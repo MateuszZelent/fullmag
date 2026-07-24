@@ -117,6 +117,8 @@ void fullmag_cuda_relax_direct_energy_difference_blocks(
     bool use_ku_field, bool use_ku2_field,
     double *block_delta_energy,
     double *block_absolute_terms,
+    double *block_demag_delta,
+    double *block_demag_absolute,
     int n,
     cudaStream_t stream = nullptr);
 

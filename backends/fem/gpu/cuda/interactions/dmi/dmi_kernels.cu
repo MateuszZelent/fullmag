@@ -208,7 +208,8 @@ __global__ void dmi_energy_difference_kernel(
     const double *nodes_xyz, const uint32_t *elements, const uint8_t *magnetic_mask,
     const double *m0x, const double *m0y, const double *m0z,
     const double *m1x, const double *m1y, const double *m1z,
-    const double *d_field, double *delta_out, double uniform_d,
+    const double *d_field, double *delta_out, double *absolute_out,
+    double uniform_d,
     double nx, double ny, double nz, bool use_d_field, bool bulk_mode, int element_count)
 {
     const int e = blockIdx.x * blockDim.x + threadIdx.x;
@@ -234,13 +235,51 @@ __global__ void dmi_energy_difference_kernel(
     const double qnd = q[0]*nx + q[1]*ny + q[2]*nz;
     const double gs_n[3] = {nx*gs[0][0]+ny*gs[1][0]+nz*gs[2][0], nx*gs[0][1]+ny*gs[1][1]+nz*gs[2][1], nx*gs[0][2]+ny*gs[1][2]+nz*gs[2][2]};
     const double gq_n[3] = {nx*gq[0][0]+ny*gq[1][0]+nz*gq[2][0], nx*gq[0][1]+ny*gq[1][1]+nz*gq[2][1], nx*gq[0][2]+ny*gq[1][2]+nz*gq[2][2]};
+    const double prefactor = 0.5 * d * volume;
+    double delta = 0.0;
+    double absolute_delta = 0.0;
     if (bulk_mode) {
         const double curls[3] = {gs[2][1]-gs[1][2], gs[0][2]-gs[2][0], gs[1][0]-gs[0][1]};
         const double curlq[3] = {gq[2][1]-gq[1][2], gq[0][2]-gq[2][0], gq[1][0]-gq[0][1]};
-        dmi_atomic_add_double(delta_out, 0.5 * d * volume * (s[0]*curlq[0]+s[1]*curlq[1]+s[2]*curlq[2] + q[0]*curls[0]+q[1]*curls[1]+q[2]*curls[2]));
+        const double bulk_terms[6] = {
+            s[0] * curlq[0],
+            s[1] * curlq[1],
+            s[2] * curlq[2],
+            q[0] * curls[0],
+            q[1] * curls[1],
+            q[2] * curls[2],
+        };
+        delta = prefactor *
+            (bulk_terms[0] + bulk_terms[1] + bulk_terms[2] +
+             bulk_terms[3] + bulk_terms[4] + bulk_terms[5]);
+        absolute_delta = fabs(prefactor) *
+            (fabs(bulk_terms[0]) + fabs(bulk_terms[1]) +
+             fabs(bulk_terms[2]) + fabs(bulk_terms[3]) +
+             fabs(bulk_terms[4]) + fabs(bulk_terms[5]));
     } else {
-        dmi_atomic_add_double(delta_out, 0.5 * d * volume * (snd*divq + qnd*divs - (s[0]*gq_n[0]+s[1]*gq_n[1]+s[2]*gq_n[2]) - (q[0]*gs_n[0]+q[1]*gs_n[1]+q[2]*gs_n[2])));
+        const double interfacial_terms[8] = {
+            snd * divq,
+            qnd * divs,
+            -s[0] * gq_n[0],
+            -s[1] * gq_n[1],
+            -s[2] * gq_n[2],
+            -q[0] * gs_n[0],
+            -q[1] * gs_n[1],
+            -q[2] * gs_n[2],
+        };
+        delta = prefactor *
+            (interfacial_terms[0] + interfacial_terms[1] +
+             interfacial_terms[2] + interfacial_terms[3] +
+             interfacial_terms[4] + interfacial_terms[5] +
+             interfacial_terms[6] + interfacial_terms[7]);
+        absolute_delta = fabs(prefactor) *
+            (fabs(interfacial_terms[0]) + fabs(interfacial_terms[1]) +
+             fabs(interfacial_terms[2]) + fabs(interfacial_terms[3]) +
+             fabs(interfacial_terms[4]) + fabs(interfacial_terms[5]) +
+             fabs(interfacial_terms[6]) + fabs(interfacial_terms[7]));
     }
+    dmi_atomic_add_double(delta_out, delta);
+    dmi_atomic_add_double(absolute_out, absolute_delta);
 }
 
 __global__ void dmi_project_field_kernel(
@@ -362,12 +401,14 @@ void fullmag_cuda_dmi_energy_difference(
     const double *m0x, const double *m0y, const double *m0z,
     const double *m1x, const double *m1y, const double *m1z,
     const double *d_field, double *element_delta,
+    double *element_absolute_terms,
     double uniform_d, double nx, double ny, double nz,
     bool use_d_field, bool bulk_mode, int element_count, cudaStream_t stream)
 {
     dmi_energy_difference_kernel<<<(element_count + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         nodes_xyz, elements, magnetic_element_mask, m0x, m0y, m0z, m1x, m1y, m1z,
-        d_field, element_delta, uniform_d, nx, ny, nz, use_d_field, bulk_mode, element_count);
+        d_field, element_delta, element_absolute_terms, uniform_d,
+        nx, ny, nz, use_d_field, bulk_mode, element_count);
 }
 
 } // namespace fullmag::fem

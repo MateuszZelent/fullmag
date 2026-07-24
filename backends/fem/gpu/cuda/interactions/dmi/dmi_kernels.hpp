@@ -48,6 +48,7 @@ void fullmag_cuda_dmi_energy_difference(
     const double *m0x, const double *m0y, const double *m0z,
     const double *m1x, const double *m1y, const double *m1z,
     const double *d_field, double *element_delta,
+    double *element_absolute_terms,
     double uniform_d, double nx, double ny, double nz,
     bool use_d_field, bool bulk_mode, int element_count,
     cudaStream_t stream = nullptr);

@@ -56,6 +56,17 @@ void cuda_term_complete_energy_difference_migration_is_atomic() {
         root / "gpu" / "cuda" / "relaxation" / "pgbb.cpp");
     const std::string kernels_source = read_text_file(
         root / "gpu" / "cuda" / "relaxation" / "pgbb_kernels.cu");
+    const std::string exchange_header = read_text_file(
+        root / "gpu" / "cuda" / "exchange" / "exchange_kernels.hpp");
+    const std::string exchange_source = read_text_file(
+        root / "gpu" / "cuda" / "exchange" / "exchange_kernels.cu");
+    const std::string dmi_header = read_text_file(
+        root / "gpu" / "cuda" / "interactions" / "dmi" / "dmi_kernels.hpp");
+    const std::string dmi_source = read_text_file(
+        root / "gpu" / "cuda" / "interactions" / "dmi" / "dmi_kernels.cu");
+    const std::string reduction_workspace_header = read_text_file(
+        root / "gpu" / "cuda" / "reductions" /
+        "reduction_workspace_state.hpp");
     const auto term_complete_start = relaxation_numerics.find(
         "inline EnergyDifference compose_term_complete_energy_difference(");
     const auto legacy_start = relaxation_numerics.find(
@@ -143,6 +154,73 @@ void cuda_term_complete_energy_difference_migration_is_atomic() {
             "result.endpoint_residual_operand_absolute_sum_j > 0.0") !=
                 std::string::npos,
         "endpoint-residual ambiguity must not be misrepresented as refinable demag uncertainty");
+    check(
+        direct_kernel.find(
+            "fabs(demag_x) + fabs(demag_y) + fabs(demag_z)") !=
+                std::string::npos &&
+            direct_kernel.find(
+                "fabs(zeeman_x) + fabs(zeeman_y) + fabs(zeeman_z)") !=
+                std::string::npos &&
+            direct_kernel.find(
+                "fabs(anisotropy_ku) + fabs(anisotropy_ku2)") !=
+                std::string::npos &&
+            direct_kernel.find("block_demag_delta") != std::string::npos &&
+            direct_kernel.find("block_demag_absolute") != std::string::npos,
+        "CUDA local direct-energy uncertainty must retain every within-owner scalar subterm and demag-owned reduction before cancellation");
+    check(
+        exchange_header.find("double *block_absolute_terms") !=
+                std::string::npos &&
+            exchange_source.find(
+                "fabs(term_x) + fabs(term_y) + fabs(term_z)") !=
+                std::string::npos,
+        "CUDA exchange direct-energy uncertainty must reduce per-component absolute terms before cancellation");
+    check(
+        dmi_header.find("double *element_absolute_terms") !=
+                std::string::npos &&
+            dmi_source.find("const double bulk_terms[6]") !=
+                std::string::npos &&
+            dmi_source.find("const double interfacial_terms[8]") !=
+                std::string::npos &&
+            dmi_source.find("fabs(bulk_terms[0])") != std::string::npos &&
+            dmi_source.find("fabs(interfacial_terms[0])") !=
+                std::string::npos &&
+            dmi_source.find(
+                "dmi_atomic_add_double(absolute_out, absolute_delta)") !=
+                std::string::npos,
+        "CUDA DMI direct-energy uncertainty must accumulate every polarized scalar-product magnitude before cancellation");
+    check(
+        direct_energy_source.find("kDirectEnergyTailSlots = 10") !=
+                std::string::npos &&
+            reduction_workspace_header.find(
+                "FEM_GPU_SCALAR_RESULT_SLOTS = 32") !=
+                std::string::npos &&
+            direct_energy_source.find("kDirectDemagAbsoluteTailSlot") !=
+                std::string::npos &&
+            direct_energy_source.find("kDirectExchangeAbsoluteTailSlot") !=
+                std::string::npos &&
+            direct_energy_source.find(
+                "kDirectInterfacialDmiAbsoluteTailSlot") !=
+                std::string::npos &&
+            direct_energy_source.find("kDirectBulkDmiAbsoluteTailSlot") !=
+                std::string::npos &&
+            direct_energy_source.find("std::abs(exchange_delta)") ==
+                std::string::npos &&
+            direct_energy_source.find("std::abs(interfacial_dmi_delta)") ==
+                std::string::npos &&
+            direct_energy_source.find("std::abs(bulk_dmi_delta)") ==
+                std::string::npos,
+        "CUDA direct Armijo must batch owner-specific signed and pre-cancellation absolute reductions without reconstructing scales from aggregate deltas");
+    check(
+        direct_energy_header.find(
+            "gpu_direct_armijo_demag_refinement_eligible(") !=
+                std::string::npos &&
+            direct_energy_source.find(
+                "non_demag_difference.roundoff_bound_joules") !=
+                std::string::npos &&
+            direct_energy_source.find(
+                "ArmijoDifferenceDecision::Accept;") !=
+                std::string::npos,
+        "CUDA direct Armijo may refine only when removing demag-owned uncertainty resolves the aggregate decision to Accept");
 }
 
 void cpu_pgbb_exchange_difference_owner_is_focused_and_term_complete() {
@@ -1216,6 +1294,20 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
         read_text_file(relaxation_root / "pgbb_kernels.hpp");
     const std::string kernels_source =
         read_text_file(relaxation_root / "pgbb_kernels.cu");
+    const auto direct_kernel_start =
+        kernels_source.find("__global__ void direct_energy_difference_kernel(");
+    const auto direct_kernel_end =
+        kernels_source.find(
+            "__global__ void tangent_gradient_norm_kernel(",
+            direct_kernel_start);
+    const std::string direct_kernel =
+        direct_kernel_start == std::string::npos
+            ? std::string()
+            : kernels_source.substr(
+                  direct_kernel_start,
+                  direct_kernel_end == std::string::npos
+                      ? std::string::npos
+                      : direct_kernel_end - direct_kernel_start);
     const std::string gpu_demag_stage =
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "stage_compute.cpp");
     const std::string runner_algorithm =
@@ -1315,7 +1407,7 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
                 std::string::npos,
         "native FEM GPU projected-gradient BB must generate current energy/gradient finite flags on device for the packed current-state readback");
     check(
-        direct_energy_source.find("kDirectEnergyTailSlots = 5") !=
+        direct_energy_source.find("kDirectEnergyTailSlots = 10") !=
                 std::string::npos &&
             direct_energy_source.find(
                 "GPU direct minimizer energy batch device->host") !=
@@ -1336,10 +1428,12 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
             direct_energy_source.find(
                 "ctx.demag.enabled ? GpuEnergyIncrementOwner::Direct") !=
                 std::string::npos &&
-            kernels_source.find("const double demag = demag_enabled") !=
-                std::string::npos &&
-            kernels_source.find(": 0.0;") != std::string::npos,
-        "native FEM GPU direct Armijo evaluation must contribute zero demag energy when demag is disabled");
+            direct_kernel.find("block_demag_delta") != std::string::npos &&
+            direct_kernel.find("block_demag_absolute") != std::string::npos &&
+            direct_kernel.find("fabs(demag_x)") != std::string::npos &&
+            direct_kernel.find("fabs(demag_y)") != std::string::npos &&
+            direct_kernel.find("fabs(demag_z)") != std::string::npos,
+        "native FEM GPU direct Armijo evaluation must contribute zero signed and absolute demag energy when demag is disabled");
     check(
         relaxation_state.find("struct FemGpuAcceptedEvaluationToken") !=
                 std::string::npos &&

@@ -8,6 +8,8 @@
 
 #include <cub/cub.cuh>
 
+#include <cmath>
+
 namespace fullmag::fem {
 
 static constexpr int kBlockSize = 256;
@@ -90,10 +92,11 @@ __global__ void legacy_sparse_exchange_difference_blocks_kernel(
     const uint32_t *rows, const uint32_t *cols, const double *values,
     const double *m0x, const double *m0y, const double *m0z,
     const double *m1x, const double *m1y, const double *m1z,
-    double *block_sums, int n)
+    double *block_sums, double *block_absolute_terms, int n)
 {
     const int row = blockIdx.x * blockDim.x + threadIdx.x;
     double local = 0.0;
+    double local_absolute = 0.0;
     if (row < n) {
         double ksumx = 0.0, ksumy = 0.0, ksumz = 0.0;
         for (uint32_t p = rows[row]; p < rows[row + 1]; ++p) {
@@ -103,14 +106,22 @@ __global__ void legacy_sparse_exchange_difference_blocks_kernel(
             ksumy += a * (m0y[col] + m1y[col]);
             ksumz += a * (m0z[col] + m1z[col]);
         }
-        local = (m1x[row] - m0x[row]) * ksumx +
-            (m1y[row] - m0y[row]) * ksumy +
-            (m1z[row] - m0z[row]) * ksumz;
+        const double term_x = (m1x[row] - m0x[row]) * ksumx;
+        const double term_y = (m1y[row] - m0y[row]) * ksumy;
+        const double term_z = (m1z[row] - m0z[row]) * ksumz;
+        local = term_x + term_y + term_z;
+        local_absolute = fabs(term_x) + fabs(term_y) + fabs(term_z);
     }
     typedef cub::BlockReduce<double, 256> BlockReduce;
-    __shared__ typename BlockReduce::TempStorage storage;
-    const double sum = BlockReduce(storage).Sum(local);
-    if (threadIdx.x == 0) block_sums[blockIdx.x] = sum;
+    __shared__ typename BlockReduce::TempStorage delta_storage;
+    __shared__ typename BlockReduce::TempStorage absolute_storage;
+    const double sum = BlockReduce(delta_storage).Sum(local);
+    const double absolute_sum =
+        BlockReduce(absolute_storage).Sum(local_absolute);
+    if (threadIdx.x == 0) {
+        block_sums[blockIdx.x] = sum;
+        block_absolute_terms[blockIdx.x] = absolute_sum;
+    }
 }
 
 __global__ void periodic_legacy_sparse_exchange_kernel(
@@ -249,10 +260,11 @@ void fullmag_cuda_legacy_sparse_exchange_difference_blocks(
     const uint32_t *rows, const uint32_t *cols, const double *values,
     const double *m0x, const double *m0y, const double *m0z,
     const double *m1x, const double *m1y, const double *m1z,
-    double *blocks, int n, cudaStream_t stream)
+    double *blocks, double *block_absolute_terms, int n, cudaStream_t stream)
 {
     legacy_sparse_exchange_difference_blocks_kernel<<<(n + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-        rows, cols, values, m0x, m0y, m0z, m1x, m1y, m1z, blocks, n);
+        rows, cols, values, m0x, m0y, m0z, m1x, m1y, m1z,
+        blocks, block_absolute_terms, n);
 }
 
 } // namespace fullmag::fem

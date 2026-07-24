@@ -7,7 +7,8 @@ and the diagnosed exchange-plus-Zeeman first step executes successfully on the
 managed RTX 4080 SUPER runtime. The 32-step focused case later reaches an
 honest strict-Armijo stagnation on step 2 and restores the previous device
 state; it is retained as non-converged diagnostic evidence, not relabelled as
-a pass.
+a pass. The final post-review implementation and tests were independently
+reviewed and approved.
 
 The change does not alter the Armijo coefficient or inequality, BB1/BB2,
 restart behavior, fresh-zero demag policy, backtrack limit, physical stopping
@@ -50,13 +51,39 @@ available only for observability and finite-state validation.
 External and uniaxial enable flags were added to the existing local CUDA
 kernel, and disabled exchange now skips its direct kernel. These guards keep
 the direct realization identical to the ownership classifier even when packed
-or device scalar storage is nonzero. No new scalar buffer, host readback, or
-host synchronization was added.
+or device scalar storage is nonzero. The existing internal scalar-result
+allocation grew from 24 to 32 doubles so the 18 final snapshot scalars and 10
+direct-difference scalars fit without aliasing. The Armijo path reads 28
+scalars in the same existing batch. No new buffer object, additional host
+readback, public ABI, or host synchronization was added.
 
 If a finite-precision overlap includes a nonzero endpoint-residual operand
 scale, no demag refinement is claimed for that residual. The trial backtracks
 and eventually fails closed with rollback if it cannot satisfy strict Armijo.
-Qualified demag-only refinement remains available to both PG-BB and NCG.
+Demag refinement is eligible only when removing the demag-owned roundoff bound
+makes the remaining aggregate interval resolve to `Accept`. A non-demag
+`Refine` or `Reject` decision backtracks without spending a demag refinement
+solve. The same rule is shared by PG-BB and NCG.
+
+## Independent-review remediation
+
+The first independent review rejected the original Task 3 implementation for
+two forward-error defects. Absolute scales had been reconstructed after
+cancellation, and aggregate ambiguity was labelled demag-refinable without
+proving that demag-owned uncertainty caused the overlap. The approved
+remediation now retains signed and absolute lanes before cancellation:
+
+- local direct energy sums `abs(demag_x/y/z)`, `abs(Zeeman_x/y/z)`, and the
+  separate `abs(Ku)`/`abs(Ku2)` increments;
+- exchange sums the three component magnitudes before their signed reduction;
+- bulk DMI sums the magnitudes of all six polarized products;
+- interfacial DMI sums the magnitudes of all eight polarized products;
+- the demag-owned absolute scale is reduced independently and converted to its
+  own roundoff bound for refinement eligibility.
+
+All values use existing device scratch arrays and the single 28-scalar control
+readback. Strict inequality, rollback, one-evaluation ownership, and the
+four-control-sync production budget are unchanged.
 
 ## RED evidence
 
@@ -80,14 +107,24 @@ FAIL: native FEM GPU direct Armijo evaluation must contribute zero demag energy 
 ```
 
 That assertion still required the deliberately deleted `add_endpoint_delta`
-implementation. It was repaired to pin both parts of the actual invariant:
-the Context-derived DemagEnergy Direct/NotEnergy classification and the
-`demag_enabled ? ... : 0.0` CUDA kernel guard. The disabled-term numerical
-tests were not weakened.
+implementation. It was first repaired to pin the Context-derived ownership and
+kernel guard. The review remediation later replaced the remaining
+formatting-sensitive guard text check with an executable CUDA test: nonzero
+endpoint demag fields produce zero signed and absolute demag increments when
+demag is disabled. Context ownership and signed/absolute output-shape source
+checks remain.
+
+The independent-review RED cycle then failed on the intended missing
+within-owner cancellation semantics. It required executable signed/absolute
+oracles for the local kernel, exchange, and both DMI modes, plus owner-specific
+demag refinement eligibility. A subsequent compile RED also caught that the
+old 24-slot internal scalar capacity could not hold the required 28-scalar
+batch; capacity was raised to 32 without changing a public structure or ABI.
 
 ## Managed GREEN evidence
 
-The final source/derivative gate exited 0. It built and ran all four targets:
+The final post-review source/derivative gate exited 0. It built and ran all four
+targets:
 
 ```text
 fem_relaxation_source_contract
@@ -106,6 +143,17 @@ The executable derivative contract proves:
 - the Robin diagnostic contributes zero Armijo ownership regardless of value;
 - an endpoint-residual ambiguity cannot be misrepresented as refinable demag
   uncertainty;
+- demag refinement remains eligible only when removing the demag-owned bound
+  resolves the aggregate interval to `Accept`; non-demag `Refine` and `Reject`
+  cases do not launch refinement;
+- a one-node local CUDA oracle retains cancelling demag x/y, Zeeman x/y, and
+  Ku/Ku2 subterm magnitudes;
+- disabled demag produces zero signed and absolute owner outputs despite
+  nonzero endpoint fields;
+- a one-row CUDA exchange oracle returns signed zero and absolute scale `2` for
+  cancelling x/y increments;
+- unit-tetra CUDA interfacial and bulk DMI oracles each return signed zero and
+  absolute scale `1/6` for cancelling polarized products;
 - the retained exchange increment `-2.1037518401e-39 J` plus Zeeman increment
   `+7.9035597018e-49 J` composes to
   `-2.10375183930964407e-39 J` and is accepted against the unchanged
@@ -113,7 +161,8 @@ The executable derivative contract proves:
 - the existing resolved-uphill contract still rejects rather than introducing
   an energy window.
 
-The managed runtime gate also exited 0:
+Before the independent-review remediation, the managed runtime gate also
+exited 0:
 
 ```bash
 COMPOSE_FILE=compose.yaml:.fullmag/task6-compose-external-network.yaml \
@@ -127,7 +176,13 @@ CPU relaxation smokes including GPU PG-BB, and ended with:
 FEM relaxation runtime smoke completed
 ```
 
-## Fresh managed runtime identity
+That runtime bundle and the focused artifacts below identify the original
+Task 3 implementation baseline. The final review remediation has fresh managed
+CUDA source/derivative proof, but no replacement exported runtime bundle was
+created; the hashes below must not be interpreted as the identity of the final
+working-tree diff.
+
+## Pre-review managed runtime identity
 
 - bundle:
   `candidate-sm89-f875db7ad96a281aa9ffb27ccb30cde7de1949abbbcd8a1ea37fb6e5554c106f`;
@@ -143,7 +198,7 @@ FEM relaxation runtime smoke completed
 - MFEM 4.9 and HYPRE 3.1.0;
 - native cubin coverage includes `sm_89`.
 
-## Focused exchange-plus-Zeeman GPU proof
+## Pre-review focused exchange-plus-Zeeman GPU proof
 
 The focused one-repeat command used the fresh managed bundle in the repository
 container, the coarse Box500/airbox fixture, GPU PG-BB, and the canonical
@@ -242,4 +297,7 @@ it does not qualify a long-horizon exchange-plus-Zeeman trajectory. The
 32-step request still ends non-converged at a later strict-Armijo stagnation.
 That result must remain open for later identity-pinned production-matrix work,
 without changing strict Armijo, adding a gradient floor, or treating
-stagnation as convergence.
+stagnation as convergence. The final post-review diff is managed-CUDA
+executable at the source/derivative gate, but still needs a newly exported,
+identity-pinned long-horizon runtime artifact before any stronger production
+validation claim.

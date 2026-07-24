@@ -71,6 +71,9 @@ struct GpuDirectArmijoResult {
     relaxation::EnergyDifference difference{};
     GpuDirectEnergySnapshot trial_snapshot{};
     double local_delta_j = 0.0;
+    double demag_delta_j = 0.0;
+    double demag_absolute_term_sum_j = 0.0;
+    double demag_roundoff_bound_j = 0.0;
     double exchange_delta_j = 0.0;
     double interfacial_dmi_delta_j = 0.0;
     double bulk_dmi_delta_j = 0.0;
@@ -82,6 +85,11 @@ struct GpuDirectArmijoResult {
     bool refinement_accepted = false;
     uint32_t refinement_rhs_evaluations = 0;
 };
+
+bool gpu_direct_armijo_demag_refinement_eligible(
+    const Context &ctx,
+    const GpuDirectArmijoResult &result,
+    double armijo_rhs_j);
 
 bool gpu_relax_compute_effective_field_and_energy_terms(
     Context &ctx,

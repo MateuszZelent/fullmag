@@ -96,6 +96,41 @@ __device__ void block_reduce_triple_sum(
     sum_z = shared_z[0];
 }
 
+__device__ void block_reduce_quad_sum(
+    double x,
+    double y,
+    double z,
+    double w,
+    double &sum_x,
+    double &sum_y,
+    double &sum_z,
+    double &sum_w)
+{
+    __shared__ double shared_x[kBlockSize];
+    __shared__ double shared_y[kBlockSize];
+    __shared__ double shared_z[kBlockSize];
+    __shared__ double shared_w[kBlockSize];
+    const int lane = threadIdx.x;
+    shared_x[lane] = x;
+    shared_y[lane] = y;
+    shared_z[lane] = z;
+    shared_w[lane] = w;
+    __syncthreads();
+    for (int stride = kBlockSize / 2; stride > 0; stride >>= 1) {
+        if (lane < stride) {
+            shared_x[lane] += shared_x[lane + stride];
+            shared_y[lane] += shared_y[lane + stride];
+            shared_z[lane] += shared_z[lane + stride];
+            shared_w[lane] += shared_w[lane + stride];
+        }
+        __syncthreads();
+    }
+    sum_x = shared_x[0];
+    sum_y = shared_y[0];
+    sum_z = shared_z[0];
+    sum_w = shared_w[0];
+}
+
 __global__ void direct_energy_difference_kernel(
     const double *current_mx, const double *current_my, const double *current_mz,
     const double *trial_mx, const double *trial_my, const double *trial_mz,
@@ -109,44 +144,77 @@ __global__ void direct_energy_difference_kernel(
     bool external_enabled,
     bool uniaxial_enabled,
     double uniform_ku, double uniform_ku2, bool use_ku_field, bool use_ku2_field,
-    double *block_delta, double *block_absolute, int n)
+    double *block_delta, double *block_absolute,
+    double *block_demag_delta, double *block_demag_absolute, int n)
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     double delta = 0.0;
+    double demag = 0.0;
+    double demag_absolute = 0.0;
+    double local_absolute = 0.0;
     if (i < n && active_node(mask, i)) {
         const double dx = trial_mx[i] - current_mx[i];
         const double dy = trial_my[i] - current_my[i];
         const double dz = trial_mz[i] - current_mz[i];
         const double volume = lumped_mass[i];
-        const double demag = demag_enabled
-            ? -0.5 * kMu0 * ms[i] * volume *
-                (dx * (current_hx[i] + trial_hx[i]) +
-                 dy * (current_hy[i] + trial_hy[i]) +
-                 dz * (current_hz[i] + trial_hz[i]))
+        const double demag_weight = demag_enabled
+            ? -0.5 * kMu0 * ms[i] * volume
             : 0.0;
-        const double zeeman = external_enabled
-            ? -kMu0 * ms[i] * volume *
-                (dx * h_ext_x[i] + dy * h_ext_y[i] + dz * h_ext_z[i])
+        const double demag_x =
+            demag_weight * dx * (current_hx[i] + trial_hx[i]);
+        const double demag_y =
+            demag_weight * dy * (current_hy[i] + trial_hy[i]);
+        const double demag_z =
+            demag_weight * dz * (current_hz[i] + trial_hz[i]);
+        demag = demag_x + demag_y + demag_z;
+        demag_absolute =
+            fabs(demag_x) + fabs(demag_y) + fabs(demag_z);
+
+        const double zeeman_weight = external_enabled
+            ? -kMu0 * ms[i] * volume
             : 0.0;
+        const double zeeman_x = zeeman_weight * dx * h_ext_x[i];
+        const double zeeman_y = zeeman_weight * dy * h_ext_y[i];
+        const double zeeman_z = zeeman_weight * dz * h_ext_z[i];
+        const double zeeman = zeeman_x + zeeman_y + zeeman_z;
         const double q0 = current_mx[i] * axis_x[i] + current_my[i] * axis_y[i] + current_mz[i] * axis_z[i];
         const double q1 = trial_mx[i] * axis_x[i] + trial_my[i] * axis_y[i] + trial_mz[i] * axis_z[i];
         const double q0sq = q0 * q0;
         const double q1sq = q1 * q1;
         const double ku_i = use_ku_field ? ku[i] : uniform_ku;
         const double ku2_i = use_ku2_field ? ku2[i] : uniform_ku2;
-        const double anisotropy = uniaxial_enabled
-            ? volume *
-                (-ku_i * (q1sq - q0sq) -
-                 ku2_i * (q1sq * q1sq - q0sq * q0sq))
+        const double anisotropy_ku = uniaxial_enabled
+            ? -volume * ku_i * (q1sq - q0sq)
             : 0.0;
+        const double anisotropy_ku2 = uniaxial_enabled
+            ? -volume * ku2_i *
+                (q1sq * q1sq - q0sq * q0sq)
+            : 0.0;
+        const double anisotropy = anisotropy_ku + anisotropy_ku2;
         delta = demag + zeeman + anisotropy;
+        local_absolute =
+            demag_absolute +
+            fabs(zeeman_x) + fabs(zeeman_y) + fabs(zeeman_z) +
+            fabs(anisotropy_ku) + fabs(anisotropy_ku2);
     }
     double sum_delta = 0.0;
     double sum_absolute = 0.0;
-    block_reduce_pair_sum(delta, fabs(delta), sum_delta, sum_absolute);
+    double sum_demag_delta = 0.0;
+    double sum_demag_absolute = 0.0;
+    block_reduce_quad_sum(
+        delta,
+        local_absolute,
+        demag,
+        demag_absolute,
+        sum_delta,
+        sum_absolute,
+        sum_demag_delta,
+        sum_demag_absolute);
     if (threadIdx.x == 0) {
         block_delta[blockIdx.x] = sum_delta;
         block_absolute[blockIdx.x] = sum_absolute;
+        block_demag_delta[blockIdx.x] = sum_demag_delta;
+        block_demag_absolute[blockIdx.x] = sum_demag_absolute;
     }
 }
 
@@ -969,7 +1037,9 @@ void fullmag_cuda_relax_direct_energy_difference_blocks(
     bool external_enabled,
     bool uniaxial_enabled,
     double uniform_ku, double uniform_ku2, bool use_ku_field, bool use_ku2_field,
-    double *block_delta_energy, double *block_absolute_terms, int n, cudaStream_t stream)
+    double *block_delta_energy, double *block_absolute_terms,
+    double *block_demag_delta, double *block_demag_absolute,
+    int n, cudaStream_t stream)
 {
     const int blocks = (n + kBlockSize - 1) / kBlockSize;
     direct_energy_difference_kernel<<<blocks, kBlockSize, 0, stream>>>(
@@ -980,7 +1050,8 @@ void fullmag_cuda_relax_direct_energy_difference_blocks(
         lumped_mass, magnetic_node_mask, demag_enabled, external_enabled,
         uniaxial_enabled,
         uniform_ku, uniform_ku2, use_ku_field, use_ku2_field,
-        block_delta_energy, block_absolute_terms, n);
+        block_delta_energy, block_absolute_terms,
+        block_demag_delta, block_demag_absolute, n);
 }
 
 void fullmag_cuda_relax_bb_curvature_blocks(

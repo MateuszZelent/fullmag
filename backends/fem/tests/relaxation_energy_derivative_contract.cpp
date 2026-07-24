@@ -15,6 +15,8 @@
 #include <mfem.hpp>
 #endif
 #if FULLMAG_HAS_CUDA_RUNTIME
+#include "gpu/cuda/exchange/exchange_kernels.hpp"
+#include "gpu/cuda/interactions/dmi/dmi_kernels.hpp"
 #include "gpu/cuda/relaxation/direct_energy_increment.hpp"
 #include "gpu/cuda/relaxation/pgbb_kernels.hpp"
 #endif
@@ -1425,6 +1427,68 @@ void gpu_endpoint_residual_ambiguity_has_no_false_demag_refinement()
         "endpoint-residual ambiguity without a qualified residual refinement must fail closed without relabelling demag refinement");
 }
 
+void gpu_demag_refinement_requires_demag_owned_ambiguity()
+{
+    fullmag::fem::Context ctx;
+    ctx.demag.enabled = true;
+    constexpr double armijo_rhs_j = -5.0e-35;
+    fullmag::fem::GpuDirectArmijoResult result{};
+    result.decision =
+        fullmag::fem::relaxation::ArmijoDifferenceDecision::Refine;
+    result.difference = {-6.0e-35, 1.0, 4.0e-35};
+    result.demag_roundoff_bound_j = 3.0e-35;
+    check(
+        fullmag::fem::gpu_direct_armijo_demag_refinement_eligible(
+            ctx, result, armijo_rhs_j),
+        "demag refinement must remain eligible when removing the demag-owned bound resolves aggregate Armijo ambiguity");
+
+    result.demag_roundoff_bound_j = 1.0e-35;
+    check(
+        !fullmag::fem::gpu_direct_armijo_demag_refinement_eligible(
+            ctx, result, armijo_rhs_j),
+        "demag refinement must be ineligible when exchange/local uncertainty remains ambiguous without the demag-owned bound");
+
+    fullmag::fem::FemGpuComponentField field{};
+    std::string error;
+    check(
+        fullmag::fem::gpu_direct_armijo_refine(
+            ctx,
+            nullptr,
+            0,
+            0,
+            field,
+            field,
+            field,
+            armijo_rhs_j,
+            result,
+            error) &&
+            !result.refinement_attempted &&
+            result.refinement_rhs_evaluations == 0u,
+        "non-demag-owned Armijo ambiguity must fail closed without a demag solve");
+
+    result.difference = {-3.0e-35, 1.0, 4.0e-35};
+    result.demag_roundoff_bound_j = 3.0e-35;
+    check(
+        !fullmag::fem::gpu_direct_armijo_demag_refinement_eligible(
+            ctx, result, armijo_rhs_j),
+        "demag refinement must be ineligible when removing the demag-owned bound already resolves Armijo to Reject");
+    check(
+        fullmag::fem::gpu_direct_armijo_refine(
+            ctx,
+            nullptr,
+            0,
+            0,
+            field,
+            field,
+            field,
+            armijo_rhs_j,
+            result,
+            error) &&
+            !result.refinement_attempted &&
+            result.refinement_rhs_evaluations == 0u,
+        "a non-demag Reject decision must fail closed without a demag solve");
+}
+
 void check_cuda(cudaError_t status, const char *message)
 {
     check(status == cudaSuccess, std::string(message) + ": " + cudaGetErrorString(status));
@@ -1458,6 +1522,223 @@ std::vector<double> copy_vector_from_device(const double *device, size_t size)
             value.data(), device, size * sizeof(double), cudaMemcpyDeviceToHost),
         "cudaMemcpy vector device-to-host");
     return value;
+}
+
+void cuda_direct_local_absolute_scale_survives_owner_cancellation()
+{
+    const std::vector<double> zero = {0.0};
+    const std::vector<double> one = {1.0};
+    const std::vector<double> minus_one = {-1.0};
+    double *d_zero = copy_to_device(zero);
+    double *d_one = copy_to_device(one);
+    double *d_minus_one = copy_to_device(minus_one);
+    uint8_t *d_mask = copy_to_device(std::vector<uint8_t>{1u});
+    double *d_delta = copy_to_device(zero);
+    double *d_absolute = copy_to_device(zero);
+    double *d_demag_delta = copy_to_device(zero);
+    double *d_demag_absolute = copy_to_device(zero);
+
+    fullmag::fem::fullmag_cuda_relax_direct_energy_difference_blocks(
+        d_zero, d_zero, d_zero,
+        d_one, d_one, d_zero,
+        d_one, d_minus_one, d_zero,
+        d_one, d_minus_one, d_zero,
+        d_one, d_minus_one, d_zero,
+        d_one, d_zero, d_zero,
+        d_one, d_zero, d_zero,
+        d_one, d_mask,
+        true, true, true,
+        1.0, -1.0, false, false,
+        d_delta, d_absolute, d_demag_delta, d_demag_absolute, 1, nullptr);
+    check_cuda(cudaGetLastError(), "CUDA direct local cancellation launch");
+    check_cuda(cudaDeviceSynchronize(), "CUDA direct local cancellation synchronize");
+
+    const double delta = copy_scalar_from_device(d_delta);
+    const double absolute = copy_scalar_from_device(d_absolute);
+    const double demag_delta = copy_scalar_from_device(d_demag_delta);
+    const double demag_absolute = copy_scalar_from_device(d_demag_absolute);
+    const double tolerance =
+        64.0 * std::numeric_limits<double>::epsilon();
+    check(
+        std::abs(delta) <= tolerance &&
+            std::abs(
+                absolute - (2.0 + 4.0 * fullmag::fem::kMu0)) <=
+                tolerance &&
+            std::abs(demag_delta) <= tolerance &&
+            std::abs(
+                demag_absolute - 2.0 * fullmag::fem::kMu0) <=
+                tolerance,
+        "within-owner demag components, Zeeman components, and Ku/Ku2 increments must cancel nominally while retaining every scalar subterm magnitude");
+
+    check_cuda(cudaMemset(d_delta, 0, sizeof(double)), "clear disabled-demag delta");
+    check_cuda(
+        cudaMemset(d_absolute, 0, sizeof(double)),
+        "clear disabled-demag absolute scale");
+    check_cuda(
+        cudaMemset(d_demag_delta, 0, sizeof(double)),
+        "clear disabled-demag owned delta");
+    check_cuda(
+        cudaMemset(d_demag_absolute, 0, sizeof(double)),
+        "clear disabled-demag owned absolute scale");
+    fullmag::fem::fullmag_cuda_relax_direct_energy_difference_blocks(
+        d_zero, d_zero, d_zero,
+        d_one, d_one, d_zero,
+        d_one, d_minus_one, d_zero,
+        d_one, d_minus_one, d_zero,
+        d_one, d_minus_one, d_zero,
+        d_one, d_zero, d_zero,
+        d_one, d_zero, d_zero,
+        d_one, d_mask,
+        false, false, false,
+        1.0, -1.0, false, false,
+        d_delta, d_absolute, d_demag_delta, d_demag_absolute, 1, nullptr);
+    check_cuda(cudaGetLastError(), "CUDA disabled-demag direct local launch");
+    check_cuda(
+        cudaDeviceSynchronize(),
+        "CUDA disabled-demag direct local synchronize");
+    check(
+        copy_scalar_from_device(d_delta) == 0.0 &&
+            copy_scalar_from_device(d_absolute) == 0.0 &&
+            copy_scalar_from_device(d_demag_delta) == 0.0 &&
+            copy_scalar_from_device(d_demag_absolute) == 0.0,
+        "disabled demag with nonzero endpoint fields must contribute zero signed and absolute energy increments");
+
+    cudaFree(d_zero);
+    cudaFree(d_one);
+    cudaFree(d_minus_one);
+    cudaFree(d_mask);
+    cudaFree(d_delta);
+    cudaFree(d_absolute);
+    cudaFree(d_demag_delta);
+    cudaFree(d_demag_absolute);
+}
+
+void cuda_exchange_absolute_scale_survives_component_cancellation()
+{
+    uint32_t *d_rows = copy_to_device(std::vector<uint32_t>{0u, 1u});
+    uint32_t *d_cols = copy_to_device(std::vector<uint32_t>{0u});
+    double *d_values = copy_to_device(std::vector<double>{1.0});
+    double *d_zero = copy_to_device(std::vector<double>{0.0});
+    double *d_one = copy_to_device(std::vector<double>{1.0});
+    double *d_delta = copy_to_device(std::vector<double>{0.0});
+    double *d_absolute = copy_to_device(std::vector<double>{0.0});
+
+    fullmag::fem::fullmag_cuda_legacy_sparse_exchange_difference_blocks(
+        d_rows,
+        d_cols,
+        d_values,
+        d_zero, d_one, d_zero,
+        d_one, d_zero, d_zero,
+        d_delta,
+        d_absolute,
+        1,
+        nullptr);
+    check_cuda(cudaGetLastError(), "CUDA exchange cancellation launch");
+    check_cuda(cudaDeviceSynchronize(), "CUDA exchange cancellation synchronize");
+    check(
+        copy_scalar_from_device(d_delta) == 0.0 &&
+            copy_scalar_from_device(d_absolute) == 2.0,
+        "opposite x/y exchange increments must cancel nominally while retaining both component magnitudes");
+
+    cudaFree(d_rows);
+    cudaFree(d_cols);
+    cudaFree(d_values);
+    cudaFree(d_zero);
+    cudaFree(d_one);
+    cudaFree(d_delta);
+    cudaFree(d_absolute);
+}
+
+void cuda_dmi_absolute_scale_survives_polarized_subterm_cancellation()
+{
+    double *d_nodes = copy_to_device(std::vector<double>{
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+    });
+    uint32_t *d_elements =
+        copy_to_device(std::vector<uint32_t>{0u, 1u, 2u, 3u});
+    uint8_t *d_mask = copy_to_device(std::vector<uint8_t>{1u});
+    double *d_zero = copy_to_device(std::vector<double>(4u, 0.0));
+    double *d_delta = copy_to_device(std::vector<double>{0.0});
+    double *d_absolute = copy_to_device(std::vector<double>{0.0});
+    const double tolerance = 64.0 * std::numeric_limits<double>::epsilon();
+
+    const auto run_fixture = [&] (
+        const std::vector<double> &m0x,
+        const std::vector<double> &m0y,
+        const std::vector<double> &m0z,
+        const std::vector<double> &m1x,
+        const std::vector<double> &m1y,
+        const std::vector<double> &m1z,
+        bool bulk_mode,
+        const char *label) {
+        double *d_m0x = copy_to_device(m0x);
+        double *d_m0y = copy_to_device(m0y);
+        double *d_m0z = copy_to_device(m0z);
+        double *d_m1x = copy_to_device(m1x);
+        double *d_m1y = copy_to_device(m1y);
+        double *d_m1z = copy_to_device(m1z);
+        check_cuda(cudaMemset(d_delta, 0, sizeof(double)), "clear CUDA DMI delta");
+        check_cuda(
+            cudaMemset(d_absolute, 0, sizeof(double)),
+            "clear CUDA DMI absolute scale");
+        fullmag::fem::fullmag_cuda_dmi_energy_difference(
+            d_nodes,
+            d_elements,
+            d_mask,
+            d_m0x, d_m0y, d_m0z,
+            d_m1x, d_m1y, d_m1z,
+            d_zero,
+            d_delta,
+            d_absolute,
+            1.0,
+            0.0, 0.0, 1.0,
+            false,
+            bulk_mode,
+            1,
+            nullptr);
+        check_cuda(cudaGetLastError(), "CUDA DMI cancellation launch");
+        check_cuda(cudaDeviceSynchronize(), "CUDA DMI cancellation synchronize");
+        check(
+            std::abs(copy_scalar_from_device(d_delta)) <= tolerance &&
+                std::abs(copy_scalar_from_device(d_absolute) - 1.0 / 6.0) <=
+                    tolerance,
+            label);
+        cudaFree(d_m0x);
+        cudaFree(d_m0y);
+        cudaFree(d_m0z);
+        cudaFree(d_m1x);
+        cudaFree(d_m1y);
+        cudaFree(d_m1z);
+    };
+
+    run_fixture(
+        {0.625, 0.125, 0.625, 0.625},
+        {0.0, 0.0, 0.0, 0.0},
+        {0.625, 0.125, 0.625, 0.625},
+        {0.375, 0.875, 0.375, 0.375},
+        {0.0, 0.0, 0.0, 0.0},
+        {0.375, 0.875, 0.375, 0.375},
+        false,
+        "interfacial DMI polarized subterms must cancel nominally while retaining the 1/6 absolute oracle");
+    run_fixture(
+        {0.5, 0.5, 0.5, 0.5},
+        {0.5, 0.5, 0.5, 0.5},
+        {0.25, -0.25, -0.25, 0.25},
+        {0.5, 0.5, 0.5, 0.5},
+        {0.5, 0.5, 0.5, 0.5},
+        {-0.25, 0.25, 0.25, -0.25},
+        true,
+        "bulk DMI polarized subterms must cancel nominally while retaining the 1/6 absolute oracle");
+
+    cudaFree(d_nodes);
+    cudaFree(d_elements);
+    cudaFree(d_mask);
+    cudaFree(d_zero);
+    cudaFree(d_delta);
+    cudaFree(d_absolute);
 }
 
 void cuda_pgbb_current_metrics_finite_flags_cover_all_packed_inputs()
@@ -1906,6 +2187,10 @@ int main()
     gpu_energy_increment_ownership_is_context_derived_and_exhaustive();
     gpu_term_complete_composition_retains_direct_zeeman_failure_scale();
     gpu_endpoint_residual_ambiguity_has_no_false_demag_refinement();
+    gpu_demag_refinement_requires_demag_owned_ambiguity();
+    cuda_direct_local_absolute_scale_survives_owner_cancellation();
+    cuda_exchange_absolute_scale_survives_component_cancellation();
+    cuda_dmi_absolute_scale_survives_polarized_subterm_cancellation();
     cuda_pgbb_current_metrics_finite_flags_cover_all_packed_inputs();
     cuda_heterogeneous_nodal_ms_pgbb_ncg_calibration();
 #endif
