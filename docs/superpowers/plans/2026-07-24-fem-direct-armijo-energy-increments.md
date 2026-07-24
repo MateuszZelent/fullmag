@@ -270,7 +270,8 @@ Classify enabled terms according to existing qualified kernels:
 - `DemagEnergy`: `Direct` when enabled, otherwise excluded;
 - `ExternalEnergy`, `DriveEnergy`, `AnisotropyEnergy`: `Direct` when enabled by the existing local direct-difference kernel;
 - `DmiEnergy`, `BulkDmiEnergy`: `Direct` when enabled;
-- `CubicAnisotropyEnergy`, `MagnetoelasticEnergy`, and `DemagRobinBoundaryEnergy`: `EndpointResidual` only when enabled and not already included by a direct owner;
+- `CubicAnisotropyEnergy` and `MagnetoelasticEnergy`: `EndpointResidual` only when enabled and not already included by a direct owner;
+- `DemagRobinBoundaryEnergy`: `NotEnergy` for Armijo composition. Robin is already part of the demag operator/endpoint field and adding this diagnostic scalar would double-count the variational boundary form. Tests require zero Armijo ownership regardless of the diagnostic slot value;
 - disabled energy terms: excluded with a tested zero value;
 - unknown enabled energy semantics: `Unsupported`, fail closed with the slot name.
 
