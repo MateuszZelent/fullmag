@@ -161,7 +161,7 @@ The executable derivative contract proves:
 - the existing resolved-uphill contract still rejects rather than introducing
   an energy window.
 
-Before the independent-review remediation, the managed runtime gate also
+After the independent-review remediation, the final managed runtime gate
 exited 0:
 
 ```bash
@@ -169,36 +169,33 @@ COMPOSE_FILE=compose.yaml:.fullmag/task6-compose-external-network.yaml \
 just verify-fem-relaxation-runtime
 ```
 
-It rebuilt the managed bundle, reran the native contracts, exercised GPU and
-CPU relaxation smokes including GPU PG-BB, and ended with:
+It rebuilt the managed runtime in 13m39s, reran the native contracts,
+exercised GPU and CPU relaxation smokes including GPU PG-BB, and ended with:
 
 ```text
 FEM relaxation runtime smoke completed
 ```
 
-That runtime bundle and the focused artifacts below identify the original
-Task 3 implementation baseline. The final review remediation has fresh managed
-CUDA source/derivative proof, but no replacement exported runtime bundle was
-created; the hashes below must not be interpreted as the identity of the final
-working-tree diff.
+The bundle and focused artifacts below are the final post-remediation runtime
+evidence for this working-tree diff.
 
-## Pre-review managed runtime identity
+## Final managed runtime identity
 
 - bundle:
-  `candidate-sm89-f875db7ad96a281aa9ffb27ccb30cde7de1949abbbcd8a1ea37fb6e5554c106f`;
+  `candidate-sm89-2a2ea397bfec5a3c15da4160b9ad19489e5fe105aab30dedaa1ed475236e7a35`;
 - bundle manifest SHA-256:
-  `f875db7ad96a281aa9ffb27ccb30cde7de1949abbbcd8a1ea37fb6e5554c106f`;
+  `2a2ea397bfec5a3c15da4160b9ad19489e5fe105aab30dedaa1ed475236e7a35`;
 - source manifest SHA-256:
-  `373c203f9f10ede4d0de1c1cf558b826defadebaea50ea8578e7afa49f20975d`;
+  `f7d4c921c0818de716fd0c79a247af8d1e9f5e3091fda034dfc6ae353012781c`;
 - loaded `libfullmag_fem.so.0.1.0` SHA-256:
-  `3c8c062ed42d7dcd7d1897740d5cc3615583c6e78b0ed1490ec9f588bbe23839`;
+  `77d0eab3e226f8caf970b6cbbe967b87e204839d9153d34596d43406b6754449`;
 - device: NVIDIA GeForce RTX 4080 SUPER, compute capability 8.9;
 - CUDA toolkit/runtime: 12.4; driver reported by the bundle: 591.86;
 - precision: double;
 - MFEM 4.9 and HYPRE 3.1.0;
 - native cubin coverage includes `sm_89`.
 
-## Pre-review focused exchange-plus-Zeeman GPU proof
+## Final focused exchange-plus-Zeeman GPU proof
 
 The focused one-repeat command used the fresh managed bundle in the repository
 container, the coarse Box500/airbox fixture, GPU PG-BB, and the canonical
@@ -212,7 +209,7 @@ docker compose --profile fem-gpu run --rm \
   -e FULLMAG_PYTHON=/usr/bin/python3 \
   -e FULLMAG_BENCH_DOMAIN_HMAX=250e-9 \
   -e FULLMAG_BENCH_AIRBOX_HMAX=500e-9 \
-  -e FULLMAG_BENCH_RAW_CASE_OUTPUT=/workspace/.fullmag/reports/armijo-task-3-gpu-zeeman-step1.raw.log \
+  -e FULLMAG_BENCH_RAW_CASE_OUTPUT=/workspace/.fullmag/reports/armijo-task-3-gpu-zeeman-step1-final.raw.log \
   fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/fem_gpu_benchmark.py \
     --meshes coarse --scenarios box500_airbox_exchange_zeeman \
     --integrators heun --relax-algorithms projected_gradient_bb \
@@ -222,7 +219,7 @@ docker compose --profile fem-gpu run --rm \
     --require-zero-strict-gpu-global-sync --require-gpu-strict-residency \
     --require-gpu-control-readback-budget \
     --gpu-pgbb-control-readback-per-step 4 \
-    --output .fullmag/reports/armijo-task-3-gpu-zeeman-step1.csv'
+    --output .fullmag/reports/armijo-task-3-gpu-zeeman-step1-final.csv'
 ```
 
 Result: process exit 0, row `status=ok`, `returncode=0`, one executed step,
@@ -239,6 +236,7 @@ and `stop_reason=max_steps`.
 | exchange host synchronizations | 0 |
 | compute H2D/D2H bytes | 0 / 0 |
 | exchange H2D/D2H bytes | 0 / 0 |
+| device-state bytes | 59206 |
 | final total energy | `-7.951455496239511e-19 J` |
 | final exchange energy | `-2.0986047873643497e-33 J` |
 | final external energy | `-7.951455496239489e-19 J` |
@@ -249,9 +247,11 @@ and `stop_reason=max_steps`.
 Artifact hashes:
 
 - step-one CSV:
-  `6d611388d2f66acf4e41f899fbbec90b3d9846f54656c65862c2351e5d6f00db`;
+  `.fullmag/reports/armijo-task-3-gpu-zeeman-step1-final.csv`,
+  SHA-256 `1510444043a610a4073a201635bc4b1c18bbe93aa7fc57726c36422f71495766`;
 - step-one raw log:
-  `b56e62f893dc7c5972e11e96b07064c144f2de761b2a878a76d0f9bf96122efd`.
+  `.fullmag/reports/armijo-task-3-gpu-zeeman-step1-final.raw.log`,
+  SHA-256 `10112e393ae8b06d4b6fd31c7d0efe6455fc4021d810f512a4a0383abe7e4cb8`.
 
 The accepted runtime log does not emit per-trial direct components. The exact
 retained decrement and Armijo decision are therefore executable managed-test
@@ -297,7 +297,8 @@ it does not qualify a long-horizon exchange-plus-Zeeman trajectory. The
 32-step request still ends non-converged at a later strict-Armijo stagnation.
 That result must remain open for later identity-pinned production-matrix work,
 without changing strict Armijo, adding a gradient floor, or treating
-stagnation as convergence. The final post-review diff is managed-CUDA
-executable at the source/derivative gate, but still needs a newly exported,
-identity-pinned long-horizon runtime artifact before any stronger production
-validation claim.
+stagnation as convergence. The final post-review diff now has an
+identity-pinned managed runtime bundle and successful one-step production GPU
+artifact, but it still lacks a successful identity-pinned long-horizon
+trajectory and therefore does not support a stronger convergence-validation
+claim.
