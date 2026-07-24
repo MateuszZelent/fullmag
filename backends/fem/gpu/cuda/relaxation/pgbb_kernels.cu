@@ -106,6 +106,8 @@ __global__ void direct_energy_difference_kernel(
     const double *axis_x, const double *axis_y, const double *axis_z,
     const double *lumped_mass, const uint8_t *mask,
     bool demag_enabled,
+    bool external_enabled,
+    bool uniaxial_enabled,
     double uniform_ku, double uniform_ku2, bool use_ku_field, bool use_ku2_field,
     double *block_delta, double *block_absolute, int n)
 {
@@ -122,16 +124,21 @@ __global__ void direct_energy_difference_kernel(
                  dy * (current_hy[i] + trial_hy[i]) +
                  dz * (current_hz[i] + trial_hz[i]))
             : 0.0;
-        const double zeeman = -kMu0 * ms[i] * volume *
-            (dx * h_ext_x[i] + dy * h_ext_y[i] + dz * h_ext_z[i]);
+        const double zeeman = external_enabled
+            ? -kMu0 * ms[i] * volume *
+                (dx * h_ext_x[i] + dy * h_ext_y[i] + dz * h_ext_z[i])
+            : 0.0;
         const double q0 = current_mx[i] * axis_x[i] + current_my[i] * axis_y[i] + current_mz[i] * axis_z[i];
         const double q1 = trial_mx[i] * axis_x[i] + trial_my[i] * axis_y[i] + trial_mz[i] * axis_z[i];
         const double q0sq = q0 * q0;
         const double q1sq = q1 * q1;
         const double ku_i = use_ku_field ? ku[i] : uniform_ku;
         const double ku2_i = use_ku2_field ? ku2[i] : uniform_ku2;
-        const double anisotropy = volume *
-            (-ku_i * (q1sq - q0sq) - ku2_i * (q1sq * q1sq - q0sq * q0sq));
+        const double anisotropy = uniaxial_enabled
+            ? volume *
+                (-ku_i * (q1sq - q0sq) -
+                 ku2_i * (q1sq * q1sq - q0sq * q0sq))
+            : 0.0;
         delta = demag + zeeman + anisotropy;
     }
     double sum_delta = 0.0;
@@ -959,6 +966,8 @@ void fullmag_cuda_relax_direct_energy_difference_blocks(
     const double *axis_x, const double *axis_y, const double *axis_z,
     const double *lumped_mass, const uint8_t *magnetic_node_mask,
     bool demag_enabled,
+    bool external_enabled,
+    bool uniaxial_enabled,
     double uniform_ku, double uniform_ku2, bool use_ku_field, bool use_ku2_field,
     double *block_delta_energy, double *block_absolute_terms, int n, cudaStream_t stream)
 {
@@ -968,7 +977,8 @@ void fullmag_cuda_relax_direct_energy_difference_blocks(
         current_h_demag_x, current_h_demag_y, current_h_demag_z,
         trial_h_demag_x, trial_h_demag_y, trial_h_demag_z,
         h_ext_x, h_ext_y, h_ext_z, ms, ku, ku2, axis_x, axis_y, axis_z,
-        lumped_mass, magnetic_node_mask, demag_enabled,
+        lumped_mass, magnetic_node_mask, demag_enabled, external_enabled,
+        uniaxial_enabled,
         uniform_ku, uniform_ku2, use_ku_field, use_ku2_field,
         block_delta_energy, block_absolute_terms, n);
 }

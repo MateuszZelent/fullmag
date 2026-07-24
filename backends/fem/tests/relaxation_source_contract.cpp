@@ -44,12 +44,18 @@ void native_relaxation_algorithms_live_under_mfem_relaxation() {
         "native FEM tangent-plane implicit relaxation must have dedicated native files");
 }
 
-void term_complete_energy_difference_preserves_atomic_migration() {
+void cuda_term_complete_energy_difference_migration_is_atomic() {
     const std::filesystem::path root = fem_source_root();
     const std::string relaxation_numerics =
         read_text_file(root / "src" / "relaxation_numerics.hpp");
+    const std::string direct_energy_header = read_text_file(
+        root / "gpu" / "cuda" / "relaxation" / "direct_energy_increment.hpp");
     const std::string direct_energy_source = read_text_file(
         root / "gpu" / "cuda" / "relaxation" / "direct_energy_increment.cpp");
+    const std::string pgbb_source = read_text_file(
+        root / "gpu" / "cuda" / "relaxation" / "pgbb.cpp");
+    const std::string kernels_source = read_text_file(
+        root / "gpu" / "cuda" / "relaxation" / "pgbb_kernels.cu");
     const auto term_complete_start = relaxation_numerics.find(
         "inline EnergyDifference compose_term_complete_energy_difference(");
     const auto legacy_start = relaxation_numerics.find(
@@ -78,25 +84,65 @@ void term_complete_energy_difference_preserves_atomic_migration() {
                 std::string::npos,
         "term-complete FEM Armijo composition must use explicit endpoint operand magnitudes instead of the cancelled residual delta");
     check(
-        legacy_start != std::string::npos &&
-            relaxation_numerics.find(
-                "double endpoint_total_delta_joules,", legacy_start) !=
-                std::string::npos &&
-            relaxation_numerics.find(
-                "endpoint_total_delta_joules - endpoint_replaced_delta_joules;",
-                legacy_start) != std::string::npos &&
-            relaxation_numerics.find(
-                "std::abs(residual_delta_joules) +", legacy_start) !=
+        legacy_start == std::string::npos &&
+            relaxation_numerics.find("endpoint_replaced_delta_joules") ==
                 std::string::npos,
-        "Task 1 must preserve the legacy direct-energy helper until its production caller migrates atomically");
+        "Task 3 must atomically delete the cancellation-prone legacy direct-energy helper");
     check(
-        direct_energy_source.find(
-            "difference = relaxation::compose_direct_energy_difference(") !=
+        direct_energy_header.find("enum class GpuEnergyIncrementOwner") !=
+                std::string::npos &&
+            direct_energy_header.find("NotEnergy") != std::string::npos &&
+            direct_energy_header.find("Direct") != std::string::npos &&
+            direct_energy_header.find("EndpointResidual") != std::string::npos &&
+            direct_energy_header.find("Unsupported") != std::string::npos &&
+            direct_energy_header.find("gpu_energy_increment_owner(") !=
+                std::string::npos,
+        "CUDA Armijo must expose one exhaustive Context-derived owner classification");
+    check(
+        direct_energy_source.find("for (int raw_slot = 0;") !=
                 std::string::npos &&
             direct_energy_source.find(
-                "compose_term_complete_energy_difference(") ==
+                "static_cast<int>(GpuFinalScalarSlot::Count)") !=
+                std::string::npos &&
+            direct_energy_source.find(
+                "GpuEnergyIncrementOwner::Unsupported") !=
                 std::string::npos,
-        "Task 1 must leave the production CUDA Armijo caller on the legacy helper until Task 3");
+        "CUDA Armijo composition must visit every current/future final scalar slot and fail closed on an unclassified semantic");
+    check(
+        direct_energy_source.find(
+            "relaxation::compose_term_complete_energy_difference(") !=
+                std::string::npos &&
+            direct_energy_source.find("trial.total_energy_j -") ==
+                std::string::npos &&
+            direct_energy_source.find("endpoint_replaced") ==
+                std::string::npos &&
+            pgbb_source.find("endpoint_replaced") == std::string::npos,
+        "production CUDA Armijo and diagnostics must remove endpoint-total reconstruction and replacement vocabulary together");
+    const auto direct_kernel_start =
+        kernels_source.find("__global__ void direct_energy_difference_kernel(");
+    const auto direct_kernel_end =
+        kernels_source.find("__global__ void tangent_gradient_norm_kernel(");
+    const std::string direct_kernel =
+        direct_kernel_start == std::string::npos
+            ? std::string()
+            : kernels_source.substr(
+                  direct_kernel_start,
+                  direct_kernel_end == std::string::npos
+                      ? std::string::npos
+                      : direct_kernel_end - direct_kernel_start);
+    check(
+        !direct_kernel.empty() && direct_kernel.find("h_drive") == std::string::npos &&
+            direct_energy_source.find("GpuFinalScalarSlot::DriveEnergy") !=
+                std::string::npos &&
+            direct_energy_source.find(
+                "GpuEnergyIncrementOwner::EndpointResidual") !=
+                std::string::npos,
+        "regional drive must remain an endpoint residual until the real local direct kernel consumes H_drive");
+    check(
+        direct_energy_source.find(
+            "result.endpoint_residual_operand_absolute_sum_j > 0.0") !=
+                std::string::npos,
+        "endpoint-residual ambiguity must not be misrepresented as refinable demag uncertainty");
 }
 
 void cpu_pgbb_exchange_difference_owner_is_focused_and_term_complete() {
@@ -1284,10 +1330,11 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
     check(
         kernels_header.find("bool demag_enabled") != std::string::npos &&
             direct_energy_source.find("ctx.demag.enabled") != std::string::npos &&
-            direct_energy_source.find("add_endpoint_delta(") !=
+            direct_energy_source.find(
+                "case GpuFinalScalarSlot::DemagEnergy:") !=
                 std::string::npos &&
             direct_energy_source.find(
-                "GpuFinalScalarSlot::DemagEnergy, ctx.demag.enabled") !=
+                "ctx.demag.enabled ? GpuEnergyIncrementOwner::Direct") !=
                 std::string::npos &&
             kernels_source.find("const double demag = demag_enabled") !=
                 std::string::npos &&
@@ -2307,7 +2354,7 @@ void fem_relaxation_benchmark_recipes_prepare_required_binaries() {
 
 int main() {
     native_relaxation_algorithms_live_under_mfem_relaxation();
-    term_complete_energy_difference_preserves_atomic_migration();
+    cuda_term_complete_energy_difference_migration_is_atomic();
     cpu_pgbb_exchange_difference_owner_is_focused_and_term_complete();
     c_abi_exposes_native_relaxation_step();
     runner_does_not_claim_production_fem_minimizer_ownership();

@@ -15,6 +15,7 @@
 #include <mfem.hpp>
 #endif
 #if FULLMAG_HAS_CUDA_RUNTIME
+#include "gpu/cuda/relaxation/direct_energy_increment.hpp"
 #include "gpu/cuda/relaxation/pgbb_kernels.hpp"
 #endif
 
@@ -63,23 +64,6 @@ void check(bool condition, const std::string &message)
         std::fprintf(stderr, "FAIL: %s\n", message.c_str());
         std::exit(1);
     }
-}
-
-void direct_increment_composition_does_not_subtract_replaced_terms_twice()
-{
-    const auto difference =
-        fullmag::fem::relaxation::compose_direct_energy_difference(
-            -10.0e-31,
-            -8.0e-31,
-            -8.0e-31,
-            8.5e-31,
-            3000);
-    check(
-        std::abs(difference.delta_joules - (-10.0e-31)) < 1.0e-45,
-        "direct Armijo composition must replace endpoint terms exactly once");
-    check(
-        std::abs(difference.absolute_term_sum_joules - 10.5e-31) < 1.0e-45,
-        "direct Armijo composition must retain the residual absolute scale");
 }
 
 void term_complete_composition_preserves_endpoint_operand_uncertainty()
@@ -1181,6 +1165,266 @@ void transported_bb_secant_lives_in_the_accepted_tangent_space()
 }
 
 #if FULLMAG_HAS_CUDA_RUNTIME
+void gpu_energy_increment_ownership_is_context_derived_and_exhaustive()
+{
+    using fullmag::fem::GpuEnergyIncrementOwner;
+    using fullmag::fem::GpuFinalScalarSlot;
+    using fullmag::fem::gpu_energy_increment_owner;
+
+    fullmag::fem::Context enabled;
+    enabled.exchange.enabled = true;
+    enabled.demag.enabled = true;
+    enabled.zeeman.has_external_field = true;
+    enabled.zeeman.regional_drives.emplace_back();
+    enabled.anisotropy.uniaxial_enabled = true;
+    enabled.anisotropy.cubic_enabled = true;
+    enabled.dmi.interfacial_enabled = true;
+    enabled.dmi.bulk_enabled = true;
+    enabled.magnetoelastic.enabled = true;
+
+    for (int raw = 0; raw < static_cast<int>(GpuFinalScalarSlot::Count); ++raw) {
+        check(
+            gpu_energy_increment_owner(
+                enabled, static_cast<GpuFinalScalarSlot>(raw)) !=
+                GpuEnergyIncrementOwner::Unsupported,
+            "every current GPU final scalar slot must have an explicit Armijo owner");
+    }
+    check(
+        gpu_energy_increment_owner(enabled, GpuFinalScalarSlot::ExchangeEnergy) ==
+                GpuEnergyIncrementOwner::Direct &&
+            gpu_energy_increment_owner(enabled, GpuFinalScalarSlot::DemagEnergy) ==
+                GpuEnergyIncrementOwner::Direct &&
+            gpu_energy_increment_owner(enabled, GpuFinalScalarSlot::ExternalEnergy) ==
+                GpuEnergyIncrementOwner::Direct &&
+            gpu_energy_increment_owner(enabled, GpuFinalScalarSlot::AnisotropyEnergy) ==
+                GpuEnergyIncrementOwner::Direct &&
+            gpu_energy_increment_owner(enabled, GpuFinalScalarSlot::DmiEnergy) ==
+                GpuEnergyIncrementOwner::Direct &&
+            gpu_energy_increment_owner(enabled, GpuFinalScalarSlot::BulkDmiEnergy) ==
+                GpuEnergyIncrementOwner::Direct,
+        "qualified CUDA exchange, demag, external, uniaxial, and DMI terms must be direct exactly once");
+    check(
+        gpu_energy_increment_owner(enabled, GpuFinalScalarSlot::DriveEnergy) ==
+                GpuEnergyIncrementOwner::EndpointResidual &&
+            gpu_energy_increment_owner(
+                enabled, GpuFinalScalarSlot::CubicAnisotropyEnergy) ==
+                GpuEnergyIncrementOwner::EndpointResidual &&
+            gpu_energy_increment_owner(
+                enabled, GpuFinalScalarSlot::MagnetoelasticEnergy) ==
+                GpuEnergyIncrementOwner::EndpointResidual,
+        "drive, cubic, and magnetoelastic terms without qualified CUDA direct owners must use explicit endpoint residuals");
+    check(
+        gpu_energy_increment_owner(
+            enabled, GpuFinalScalarSlot::DemagRobinBoundaryEnergy) ==
+            GpuEnergyIncrementOwner::NotEnergy,
+        "Robin boundary diagnostics must not double-count the polarized demag energy");
+    for (GpuFinalScalarSlot observable : {
+             GpuFinalScalarSlot::MaxRhs,
+             GpuFinalScalarSlot::MaxHEff,
+             GpuFinalScalarSlot::MaxHDemag,
+             GpuFinalScalarSlot::MaxTorque,
+             GpuFinalScalarSlot::MxSum,
+             GpuFinalScalarSlot::MySum,
+             GpuFinalScalarSlot::MzSum,
+             GpuFinalScalarSlot::MomentWeight,
+         }) {
+        check(
+            gpu_energy_increment_owner(enabled, observable) ==
+                GpuEnergyIncrementOwner::NotEnergy,
+            "GPU final observables must not participate in Armijo energy composition");
+    }
+
+    fullmag::fem::Context disabled;
+    disabled.exchange.enabled = false;
+    for (GpuFinalScalarSlot energy : {
+             GpuFinalScalarSlot::ExchangeEnergy,
+             GpuFinalScalarSlot::DemagEnergy,
+             GpuFinalScalarSlot::ExternalEnergy,
+             GpuFinalScalarSlot::DriveEnergy,
+             GpuFinalScalarSlot::DmiEnergy,
+             GpuFinalScalarSlot::BulkDmiEnergy,
+             GpuFinalScalarSlot::AnisotropyEnergy,
+             GpuFinalScalarSlot::CubicAnisotropyEnergy,
+             GpuFinalScalarSlot::MagnetoelasticEnergy,
+         }) {
+        check(
+            gpu_energy_increment_owner(disabled, energy) ==
+                GpuEnergyIncrementOwner::NotEnergy,
+            "disabled GPU energies must be excluded by Context state");
+    }
+    check(
+        gpu_energy_increment_owner(disabled, GpuFinalScalarSlot::Count) ==
+            GpuEnergyIncrementOwner::Unsupported,
+        "an unknown GPU scalar semantic must fail closed as unsupported");
+}
+
+void gpu_term_complete_composition_retains_direct_zeeman_failure_scale()
+{
+    using fullmag::fem::GpuDirectEnergySnapshot;
+    using fullmag::fem::GpuFinalScalarSlot;
+
+    fullmag::fem::Context ctx;
+    ctx.exchange.enabled = true;
+    ctx.zeeman.has_external_field = true;
+    GpuDirectEnergySnapshot base{};
+    GpuDirectEnergySnapshot trial{};
+    base.total_energy_j = -2.0e-17;
+    trial.total_energy_j = -2.0e-17;
+    base.terms_j[static_cast<size_t>(GpuFinalScalarSlot::DemagRobinBoundaryEnergy)] =
+        -7.0e-12;
+    trial.terms_j[static_cast<size_t>(GpuFinalScalarSlot::DemagRobinBoundaryEnergy)] =
+        9.0e-12;
+    base.terms_j[static_cast<size_t>(GpuFinalScalarSlot::DriveEnergy)] = -1.0e9;
+    trial.terms_j[static_cast<size_t>(GpuFinalScalarSlot::DriveEnergy)] = 1.0e9;
+
+    constexpr double exchange_delta = -2.1037518401e-39;
+    constexpr double zeeman_delta = 7.9035597018e-49;
+    fullmag::fem::relaxation::EnergyDifference difference{};
+    double endpoint_residual_delta = 0.0;
+    double endpoint_residual_operand_absolute_sum = 0.0;
+    std::string error;
+    check(
+        fullmag::fem::gpu_compose_term_complete_energy_difference(
+            ctx,
+            base,
+            trial,
+            exchange_delta + zeeman_delta,
+            std::abs(exchange_delta) + std::abs(zeeman_delta),
+            96u,
+            difference,
+            endpoint_residual_delta,
+            endpoint_residual_operand_absolute_sum,
+            error),
+        "GPU term-complete composition must accept classified direct inputs: " +
+            error);
+    check(
+        difference.delta_joules == exchange_delta + zeeman_delta &&
+            endpoint_residual_delta == 0.0 &&
+            endpoint_residual_operand_absolute_sum == 0.0,
+        "GPU Armijo composition must retain direct exchange plus Zeeman without endpoint-total reconstruction or disabled-scalar inference");
+    check(
+        fullmag::fem::relaxation::strict_armijo_difference_decision(
+            difference, -6.0314e-43) ==
+            fullmag::fem::relaxation::ArmijoDifferenceDecision::Accept,
+        "retained GPU exchange-plus-Zeeman increment must satisfy strict Armijo");
+
+    fullmag::fem::Context disabled_ctx;
+    disabled_ctx.exchange.enabled = false;
+    GpuDirectEnergySnapshot disabled_base{};
+    GpuDirectEnergySnapshot disabled_trial{};
+    for (GpuFinalScalarSlot disabled_slot : {
+             GpuFinalScalarSlot::ExchangeEnergy,
+             GpuFinalScalarSlot::DemagEnergy,
+             GpuFinalScalarSlot::DemagRobinBoundaryEnergy,
+             GpuFinalScalarSlot::ExternalEnergy,
+             GpuFinalScalarSlot::DriveEnergy,
+             GpuFinalScalarSlot::DmiEnergy,
+             GpuFinalScalarSlot::BulkDmiEnergy,
+             GpuFinalScalarSlot::AnisotropyEnergy,
+             GpuFinalScalarSlot::CubicAnisotropyEnergy,
+             GpuFinalScalarSlot::MagnetoelasticEnergy,
+         }) {
+        disabled_base.terms_j[static_cast<size_t>(disabled_slot)] = -1.0e9;
+        disabled_trial.terms_j[static_cast<size_t>(disabled_slot)] = 1.0e9;
+    }
+    check(
+        fullmag::fem::gpu_compose_term_complete_energy_difference(
+            disabled_ctx,
+            disabled_base,
+            disabled_trial,
+            0.0,
+            0.0,
+            96u,
+            difference,
+            endpoint_residual_delta,
+            endpoint_residual_operand_absolute_sum,
+            error) &&
+            difference.delta_joules == 0.0 &&
+            difference.absolute_term_sum_joules == 0.0,
+        "disabled energy slots must remain excluded even when their stored scalars are nonzero");
+
+    fullmag::fem::Context residual_ctx;
+    residual_ctx.exchange.enabled = false;
+    residual_ctx.zeeman.regional_drives.emplace_back();
+    residual_ctx.anisotropy.cubic_enabled = true;
+    residual_ctx.magnetoelastic.enabled = true;
+    GpuDirectEnergySnapshot residual_base{};
+    GpuDirectEnergySnapshot residual_trial{};
+    const auto set_pair = [&](GpuFinalScalarSlot slot, double base_value,
+                              double trial_value) {
+        residual_base.terms_j[static_cast<size_t>(slot)] = base_value;
+        residual_trial.terms_j[static_cast<size_t>(slot)] = trial_value;
+    };
+    set_pair(GpuFinalScalarSlot::DriveEnergy, -1.1e-17, -1.1e-17 + 7.0e-31);
+    set_pair(
+        GpuFinalScalarSlot::CubicAnisotropyEnergy,
+        3.0e-18,
+        3.0e-18 - 2.0e-31);
+    set_pair(
+        GpuFinalScalarSlot::MagnetoelasticEnergy,
+        -4.0e-18,
+        -4.0e-18 + 5.0e-31);
+    set_pair(GpuFinalScalarSlot::DemagRobinBoundaryEnergy, -1.0e3, 2.0e3);
+    const double expected_residual =
+        (residual_trial.terms_j[static_cast<size_t>(GpuFinalScalarSlot::DriveEnergy)] -
+         residual_base.terms_j[static_cast<size_t>(GpuFinalScalarSlot::DriveEnergy)]) +
+        (residual_trial.terms_j[static_cast<size_t>(GpuFinalScalarSlot::CubicAnisotropyEnergy)] -
+         residual_base.terms_j[static_cast<size_t>(GpuFinalScalarSlot::CubicAnisotropyEnergy)]) +
+        (residual_trial.terms_j[static_cast<size_t>(GpuFinalScalarSlot::MagnetoelasticEnergy)] -
+         residual_base.terms_j[static_cast<size_t>(GpuFinalScalarSlot::MagnetoelasticEnergy)]);
+    const double expected_operand_scale =
+        std::abs(residual_base.terms_j[static_cast<size_t>(GpuFinalScalarSlot::DriveEnergy)]) +
+        std::abs(residual_trial.terms_j[static_cast<size_t>(GpuFinalScalarSlot::DriveEnergy)]) +
+        std::abs(residual_base.terms_j[static_cast<size_t>(GpuFinalScalarSlot::CubicAnisotropyEnergy)]) +
+        std::abs(residual_trial.terms_j[static_cast<size_t>(GpuFinalScalarSlot::CubicAnisotropyEnergy)]) +
+        std::abs(residual_base.terms_j[static_cast<size_t>(GpuFinalScalarSlot::MagnetoelasticEnergy)]) +
+        std::abs(residual_trial.terms_j[static_cast<size_t>(GpuFinalScalarSlot::MagnetoelasticEnergy)]);
+    check(
+        fullmag::fem::gpu_compose_term_complete_energy_difference(
+            residual_ctx,
+            residual_base,
+            residual_trial,
+            0.0,
+            0.0,
+            96u,
+            difference,
+            endpoint_residual_delta,
+            endpoint_residual_operand_absolute_sum,
+            error) &&
+            endpoint_residual_delta == expected_residual &&
+            endpoint_residual_operand_absolute_sum == expected_operand_scale &&
+            difference.delta_joules == expected_residual,
+        "GPU residual composition must include drive, cubic, and magnetoelastic endpoint operands exactly once while excluding Robin diagnostics");
+}
+
+void gpu_endpoint_residual_ambiguity_has_no_false_demag_refinement()
+{
+    fullmag::fem::Context ctx;
+    ctx.demag.enabled = true;
+    fullmag::fem::GpuDirectArmijoResult result{};
+    result.decision =
+        fullmag::fem::relaxation::ArmijoDifferenceDecision::Refine;
+    result.endpoint_residual_operand_absolute_sum_j = 1.0e-17;
+    fullmag::fem::FemGpuComponentField field{};
+    std::string error;
+    check(
+        fullmag::fem::gpu_direct_armijo_refine(
+            ctx,
+            nullptr,
+            0,
+            0,
+            field,
+            field,
+            field,
+            0.0,
+            result,
+            error) &&
+            !result.refinement_attempted &&
+            !result.refinement_accepted &&
+            result.refinement_rhs_evaluations == 0u,
+        "endpoint-residual ambiguity without a qualified residual refinement must fail closed without relabelling demag refinement");
+}
+
 void check_cuda(cudaError_t status, const char *message)
 {
     check(status == cudaSuccess, std::string(message) + ": " + cudaGetErrorString(status));
@@ -1628,7 +1872,6 @@ void cuda_heterogeneous_nodal_ms_pgbb_ncg_calibration()
 
 int main()
 {
-    direct_increment_composition_does_not_subtract_replaced_terms_twice();
     term_complete_composition_preserves_endpoint_operand_uncertainty();
     adverse_drive_endpoint_delta_controls_strict_armijo();
     polarized_exchange_difference_matches_long_double_and_endpoint_oracles();
@@ -1660,6 +1903,9 @@ int main()
         }
     }
 #if FULLMAG_HAS_CUDA_RUNTIME
+    gpu_energy_increment_ownership_is_context_derived_and_exhaustive();
+    gpu_term_complete_composition_retains_direct_zeeman_failure_scale();
+    gpu_endpoint_residual_ambiguity_has_no_false_demag_refinement();
     cuda_pgbb_current_metrics_finite_flags_cover_all_packed_inputs();
     cuda_heterogeneous_nodal_ms_pgbb_ncg_calibration();
 #endif

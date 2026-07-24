@@ -571,12 +571,12 @@ int gpu_relax_projected_gradient_bb_step(
     bool last_refinement_attempted = false;
     bool last_refinement_accepted = false;
     double last_local_direct_delta = 0.0;
-    double last_residual_delta = 0.0;
+    double last_endpoint_residual_delta = 0.0;
+    double last_endpoint_residual_operand_absolute_sum = 0.0;
     double last_direct_local_component = 0.0;
     double last_direct_exchange_component = 0.0;
     double last_direct_interfacial_dmi_component = 0.0;
     double last_direct_bulk_dmi_component = 0.0;
-    double last_endpoint_replaced_delta = 0.0;
     while (true) {
         fullmag_cuda_relax_retract_field(
             gpu.rk.m_backup.x,
@@ -634,18 +634,18 @@ int gpu_relax_projected_gradient_bb_step(
                 ctx, stream, "trial direct-energy evaluation failure", reason, error);
         }
         last_direct_difference = armijo_result.difference;
-        last_local_direct_delta = armijo_result.difference.delta_joules;
-        last_residual_delta = 0.0;
+        last_local_direct_delta = armijo_result.local_delta_j;
+        last_endpoint_residual_delta =
+            armijo_result.endpoint_residual_delta_j;
+        last_endpoint_residual_operand_absolute_sum =
+            armijo_result.endpoint_residual_operand_absolute_sum_j;
         last_direct_local_component = armijo_result.local_delta_j;
         last_direct_exchange_component = armijo_result.exchange_delta_j;
         last_direct_interfacial_dmi_component =
             armijo_result.interfacial_dmi_delta_j;
         last_direct_bulk_dmi_component = armijo_result.bulk_dmi_delta_j;
-        last_endpoint_replaced_delta =
-            armijo_result.endpoint_replaced_delta_j;
         last_armijo_decision = armijo_result.decision;
-        last_refinement_attempted =
-            armijo_result.decision == relaxation::ArmijoDifferenceDecision::Refine;
+        last_refinement_attempted = armijo_result.refinement_attempted;
         last_refinement_accepted = false;
         if (last_refinement_attempted &&
             !gpu_direct_armijo_refine(
@@ -711,9 +711,12 @@ int gpu_relax_projected_gradient_bb_step(
                 last_direct_interfacial_dmi_component) +
             " direct_bulk_dmi_component_j=" +
             format_gpu_relax_pgbb_scalar(last_direct_bulk_dmi_component) +
-            " endpoint_replaced_delta_j=" +
+            " endpoint_residual_delta_j=" +
             format_gpu_relax_pgbb_scalar(
-                last_endpoint_replaced_delta) +
+                last_endpoint_residual_delta) +
+            " endpoint_residual_operand_absolute_sum_j=" +
+            format_gpu_relax_pgbb_scalar(
+                last_endpoint_residual_operand_absolute_sum) +
             " direct_roundoff_bound_j=" +
             format_gpu_relax_pgbb_scalar(last_direct_difference.roundoff_bound_joules) +
             " direct_armijo_decision=" +
@@ -735,7 +738,7 @@ int gpu_relax_projected_gradient_bb_step(
             " direct_local_delta_j=" +
             format_gpu_relax_pgbb_scalar(last_local_direct_delta) +
             " residual_delta_j=" +
-            format_gpu_relax_pgbb_scalar(last_residual_delta);
+            format_gpu_relax_pgbb_scalar(last_endpoint_residual_delta);
         return gpu_relax_restore_previous_magnetization_after_failure(
             ctx,
             stream,

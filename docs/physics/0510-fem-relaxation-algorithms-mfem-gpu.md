@@ -481,11 +481,17 @@ nullspace where separately accumulated endpoint energies cannot resolve the
 descent. The reduction also reports a componentwise absolute-term sum for its
 forward-error bound.
 
-The CUDA direct-increment batch classifies every `GpuFinalScalarSlot`.
-Exchange, local, drive, DMI, and polarized demag terms covered by direct
-identities are excluded from the endpoint residual. Any term without a
-qualified direct owner uses an explicit termwise endpoint difference with an
-operand-scale bound, or fails closed when neither route is supported. This
+The CUDA direct-increment batch classifies every `GpuFinalScalarSlot` from the
+enabled `Context` semantics. Exchange, polarized demag, external Zeeman,
+uniaxial anisotropy, and interfacial/bulk DMI use qualified direct identities
+exactly once. The current local direct kernel does not consume `H_drive`, so an
+enabled regional drive uses its already-reduced endpoint scalar; cubic
+anisotropy and magnetoelastic energy use the same explicit endpoint-residual
+route. Each residual contributes `trial_q - base_q` and
+`abs(trial_q) + abs(base_q)` to the operand-scale bound. The Robin boundary
+diagnostic is not a separate Armijo energy because the polarized demag identity
+already includes that variational boundary form. Disabled terms and observable
+slots are excluded, and an unclassified energy semantic fails closed. This
 prevents cancellation of a physical `1e-39 J` decrement by unrelated endpoint
 totals of order `1e-17 J`.
 

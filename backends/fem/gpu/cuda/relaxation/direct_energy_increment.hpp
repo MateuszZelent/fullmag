@@ -11,6 +11,7 @@
 #include <cuda_runtime.h>
 
 #include <array>
+#include <cstdint>
 #include <string>
 
 namespace fullmag::fem {
@@ -21,6 +22,29 @@ struct GpuDirectEnergySnapshot {
     double total_energy_j = 0.0;
     std::array<double, kGpuFinalScalarSlots> terms_j{};
 };
+
+enum class GpuEnergyIncrementOwner : uint8_t {
+    NotEnergy,
+    Direct,
+    EndpointResidual,
+    Unsupported,
+};
+
+GpuEnergyIncrementOwner gpu_energy_increment_owner(
+    const Context &ctx,
+    GpuFinalScalarSlot slot);
+
+bool gpu_compose_term_complete_energy_difference(
+    const Context &ctx,
+    const GpuDirectEnergySnapshot &base,
+    const GpuDirectEnergySnapshot &trial,
+    double direct_delta_j,
+    double direct_absolute_term_sum_j,
+    size_t scalar_term_count,
+    relaxation::EnergyDifference &difference,
+    double &endpoint_residual_delta_j,
+    double &endpoint_residual_operand_absolute_sum_j,
+    std::string &reason);
 
 static constexpr size_t kGpuPgbbCurrentGradientNormSlot =
     kGpuFinalScalarSlots;
@@ -50,7 +74,8 @@ struct GpuDirectArmijoResult {
     double exchange_delta_j = 0.0;
     double interfacial_dmi_delta_j = 0.0;
     double bulk_dmi_delta_j = 0.0;
-    double endpoint_replaced_delta_j = 0.0;
+    double endpoint_residual_delta_j = 0.0;
+    double endpoint_residual_operand_absolute_sum_j = 0.0;
     relaxation::ArmijoDifferenceDecision decision =
         relaxation::ArmijoDifferenceDecision::Reject;
     bool refinement_attempted = false;

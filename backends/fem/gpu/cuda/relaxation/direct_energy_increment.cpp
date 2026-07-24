@@ -69,6 +69,51 @@ bool reduce_scalar_sum(
     return cuda_launch_ok(operation, reason);
 }
 
+const char *gpu_final_scalar_slot_name(GpuFinalScalarSlot slot)
+{
+    switch (slot) {
+    case GpuFinalScalarSlot::MaxRhs:
+        return "MaxRhs";
+    case GpuFinalScalarSlot::ExchangeEnergy:
+        return "ExchangeEnergy";
+    case GpuFinalScalarSlot::DemagEnergy:
+        return "DemagEnergy";
+    case GpuFinalScalarSlot::DemagRobinBoundaryEnergy:
+        return "DemagRobinBoundaryEnergy";
+    case GpuFinalScalarSlot::ExternalEnergy:
+        return "ExternalEnergy";
+    case GpuFinalScalarSlot::DriveEnergy:
+        return "DriveEnergy";
+    case GpuFinalScalarSlot::DmiEnergy:
+        return "DmiEnergy";
+    case GpuFinalScalarSlot::BulkDmiEnergy:
+        return "BulkDmiEnergy";
+    case GpuFinalScalarSlot::AnisotropyEnergy:
+        return "AnisotropyEnergy";
+    case GpuFinalScalarSlot::CubicAnisotropyEnergy:
+        return "CubicAnisotropyEnergy";
+    case GpuFinalScalarSlot::MagnetoelasticEnergy:
+        return "MagnetoelasticEnergy";
+    case GpuFinalScalarSlot::MaxHEff:
+        return "MaxHEff";
+    case GpuFinalScalarSlot::MaxHDemag:
+        return "MaxHDemag";
+    case GpuFinalScalarSlot::MaxTorque:
+        return "MaxTorque";
+    case GpuFinalScalarSlot::MxSum:
+        return "MxSum";
+    case GpuFinalScalarSlot::MySum:
+        return "MySum";
+    case GpuFinalScalarSlot::MzSum:
+        return "MzSum";
+    case GpuFinalScalarSlot::MomentWeight:
+        return "MomentWeight";
+    case GpuFinalScalarSlot::Count:
+        return "Count";
+    }
+    return "unknown";
+}
+
 bool unpack_energy_snapshot(
     const Context &ctx,
     const double *energy_terms,
@@ -84,7 +129,7 @@ bool unpack_energy_snapshot(
                 snapshot.terms_j[static_cast<size_t>(slot)];
         }
     };
-    add(GpuFinalScalarSlot::ExchangeEnergy, true);
+    add(GpuFinalScalarSlot::ExchangeEnergy, ctx.exchange.enabled);
     add(GpuFinalScalarSlot::DemagEnergy, ctx.demag.enabled);
     add(GpuFinalScalarSlot::ExternalEnergy, ctx.zeeman.has_external_field);
     add(GpuFinalScalarSlot::DriveEnergy, !ctx.zeeman.regional_drives.empty());
@@ -132,7 +177,8 @@ bool direct_difference(
         gpu.materials.anisotropy_axis_x, gpu.materials.anisotropy_axis_y,
         gpu.materials.anisotropy_axis_z, gpu.mesh_metrics.lumped_mass,
         gpu.mesh_regions.magnetic_node_mask,
-        ctx.demag.enabled,
+        ctx.demag.enabled, ctx.zeeman.has_external_field,
+        ctx.anisotropy.uniaxial_enabled,
         ctx.anisotropy.uniaxial_Ku, ctx.anisotropy.uniaxial_Ku2,
         !ctx.material_fields.Ku_field.empty(), !ctx.material_fields.Ku2_field.empty(),
         gpu.reductions.scalar_workspace,
@@ -149,19 +195,21 @@ bool direct_difference(
         return false;
     }
 
-    fullmag_cuda_legacy_sparse_exchange_difference_blocks(
-        gpu.legacy_exchange.csr_row_offsets,
-        gpu.legacy_exchange.csr_col_indices,
-        gpu.legacy_exchange.csr_values,
-        base_m.x, base_m.y, base_m.z,
-        gpu.magnetization.m.x, gpu.magnetization.m.y, gpu.magnetization.m.z,
-        gpu.reductions.scalar_workspace, node_count, stream);
-    if (!cuda_launch_ok("launch GPU direct minimizer exchange difference", reason) ||
-        !reduce_scalar_sum(
-            ctx, stream, gpu.reductions.scalar_workspace, block_count,
-            tail + kDirectExchangeDeltaTailSlot,
-            "launch GPU direct minimizer exchange delta reduction", reason)) {
-        return false;
+    if (ctx.exchange.enabled) {
+        fullmag_cuda_legacy_sparse_exchange_difference_blocks(
+            gpu.legacy_exchange.csr_row_offsets,
+            gpu.legacy_exchange.csr_col_indices,
+            gpu.legacy_exchange.csr_values,
+            base_m.x, base_m.y, base_m.z,
+            gpu.magnetization.m.x, gpu.magnetization.m.y, gpu.magnetization.m.z,
+            gpu.reductions.scalar_workspace, node_count, stream);
+        if (!cuda_launch_ok("launch GPU direct minimizer exchange difference", reason) ||
+            !reduce_scalar_sum(
+                ctx, stream, gpu.reductions.scalar_workspace, block_count,
+                tail + kDirectExchangeDeltaTailSlot,
+                "launch GPU direct minimizer exchange delta reduction", reason)) {
+            return false;
+        }
     }
 
     const auto add_dmi_difference = [&](bool bulk_mode, size_t tail_slot) -> bool {
@@ -226,32 +274,17 @@ bool direct_difference(
     result.interfacial_dmi_delta_j = interfacial_dmi_delta;
     result.bulk_dmi_delta_j = bulk_dmi_delta;
 
-    const auto slot = [](GpuFinalScalarSlot value) {
-        return static_cast<size_t>(value);
-    };
-    double endpoint_replaced = 0.0;
-    const auto add_endpoint_delta = [&](GpuFinalScalarSlot energy_slot, bool enabled) {
-        if (enabled) {
-            endpoint_replaced +=
-                trial.terms_j[slot(energy_slot)] - base.terms_j[slot(energy_slot)];
-        }
-    };
-    add_endpoint_delta(GpuFinalScalarSlot::ExchangeEnergy, true);
-    add_endpoint_delta(GpuFinalScalarSlot::DemagEnergy, ctx.demag.enabled);
-    add_endpoint_delta(
-        GpuFinalScalarSlot::ExternalEnergy, ctx.zeeman.has_external_field);
-    add_endpoint_delta(
-        GpuFinalScalarSlot::AnisotropyEnergy, ctx.anisotropy.uniaxial_enabled);
-    add_endpoint_delta(GpuFinalScalarSlot::DmiEnergy, ctx.dmi.interfacial_enabled);
-    add_endpoint_delta(GpuFinalScalarSlot::BulkDmiEnergy, ctx.dmi.bulk_enabled);
-    result.endpoint_replaced_delta_j = endpoint_replaced;
-    difference = relaxation::compose_direct_energy_difference(
-        trial.total_energy_j - base.total_energy_j,
-        endpoint_replaced,
+    return gpu_compose_term_complete_energy_difference(
+        ctx,
+        base,
+        trial,
         direct_delta,
         direct_absolute,
-        static_cast<size_t>(node_count) * 3u);
-    return true;
+        static_cast<size_t>(node_count) * 3u,
+        difference,
+        result.endpoint_residual_delta_j,
+        result.endpoint_residual_operand_absolute_sum_j,
+        reason);
 }
 
 bool compute_fresh_snapshot(
@@ -271,6 +304,126 @@ bool compute_fresh_snapshot(
 }
 
 } // namespace
+
+GpuEnergyIncrementOwner gpu_energy_increment_owner(
+    const Context &ctx,
+    GpuFinalScalarSlot slot)
+{
+    switch (slot) {
+    case GpuFinalScalarSlot::ExchangeEnergy:
+        return ctx.exchange.enabled ? GpuEnergyIncrementOwner::Direct
+                                    : GpuEnergyIncrementOwner::NotEnergy;
+    case GpuFinalScalarSlot::DemagEnergy:
+        return ctx.demag.enabled ? GpuEnergyIncrementOwner::Direct
+                                 : GpuEnergyIncrementOwner::NotEnergy;
+    case GpuFinalScalarSlot::DemagRobinBoundaryEnergy:
+        return GpuEnergyIncrementOwner::NotEnergy;
+    case GpuFinalScalarSlot::ExternalEnergy:
+        return ctx.zeeman.has_external_field ? GpuEnergyIncrementOwner::Direct
+                                             : GpuEnergyIncrementOwner::NotEnergy;
+    case GpuFinalScalarSlot::DriveEnergy:
+        return !ctx.zeeman.regional_drives.empty()
+            ? GpuEnergyIncrementOwner::EndpointResidual
+            : GpuEnergyIncrementOwner::NotEnergy;
+    case GpuFinalScalarSlot::DmiEnergy:
+        return ctx.dmi.interfacial_enabled ? GpuEnergyIncrementOwner::Direct
+                                           : GpuEnergyIncrementOwner::NotEnergy;
+    case GpuFinalScalarSlot::BulkDmiEnergy:
+        return ctx.dmi.bulk_enabled ? GpuEnergyIncrementOwner::Direct
+                                    : GpuEnergyIncrementOwner::NotEnergy;
+    case GpuFinalScalarSlot::AnisotropyEnergy:
+        return ctx.anisotropy.uniaxial_enabled ? GpuEnergyIncrementOwner::Direct
+                                               : GpuEnergyIncrementOwner::NotEnergy;
+    case GpuFinalScalarSlot::CubicAnisotropyEnergy:
+        return ctx.anisotropy.cubic_enabled
+            ? GpuEnergyIncrementOwner::EndpointResidual
+            : GpuEnergyIncrementOwner::NotEnergy;
+    case GpuFinalScalarSlot::MagnetoelasticEnergy:
+        return ctx.magnetoelastic.enabled
+            ? GpuEnergyIncrementOwner::EndpointResidual
+            : GpuEnergyIncrementOwner::NotEnergy;
+    case GpuFinalScalarSlot::MaxRhs:
+    case GpuFinalScalarSlot::MaxHEff:
+    case GpuFinalScalarSlot::MaxHDemag:
+    case GpuFinalScalarSlot::MaxTorque:
+    case GpuFinalScalarSlot::MxSum:
+    case GpuFinalScalarSlot::MySum:
+    case GpuFinalScalarSlot::MzSum:
+    case GpuFinalScalarSlot::MomentWeight:
+        return GpuEnergyIncrementOwner::NotEnergy;
+    case GpuFinalScalarSlot::Count:
+        return GpuEnergyIncrementOwner::Unsupported;
+    }
+    return GpuEnergyIncrementOwner::Unsupported;
+}
+
+bool gpu_compose_term_complete_energy_difference(
+    const Context &ctx,
+    const GpuDirectEnergySnapshot &base,
+    const GpuDirectEnergySnapshot &trial,
+    double direct_delta_j,
+    double direct_absolute_term_sum_j,
+    size_t scalar_term_count,
+    relaxation::EnergyDifference &difference,
+    double &endpoint_residual_delta_j,
+    double &endpoint_residual_operand_absolute_sum_j,
+    std::string &reason)
+{
+    if (!std::isfinite(direct_delta_j) ||
+        !std::isfinite(direct_absolute_term_sum_j) ||
+        direct_absolute_term_sum_j < 0.0) {
+        reason = "GPU direct minimizer produced a non-finite direct energy increment";
+        return false;
+    }
+
+    endpoint_residual_delta_j = 0.0;
+    endpoint_residual_operand_absolute_sum_j = 0.0;
+    for (int raw_slot = 0;
+         raw_slot < static_cast<int>(GpuFinalScalarSlot::Count);
+         ++raw_slot) {
+        const auto slot = static_cast<GpuFinalScalarSlot>(raw_slot);
+        switch (gpu_energy_increment_owner(ctx, slot)) {
+        case GpuEnergyIncrementOwner::NotEnergy:
+        case GpuEnergyIncrementOwner::Direct:
+            break;
+        case GpuEnergyIncrementOwner::EndpointResidual: {
+            const double base_term = base.terms_j[static_cast<size_t>(slot)];
+            const double trial_term = trial.terms_j[static_cast<size_t>(slot)];
+            if (!std::isfinite(base_term) || !std::isfinite(trial_term)) {
+                reason = std::string("GPU direct minimizer produced a non-finite endpoint residual for ") +
+                    gpu_final_scalar_slot_name(slot);
+                return false;
+            }
+            endpoint_residual_delta_j += trial_term - base_term;
+            endpoint_residual_operand_absolute_sum_j +=
+                std::abs(base_term) + std::abs(trial_term);
+            break;
+        }
+        case GpuEnergyIncrementOwner::Unsupported:
+            reason = std::string("GPU direct minimizer has no energy-increment owner for ") +
+                gpu_final_scalar_slot_name(slot);
+            return false;
+        }
+    }
+    if (!std::isfinite(endpoint_residual_delta_j) ||
+        !std::isfinite(endpoint_residual_operand_absolute_sum_j)) {
+        reason = "GPU direct minimizer produced a non-finite endpoint residual composition";
+        return false;
+    }
+    difference = relaxation::compose_term_complete_energy_difference(
+        endpoint_residual_delta_j,
+        endpoint_residual_operand_absolute_sum_j,
+        direct_delta_j,
+        direct_absolute_term_sum_j,
+        scalar_term_count);
+    if (!std::isfinite(difference.delta_joules) ||
+        !std::isfinite(difference.absolute_term_sum_joules) ||
+        !std::isfinite(difference.roundoff_bound_joules)) {
+        reason = "GPU direct minimizer produced a non-finite term-complete energy difference";
+        return false;
+    }
+    return true;
+}
 
 bool gpu_relax_compute_effective_field_and_energy_terms(
     Context &ctx,
@@ -376,7 +529,9 @@ bool gpu_direct_armijo_evaluate(
     result.decision = relaxation::strict_armijo_difference_decision(
         result.difference, armijo_rhs_j);
     result.refinement_attempted =
-        result.decision == relaxation::ArmijoDifferenceDecision::Refine;
+        result.decision == relaxation::ArmijoDifferenceDecision::Refine &&
+        ctx.demag.enabled &&
+        result.endpoint_residual_operand_absolute_sum_j == 0.0;
     result.refinement_accepted = false;
     return true;
 }
@@ -394,9 +549,12 @@ bool gpu_direct_armijo_refine(
     std::string &reason)
 {
     if (result.decision != relaxation::ArmijoDifferenceDecision::Refine ||
-        !ctx.demag.enabled) {
+        !ctx.demag.enabled ||
+        result.endpoint_residual_operand_absolute_sum_j > 0.0) {
+        result.refinement_attempted = false;
         return true;
     }
+    result.refinement_attempted = true;
 
     const fullmag_fem_solver_config ordinary_solver = ctx.demag.solver;
     const double ordinary_rtol = ordinary_solver.relative_tolerance;

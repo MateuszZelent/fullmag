@@ -111,6 +111,8 @@ void fullmag_cuda_relax_direct_energy_difference_blocks(
     const double *lumped_mass,
     const uint8_t *magnetic_node_mask,
     bool demag_enabled,
+    bool external_enabled,
+    bool uniaxial_enabled,
     double uniform_ku, double uniform_ku2,
     bool use_ku_field, bool use_ku2_field,
     double *block_delta_energy,
