@@ -113,6 +113,8 @@ void cpu_pgbb_exchange_difference_owner_is_focused_and_term_complete() {
     const std::string cmake = read_text_file(root / "CMakeLists.txt");
     const std::string projected_gradient = read_text_file(
         root / "cpu" / "mfem" / "relaxation" / "projected_gradient_bb.cpp");
+    const std::string derivative_contract = read_text_file(
+        root / "tests" / "relaxation_energy_derivative_contract.cpp");
     const auto count_occurrences = [](const std::string &text, const std::string &needle) {
         size_t count = 0u;
         size_t position = 0u;
@@ -170,6 +172,12 @@ void cpu_pgbb_exchange_difference_owner_is_focused_and_term_complete() {
         projected_gradient.find("residual_operand_abs +=") != std::string::npos &&
             projected_gradient.find("std::abs(base) + std::abs(trial)") !=
                 std::string::npos &&
+            count_occurrences(
+                projected_gradient,
+                "current_stats.drive_energy_joules") == 1u &&
+            count_occurrences(
+                projected_gradient,
+                "trial_stats.drive_energy_joules") == 1u &&
             projected_gradient.find("current_stats.dmi_energy_joules") !=
                 std::string::npos &&
             projected_gradient.find("trial_stats.dmi_energy_joules") !=
@@ -182,7 +190,39 @@ void cpu_pgbb_exchange_difference_owner_is_focused_and_term_complete() {
             projected_gradient.find("trial_cubic_energy") != std::string::npos &&
             projected_gradient.find("std::abs(residual_delta)") ==
                 std::string::npos,
-        "CPU PG-BB residual DMI, magnetoelastic, and cubic terms must retain explicit base/trial operand scales");
+        "CPU PG-BB residual drive, DMI, magnetoelastic, and cubic terms must each retain one explicit base/trial operand scale");
+    check(
+        count_occurrences(
+            projected_gradient,
+            "current_stats.exchange_energy_joules") == 0u &&
+            count_occurrences(
+                projected_gradient,
+                "trial_stats.exchange_energy_joules") == 0u &&
+            count_occurrences(
+                projected_gradient,
+                "current_stats.demag_energy_joules") == 0u &&
+            count_occurrences(
+                projected_gradient,
+                "trial_stats.demag_energy_joules") == 0u &&
+            count_occurrences(
+                projected_gradient,
+                "current_stats.external_energy_joules") == 0u &&
+            count_occurrences(
+                projected_gradient,
+                "trial_stats.external_energy_joules") == 0u &&
+            count_occurrences(
+                projected_gradient,
+                "current_stats.anisotropy_energy_joules") == 0u &&
+            count_occurrences(
+                projected_gradient,
+                "trial_stats.anisotropy_energy_joules") == 0u &&
+            count_occurrences(
+                projected_gradient,
+                "current_stats.total_energy_joules") == 2u &&
+            count_occurrences(
+                projected_gradient,
+                "trial_stats.total_energy_joules") == 1u,
+        "CPU PG-BB must replace exchange, demag, external, and aggregate anisotropy endpoints with their direct/subterm owners while reserving total energy for diagnostics only");
     check(
         projected_gradient.find("demag.roundoff_bound_joules +") !=
                 std::string::npos &&
@@ -193,6 +233,14 @@ void cpu_pgbb_exchange_difference_owner_is_focused_and_term_complete() {
             projected_gradient.find("exchange.roundoff_bound_joules +") !=
                 std::string::npos,
         "CPU PG-BB must sum independent direct-owner roundoff bounds");
+    check(
+        derivative_contract.find(
+            "production_exchange_energy_difference_uses_assembled_mfem_form") !=
+                std::string::npos &&
+            derivative_contract.find(
+                "production_exchange_energy_difference_uses_assembled_mfem_form();") !=
+                std::string::npos,
+        "the relaxation derivative contract must execute the production assembled-MFEM exchange difference owner");
 }
 
 void c_abi_exposes_native_relaxation_step() {

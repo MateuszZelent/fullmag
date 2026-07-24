@@ -90,6 +90,7 @@ BOX500_AIRBOX_SCENARIO_ALIASES = {
     "box500_airbox_exchange_zeeman": "exchange_zeeman",
     "box500_airbox_exchange_demag": "exchange_demag",
     "box500_airbox_exchange_anis_uniaxial": "exchange_anis_uniaxial",
+    "box500_airbox_exchange_anis_uniaxial_tilted": "exchange_anis_uniaxial_tilted",
     "box500_airbox_exchange_anis_cubic": "exchange_anis_cubic",
     "box500_airbox_exchange_demag_anis_uniaxial": "exchange_demag_anis_uniaxial",
     "box500_airbox_exchange_demag_anis_cubic": "exchange_demag_anis_cubic",
@@ -131,6 +132,11 @@ INTERACTION_CONTRACTS = {
         ],
     },
     "exchange_anis_uniaxial": {
+        "interactions": ["exchange", "uniaxial_anisotropy"],
+        "energy_fields": ["final_e_ani_j"],
+        "timing_fields": ["extra_energy_wall_time_ms"],
+    },
+    "exchange_anis_uniaxial_tilted": {
         "interactions": ["exchange", "uniaxial_anisotropy"],
         "energy_fields": ["final_e_ani_j"],
         "timing_fields": ["extra_energy_wall_time_ms"],
@@ -1549,6 +1555,10 @@ def box500_airbox_interaction_manifest(
     if contract is None:
         raise ValueError(f"unsupported box500 airbox consistency scenario: {scenario}")
     interactions = [str(item) for item in contract["interactions"]]
+    initial_magnetization = BOX500_AIRBOX_INITIAL_M
+    if canonical_consistency_scenario(scenario) == "exchange_anis_uniaxial_tilted":
+        inv_sqrt_two = 1.0 / math.sqrt(2.0)
+        initial_magnetization = [inv_sqrt_two, 0.0, inv_sqrt_two]
     relaxation: dict[str, object] = {
         "algorithm": relaxation_algorithm,
         "max_steps": steps,
@@ -1564,7 +1574,7 @@ def box500_airbox_interaction_manifest(
         "required_backends": required_backends_for_relaxation_algorithm(relaxation_algorithm),
         "magnet_size_m": BOX500_AIRBOX_BODY_SIZE_M,
         "airbox_size_m": BOX500_AIRBOX_SIZE_M,
-        "initial_magnetization": BOX500_AIRBOX_INITIAL_M,
+        "initial_magnetization": initial_magnetization,
         "interactions": interactions,
         "demag_enabled": "demag" in interactions,
         "relaxation": relaxation,

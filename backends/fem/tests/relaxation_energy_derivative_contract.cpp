@@ -8,8 +8,12 @@
 #include "cpu/mfem/interactions/exchange_energy_difference.hpp"
 #include "cpu/mfem/interactions/zeeman_energy.hpp"
 #include "cpu/mfem/relaxation/relaxation_math.hpp"
+#include "cpu/mfem/runtime/aos_field.hpp"
 #include "fem_common.hpp"
 #include "src/relaxation_numerics.hpp"
+#if FULLMAG_HAS_MFEM_STACK
+#include <mfem.hpp>
+#endif
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include "gpu/cuda/relaxation/pgbb_kernels.hpp"
 #endif
@@ -137,6 +141,39 @@ void term_complete_composition_preserves_endpoint_operand_uncertainty()
         "term-complete composition must reject a resolved uphill increment");
 }
 
+void adverse_drive_endpoint_delta_controls_strict_armijo()
+{
+    using fullmag::fem::relaxation::ArmijoDifferenceDecision;
+    using fullmag::fem::relaxation::compose_term_complete_energy_difference;
+    using fullmag::fem::relaxation::strict_armijo_difference_decision;
+
+    const double direct_decrement = -4.0e-31;
+    const double adverse_drive_delta = 7.0e-31;
+    const double drive_base = -1.1e-17;
+    const double drive_trial = drive_base + adverse_drive_delta;
+    const auto complete = compose_term_complete_energy_difference(
+        drive_trial - drive_base,
+        std::abs(drive_base) + std::abs(drive_trial),
+        direct_decrement,
+        std::abs(direct_decrement),
+        2u);
+    const auto omitted = compose_term_complete_energy_difference(
+        0.0,
+        0.0,
+        direct_decrement,
+        std::abs(direct_decrement),
+        1u);
+
+    check(
+        strict_armijo_difference_decision(omitted, -2.0e-31) ==
+            ArmijoDifferenceDecision::Accept,
+        "drive omission fixture must otherwise satisfy strict Armijo");
+    check(
+        strict_armijo_difference_decision(complete, -2.0e-31) ==
+            ArmijoDifferenceDecision::Reject,
+        "an adverse regional-drive endpoint delta must make strict Armijo reject");
+}
+
 struct PolarizedExchangeOracle {
     long double value = 0.0L;
     long double absolute_term_sum = 0.0L;
@@ -261,6 +298,158 @@ void polarized_exchange_difference_matches_long_double_and_endpoint_oracles()
             std::isnan(invalid.roundoff_bound_joules),
         "production polarized exchange accumulation must fail closed on non-finite terms");
 }
+
+#if FULLMAG_HAS_MFEM_STACK
+mfem::Mesh magnetic_and_air_exchange_mesh()
+{
+    mfem::Mesh mesh(3, 8, 2, 0, 3);
+    const double vertices[][3] = {
+        {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0},
+        {2.0, 0.0, 0.0}, {3.0, 0.0, 0.0}, {2.0, 1.0, 0.0}, {2.0, 0.0, 1.0},
+    };
+    for (const auto &vertex : vertices) {
+        mesh.AddVertex(vertex);
+    }
+    const int magnetic[] = {0, 1, 2, 3};
+    const int air[] = {4, 5, 6, 7};
+    mesh.AddTet(magnetic, 1);
+    mesh.AddTet(air, 2);
+    mesh.FinalizeTopology();
+    mesh.Finalize(false, true);
+    return mesh;
+}
+
+long double exchange_endpoint_energy(
+    mfem::BilinearForm &form,
+    const std::vector<double> &state,
+    std::size_t component)
+{
+    const int nodes = form.FESpace()->GetNDofs();
+    mfem::Vector component_state(nodes);
+    for (int node = 0; node < nodes; ++node) {
+        component_state[node] = state[3u * static_cast<std::size_t>(node) + component];
+    }
+    mfem::Vector applied(nodes);
+    form.Mult(component_state, applied);
+    long double energy = 0.0L;
+    for (int node = 0; node < nodes; ++node) {
+        energy += static_cast<long double>(component_state[node]) *
+            static_cast<long double>(applied[node]);
+    }
+    return energy;
+}
+
+long double exchange_endpoint_difference(
+    mfem::BilinearForm &form,
+    const std::vector<double> &base,
+    const std::vector<double> &trial)
+{
+    long double difference = 0.0L;
+    for (std::size_t component = 0; component < 3u; ++component) {
+        difference += exchange_endpoint_energy(form, trial, component) -
+            exchange_endpoint_energy(form, base, component);
+    }
+    return difference;
+}
+
+void production_exchange_energy_difference_uses_assembled_mfem_form()
+{
+    mfem::Mesh mesh = magnetic_and_air_exchange_mesh();
+    mfem::H1_FECollection collection(1, 3);
+    mfem::FiniteElementSpace space(&mesh, &collection);
+    mfem::ConstantCoefficient stiffness(1.3e-11);
+    mfem::Array<int> magnetic_marker(mesh.attributes.Max());
+    magnetic_marker = 0;
+    magnetic_marker[0] = 1;
+    mfem::BilinearForm magnetic_form(&space);
+    magnetic_form.AddDomainIntegrator(
+        new mfem::DiffusionIntegrator(stiffness), magnetic_marker);
+    magnetic_form.Assemble();
+    magnetic_form.Finalize();
+
+    mfem::BilinearForm all_domain_form(&space);
+    all_domain_form.AddDomainIntegrator(new mfem::DiffusionIntegrator(stiffness));
+    all_domain_form.Assemble();
+    all_domain_form.Finalize();
+
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = static_cast<uint32_t>(space.GetNDofs());
+    ctx.mesh.magnetic_node_mask.assign(ctx.mesh.n_nodes, 0u);
+    for (std::size_t node = 0; node < 4u; ++node) {
+        ctx.mesh.magnetic_node_mask[node] = 1u;
+    }
+    ctx.exchange.enabled = true;
+    ctx.exchange.mfem.exchange_form = &magnetic_form;
+    ctx.mfem_context.ready = true;
+
+    std::vector<double> base(3u * ctx.mesh.n_nodes, 0.0);
+    std::vector<double> trial(3u * ctx.mesh.n_nodes, 0.0);
+    for (std::size_t node = 0; node < ctx.mesh.n_nodes; ++node) {
+        base[3u * node + 0u] = 0.11 + 0.07 * static_cast<double>(node);
+        base[3u * node + 1u] = -0.23 + 0.03 * static_cast<double>(node);
+        base[3u * node + 2u] = 0.37 - 0.02 * static_cast<double>(node);
+        trial[3u * node + 0u] = base[3u * node + 0u] + 0.013 * static_cast<double>(node + 1u);
+        trial[3u * node + 1u] = base[3u * node + 1u] - 0.009 * static_cast<double>(node + 2u);
+        trial[3u * node + 2u] = base[3u * node + 2u] + 0.005 * static_cast<double>(2u * node + 1u);
+    }
+
+    std::string error;
+    const auto actual = fullmag::fem::exchange_energy_difference(
+        ctx, base, trial, false, error);
+    const long double endpoint = exchange_endpoint_difference(
+        magnetic_form, base, trial);
+    const long double scale = std::max(1.0e-40L, std::abs(endpoint));
+    check(error.empty(), "production exchange difference must accept the assembled MFEM form");
+    check(
+        std::abs(static_cast<long double>(actual.delta_joules) - endpoint) <=
+            64.0L * static_cast<long double>(std::numeric_limits<double>::epsilon()) * scale,
+        "production exchange difference must preserve AoS component-to-MFEM-DOF mapping against endpoint energy");
+    check(
+        std::abs(exchange_endpoint_difference(all_domain_form, base, trial) - endpoint) >
+            1.0e-18L * scale,
+        "magnetic-marker form selection must observably exclude the nonmagnetic tetrahedron");
+
+    std::vector<double> air_changed_base = base;
+    std::vector<double> air_changed_trial = trial;
+    for (std::size_t node = 4u; node < ctx.mesh.n_nodes; ++node) {
+        for (std::size_t component = 0; component < 3u; ++component) {
+            air_changed_base[3u * node + component] += 1.0e6 * static_cast<double>(node + component + 1u);
+            air_changed_trial[3u * node + component] -= 2.0e6 * static_cast<double>(node + component + 1u);
+        }
+    }
+    const auto air_changed = fullmag::fem::exchange_energy_difference(
+        ctx, air_changed_base, air_changed_trial, false, error);
+    check(
+        error.empty() && air_changed.delta_joules == actual.delta_joules,
+        "production exchange difference must ignore magnetization changes confined to the nonmagnetic domain");
+
+    ctx.mesh.periodic_reduced_node.resize(ctx.mesh.n_nodes);
+    ctx.mesh.periodic_representative_nodes.resize(ctx.mesh.n_nodes);
+    for (uint32_t node = 0; node < ctx.mesh.n_nodes; ++node) {
+        ctx.mesh.periodic_reduced_node[node] = node;
+        ctx.mesh.periodic_representative_nodes[node] = node;
+    }
+    ctx.mesh.periodic_reduced_node[1] = 0u;
+    auto periodic_base = base;
+    auto periodic_trial = trial;
+    fullmag::fem::project_static_periodic_aos(ctx, periodic_base);
+    fullmag::fem::project_static_periodic_aos(ctx, periodic_trial);
+    const auto periodic_actual = fullmag::fem::exchange_energy_difference(
+        ctx, periodic_base, periodic_trial, false, error);
+    const long double periodic_endpoint = exchange_endpoint_difference(
+        magnetic_form, periodic_base, periodic_trial);
+    const long double periodic_scale =
+        std::max(1.0e-40L, std::abs(periodic_endpoint));
+    check(
+        error.empty() &&
+            std::abs(
+                static_cast<long double>(periodic_actual.delta_joules) -
+                periodic_endpoint) <=
+                64.0L * static_cast<long double>(std::numeric_limits<double>::epsilon()) *
+                    periodic_scale,
+        "production exchange difference must preserve endpoint identity for static-periodic class-projected states");
+}
+#endif
 
 std::array<double, 3> normalized(std::array<double, 3> value)
 {
@@ -1441,7 +1630,11 @@ int main()
 {
     direct_increment_composition_does_not_subtract_replaced_terms_twice();
     term_complete_composition_preserves_endpoint_operand_uncertainty();
+    adverse_drive_endpoint_delta_controls_strict_armijo();
     polarized_exchange_difference_matches_long_double_and_endpoint_oracles();
+#if FULLMAG_HAS_MFEM_STACK
+    production_exchange_energy_difference_uses_assembled_mfem_form();
+#endif
     analytic_absolute_term_sum_resolves_component_cancellation();
     cpu_energy_weight_uses_nodal_ms_and_uniform_fallback();
     dimension_aware_reduction_guards_are_scale_relative();

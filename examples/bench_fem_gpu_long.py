@@ -32,6 +32,7 @@ BOX500_AIRBOX_SCENARIO_ALIASES = {
     "box500_airbox_exchange_zeeman": "exchange_zeeman",
     "box500_airbox_exchange_demag": "exchange_demag",
     "box500_airbox_exchange_anis_uniaxial": "exchange_anis_uniaxial",
+    "box500_airbox_exchange_anis_uniaxial_tilted": "exchange_anis_uniaxial_tilted",
     "box500_airbox_exchange_anis_cubic": "exchange_anis_cubic",
     "box500_airbox_exchange_demag_anis_uniaxial": "exchange_demag_anis_uniaxial",
     "box500_airbox_exchange_demag_anis_cubic": "exchange_demag_anis_cubic",
@@ -71,6 +72,7 @@ SUPPORTED_SCENARIOS = {
     "exchange_zeeman",
     "exchange_demag",
     "exchange_anis_uniaxial",
+    "exchange_anis_uniaxial_tilted",
     "exchange_anis_cubic",
     "exchange_demag_anis_uniaxial",
     "exchange_demag_anis_cubic",
@@ -236,15 +238,23 @@ def scenario_terms(scenario: str) -> tuple[list[object], dict[str, object]]:
         return [fm.Exchange()], {}
     if scenario == "exchange_zeeman":
         return [fm.Exchange(), fm.Zeeman(B=(0.0, 0.0, 0.05))], {}
-    if scenario in {"exchange_anis_uniaxial", "exchange_anis_cubic"}:
+    if scenario in {"exchange_anis_uniaxial", "exchange_anis_uniaxial_tilted"}:
+        return [
+            fm.Exchange(),
+            fm.UniaxialAnisotropy(ku1=0.5e6, axis=(0.0, 0.0, 1.0)),
+        ], {}
+    if scenario == "exchange_anis_cubic":
         return [fm.Exchange()], {}
     if scenario == "exchange_demag":
         return [fm.Exchange(), fm.Demag(), fm.Zeeman(B=(0.0, 0.0, 0.05))], {}
-    if scenario in {
-        "exchange_demag_anis_uniaxial",
-        "exchange_demag_anis_cubic",
-        "exchange_demag_anisotropy",
-    }:
+    if scenario in {"exchange_demag_anis_uniaxial", "exchange_demag_anisotropy"}:
+        return [
+            fm.Exchange(),
+            fm.Demag(),
+            fm.Zeeman(B=(0.0, 0.0, 0.05)),
+            fm.UniaxialAnisotropy(ku1=0.5e6, axis=(0.0, 0.0, 1.0)),
+        ], {}
+    if scenario == "exchange_demag_anis_cubic":
         return [fm.Exchange(), fm.Demag(), fm.Zeeman(B=(0.0, 0.0, 0.05))], {}
     if scenario == "exchange_dmi":
         return [
@@ -268,6 +278,14 @@ def scenario_terms(scenario: str) -> tuple[list[object], dict[str, object]]:
 
 
 def scenario_initial_magnetization(scenario: str):
+    if canonical_scenario(scenario) == "exchange_anis_uniaxial_tilted":
+        inv_sqrt_two = 1.0 / math.sqrt(2.0)
+        body_size = scenario_body_size(scenario)
+        return fm.init.texture.helical(
+            wavevector=(2.0 * math.pi / body_size[0], 0.0, 0.0),
+            e1=(inv_sqrt_two, 0.0, inv_sqrt_two),
+            e2=(0.0, 1.0, 0.0),
+        )
     if scenario_is_box500_airbox(scenario) or scenario in RELAXATION_SCENARIO_ALIASES:
         body_size = scenario_body_size(scenario)
         return fm.init.texture.helical(
@@ -312,8 +330,6 @@ def scenario_airbox_hmax(scenario: str) -> float:
 
 def scenario_material_kwargs(scenario: str) -> dict[str, object]:
     scenario = canonical_scenario(scenario)
-    if scenario in {"exchange_anis_uniaxial", "exchange_demag_anis_uniaxial", "exchange_demag_anisotropy"}:
-        return {"Ku1": 0.5e6, "anisU": (0.0, 0.0, 1.0)}
     if scenario in {"exchange_anis_cubic", "exchange_demag_anis_cubic"}:
         return {
             "Kc1": 4.8e4,

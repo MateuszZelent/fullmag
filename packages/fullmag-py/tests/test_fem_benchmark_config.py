@@ -1939,6 +1939,7 @@ def load_analysis_benchmark_module():
     )
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -2118,6 +2119,46 @@ def test_phase10_anisotropy_scenarios_use_expected_terms_and_materials():
     assert demag_cubic.discretization.fem.mesh is None
     assert demag_cubic.runtime_metadata["mesh_workflow"]["build_target"] == "domain"
     assert demag_cubic.magnets[0].material.Kc1 == 4.8e4
+
+
+def test_exchange_uniaxial_fixture_authors_term_and_distinct_tilted_identity():
+    bench = load_benchmark_module()
+
+    terms, _ = bench.scenario_terms("exchange_anis_uniaxial")
+    assert [term.to_ir()["kind"] for term in terms] == [
+        "exchange",
+        "uniaxial_anisotropy",
+    ]
+    assert (
+        bench.BOX500_AIRBOX_SCENARIO_ALIASES[
+            "box500_airbox_exchange_anis_uniaxial_tilted"
+        ]
+        == "exchange_anis_uniaxial_tilted"
+    )
+    tilted = bench.scenario_initial_magnetization(
+        "box500_airbox_exchange_anis_uniaxial_tilted"
+    ).to_ir()
+    assert tilted["preset_kind"] == "helical"
+    assert tilted["preset_params"]["e1"] == pytest.approx(
+        [2**-0.5, 0.0, 2**-0.5]
+    )
+    assert tilted["preset_params"]["e2"] == pytest.approx([0.0, 1.0, 0.0])
+    problem = bench.build(
+        mesh_path=REPO_ROOT / "examples" / "assets" / "box_40x20x10_coarse.mesh.json",
+        dt=1e-13,
+        steps=32,
+        scenario="box500_airbox_exchange_anis_uniaxial_tilted",
+        integrator="heun",
+        timestep_policy="fixed",
+    )
+    manifest = problem.to_ir(include_geometry_assets=False)
+    assert manifest["materials"][0]["uniaxial_anisotropy"] == pytest.approx(0.5e6)
+    model_builder = manifest["problem_meta"]["runtime_metadata"]["model_builder"]
+    authored_m0 = model_builder["problem"]["magnets"][0]["initial_magnetization"]
+    assert authored_m0["preset_kind"] == "helical"
+    assert authored_m0["preset_params"]["e1"] == pytest.approx(
+        [2**-0.5, 0.0, 2**-0.5]
+    )
 
 
 def test_benchmark_build_accepts_demag_solver_policy_env(monkeypatch):
@@ -3495,12 +3536,19 @@ def test_box500_airbox_interaction_manifests_cover_deterministic_terms():
         max_step_delta=0,
     )
 
-    assert [manifest["case_id"] for manifest in manifests] == scenarios
+    conservative_scenarios = scenarios[:-1]
+    assert scenarios[-1] == "box500_airbox_stt_oersted"
+    assert [manifest["case_id"] for manifest in manifests] == conservative_scenarios
     by_id = {manifest["case_id"]: manifest for manifest in manifests}
     for manifest in manifests:
         assert manifest["magnet_size_m"] == [500e-9, 100e-9, 10e-9]
         assert manifest["airbox_size_m"] == [1e-6, 1e-6, 1e-6]
-        assert manifest["initial_magnetization"] == [1.0, 0.0, 0.0]
+        if manifest["case_id"] == "box500_airbox_exchange_anis_uniaxial_tilted":
+            assert manifest["initial_magnetization"] == pytest.approx(
+                [2**-0.5, 0.0, 2**-0.5]
+            )
+        else:
+            assert manifest["initial_magnetization"] == [1.0, 0.0, 0.0]
         assert manifest["relaxation"]["algorithm"] == "llg_overdamped"
         assert "executed_steps" in manifest["observables"]
         assert "wall_time_ms" in manifest["observables"]
@@ -3523,12 +3571,7 @@ def test_box500_airbox_interaction_manifests_cover_deterministic_terms():
     ]
     assert "final_e_dmi_j" in by_id["box500_airbox_exchange_dmi"]["observables"]
     assert "final_e_ext_j" in by_id["box500_airbox_exchange_dmi"]["observables"]
-    assert by_id["box500_airbox_stt_oersted"]["interactions"] == [
-        "exchange",
-        "zeeman",
-        "oersted",
-        "zhang_li_stt",
-    ]
+    assert "box500_airbox_stt_oersted" not in by_id
 
 
 def test_box500_airbox_interaction_builds_reuse_geometry_airbox_and_relaxation():

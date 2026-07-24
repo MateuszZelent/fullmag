@@ -81,6 +81,9 @@ relaxation::EnergyDifference pgbb_direct_energy_difference(
         residual_operand_abs += std::abs(base) + std::abs(trial);
     };
     accumulate_residual(
+        current_stats.drive_energy_joules,
+        trial_stats.drive_energy_joules);
+    accumulate_residual(
         current_stats.dmi_energy_joules,
         trial_stats.dmi_energy_joules);
     accumulate_residual(
@@ -100,7 +103,7 @@ relaxation::EnergyDifference pgbb_direct_energy_difference(
         residual_operand_abs;
     result.roundoff_bound_joules = demag.roundoff_bound_joules + zeeman.roundoff_bound_joules +
         uniaxial.roundoff_bound_joules + exchange.roundoff_bound_joules +
-        relaxation::reduction_roundoff_bound(6u) * residual_operand_abs;
+        relaxation::reduction_roundoff_bound(8u) * residual_operand_abs;
     if (!std::isfinite(result.delta_joules) ||
         !std::isfinite(result.absolute_term_sum_joules) ||
         !std::isfinite(result.roundoff_bound_joules)) {
