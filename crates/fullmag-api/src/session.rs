@@ -534,6 +534,64 @@ fn field_payload_revision(value: &Value) -> Option<u64> {
         .or_else(|| value.get("revision").and_then(Value::as_u64))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct FieldSourcePrecedence {
+    pub(crate) source_step: u64,
+    pub(crate) source_revision: u64,
+    pub(crate) materialized_at_unix_ms: u64,
+}
+
+pub(crate) fn latest_field_source_precedence(
+    snapshot: &SessionStateResponse,
+    value: &Value,
+) -> FieldSourcePrecedence {
+    FieldSourcePrecedence {
+        source_step: value
+            .get("source_step")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        source_revision: value
+            .get("source_revision")
+            .and_then(Value::as_u64)
+            .or_else(|| field_payload_revision(value))
+            .unwrap_or(0),
+        materialized_at_unix_ms: value
+            .get("materialized_at_unix_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or_else(|| {
+                snapshot
+                    .live_state
+                    .as_ref()
+                    .map(|state| state.updated_at_unix_ms.min(u64::MAX as u128) as u64)
+                    .unwrap_or(0)
+            }),
+    }
+}
+
+pub(crate) fn preview_field_source_precedence(field: &LivePreviewField) -> FieldSourcePrecedence {
+    FieldSourcePrecedence {
+        source_step: field.source_step,
+        source_revision: field.source_revision,
+        materialized_at_unix_ms: field.materialized_at_unix_ms,
+    }
+}
+
+pub(crate) fn preview_cache_precedes_latest(
+    snapshot: &SessionStateResponse,
+    quantity: &str,
+) -> bool {
+    let Some(preview) = snapshot.preview_cache.get(quantity) else {
+        return false;
+    };
+    let Some(latest) = snapshot.latest_fields.get(quantity) else {
+        return true;
+    };
+    // The preview cache is the explicit materialized-field channel. On equal
+    // provenance it is authoritative over the legacy latest_fields payload;
+    // genuinely newer latest_fields still wins by the ordered source tuple.
+    preview_field_source_precedence(preview) >= latest_field_source_precedence(snapshot, latest)
+}
+
 fn bump_field_sample_revision(
     current: &mut SessionStateResponse,
     quantity: &str,
@@ -596,19 +654,21 @@ fn effective_field_source(
             });
         }
     }
-    if let Some(value) = snapshot.latest_fields.get(quantity) {
+    let latest = snapshot.latest_fields.get(quantity).filter(|value| {
         let values = flatten_json_field_values(value);
-        if field_values_match_current_domain(snapshot, quantity, n_comp, &values) {
-            return Some(EffectiveFieldSource::Latest(value.clone()));
+        field_values_match_current_domain(snapshot, quantity, n_comp, &values)
+    });
+    let preview = snapshot.preview_cache.get(quantity).filter(|field| {
+        field_values_match_current_domain(snapshot, quantity, n_comp, &field.vector_field_values)
+    });
+    match (latest, preview) {
+        (Some(_), Some(field)) if preview_cache_precedes_latest(snapshot, quantity) => {
+            Some(EffectiveFieldSource::Preview(field.clone()))
         }
+        (Some(value), _) => Some(EffectiveFieldSource::Latest(value.clone())),
+        (None, Some(field)) => Some(EffectiveFieldSource::Preview(field.clone())),
+        (None, None) => None,
     }
-    if let Some(field) = snapshot.preview_cache.get(quantity) {
-        if field_values_match_current_domain(snapshot, quantity, n_comp, &field.vector_field_values)
-        {
-            return Some(EffectiveFieldSource::Preview(field.clone()));
-        }
-    }
-    None
 }
 
 fn capture_effective_field_sources(
@@ -1250,15 +1310,9 @@ fn finalize_current_live_apply(
 
     if current.fem_mesh.is_none() {
         current.fem_mesh = current
-            .live_state
+            .metadata
             .as_ref()
-            .and_then(|state| state.latest_step.fem_mesh.clone())
-            .or_else(|| {
-                current
-                    .metadata
-                    .as_ref()
-                    .and_then(extract_fem_mesh_from_metadata)
-            });
+            .and_then(extract_fem_mesh_from_metadata);
     }
     if let Some(node_count) = current.fem_mesh.as_ref().map(|mesh| mesh.nodes.len()) {
         expand_uniform_material_latest_fields(&mut current.latest_fields, node_count);
@@ -1397,11 +1451,11 @@ pub(crate) fn apply_current_live_snapshot(
         current.session.artifact_dir = run.artifact_dir.clone();
         current.run = Some(run);
     }
-    if let Some(live_state) = req.live_state {
+    if let Some(mut live_state) = req.live_state {
         if current.run.is_none() && current.session.status == "bootstrapping" {
             current.session.status = live_state.status.clone();
         }
-        if let Some(fem_mesh) = live_state.latest_step.fem_mesh.clone() {
+        if let Some(fem_mesh) = live_state.latest_step.fem_mesh.take() {
             apply_fem_mesh_update(current, fem_mesh);
         }
         current.live_state = Some(live_state);
@@ -1420,22 +1474,23 @@ pub(crate) fn apply_current_live_snapshot(
     if req.clear_preview_cache {
         current.preview_cache = CachedPreviewFields::default();
     }
-    if let Some(preview_fields) = req.preview_fields {
-        merge_cached_preview_fields(&mut current.preview_cache, preview_fields);
-    }
     // Promote the active preview field into preview_cache so that API
     // query handlers (get_field_meta, get_field_vector, etc.) can find
     // it.  Without this, the field is only reachable via
     // live_state.latest_step.preview_field, which those handlers do not
     // consult, causing a 404 when the user switches to a non-"m" quantity.
-    // This runs AFTER clear_preview_cache + preview_fields merge so the
-    // active field survives cache clears.
+    // This runs after a cache clear but before the explicit preview-field
+    // batch. The latter is the terminal/cache-authoritative channel and must
+    // win an equal-generation conflict with a carried active field.
     if let Some(preview_field) = current
         .live_state
         .as_ref()
         .and_then(|ls| ls.latest_step.preview_field.clone())
     {
-        current.preview_cache.insert(preview_field);
+        merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field]);
+    }
+    if let Some(preview_fields) = req.preview_fields {
+        merge_authoritative_cached_preview_fields(&mut current.preview_cache, preview_fields);
     }
     if let Some(engine_log) = req.engine_log {
         current.engine_log = engine_log;
@@ -1519,7 +1574,7 @@ pub(crate) fn apply_current_live_runtime_frame(
         if current.run.is_none() && current.session.status == "bootstrapping" {
             current.session.status = live_state.status.clone();
         }
-        if let Some(fem_mesh) = live_state.latest_step.fem_mesh.clone() {
+        if let Some(fem_mesh) = live_state.latest_step.fem_mesh.take() {
             apply_fem_mesh_update(current, fem_mesh);
         }
         // Preserve heavy payload fields from the previous state when the
@@ -1533,8 +1588,9 @@ pub(crate) fn apply_current_live_runtime_frame(
             if live_state.latest_step.magnetization.is_none() {
                 live_state.latest_step.magnetization = prev.latest_step.magnetization.clone();
             }
-            if live_state.latest_step.fem_mesh.is_none() {
-                live_state.latest_step.fem_mesh = prev.latest_step.fem_mesh.clone();
+            if live_state.latest_step.fem_mesh_generation_id.is_none() {
+                live_state.latest_step.fem_mesh_generation_id =
+                    prev.latest_step.fem_mesh_generation_id.clone();
             }
             if live_state.latest_step.preview_field.is_none() {
                 live_state.latest_step.preview_field = prev.latest_step.preview_field.clone();
@@ -1544,7 +1600,7 @@ pub(crate) fn apply_current_live_runtime_frame(
         // query handlers (get_field_meta, get_field_vector, etc.) can find
         // it — same rationale as in apply_current_live_snapshot.
         if let Some(preview_field) = live_state.latest_step.preview_field.clone() {
-            current.preview_cache.insert(preview_field);
+            merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field]);
         }
         current.live_state = Some(live_state);
     }
@@ -1615,7 +1671,10 @@ pub(crate) fn apply_current_live_field_frame(
         current.preview_cache = CachedPreviewFields::default();
     }
     if let Some(preview_fields) = frame.preview_fields {
-        merge_cached_preview_fields(&mut current.preview_cache, preview_fields);
+        // An explicit field frame is the cache-authoritative channel, just
+        // like the explicit preview-field batch in a full snapshot. It must
+        // replace a runtime-carried active preview at the same generation.
+        merge_authoritative_cached_preview_fields(&mut current.preview_cache, preview_fields);
     }
     apply_effective_field_source_delta(current, previous_field_sources);
 
@@ -1680,8 +1739,49 @@ pub(crate) fn merge_cached_preview_fields(
     current: &mut CachedPreviewFields,
     incoming: Vec<LivePreviewField>,
 ) {
+    merge_cached_preview_fields_with_precedence(
+        current,
+        incoming,
+        CachedPreviewMergePrecedence::StrictlyNewer,
+    );
+}
+
+fn merge_authoritative_cached_preview_fields(
+    current: &mut CachedPreviewFields,
+    incoming: Vec<LivePreviewField>,
+) {
+    merge_cached_preview_fields_with_precedence(
+        current,
+        incoming,
+        CachedPreviewMergePrecedence::AuthoritativeEqualGeneration,
+    );
+}
+
+#[derive(Clone, Copy)]
+enum CachedPreviewMergePrecedence {
+    StrictlyNewer,
+    AuthoritativeEqualGeneration,
+}
+
+fn merge_cached_preview_fields_with_precedence(
+    current: &mut CachedPreviewFields,
+    incoming: Vec<LivePreviewField>,
+    precedence: CachedPreviewMergePrecedence,
+) {
     for field in incoming {
-        current.insert(field);
+        let source = (field.source_step, field.source_revision);
+        let should_insert = current.get(&field.quantity).is_none_or(|cached| {
+            let cached_source = (cached.source_step, cached.source_revision);
+            source > cached_source
+                || (source == cached_source
+                    && matches!(
+                        precedence,
+                        CachedPreviewMergePrecedence::AuthoritativeEqualGeneration
+                    ))
+        });
+        if should_insert {
+            current.insert(field);
+        }
     }
 }
 
@@ -1857,9 +1957,11 @@ mod tests {
                 max_torque_T: 0.0,
                 wall_time_ns: 0,
                 grid: [2, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: Some(magnetization),
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -2009,6 +2111,47 @@ mod tests {
         assert_eq!(mesh.mesh_id, "domain-mesh-id");
         assert_eq!(mesh.generation_id.as_deref(), Some("domain-gen-1"));
         assert_eq!(current.mesh_revision, mesh_revision);
+    }
+
+    #[test]
+    fn runtime_frame_accepts_stage_mesh_once_and_preserves_it_across_steps() {
+        let mut current = test_current_snapshot();
+        let session_id = current.session.session_id.clone();
+        apply_current_live_runtime_frame(
+            &mut current,
+            CurrentLiveRuntimeFrameRequest {
+                session_id: session_id.clone(),
+                live_state: None,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: Some(domain_fem_mesh("domain-gen-1")),
+            },
+        )
+        .expect("initial stage mesh frame should apply");
+        let mesh_revision = current.mesh_revision;
+
+        for _ in 0..12 {
+            apply_current_live_runtime_frame(
+                &mut current,
+                CurrentLiveRuntimeFrameRequest {
+                    session_id: session_id.clone(),
+                    live_state: None,
+                    engine_log: None,
+                    solver_profile: None,
+                    fem_mesh: None,
+                },
+            )
+            .expect("generation-only step frame should preserve stage mesh");
+        }
+
+        assert_eq!(current.mesh_revision, mesh_revision);
+        assert_eq!(
+            current
+                .fem_mesh
+                .as_ref()
+                .and_then(|mesh| mesh.generation_id.as_deref()),
+            Some("domain-gen-1")
+        );
     }
 
     #[test]
@@ -2390,9 +2533,11 @@ mod tests {
                 max_torque_T: 0.0,
                 wall_time_ns: 0,
                 grid: [1, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -2442,9 +2587,11 @@ mod tests {
                 max_torque_T: 0.0,
                 wall_time_ns: 0,
                 grid: [1, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -2860,6 +3007,10 @@ mod tests {
             auto_downscale_message: None,
             auto_downscaled: false,
             config_revision: 1,
+            source_step: 0,
+            source_revision: 1,
+            materialized_at_unix_ms: 0,
+            materialization_wall_time_ns: 0,
             original_grid: [1, 1, 1],
             preview_grid: [1, 1, 1],
             quantity: quantity.to_string(),
@@ -2870,6 +3021,61 @@ mod tests {
             x_chosen_size: 1,
             y_chosen_size: 1,
         }
+    }
+
+    #[test]
+    fn terminal_preview_json_transport_preserves_f64_bits() {
+        let artifact_values = vec![
+            5762.548134664166,
+            -6246.828452439119,
+            5154.102054176682,
+            -1718.9201656167345,
+            -7885.426098082194,
+            1836.8474621392222,
+            10338.286900101315,
+            15173.812325455918,
+            7491.904612481956,
+            3390.0267837822926,
+            21990.013757105164,
+            -17004.747455698853,
+            8123.414559350708,
+            -3214.715903969464,
+            -12671.236050772604,
+            12097.26745275608,
+            987.6351830018867,
+            -1455.731818429477,
+            -11407.751914450959,
+            6112.129305304056,
+            9797.166009175871,
+            -20989.00984124621,
+            -6803.9894437105695,
+            -1176.6040005960192,
+            -5120.223204986794,
+            -19370.337149302362,
+            17141.856040955292,
+            -5302.631973672777,
+            -11772.335655363348,
+            -13193.865270991333,
+        ];
+        let mut field = preview_field("H_demag");
+        field.vector_field_values = artifact_values.clone();
+
+        let json = serde_json::to_vec(&vec![field]).expect("field frame should serialize");
+        let decoded: Vec<LivePreviewField> =
+            serde_json::from_slice(&json).expect("field frame should deserialize");
+        let decoded_values = &decoded[0].vector_field_values;
+
+        assert_eq!(
+            decoded_values
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            artifact_values
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            "internal field-frame JSON transport must preserve exact f64 payload bits",
+        );
     }
 
     fn engine_log(timestamp_unix_ms: u128, level: &str, message: &str) -> EngineLogEntry {
@@ -3019,9 +3225,11 @@ mod tests {
                         max_torque_T: 0.0,
                         wall_time_ns: 0,
                         grid: [1, 1, 1],
+                        fem_mesh_generation_id: None,
                         fem_mesh: None,
                         magnetization: Some(vec![0.0, 0.0, 1.0]),
                         per_object_scalars: Default::default(),
+                        field_materialization_states: Vec::new(),
                         preview_field: None,
                         finished: true,
                     },
@@ -3174,6 +3382,7 @@ mod tests {
     fn snapshot_promotes_active_preview_field_into_preview_cache() {
         let mut current = test_current_snapshot();
         assert!(current.preview_cache.get("H_eff").is_none());
+        let legacy_mesh = domain_fem_mesh("legacy-domain-gen");
 
         let req = CurrentLiveSnapshotRequest {
             session_id: "test-session".to_string(),
@@ -3205,9 +3414,11 @@ mod tests {
                     max_torque_T: 0.0,
                     wall_time_ns: 100,
                     grid: [1, 1, 1],
-                    fem_mesh: None,
+                    fem_mesh_generation_id: None,
+                    fem_mesh: Some(legacy_mesh),
                     magnetization: None,
                     per_object_scalars: Default::default(),
+                    field_materialization_states: Vec::new(),
                     preview_field: Some(preview_field("H_eff")),
                     finished: false,
                 },
@@ -3222,11 +3433,290 @@ mod tests {
         };
         apply_current_live_snapshot(&mut current, req).unwrap();
 
+        assert_eq!(
+            current
+                .fem_mesh
+                .as_ref()
+                .and_then(|mesh| mesh.generation_id.as_deref()),
+            Some("legacy-domain-gen")
+        );
+        assert!(current
+            .live_state
+            .as_ref()
+            .unwrap()
+            .latest_step
+            .fem_mesh
+            .is_none());
+
         let cached = current
             .preview_cache
             .get("H_eff")
             .expect("active preview field should be promoted into preview_cache");
         assert_eq!(cached.quantity, "H_eff");
+    }
+
+    #[test]
+    fn cached_preview_merge_never_regresses_source_provenance() {
+        let mut current = CachedPreviewFields::default();
+        let mut terminal = preview_field("H_demag");
+        terminal.source_step = 52;
+        terminal.source_revision = 4;
+        terminal.materialized_at_unix_ms = 1_700_000_000_456;
+        terminal.vector_field_values = vec![0.0, 1.0, 0.0];
+        merge_cached_preview_fields(&mut current, vec![terminal]);
+
+        let mut carried_active = preview_field("H_demag");
+        carried_active.source_step = 0;
+        carried_active.source_revision = 4;
+        carried_active.materialized_at_unix_ms = 1_700_000_000_100;
+        carried_active.vector_field_values = vec![1.0, 0.0, 0.0];
+        merge_cached_preview_fields(&mut current, vec![carried_active]);
+
+        let cached = current.get("H_demag").expect("terminal cached field");
+        assert_eq!(cached.source_step, 52);
+        assert_eq!(cached.vector_field_values, vec![0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn cached_preview_merge_is_idempotent_and_accepts_only_newer_generation() {
+        let mut current = CachedPreviewFields::default();
+        let mut established = preview_field("H_demag");
+        established.source_step = 52;
+        established.source_revision = 4;
+        established.materialized_at_unix_ms = 1_700_000_000_200;
+        established.vector_field_values = vec![0.0, 0.0, 52.0];
+        merge_cached_preview_fields(&mut current, vec![established.clone()]);
+        merge_cached_preview_fields(&mut current, vec![established.clone()]);
+
+        let mut equal_generation_conflict = established.clone();
+        equal_generation_conflict.materialized_at_unix_ms += 1;
+        equal_generation_conflict.vector_field_values = vec![0.0, 0.0, 0.0];
+        merge_cached_preview_fields(&mut current, vec![equal_generation_conflict]);
+        assert_eq!(current.get("H_demag"), Some(&established));
+
+        let mut newer = established.clone();
+        newer.source_step = 53;
+        newer.vector_field_values = vec![0.0, 0.0, 53.0];
+        merge_cached_preview_fields(&mut current, vec![newer.clone()]);
+        assert_eq!(current.get("H_demag"), Some(&newer));
+    }
+
+    #[test]
+    fn snapshot_terminal_cache_wins_equal_provenance_conflict_with_active_preview() {
+        let mut current = test_current_snapshot();
+        let mut carried_active = preview_field("H_demag");
+        carried_active.source_step = 52;
+        carried_active.source_revision = 7;
+        carried_active.materialized_at_unix_ms = 1_700_000_000_200;
+        carried_active.vector_field_values = vec![0.0, 0.0, 0.0];
+        let mut terminal = carried_active.clone();
+        terminal.vector_field_values = vec![0.0, 0.0, 52.0];
+
+        let req = CurrentLiveSnapshotRequest {
+            session_id: "test-session".to_string(),
+            session: None,
+            session_status: None,
+            metadata: None,
+            mesh_workspace: None,
+            stage_execution: None,
+            simulation_preparation: None,
+            run: None,
+            live_state: Some(LiveState {
+                status: "completed".into(),
+                updated_at_unix_ms: 1_700_000_000_300,
+                latest_step: StepUpdateView {
+                    step: 52,
+                    time: 52e-13,
+                    dt: 1e-13,
+                    pseudo_time_s: None,
+                    e_ex: 0.0,
+                    e_demag: 0.0,
+                    e_ext: 0.0,
+                    e_ani: 0.0,
+                    e_dmi: 0.0,
+                    e_total: 0.0,
+                    max_dm_dt: 0.0,
+                    max_h_eff: 0.0,
+                    max_h_demag: 0.0,
+                    max_torque_Apm: 0.0,
+                    max_torque_T: 0.0,
+                    wall_time_ns: 100,
+                    grid: [1, 1, 1],
+                    fem_mesh_generation_id: None,
+                    fem_mesh: None,
+                    magnetization: None,
+                    per_object_scalars: Default::default(),
+                    field_materialization_states: Vec::new(),
+                    preview_field: Some(carried_active),
+                    finished: true,
+                },
+            }),
+            latest_scalar_row: None,
+            latest_fields: None,
+            preview_fields: Some(vec![terminal.clone()]),
+            clear_preview_cache: false,
+            engine_log: None,
+            solver_profile: None,
+            fem_mesh: None,
+        };
+
+        apply_current_live_snapshot(&mut current, req).unwrap();
+
+        let cached = current
+            .preview_cache
+            .get("H_demag")
+            .expect("terminal H_demag cache entry");
+        assert_eq!(cached.vector_field_values, terminal.vector_field_values);
+        assert_eq!(cached.source_step, terminal.source_step);
+        assert_eq!(cached.source_revision, terminal.source_revision);
+        assert_eq!(
+            cached.materialized_at_unix_ms,
+            terminal.materialized_at_unix_ms
+        );
+    }
+
+    #[test]
+    fn field_frame_terminal_cache_wins_equal_provenance_conflict_with_runtime_preview() {
+        let mut current = test_current_snapshot();
+        let mut runtime_preview = preview_field("H_demag");
+        runtime_preview.source_step = 52;
+        runtime_preview.source_revision = 7;
+        runtime_preview.materialized_at_unix_ms = 1_700_000_000_200;
+        runtime_preview.vector_field_values = vec![0.0, 0.0, 0.0];
+        merge_cached_preview_fields(&mut current.preview_cache, vec![runtime_preview]);
+
+        let mut terminal = preview_field("H_demag");
+        terminal.source_step = 52;
+        terminal.source_revision = 7;
+        terminal.materialized_at_unix_ms = 1_700_000_000_200;
+        terminal.vector_field_values = vec![0.0, 0.0, 52.0];
+
+        apply_current_live_field_frame(
+            &mut current,
+            CurrentLiveFieldFrameRequest {
+                session_id: "test-session".to_string(),
+                latest_fields: None,
+                preview_fields: Some(vec![terminal.clone()]),
+                clear_preview_cache: false,
+            },
+        )
+        .expect("terminal field frame should apply");
+
+        let cached = current
+            .preview_cache
+            .get("H_demag")
+            .expect("terminal H_demag cache entry");
+        assert_eq!(cached.vector_field_values, terminal.vector_field_values);
+        assert_eq!(cached.source_step, terminal.source_step);
+        assert_eq!(cached.source_revision, terminal.source_revision);
+
+        let mut older = terminal.clone();
+        older.source_step = 51;
+        older.vector_field_values = vec![0.0, 0.0, 51.0];
+        apply_current_live_field_frame(
+            &mut current,
+            CurrentLiveFieldFrameRequest {
+                session_id: "test-session".to_string(),
+                latest_fields: None,
+                preview_fields: Some(vec![older]),
+                clear_preview_cache: false,
+            },
+        )
+        .expect("older authoritative field frame should be ignored");
+
+        let cached = current
+            .preview_cache
+            .get("H_demag")
+            .expect("newer terminal H_demag cache entry");
+        assert_eq!(cached.vector_field_values, terminal.vector_field_values);
+        assert_eq!(cached.source_step, terminal.source_step);
+        assert_eq!(cached.source_revision, terminal.source_revision);
+    }
+
+    #[test]
+    fn effective_field_source_tracks_shared_latest_preview_precedence_without_revision_churn() {
+        let mut current = test_current_snapshot();
+        current.latest_fields = serde_json::from_value(json!({
+            "H_demag": {
+                "values": [[9.0, 9.0, 9.0]],
+                "field_revision": 7,
+                "source_step": 52,
+                "source_revision": 7,
+                "materialized_at_unix_ms": 1_700_000_000_100_u64
+            }
+        }))
+        .expect("latest H_demag field");
+        current
+            .field_quantity_revisions
+            .insert("H_demag".to_string(), 7);
+        current.field_samples_revision = 7;
+
+        let mut terminal = preview_field("H_demag");
+        terminal.source_step = 52;
+        terminal.source_revision = 7;
+        terminal.materialized_at_unix_ms = 1_700_000_000_200;
+        terminal.vector_field_values = vec![0.0, 0.0, 52.0];
+
+        apply_current_live_field_frame(
+            &mut current,
+            CurrentLiveFieldFrameRequest {
+                session_id: "test-session".to_string(),
+                latest_fields: None,
+                preview_fields: Some(vec![terminal.clone()]),
+                clear_preview_cache: false,
+            },
+        )
+        .expect("terminal field frame should apply");
+
+        assert_eq!(
+            effective_field_source(&current, "H_demag"),
+            Some(EffectiveFieldSource::Preview(terminal.clone())),
+            "newer terminal preview must supersede stale latest_fields at the same source generation"
+        );
+        let terminal_revision = current.field_quantity_revisions["H_demag"];
+        assert!(terminal_revision > 7);
+
+        apply_current_live_field_frame(
+            &mut current,
+            CurrentLiveFieldFrameRequest {
+                session_id: "test-session".to_string(),
+                latest_fields: None,
+                preview_fields: Some(vec![terminal]),
+                clear_preview_cache: false,
+            },
+        )
+        .expect("duplicate terminal field frame should apply idempotently");
+        assert_eq!(
+            current.field_quantity_revisions["H_demag"], terminal_revision,
+            "an exact duplicate must not create artificial revision churn"
+        );
+
+        let genuinely_newer_latest: LatestFields = serde_json::from_value(json!({
+            "H_demag": {
+                "values": [[53.0, 53.0, 53.0]],
+                "field_revision": terminal_revision + 1,
+                "source_step": 53,
+                "source_revision": 8,
+                "materialized_at_unix_ms": 1_700_000_000_300_u64
+            }
+        }))
+        .expect("newer latest H_demag field");
+        apply_current_live_field_frame(
+            &mut current,
+            CurrentLiveFieldFrameRequest {
+                session_id: "test-session".to_string(),
+                latest_fields: Some(genuinely_newer_latest),
+                preview_fields: None,
+                clear_preview_cache: false,
+            },
+        )
+        .expect("newer latest field frame should apply");
+
+        assert!(matches!(
+            effective_field_source(&current, "H_demag"),
+            Some(EffectiveFieldSource::Latest(_))
+        ));
+        assert!(current.field_quantity_revisions["H_demag"] > terminal_revision);
     }
 
     #[test]
@@ -3258,9 +3748,11 @@ mod tests {
                 max_torque_T: 0.0,
                 wall_time_ns: 100,
                 grid: [1, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: Some(preview_field("H_eff")),
                 finished: false,
             },
@@ -3335,9 +3827,11 @@ mod tests {
                 max_torque_T: 0.0,
                 wall_time_ns: 100,
                 grid: [1, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: Some(preview_field("H_eff")),
                 finished: false,
             },
@@ -3368,9 +3862,11 @@ mod tests {
                         max_torque_T: 0.0,
                         wall_time_ns: 100,
                         grid: [1, 1, 1],
+                        fem_mesh_generation_id: None,
                         fem_mesh: None,
                         magnetization: None,
                         per_object_scalars: Default::default(),
+                        field_materialization_states: Vec::new(),
                         preview_field: None,
                         finished: false,
                     },

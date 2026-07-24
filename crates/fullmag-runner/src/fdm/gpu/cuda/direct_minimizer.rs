@@ -118,7 +118,7 @@ pub(crate) fn execute_direct_minimizer(
                 let action = (live.on_step)(StepUpdate {
                     stats: current_stats.clone(),
                     grid: live.grid,
-                    fem_mesh: None,
+                    fem_mesh_generation_id: None,
                     magnetization: Some(flatten_vectors(&state.magnetization)),
                     preview_field,
                     cached_preview_fields: None,

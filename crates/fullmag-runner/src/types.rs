@@ -7,6 +7,37 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::sync::atomic::AtomicBool;
 
+#[cfg(test)]
+thread_local! {
+    static FEM_MESH_PAYLOAD_BUILD_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static FEM_MESH_FINGERPRINT_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_fem_mesh_payload_build_count() {
+    FEM_MESH_PAYLOAD_BUILD_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+fn fem_mesh_payload_build_count() -> u64 {
+    FEM_MESH_PAYLOAD_BUILD_COUNT.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) fn reset_fem_mesh_fingerprint_count() {
+    FEM_MESH_FINGERPRINT_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn fem_mesh_fingerprint_count() -> u64 {
+    FEM_MESH_FINGERPRINT_COUNT.with(std::cell::Cell::get)
+}
+
+fn record_fem_mesh_payload_build() {
+    #[cfg(test)]
+    FEM_MESH_PAYLOAD_BUILD_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+}
+
 // ----- public types -----
 
 /// Public result type returned by [`crate::run_reference_fem_eigen`].
@@ -324,6 +355,25 @@ pub struct SolverAttemptRecord {
     pub estimator_order: i32,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LiveFieldMaterializationState {
+    Pending,
+    Complete,
+    Superseded,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LiveFieldMaterializationStatus {
+    pub quantity: String,
+    pub source_step: u64,
+    pub request_revision: u64,
+    pub state: LiveFieldMaterializationState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(non_snake_case)]
 pub struct StepStats {
@@ -359,7 +409,22 @@ pub struct StepStats {
     /// Comparable to mumax MaxTorque.
     #[serde(default)]
     pub max_torque_T: f64,
+    #[serde(default)]
+    pub accepted_energy_proof_available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_energy_delta_j: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_energy_roundoff_bound_j: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_energy_delta_upper_j: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub armijo_increment_rhs_j: Option<f64>,
     pub wall_time_ns: u64,
+    /// One-time wall time spent constructing the native backend/context.
+    ///
+    /// This is attached to the first accepted step produced by that backend.
+    #[serde(default)]
+    pub backend_create_wall_time_ns: u64,
     #[serde(default)]
     pub exchange_wall_time_ns: u64,
     #[serde(default)]
@@ -417,9 +482,90 @@ pub struct StepStats {
     /// Wall-clock time spent on cached (non-active) preview field copies (ns).
     #[serde(default)]
     pub cached_preview_wall_time_ns: u64,
+    /// Nonblocking worker-completion query time inside the preview handoff (ns).
+    #[serde(default)]
+    pub preview_harvest_query_wall_time_ns: u64,
+    /// Completed preview result promotion into active/cache-ready ownership (ns).
+    #[serde(default)]
+    pub preview_result_promotion_wall_time_ns: u64,
+    /// Bounded-worker capacity checks inside the preview handoff (ns).
+    #[serde(default)]
+    pub preview_can_accept_wall_time_ns: u64,
+    /// Native vector-field snapshot scheduling time inside the preview handoff (ns).
+    #[serde(default)]
+    pub preview_vector_snapshot_schedule_wall_time_ns: u64,
+    /// Native energy-density snapshot scheduling time inside the preview handoff (ns).
+    #[serde(default)]
+    pub preview_energy_snapshot_schedule_wall_time_ns: u64,
+    /// Cache-cycle request coalescing time inside the preview handoff (ns).
+    #[serde(default)]
+    pub preview_queue_coalescing_wall_time_ns: u64,
+    /// Bounded materializer job submission time inside the preview handoff (ns).
+    #[serde(default)]
+    pub preview_submit_wall_time_ns: u64,
+    /// Time spent staging a deferred preview request for submission (ns).
+    #[serde(default)]
+    pub preview_submit_stage_wall_time_ns: u64,
+    /// Time spent constructing submission descriptors and identities (ns).
+    #[serde(default)]
+    pub preview_submit_descriptor_wall_time_ns: u64,
+    /// Time spent allocating per-submission acknowledgement channels (ns).
+    #[serde(default)]
+    pub preview_submit_channel_alloc_wall_time_ns: u64,
+    /// Time spent in the nonblocking worker-channel send (ns).
+    #[serde(default)]
+    pub preview_submit_try_send_wall_time_ns: u64,
+    /// Time spent recording submission ownership and failure state (ns).
+    #[serde(default)]
+    pub preview_submit_bookkeeping_wall_time_ns: u64,
+    /// Calling-thread CPU time consumed by preview submission (ns).
+    #[serde(default)]
+    pub preview_submit_thread_cpu_time_ns: u64,
+    /// Calling-thread CPU time consumed by the full preview callback (ns).
+    #[serde(default)]
+    pub preview_callback_thread_cpu_time_ns: u64,
+    /// Internal absolute thread-CPU timestamp carried across the synchronous runner callback.
+    #[serde(skip)]
+    pub preview_callback_thread_cpu_started_ns: Option<u64>,
+    /// Pre-step wait for the scheduler to enqueue exact-step native snapshots (ns).
+    #[serde(default)]
+    pub preview_schedule_fence_wall_time_ns: u64,
+    /// Preview requests deliberately superseded while the bounded worker was busy.
+    #[serde(default)]
+    pub preview_superseded_count: u64,
+    /// Bounded materializer ownership/state for each requested live field quantity.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub field_materialization_states: Vec<LiveFieldMaterializationStatus>,
+    /// Capture step for the optional live magnetization payload in the enclosing StepUpdate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetization_source_step: Option<u64>,
+    /// Monotonic capture revision for the optional live magnetization payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetization_source_revision: Option<u64>,
+    /// Wall-clock completion time for the optional live magnetization payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetization_materialized_at_unix_ms: Option<u64>,
+    /// Snapshot completion/copy duration for the optional live magnetization payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetization_materialization_wall_time_ns: Option<u64>,
     /// Wall-clock time spent in synchronous runner/CLI live callback orchestration (ns).
     #[serde(default)]
     pub orchestration_wall_time_ns: u64,
+    /// Wall-clock time spent materializing or cloning FEM mesh payloads for this callback (ns).
+    #[serde(default)]
+    pub mesh_payload_wall_time_ns: u64,
+    /// Number of deep `StepUpdate` clones performed by host orchestration.
+    #[serde(default)]
+    pub step_update_deep_clone_count: u64,
+    /// Wall-clock time spent building the live-state resource under the workspace lock (ns).
+    #[serde(default)]
+    pub live_state_build_wall_time_ns: u64,
+    /// Wall-clock time spent replacing the pending publisher payload synchronously (ns).
+    #[serde(default)]
+    pub publisher_replace_wall_time_ns: u64,
+    /// Wall-clock time spent preparing an enabled profiler sample for persistence (ns).
+    #[serde(default)]
+    pub profile_persist_enqueue_wall_time_ns: u64,
     /// Wall-clock time spent copying full field payloads for live/artifact handoff (ns).
     #[serde(default)]
     pub field_copy_wall_time_ns: u64,
@@ -571,7 +717,13 @@ impl Default for StepStats {
             max_h_demag: 0.0,
             max_torque_Apm: 0.0,
             max_torque_T: 0.0,
+            accepted_energy_proof_available: false,
+            accepted_energy_delta_j: None,
+            accepted_energy_roundoff_bound_j: None,
+            accepted_energy_delta_upper_j: None,
+            armijo_increment_rhs_j: None,
             wall_time_ns: 0,
+            backend_create_wall_time_ns: 0,
             exchange_wall_time_ns: 0,
             demag_wall_time_ns: 0,
             demag_assemble_wall_time_ns: 0,
@@ -599,7 +751,34 @@ impl Default for StepStats {
             native_ffi_overhead_wall_time_ns: 0,
             preview_wall_time_ns: 0,
             cached_preview_wall_time_ns: 0,
+            preview_harvest_query_wall_time_ns: 0,
+            preview_result_promotion_wall_time_ns: 0,
+            preview_can_accept_wall_time_ns: 0,
+            preview_vector_snapshot_schedule_wall_time_ns: 0,
+            preview_energy_snapshot_schedule_wall_time_ns: 0,
+            preview_queue_coalescing_wall_time_ns: 0,
+            preview_submit_wall_time_ns: 0,
+            preview_submit_stage_wall_time_ns: 0,
+            preview_submit_descriptor_wall_time_ns: 0,
+            preview_submit_channel_alloc_wall_time_ns: 0,
+            preview_submit_try_send_wall_time_ns: 0,
+            preview_submit_bookkeeping_wall_time_ns: 0,
+            preview_submit_thread_cpu_time_ns: 0,
+            preview_callback_thread_cpu_time_ns: 0,
+            preview_callback_thread_cpu_started_ns: None,
+            preview_schedule_fence_wall_time_ns: 0,
+            preview_superseded_count: 0,
+            field_materialization_states: Vec::new(),
+            magnetization_source_step: None,
+            magnetization_source_revision: None,
+            magnetization_materialized_at_unix_ms: None,
+            magnetization_materialization_wall_time_ns: None,
             orchestration_wall_time_ns: 0,
+            mesh_payload_wall_time_ns: 0,
+            step_update_deep_clone_count: 0,
+            live_state_build_wall_time_ns: 0,
+            publisher_replace_wall_time_ns: 0,
+            profile_persist_enqueue_wall_time_ns: 0,
             field_copy_wall_time_ns: 0,
             field_copy_bytes: 0,
             artifact_enqueue_block_wall_time_ns: 0,
@@ -681,6 +860,7 @@ mod all_in_gpu_fem_transfer_audit_tests {
     #[test]
     fn demag_profile_step_stats_flow_into_diagnostics() {
         let stats = StepStats {
+            backend_create_wall_time_ns: 31,
             demag_wall_time_ns: 17,
             demag_assemble_wall_time_ns: 3,
             demag_solve_wall_time_ns: 5,
@@ -694,6 +874,7 @@ mod all_in_gpu_fem_transfer_audit_tests {
         };
 
         let diagnostics = stats.to_diagnostics();
+        assert_eq!(diagnostics.backend_create_wall_time_ns, 31);
         assert_eq!(diagnostics.demag_wall_time_ns, 17);
         assert_eq!(diagnostics.demag_assemble_wall_time_ns, 3);
         assert_eq!(diagnostics.demag_solve_wall_time_ns, 5);
@@ -771,8 +952,8 @@ mod all_in_gpu_fem_transfer_audit_tests {
         assert_eq!(snapshot.latest_samples[1].step, 3);
         assert!(snapshot.latest_samples[1].sample_time_unix_ms > 0);
         assert!(snapshot.latest_samples[1].delta_wall_time_ns.is_some());
-        assert_eq!(snapshot.latest_samples[1].phase_sum_ns, 840);
-        assert_eq!(snapshot.latest_samples[1].missing_ns, 160);
+        assert_eq!(snapshot.latest_samples[1].phase_sum_ns, 815);
+        assert_eq!(snapshot.latest_samples[1].missing_ns, 185);
         assert_eq!(snapshot.latest_samples[1].artifact_enqueue_bytes, 4096);
         assert_eq!(snapshot.latest_samples[1].artifact_queue_depth_max, 3);
         assert_eq!(snapshot.latest_samples[1].artifact_queue_depth_current, 1);
@@ -861,7 +1042,10 @@ mod all_in_gpu_fem_transfer_audit_tests {
         assert_eq!(finalization_phase.wall_time_ns, 700);
         assert_eq!(forced.finalization_field_copy_wall_time_ns, 500);
         assert_eq!(forced.finalization_field_copy_bytes, 24_000);
-        assert_eq!(profile.snapshot().latest_samples.len(), 2);
+        let samples = profile.snapshot().latest_samples;
+        assert_eq!(samples.len(), 3);
+        assert_eq!(samples[1].span_step_count, 1);
+        assert_eq!(samples[2].span_step_count, 0);
     }
 
     #[test]
@@ -1041,6 +1225,7 @@ impl StepStats {
             time: self.time,
             dt: self.dt,
             wall_time_ns: self.wall_time_ns,
+            backend_create_wall_time_ns: self.backend_create_wall_time_ns,
             exchange_wall_time_ns: self.exchange_wall_time_ns,
             demag_wall_time_ns: self.demag_wall_time_ns,
             demag_assemble_wall_time_ns: self.demag_assemble_wall_time_ns,
@@ -1120,9 +1305,9 @@ pub struct StepUpdate {
     pub stats: StepStats,
     /// Grid dimensions [nx, ny, nz] for client-side reconstruction.
     pub grid: [u32; 3],
-    /// Optional FEM mesh payload for mesh-native preview in the control room.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fem_mesh: Option<FemMeshPayload>,
+    /// Stage-scoped FEM mesh generation resolved through the separate mesh resource.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_mesh_generation_id: Option<String>,
     /// **Deprecated (Q16):** Use [`fullmag_quantities::LiveQuantityFrame`]
     /// with `quantity_id = "m"` via [`Self::to_v2()`] instead.
     ///
@@ -1267,6 +1452,18 @@ impl Default for LivePreviewRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LivePreviewField {
     pub config_revision: u64,
+    /// Solver step whose state was captured for this completed field.
+    #[serde(default)]
+    pub source_step: u64,
+    /// Display/materialization request revision used for this field.
+    #[serde(default)]
+    pub source_revision: u64,
+    /// Wall-clock completion time for asynchronous materialization.
+    #[serde(default)]
+    pub materialized_at_unix_ms: u64,
+    /// Worker-side wait and field-materialization duration.
+    #[serde(default)]
+    pub materialization_wall_time_ns: u64,
     pub quantity: String,
     pub unit: String,
     pub spatial_kind: String,
@@ -1287,6 +1484,15 @@ pub struct LivePreviewField {
     /// ANY original cell in its block is active).  `None` means all cells active.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_mask: Option<Vec<bool>>,
+}
+
+/// SHA-256 over the canonical little-endian `f64` preview payload bytes.
+pub fn live_preview_values_sha256(values: &[f64]) -> String {
+    let mut hasher = Sha256::new();
+    for value in values {
+        hasher.update(value.to_le_bytes());
+    }
+    digest_hex(&hasher.finalize())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1411,6 +1617,82 @@ pub struct FemMeshPayload {
     pub build_report: Option<fullmag_ir::FemSharedDomainBuildReportIR>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StageFemMeshIdentity {
+    generation_id: String,
+}
+
+impl StageFemMeshIdentity {
+    pub(crate) fn from_generation_id(generation_id: String) -> Self {
+        Self { generation_id }
+    }
+
+    pub fn generation_id(&self) -> &str {
+        &self.generation_id
+    }
+
+    pub fn from_fem_plan(plan: &fullmag_ir::FemPlanIR) -> Self {
+        Self {
+            generation_id: fem_plan_mesh_generation_id(plan),
+        }
+    }
+
+    pub fn from_fem_eigen_plan(plan: &fullmag_ir::FemEigenPlanIR) -> Self {
+        Self {
+            generation_id: fem_eigen_mesh_generation_id(plan),
+        }
+    }
+
+    pub fn from_fem_frequency_response_plan(plan: &fullmag_ir::FemFrequencyResponsePlanIR) -> Self {
+        Self {
+            generation_id: fem_frequency_response_mesh_generation_id(plan),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StageFemMeshAsset {
+    pub identity: StageFemMeshIdentity,
+    pub payload: FemMeshPayload,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FemStageExecutionContext {
+    pub mesh_identity: StageFemMeshIdentity,
+}
+
+impl FemStageExecutionContext {
+    pub fn from_mesh_identity(mesh_identity: StageFemMeshIdentity) -> Self {
+        Self { mesh_identity }
+    }
+
+    pub fn from_fem_plan(plan: &fullmag_ir::FemPlanIR) -> Self {
+        Self {
+            mesh_identity: StageFemMeshIdentity::from_fem_plan(plan),
+        }
+    }
+
+    pub fn generation_id(&self) -> Option<String> {
+        Some(self.mesh_identity.generation_id().to_string())
+    }
+
+    pub fn from_backend_plan(plan: &fullmag_ir::BackendPlanIR) -> Option<Self> {
+        let mesh_identity = match plan {
+            fullmag_ir::BackendPlanIR::Fem(plan) => StageFemMeshIdentity::from_fem_plan(plan),
+            fullmag_ir::BackendPlanIR::FemEigen(plan) => {
+                StageFemMeshIdentity::from_fem_eigen_plan(plan)
+            }
+            fullmag_ir::BackendPlanIR::FemFrequencyResponse(plan) => {
+                StageFemMeshIdentity::from_fem_frequency_response_plan(plan)
+            }
+            fullmag_ir::BackendPlanIR::Fdm(_) | fullmag_ir::BackendPlanIR::FdmMultilayer(_) => {
+                return None;
+            }
+        };
+        Some(Self { mesh_identity })
+    }
+}
+
 pub fn fem_mesh_topology_fingerprint(mesh: &FemMeshPayload) -> String {
     let mut hasher = Sha256::new();
     update_hash_bytes(
@@ -1491,6 +1773,8 @@ fn stable_fem_mesh_generation_id(
     domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR,
     domain_frame: &Option<fullmag_ir::DomainFrameIR>,
 ) -> String {
+    #[cfg(test)]
+    FEM_MESH_FINGERPRINT_COUNT.with(|count| count.set(count.get().saturating_add(1)));
     let mut hasher = Sha256::new();
     update_hash_bytes(&mut hasher, "schema", b"fullmag:fem-mesh-payload:v1");
     update_hash_str(&mut hasher, "mesh_name", &mesh.mesh_name);
@@ -1583,8 +1867,12 @@ fn update_hash_serialized<T: Serialize + ?Sized>(hasher: &mut Sha256, label: &st
     update_hash_bytes(hasher, label, &bytes);
 }
 
-impl From<&fullmag_ir::FemPlanIR> for FemMeshPayload {
-    fn from(plan: &fullmag_ir::FemPlanIR) -> Self {
+impl FemMeshPayload {
+    pub fn from_fem_plan_with_generation(
+        plan: &fullmag_ir::FemPlanIR,
+        generation_id: String,
+    ) -> Self {
+        record_fem_mesh_payload_build();
         let magnetic_markers = (!plan.region_materials.is_empty()).then(|| {
             plan.region_materials
                 .iter()
@@ -1595,14 +1883,6 @@ impl From<&fullmag_ir::FemPlanIR> for FemMeshPayload {
             &plan.mesh.element_markers,
             magnetic_markers.as_ref(),
         );
-        let generation_id = stable_fem_mesh_generation_id(
-            &plan.mesh,
-            &element_markers,
-            &plan.object_segments,
-            &plan.mesh_parts,
-            plan.domain_mesh_mode,
-            &plan.domain_frame,
-        );
         Self {
             mesh_name: plan.mesh.mesh_name.clone(),
             mesh_id: format!("{}:{}", plan.mesh.mesh_name, generation_id),
@@ -1644,19 +1924,68 @@ impl From<&fullmag_ir::FemPlanIR> for FemMeshPayload {
             build_report: plan.mesh_build_report.clone(),
         }
     }
+}
+
+impl StageFemMeshAsset {
+    pub fn build_from_backend_plan(plan: &fullmag_ir::BackendPlanIR) -> Option<Self> {
+        match plan {
+            fullmag_ir::BackendPlanIR::Fem(plan) => Some(Self::build_from_fem_plan(plan)),
+            fullmag_ir::BackendPlanIR::FemEigen(plan) => {
+                Some(Self::build_from_fem_eigen_plan(plan))
+            }
+            fullmag_ir::BackendPlanIR::FemFrequencyResponse(plan) => {
+                Some(Self::build_from_fem_frequency_response_plan(plan))
+            }
+            fullmag_ir::BackendPlanIR::Fdm(_) | fullmag_ir::BackendPlanIR::FdmMultilayer(_) => None,
+        }
+    }
+
+    pub fn build_from_fem_plan(plan: &fullmag_ir::FemPlanIR) -> Self {
+        let identity = StageFemMeshIdentity::from_fem_plan(plan);
+        let payload =
+            FemMeshPayload::from_fem_plan_with_generation(plan, identity.generation_id.clone());
+        Self { identity, payload }
+    }
+}
+
+impl From<&fullmag_ir::FemPlanIR> for FemMeshPayload {
+    fn from(plan: &fullmag_ir::FemPlanIR) -> Self {
+        StageFemMeshAsset::build_from_fem_plan(plan).payload
+    }
+}
+
+pub fn fem_plan_mesh_generation_id(plan: &fullmag_ir::FemPlanIR) -> String {
+    let magnetic_markers = (!plan.region_materials.is_empty()).then(|| {
+        plan.region_materials
+            .iter()
+            .map(|region| region.element_marker)
+            .collect::<BTreeSet<_>>()
+    });
+    let element_markers =
+        normalized_payload_element_markers(&plan.mesh.element_markers, magnetic_markers.as_ref());
+    stable_fem_mesh_generation_id(
+        &plan.mesh,
+        &element_markers,
+        &plan.object_segments,
+        &plan.mesh_parts,
+        plan.domain_mesh_mode,
+        &plan.domain_frame,
+    )
 }
 
 impl From<&fullmag_ir::FemEigenPlanIR> for FemMeshPayload {
     fn from(plan: &fullmag_ir::FemEigenPlanIR) -> Self {
+        StageFemMeshAsset::build_from_fem_eigen_plan(plan).payload
+    }
+}
+
+impl FemMeshPayload {
+    pub fn from_fem_eigen_plan_with_generation(
+        plan: &fullmag_ir::FemEigenPlanIR,
+        generation_id: String,
+    ) -> Self {
+        record_fem_mesh_payload_build();
         let element_markers = normalized_payload_element_markers(&plan.mesh.element_markers, None);
-        let generation_id = stable_fem_mesh_generation_id(
-            &plan.mesh,
-            &element_markers,
-            &plan.object_segments,
-            &plan.mesh_parts,
-            plan.domain_mesh_mode,
-            &plan.domain_frame,
-        );
         Self {
             mesh_name: plan.mesh.mesh_name.clone(),
             mesh_id: format!("{}:{}", plan.mesh.mesh_name, generation_id),
@@ -1700,17 +2029,42 @@ impl From<&fullmag_ir::FemEigenPlanIR> for FemMeshPayload {
     }
 }
 
+impl StageFemMeshAsset {
+    pub fn build_from_fem_eigen_plan(plan: &fullmag_ir::FemEigenPlanIR) -> Self {
+        let identity = StageFemMeshIdentity::from_fem_eigen_plan(plan);
+        let payload = FemMeshPayload::from_fem_eigen_plan_with_generation(
+            plan,
+            identity.generation_id.clone(),
+        );
+        Self { identity, payload }
+    }
+}
+
+pub fn fem_eigen_mesh_generation_id(plan: &fullmag_ir::FemEigenPlanIR) -> String {
+    let element_markers = normalized_payload_element_markers(&plan.mesh.element_markers, None);
+    stable_fem_mesh_generation_id(
+        &plan.mesh,
+        &element_markers,
+        &plan.object_segments,
+        &plan.mesh_parts,
+        plan.domain_mesh_mode,
+        &plan.domain_frame,
+    )
+}
+
 impl From<&fullmag_ir::FemFrequencyResponsePlanIR> for FemMeshPayload {
     fn from(plan: &fullmag_ir::FemFrequencyResponsePlanIR) -> Self {
+        StageFemMeshAsset::build_from_fem_frequency_response_plan(plan).payload
+    }
+}
+
+impl FemMeshPayload {
+    pub fn from_fem_frequency_response_plan_with_generation(
+        plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+        generation_id: String,
+    ) -> Self {
+        record_fem_mesh_payload_build();
         let element_markers = normalized_payload_element_markers(&plan.mesh.element_markers, None);
-        let generation_id = stable_fem_mesh_generation_id(
-            &plan.mesh,
-            &element_markers,
-            &plan.object_segments,
-            &plan.mesh_parts,
-            plan.domain_mesh_mode,
-            &plan.domain_frame,
-        );
         Self {
             mesh_name: plan.mesh.mesh_name.clone(),
             mesh_id: format!("{}:{}", plan.mesh.mesh_name, generation_id),
@@ -1752,6 +2106,33 @@ impl From<&fullmag_ir::FemFrequencyResponsePlanIR> for FemMeshPayload {
             build_report: plan.mesh_build_report.clone(),
         }
     }
+}
+
+impl StageFemMeshAsset {
+    pub fn build_from_fem_frequency_response_plan(
+        plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+    ) -> Self {
+        let identity = StageFemMeshIdentity::from_fem_frequency_response_plan(plan);
+        let payload = FemMeshPayload::from_fem_frequency_response_plan_with_generation(
+            plan,
+            identity.generation_id.clone(),
+        );
+        Self { identity, payload }
+    }
+}
+
+pub fn fem_frequency_response_mesh_generation_id(
+    plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+) -> String {
+    let element_markers = normalized_payload_element_markers(&plan.mesh.element_markers, None);
+    stable_fem_mesh_generation_id(
+        &plan.mesh,
+        &element_markers,
+        &plan.object_segments,
+        &plan.mesh_parts,
+        plan.domain_mesh_mode,
+        &plan.domain_frame,
+    )
 }
 
 impl From<&fullmag_ir::FemMeshPartIR> for FemMeshPartPayload {
@@ -2360,10 +2741,12 @@ pub(crate) struct StateObservables {
 #[cfg(test)]
 mod tests {
     use super::{
-        fem_mesh_topology_fingerprint, normalized_payload_element_markers, ExecutionProvenance,
-        FemMeshPartPayload, FemMeshPayload, InitialTimestepReason, LegacyDtPolicy,
-        LivePreviewField, LlgTimestepCapabilityId, LlgTimestepQualificationId,
-        RequestedTimestepPolicy, ResolvedTimestepPolicy, StepStats, StepUpdate, TimestepBackend,
+        fem_mesh_fingerprint_count, fem_mesh_payload_build_count, fem_mesh_topology_fingerprint,
+        normalized_payload_element_markers, reset_fem_mesh_fingerprint_count,
+        reset_fem_mesh_payload_build_count, ExecutionProvenance, FemMeshPartPayload,
+        FemMeshPayload, InitialTimestepReason, LegacyDtPolicy, LivePreviewField,
+        LlgTimestepCapabilityId, LlgTimestepQualificationId, RequestedTimestepPolicy,
+        ResolvedTimestepPolicy, StageFemMeshAsset, StepStats, StepUpdate, TimestepBackend,
         TimestepDevice, TimestepExecutionIdentity, TimestepPolicyProvenance,
         TimestepValidationState,
     };
@@ -2509,6 +2892,118 @@ mod tests {
     }
 
     #[test]
+    fn fem_mesh_payload_is_built_once_while_step_updates_reuse_generation() {
+        reset_fem_mesh_payload_build_count();
+        reset_fem_mesh_fingerprint_count();
+        let mut plan = tiny_fem_plan();
+        let stage_asset = StageFemMeshAsset::build_from_fem_plan(&plan);
+        let stage_generation = stage_asset.identity.generation_id().to_string();
+        let stage_mesh = &stage_asset.payload;
+        for _ in 0..12 {
+            assert_eq!(
+                Some(stage_generation.as_str()),
+                stage_mesh.generation_id.as_deref()
+            );
+        }
+        assert_eq!(fem_mesh_payload_build_count(), 1);
+        assert_eq!(fem_mesh_fingerprint_count(), 1);
+
+        let rebuilt_payload = FemMeshPayload::from_fem_plan_with_generation(
+            &plan,
+            stage_asset.identity.generation_id().to_string(),
+        );
+        assert_eq!(rebuilt_payload.generation_id, stage_mesh.generation_id);
+        assert_eq!(fem_mesh_payload_build_count(), 2);
+        assert_eq!(fem_mesh_fingerprint_count(), 1);
+
+        plan.mesh.nodes[0][0] += 0.25;
+        let remeshed = FemMeshPayload::from(&plan);
+        assert_ne!(remeshed.generation_id, stage_mesh.generation_id);
+        assert_eq!(fem_mesh_payload_build_count(), 3);
+        assert_eq!(fem_mesh_fingerprint_count(), 2);
+    }
+
+    #[test]
+    fn stage_fem_mesh_asset_survives_initialization_and_stage_zero_without_rehash() {
+        reset_fem_mesh_payload_build_count();
+        reset_fem_mesh_fingerprint_count();
+        let plan = tiny_fem_plan();
+
+        let stage_asset = StageFemMeshAsset::build_from_fem_plan(&plan);
+        let initialization_payload = stage_asset.payload.clone();
+        let stage_context =
+            super::FemStageExecutionContext::from_mesh_identity(stage_asset.identity.clone());
+
+        for _ in 0..16 {
+            assert_eq!(
+                initialization_payload.generation_id.as_deref(),
+                stage_context.generation_id().as_deref(),
+            );
+        }
+        assert_eq!(fem_mesh_payload_build_count(), 1);
+        assert_eq!(fem_mesh_fingerprint_count(), 1);
+    }
+
+    #[test]
+    fn production_interactive_asset_reuse_does_not_rebuild_or_refingerprint_mesh() {
+        reset_fem_mesh_payload_build_count();
+        reset_fem_mesh_fingerprint_count();
+        let stage_asset = StageFemMeshAsset::build_from_fem_plan(&tiny_fem_plan());
+
+        let (mesh, context) = crate::interactive_runtime::reuse_stage_fem_mesh_asset(&stage_asset);
+
+        assert_eq!(
+            mesh.generation_id.as_deref(),
+            context.generation_id().as_deref()
+        );
+        assert_eq!(fem_mesh_payload_build_count(), 1);
+        assert_eq!(fem_mesh_fingerprint_count(), 1);
+    }
+
+    #[test]
+    fn remeshed_stage_asset_publishes_and_executes_one_new_generation() {
+        let mut plan = tiny_fem_plan();
+        plan.mesh.nodes[1][0] += 0.25;
+        reset_fem_mesh_payload_build_count();
+        reset_fem_mesh_fingerprint_count();
+
+        let remeshed_asset = StageFemMeshAsset::build_from_fem_plan(&plan);
+        let published_generation = remeshed_asset
+            .payload
+            .generation_id
+            .as_deref()
+            .expect("published remesh generation");
+        let context =
+            super::FemStageExecutionContext::from_mesh_identity(remeshed_asset.identity.clone());
+        for step in 0..8 {
+            let update = StepUpdate {
+                stats: StepStats {
+                    step,
+                    ..StepStats::default()
+                },
+                grid: [0, 0, 0],
+                fem_mesh_generation_id: context.generation_id(),
+                magnetization: None,
+                preview_field: None,
+                cached_preview_fields: None,
+                hysteresis_field_m_t: None,
+                hysteresis_point_index: None,
+                hysteresis_settle_step_index: None,
+                hysteresis_settle_step_kind: None,
+                hysteresis_settle_step_method: None,
+                scalar_row_due: false,
+                finished: step == 7,
+            };
+            assert_eq!(
+                update.fem_mesh_generation_id.as_deref(),
+                Some(published_generation)
+            );
+        }
+        assert_eq!(fem_mesh_payload_build_count(), 1);
+        assert_eq!(fem_mesh_fingerprint_count(), 1);
+    }
+
+    #[test]
     fn fem_mesh_topology_fingerprint_changes_for_node_reorder() {
         let base = FemMeshPayload::from(&tiny_fem_plan());
         let mut reordered = base.clone();
@@ -2619,7 +3114,7 @@ mod tests {
         let update = StepUpdate {
             stats: StepStats::default(),
             grid: [4, 1, 1],
-            fem_mesh: None,
+            fem_mesh_generation_id: None,
             magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
             preview_field: None,
             cached_preview_fields: None,
@@ -2650,10 +3145,14 @@ mod tests {
         let update = StepUpdate {
             stats: StepStats::default(),
             grid: [4, 1, 1],
-            fem_mesh: None,
+            fem_mesh_generation_id: None,
             magnetization: None,
             preview_field: Some(LivePreviewField {
                 config_revision: 1,
+                source_step: 0,
+                source_revision: 1,
+                materialized_at_unix_ms: 0,
+                materialization_wall_time_ns: 0,
                 quantity: "eden_total".to_string(),
                 unit: "wrong".to_string(),
                 spatial_kind: "grid".to_string(),

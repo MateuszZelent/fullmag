@@ -423,6 +423,7 @@ class MagnetHandle:
         self.Dbulk: float | None = None
         self.Ku1: float | None = None
         self.anisU: tuple[float, float, float] | None = None
+        self.Kc1: float | None = None
         self._m_value: Any = None
         self._m_proxy = MagnetizationHandle(self)
         self._field_states: dict[str, object] = {}
@@ -487,6 +488,7 @@ class MagnetHandle:
             alpha=self.alpha,
             Ku1=self.Ku1,
             anisU=as_vector3(self.anisU, "anisU") if self.anisU is not None else None,
+            Kc1=self.Kc1,
             Dind=self.Dind,
             Dbulk=self.Dbulk,
         )

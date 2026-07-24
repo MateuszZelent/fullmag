@@ -3833,8 +3833,42 @@
           "location": {
             "type": "string"
           },
+          "materialization_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "materialization_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "materialized_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "quantity_id": {
             "type": "string"
+          },
+          "source_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source_step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stale_by_steps": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/FieldMaterializationState"
           },
           "unit": {
             "type": "string"
@@ -3849,7 +3883,13 @@
           "unit",
           "field_revision",
           "domain_generation_id",
-          "available"
+          "available",
+          "source_step",
+          "source_revision",
+          "materialized_at_unix_ms",
+          "stale_by_steps",
+          "materialization_wall_time_ns",
+          "state"
         ],
         "type": "object"
       },
@@ -4012,6 +4052,15 @@
             "type": "object"
           }
         ]
+      },
+      "FieldMaterializationState": {
+        "enum": [
+          "complete",
+          "stale_complete",
+          "pending",
+          "error"
+        ],
+        "type": "string"
       },
       "FieldMatrixResponse": {
         "properties": {
@@ -4190,8 +4239,42 @@
           "location": {
             "type": "string"
           },
+          "materialization_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "materialization_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "materialized_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "quantity_id": {
             "type": "string"
+          },
+          "source_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source_step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stale_by_steps": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/FieldMaterializationState"
           },
           "stats": {
             "oneOf": [
@@ -4215,7 +4298,13 @@
           "location",
           "unit",
           "field_revision",
-          "domain_generation_id"
+          "domain_generation_id",
+          "source_step",
+          "source_revision",
+          "materialized_at_unix_ms",
+          "stale_by_steps",
+          "materialization_wall_time_ns",
+          "state"
         ],
         "type": "object"
       },
@@ -8609,6 +8698,21 @@
             "minimum": 0,
             "type": "integer"
           },
+          "successful_publish_source_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "successful_publish_step_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "successful_publish_window_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "total_clone_wall_time_ns": {
             "format": "int64",
             "minimum": 0,
@@ -11677,6 +11781,8 @@
       "MetricsSummary": {
         "properties": {
           "steps_per_second": {
+            "deprecated": true,
+            "description": "Deprecated compatibility alias of the diagnostics end-to-end rate.",
             "format": "double",
             "type": [
               "number",
@@ -13374,6 +13480,31 @@
         ],
         "type": "object"
       },
+      "PreparationClockAdjustment": {
+        "properties": {
+          "backward_delta_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observed_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stage_started_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "observed_at_unix_ms",
+          "stage_started_at_unix_ms",
+          "backward_delta_ms"
+        ],
+        "type": "object"
+      },
       "PreparationExecutionSummary": {
         "properties": {
           "backend": {
@@ -13492,6 +13623,16 @@
       },
       "PreparationProgressStage": {
         "properties": {
+          "clock_adjustment": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PreparationClockAdjustment"
+              }
+            ]
+          },
           "completed_at_unix_ms": {
             "format": "int64",
             "minimum": 0,
@@ -13803,6 +13944,36 @@
           "field_component",
           "colormap",
           "auto_contrast"
+        ],
+        "type": "object"
+      },
+      "RateMetricResource": {
+        "properties": {
+          "source_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "value": {
+            "format": "double",
+            "type": "number"
+          },
+          "window_step_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "window_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "value",
+          "window_step_count",
+          "window_wall_time_ns",
+          "source_revision"
         ],
         "type": "object"
       },
@@ -17803,6 +17974,59 @@
         },
         "type": "object"
       },
+      "SolverProfileOverheadDiagnosticsResource": {
+        "properties": {
+          "heartbeat_seed_deep_clone_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "heartbeat_worker_deep_clone_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_persist_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_publisher_replace_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_record_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_persist_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_publisher_replace_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_record_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "last_record_wall_time_ns",
+          "total_record_wall_time_ns",
+          "last_persist_wall_time_ns",
+          "total_persist_wall_time_ns",
+          "last_publisher_replace_wall_time_ns",
+          "total_publisher_replace_wall_time_ns"
+        ],
+        "type": "object"
+      },
       "SolverProfilePhaseResource": {
         "properties": {
           "id": {
@@ -17826,6 +18050,39 @@
           "label",
           "wall_time_ns",
           "percent_of_total"
+        ],
+        "type": "object"
+      },
+      "SolverProfilePhaseWindowResource": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "max_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mean_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sum_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "sum_wall_time_ns",
+          "mean_wall_time_ns",
+          "max_wall_time_ns"
         ],
         "type": "object"
       },
@@ -17859,8 +18116,14 @@
               }
             ]
           },
+          "overhead": {
+            "$ref": "#/components/schemas/SolverProfileOverheadDiagnosticsResource"
+          },
           "preview_3d_disabled": {
             "type": "boolean"
+          },
+          "rates": {
+            "$ref": "#/components/schemas/SolverRateDiagnosticsResource"
           },
           "revision": {
             "format": "int64",
@@ -17890,6 +18153,16 @@
           "artifact_refs"
         ],
         "type": "object"
+      },
+      "SolverProfileSampleKindResource": {
+        "enum": [
+          "normal_step",
+          "publish",
+          "preview",
+          "finalization",
+          "stall"
+        ],
+        "type": "string"
       },
       "SolverProfileStepSampleResource": {
         "properties": {
@@ -17929,6 +18202,11 @@
             "type": "integer"
           },
           "artifact_writer_jobs_completed": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "backend_create_wall_time_ns": {
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -18031,10 +18309,21 @@
             "minimum": 0,
             "type": "integer"
           },
+          "native_solver_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "phase_sum_ns": {
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "phase_windows": {
+            "items": {
+              "$ref": "#/components/schemas/SolverProfilePhaseWindowResource"
+            },
+            "type": "array"
           },
           "phases": {
             "items": {
@@ -18048,6 +18337,11 @@
           },
           "poisson_iterations": {
             "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "profiled_step_total_ns": {
+            "format": "int64",
             "minimum": 0,
             "type": "integer"
           },
@@ -18106,12 +18400,43 @@
             "minimum": 0,
             "type": "integer"
           },
+          "sample_kinds": {
+            "items": {
+              "$ref": "#/components/schemas/SolverProfileSampleKindResource"
+            },
+            "type": "array"
+          },
           "sample_time_unix_ms": {
             "format": "int64",
             "minimum": 0,
             "type": "integer"
           },
+          "span_first_step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "span_last_step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "span_monotonic_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "span_step_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "step_update_deep_clone_count": {
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -18124,6 +18449,16 @@
             "type": "number"
           },
           "total_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unprofiled_gap_per_step_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unprofiled_gap_total_ns": {
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -18196,6 +18531,41 @@
           "effective_omp_threads",
           "thread_mode"
         ],
+        "type": "object"
+      },
+      "SolverRateDiagnosticsResource": {
+        "properties": {
+          "end_to_end_steps_per_second": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RateMetricResource"
+              }
+            ]
+          },
+          "published_steps_per_second": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RateMetricResource"
+              }
+            ]
+          },
+          "solver_steps_per_second": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RateMetricResource"
+              }
+            ]
+          }
+        },
         "type": "object"
       },
       "SolverStatusResource": {
@@ -18926,6 +19296,13 @@
             "type": "string"
           },
           "threshold": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "time_to_tolerance_seconds": {
             "format": "double",
             "type": [
               "number",

@@ -48,10 +48,10 @@ use crate::relaxation::apply_energy_minimizer_provenance;
 use crate::relaxation::direct_minimizer::direct_minimizer_control;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::relaxation::llg_overdamped_uses_pure_damping;
-#[cfg(feature = "cuda")]
-use crate::relaxation::RelaxationTorqueConfirmation;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::relaxation::RelaxationEnergyPlateauWindow;
+#[cfg(feature = "cuda")]
+use crate::relaxation::RelaxationTorqueConfirmation;
 use crate::runtime_registry::RuntimeRegistry;
 #[cfg(feature = "cuda")]
 use crate::scalar_metrics::single_object_scalars;
@@ -73,8 +73,8 @@ pub(crate) use crate::solver_runtime::selection::{
 #[cfg(feature = "fem-gpu")]
 use crate::types::FemPoissonDemagProvenance;
 use crate::types::{
-    AuxiliaryArtifact, ExecutedRun, LivePreviewRequest, LiveStepConsumer, ResolvedFallback,
-    RunError, StepAction, StepUpdate,
+    AuxiliaryArtifact, ExecutedRun, FemStageExecutionContext, LivePreviewRequest, LiveStepConsumer,
+    ResolvedFallback, RunError, StepAction, StepUpdate,
 };
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::types::{ExecutionProvenance, StepStats};
@@ -2046,6 +2046,27 @@ pub(crate) fn execute_fem<'a>(
     live: Option<LiveStepConsumer<'a>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    let stage_context = FemStageExecutionContext::from_fem_plan(plan);
+    execute_fem_with_context(
+        engine,
+        plan,
+        &stage_context,
+        until_seconds,
+        outputs,
+        live,
+        artifact_writer,
+    )
+}
+
+pub(crate) fn execute_fem_with_context<'a>(
+    engine: FemEngine,
+    plan: &FemPlanIR,
+    stage_context: &FemStageExecutionContext,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    live: Option<LiveStepConsumer<'a>>,
+    artifact_writer: Option<ArtifactPipelineSender>,
+) -> Result<ExecutedRun, RunError> {
     let normalized_plan = normalized_fem_plan_for_runtime(plan)?;
     let pbc_decision = fem_static_periodic_decision(&normalized_plan);
     match pbc_decision.lane {
@@ -2070,8 +2091,9 @@ pub(crate) fn execute_fem<'a>(
                         .unwrap_or("operator reduction required")
                 ),
             );
-            let mut executed = fem_baseline::execute_reference_fem(
+            let mut executed = fem_baseline::execute_reference_fem_with_context(
                 &normalized_plan,
+                stage_context,
                 until_seconds,
                 outputs,
                 live,
@@ -2103,6 +2125,7 @@ pub(crate) fn execute_fem<'a>(
             execute_native_fem(
                 FemEngine::CpuNative,
                 &cpu_plan,
+                stage_context,
                 until_seconds,
                 outputs,
                 live,
@@ -2124,6 +2147,7 @@ pub(crate) fn execute_fem<'a>(
                 let mut executed = execute_native_fem(
                     FemEngine::CpuNative,
                     &cpu_plan,
+                    stage_context,
                     until_seconds,
                     outputs,
                     live,
@@ -2146,6 +2170,7 @@ pub(crate) fn execute_fem<'a>(
             execute_native_fem(
                 FemEngine::NativeGpu,
                 &gpu_plan,
+                stage_context,
                 until_seconds,
                 outputs,
                 live,
@@ -4765,7 +4790,7 @@ fn execute_cuda_fdm(
                     let action = (live.on_step)(StepUpdate {
                         stats: current_stats.clone(),
                         grid: live.grid,
-                        fem_mesh: None,
+                        fem_mesh_generation_id: None,
                         magnetization: None,
                         preview_field,
                         cached_preview_fields: None,
@@ -4862,7 +4887,7 @@ fn execute_cuda_fdm(
                 let action = (live.on_step)(StepUpdate {
                     stats: sampled_stats.clone(),
                     grid: live.grid,
-                    fem_mesh: None,
+                    fem_mesh_generation_id: None,
                     magnetization,
                     preview_field,
                     cached_preview_fields: None,
@@ -5269,11 +5294,13 @@ fn record_native_fem_initial_field_snapshots(
 fn execute_native_fem(
     engine: FemEngine,
     plan: &FemPlanIR,
+    stage_context: &FemStageExecutionContext,
     until_seconds: f64,
     outputs: &[OutputIR],
     mut live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    let fem_mesh_generation_id = stage_context.generation_id();
     if until_seconds <= 0.0 {
         return Err(RunError {
             message: "until_seconds must be positive".to_string(),
@@ -5297,6 +5324,7 @@ fn execute_native_fem(
 
     let mut backend =
         NativeFemBackend::create_with_initial_effective_field(plan, needs_initial_snapshot)?;
+    backend.begin_stage(plan.time_stage.start_time_s)?;
     let device_info = backend.device_info()?;
     let gpu_state_info = backend.gpu_state_info()?;
     let gpu_rk_plan_info = backend.gpu_rk_plan_info()?;
@@ -5446,12 +5474,14 @@ fn execute_native_fem(
     let last_preview_revision: Option<u64> = None;
     let cancelled: bool;
     let paused: bool;
+    let preview_handoff: crate::fem::relax::preview::FemPreviewHandoff;
 
     if let Some(native_step_control) = native_relaxation_step {
         let outcome = crate::fem::relax::direct_minimizer::execute_direct_minimizer(
             &mut backend,
             engine,
             plan,
+            &fem_mesh_generation_id,
             node_count,
             native_step_control,
             current_stats,
@@ -5464,6 +5494,7 @@ fn execute_native_fem(
         backend_completion = outcome.backend_completion;
         cancelled = outcome.cancelled;
         paused = outcome.paused;
+        preview_handoff = outcome.preview_handoff;
     } else {
         let dt = provenance
             .timestep_policy
@@ -5474,6 +5505,7 @@ fn execute_native_fem(
             &mut backend,
             engine,
             plan,
+            &fem_mesh_generation_id,
             plan.time_stage.start_time_s + until_seconds,
             &time_events
                 .as_ref()
@@ -5493,12 +5525,14 @@ fn execute_native_fem(
         backend_completion = outcome.backend_completion;
         cancelled = outcome.cancelled;
         paused = outcome.paused;
+        preview_handoff = outcome.preview_handoff;
     }
 
     crate::fem::relax::finalize::finalize_native_fem_relaxation(
         &mut backend,
         engine,
         plan,
+        &fem_mesh_generation_id,
         node_count,
         initial_magnetization,
         field_schedules,
@@ -5510,6 +5544,7 @@ fn execute_native_fem(
             backend_completion,
             cancelled,
             paused,
+            preview_handoff,
         },
     )
 }
@@ -5558,6 +5593,7 @@ pub(crate) fn fem_poisson_demag_provenance(
 fn execute_native_fem(
     _engine: FemEngine,
     _plan: &FemPlanIR,
+    _stage_context: &FemStageExecutionContext,
     _until_seconds: f64,
     _outputs: &[OutputIR],
     _live: Option<LiveStepConsumer<'_>>,

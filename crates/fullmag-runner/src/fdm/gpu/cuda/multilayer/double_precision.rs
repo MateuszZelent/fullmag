@@ -119,7 +119,7 @@ pub(super) fn execute_cuda_assisted_multilayer_double(
             let action = on_step(StepUpdate {
                 stats: latest_stats.clone(),
                 grid: [grid[0], grid[1], grid[2]],
-                fem_mesh: None,
+                    fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field: None,
                 cached_preview_fields: None,

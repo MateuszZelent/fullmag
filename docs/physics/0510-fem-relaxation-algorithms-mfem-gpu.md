@@ -3,7 +3,7 @@
 
 - Status: production-executable for LLG/PG-BB/NCG; TPI under development
 - Owners: Fullmag core
-- Last updated: 2026-07-11
+- Last updated: 2026-07-24
 - Related ADRs:
   - `docs/adr/0001-physics-first-python-api.md`
 - Related specs:
@@ -119,15 +119,70 @@ M g(u) = -G(u),
 
 where `G(u)` is the assembled energy residual and `M` is the vector mass operator.
 
-The tangent projection at nodal/DOF level is
+The tangent projection at nodal/DOF level must remain exact for the
+representable state stored by the solver. Although nodal retraction targets a
+unit vector, binary64 normalization can leave
+\(m_i\mathbin{\cdot}m_i\ne 1\) by one or more ulps. Therefore the canonical
+projector is
 
 \[
-g_T = P_u g,
+P_m v = v-m\frac{m\mathbin{\cdot}v}{m\mathbin{\cdot}m},
 \qquad
-P_u = I - uu^\top
+g_T=P_m g,
 \]
 
-interpreted cellwise / nodewise according to the chosen DOF layout.
+interpreted cellwise / nodewise according to the chosen DOF layout. Replacing
+the denominator by one is not equivalent in floating-point arithmetic: a
+longitudinal field can otherwise create a spurious non-orthogonal gradient
+whose squared norm pollutes the Armijo slope.
+
+For normalization retraction
+
+\[
+R_m(\lambda p)=\frac{m+\lambda p}{\lVert m+\lambda p\rVert},
+\]
+
+the actual derivative at the representable base state is
+
+\[
+\left.\frac{dR_m(\lambda p)}{d\lambda}\right|_{\lambda=0}
+=\frac{P_m p}{\lVert m\rVert}.
+\]
+
+Consequently a line-search directional derivative must use this retraction
+derivative, including the per-node \(1/\lVert m_i\rVert\) factor; it must not
+silently substitute the ambient direction. Zero-norm magnetic states remain
+invalid input and are not repaired by a tolerance or projector fallback.
+The binary64 projector evaluates the denominator explicitly and applies one
+unconditional residual reprojection, again with the same denominator, so the
+stored result is orthogonal to the stored `m` even when the first subtraction
+loses low bits. This is algebraically the same projector, not a stopping
+tolerance.
+
+For an actual production trial, the sufficient-decrease owner uses the
+representable chord
+
+\[
+s_i=R_{m_i}(\lambda p_i)_{\mathrm{fp}}-m_i
+\]
+
+and the current ambient energy gradient:
+
+\[
+\Delta E_{\mathrm{lin,fp}}
+=-\mu_0\sum_i M_{s,i}V_i
+ H_{\mathrm{eff},i}(m)\mathbin{\cdot}s_i.
+\]
+
+The strict Armijo threshold is
+\(c_1\Delta E_{\mathrm{lin,fp}}\), and a trial is eligible only when this
+quantity is finite and strictly negative. A zero/non-descent chord is rejected;
+an unchanged chord is never accepted. For a unit state and tangent direction
+in exact arithmetic, \(s=\lambda p+O(\lambda^2)\), so the rule recovers the
+classical \(c_1\lambda\phi'(0)\) threshold. The representable form is required
+because binary64 normalization can leave one component bitwise fixed even when
+the analytic retraction derivative has a nonzero component. No norm, energy,
+or component tolerance is introduced.
 
 ### 2.2 Torque and stopping criteria
 
@@ -243,8 +298,8 @@ weight. For nodal vectors `a` and `b`, define
 \]
 The admissible FEM state is a product of nodal spheres, so successive tangent
 gradients must first be compared in the accepted tangent space. With the
-normalization retraction, both lanes use projection transport
-`P_m(v)=v-(m dot v)m` and form
+normalization retraction, both lanes use the representable-state projection
+transport `P_m(v)=v-m(m dot v)/(m dot m)` and form
 
 \[
 \widetilde{s}_k=P_{m_k}(m_k-m_{k-1}),
@@ -460,6 +515,166 @@ increase. This intentionally removes the former
 was scale dependent and whose relative branch still changed the physical
 monotonicity contract.
 
+#### 3.2.1 Term-complete direct increments
+
+The phrase "directly reduced increment" requires a term-complete numerical
+contract. Every enabled discrete energy term is classified exactly once as a
+direct increment or an explicit endpoint residual. A directly replaced term
+must not also participate in endpoint-total subtraction. Any endpoint residual
+must carry a subtraction-error scale derived from the magnitudes of its base
+and trial operands, not from the already cancelled residual.
+
+For the symmetric discrete CPU exchange operator `K_A`, PG-BB evaluates
+
+\[
+\Delta E_{\mathrm{ex}}=(m_1-m_0)^T K_A(m_1+m_0),
+\]
+
+using the same energy normalization and SI-joule convention as the canonical
+exchange owner. This polarized identity remains accurate near an exchange
+nullspace where separately accumulated endpoint energies cannot resolve the
+descent. The reduction also reports a componentwise absolute-term sum for its
+forward-error bound.
+
+The CUDA direct-increment batch classifies every `GpuFinalScalarSlot` from the
+enabled `Context` semantics. Exchange, polarized demag, external Zeeman,
+uniaxial anisotropy, and interfacial/bulk DMI use qualified direct identities
+exactly once. The current local direct kernel does not consume `H_drive`, so an
+enabled regional drive uses its already-reduced endpoint scalar; cubic
+anisotropy and magnetoelastic energy use the same explicit endpoint-residual
+route. Each residual contributes `trial_q - base_q` and
+`abs(trial_q) + abs(base_q)` to the operand-scale bound. The Robin boundary
+diagnostic is not a separate Armijo energy because the polarized demag identity
+already includes that variational boundary form. Disabled terms and observable
+slots are excluded, and an unclassified energy semantic fails closed. This
+prevents cancellation of a physical `1e-39 J` decrement by unrelated endpoint
+totals of order `1e-17 J`.
+
+The Armijo inequality, `c1`, BB1/BB2, restart, fresh-zero demag, rollback, and
+torque/energy tolerances do not change. A resolved uphill interval is rejected.
+An interval overlapping the Armijo threshold is refined by a supported
+uncertain owner or fails as numerical stagnation/non-convergence after state
+restoration. No energy noise window or absolute raw-gradient threshold is
+introduced. The authoritative design and qualification contract is
+`docs/superpowers/specs/2026-07-23-fem-direct-armijo-energy-increments-design.md`.
+
+#### 3.2.2 Accepted-step Armijo proof telemetry
+
+Every accepted CPU/MFEM or CUDA PG-BB line-search step must export
+`accepted_energy_proof_available=true` and the exact decision quantities
+produced by its native direct-increment owner. For an accepted trial, let
+`accepted_energy_delta_j` be the computed direct
+increment \(\widehat{\Delta E}\), let
+`accepted_energy_roundoff_bound_j` be its nonnegative forward-error bound
+\(B_{\Delta E}\), and define
+
+\[
+\Delta E_{\mathrm{upper}}
+=\widehat{\Delta E}+B_{\Delta E}.
+\]
+
+The artifact field `accepted_energy_delta_upper_j` records this upper endpoint,
+and `armijo_increment_rhs_j` records the accepted representable-chord Armijo
+threshold \(c_1\Delta E_{\mathrm{lin,fp}}\). All four fields have SI unit `J`. An ordinary accepted
+step proves
+
+\[
+\Delta E_{\mathrm{upper}}
+\le c_1\Delta E_{\mathrm{lin,fp}}<0.
+\]
+
+These are acceptance-decision observables, not reconstructed diagnostics.
+They are read after an accepted step through the caller-sized, versioned
+`fullmag_fem_backend_take_accepted_energy_proof_v1` query; a successful take
+clears the native record so it cannot be observed by a second take, an LLG
+step, or a later snapshot. The unversioned
+`fullmag_fem_step_stats` layout is unchanged. The runner copies the queried
+values into the accepted `solver_steps.csv` row. Rejected trials never produce solver-step
+rows and their candidate proof quantities must not leak into a later accepted
+row. LLG, TPI, and the current NCG implementation export
+`accepted_energy_proof_available=false`; their four optional artifact columns
+are empty, never synthetic zero. The runner and artifact writer preserve the native values but do not
+recompute the inequality.
+
+This proof is deliberately distinct from subtracting published endpoint
+`E_total` values. The latter are independently accumulated observables and may
+show an absolute drift dominated by cancellation at the scale of the full
+energy. Such drift neither replaces nor invalidates a direct Armijo proof; it
+remains a recomputation-consistency diagnostic (record count and maximum
+positive drift) and must not be silently relabelled as the accepted direct
+increment or used as a Task 8 acceptance gate. Task 8 instead validates every
+accepted PG-BB solver-step proof row and requires the valid proof-row count to
+equal the executed-step count. Conversely, the four proof fields establish only
+the native line-search decision for that accepted step. They do not by
+themselves qualify long-horizon convergence, torque reduction, or agreement of
+recomputed total-energy trajectories.
+
+Current NCG caveat: its CPU recovery path still owns endpoint-total and
+monotone-recovery decisions, and its GPU restart helpers do not yet return the
+accepted direct-increment proof object. Migrating every CPU/GPU NCG acceptance
+and recovery route to one exact direct oracle is deferred. Until that migration
+is implemented and qualified, NCG must remain explicitly unavailable for this
+per-step proof contract and Task 8 must not infer proof values from its endpoint
+energies.
+
+#### 3.2.3 Representability-stationary termination
+
+A trial whose retraction returns the unchanged magnetic state is never an
+accepted relaxation step. CPU and GPU may report
+`representability_stationary` termination only after the line search proves
+that every active retracted magnetic DOF is bitwise unchanged from the current
+accepted state and that no representable trial exists under the permitted step
+sequence. A norm estimate, small total-energy subtraction, one unchanged node,
+or one underflowed trial is insufficient. Nonmagnetic/masked DOFs do not enter
+this all-active-DOF proof.
+
+This termination commits no new state, creates no accepted `solver_steps.csv`
+row, and cannot satisfy torque convergence by implication. Completion and
+convergence remain governed by the canonical equilibrium contract and the
+accepted-state torque/plateau evidence. CPU/MFEM and CUDA must use the same
+bitwise active-DOF condition; a device lane may reduce the all-unchanged flag
+without copying trial vectors to the host. CUDA PG-BB owns a persistent
+accepted-state `H_eff` device vector in its relaxation workspace. That vector
+is allocated and byte-accounted with backend state, copied device-to-device
+once before the line search, and reused for every representable-chord reduction;
+trial field evaluation cannot replace the Armijo derivative owner on later
+backtracks. No line-search allocation, vector readback, synchronization, or
+extra demag solve is introduced. Focused CPU and real-CUDA contracts cover all
+permitted unchanged trials, masked differences, one active-DOF negative
+control, and reuse of accepted `H_eff` after a rejected trial overwrites the
+live field.
+
+#### 3.2.4 Cancellation-resistant uniaxial increment
+
+For uniaxial anisotropy with unit axis \(a_i\), nodal coefficient-volume
+weights \(K_{u1,i}V_i\) and \(K_{u2,i}V_i\) in joules, and
+\(s_{k,i}=m_{k,i}\cdot a_i\), the direct accepted trial increment must use the
+factored identity
+
+\[
+\Delta E_{\mathrm{ani}}
+=-\sum_i V_i(s_{1,i}-s_{0,i})(s_{1,i}+s_{0,i})
+  \left[K_{u1,i}+K_{u2,i}(s_{1,i}^2+s_{0,i}^2)\right],
+\]
+
+which is algebraically identical to subtracting the canonical endpoint energy
+\(V_i[K_{u1,i}(1-s_{k,i}^2)+K_{u2,i}(1-s_{k,i}^4)]\) but does not first form
+two nearly equal powers. Equivalently, the quadratic owner uses
+\((s_1-s_0)(s_1+s_0)\), and the quartic owner multiplies that factor by
+\((s_1^2+s_0^2)\). The sign, joule unit, per-node material semantics, magnetic
+masking, and CPU/GPU reduction domain remain unchanged. The forward-error
+owner must also accumulate an absolute component scale from the two factored
+products; it must not use the already-cancelled increment as its roundoff
+scale.
+
+This identity changes only the numerical evaluation of the existing uniaxial
+energy increment. It does not change `H_ani`, the public anisotropy energy,
+ProblemIR, planner legality, or endpoint scalar artifacts. The native CPU and
+CUDA direct-increment owners implement the same factored quadratic/quartic
+contract, with a shared cancellation-focused test covering finite increments,
+the descent sign, first-order directional agreement, and strict Armijo
+acceptance at the observed near-aligned failure scale.
+
 For Poisson demag, with endpoint fields from deterministic fresh solves, the
 direct increment uses the polarized quadratic identity
 
@@ -511,7 +726,7 @@ with units `A/m`. Its lumped-volume norm is a solver and stop-control
 quantity; it is not an energy derivative and therefore remains independent of
 the Armijo product. Production PG-BB/NCG directions `p` also have units
 `A/m`, and the trial state is `R(m + lambda p)` with `lambda` in `m/A`.
-For nodal lumped volumes `V_i`, the physical line-search slope is
+For nodal lumped volumes `V_i`, the exact-arithmetic physical line-search slope is
 
 \[
 \frac{dE(R(m+\lambda p))}{d\lambda}\bigg|_{\lambda=0}
@@ -519,7 +734,21 @@ For nodal lumped volumes `V_i`, the physical line-search slope is
 =\mu_0\sum_i M_{s,i}V_i g_i\mathbin{\cdot}p_i,
 \]
 
-with units `J A/m`. The Armijo decrement `lambda * phi'(0)` is in joules.
+with units `J A/m`. Its classical Armijo decrement
+`lambda * phi'(0)` is in joules. Production binary64 PG-BB evaluates the
+equivalent first-order model on the representable retraction chord instead:
+
+\[
+\Delta E_{\mathrm{lin,fp}}
+=-\mu_0\sum_i M_{s,i}V_iH_{\mathrm{eff},i}(m)\mathbin{\cdot}
+\left[R_m(\lambda p)_{\mathrm{fp},i}-m_i\right].
+\]
+
+This is the value multiplied by `c1` and published as
+`armijo_increment_rhs_j`. It is required to be strictly negative. At ordinary
+scales it agrees with `lambda * phi'(0)` to first order; at a representability
+boundary it truthfully excludes analytic motion that did not occur in the
+stored trial.
 For the derivative-matrix oracle, the perturbation direction `q` and sweep
 parameter `epsilon` are dimensionless; the corresponding
 `mu0 * sum(Ms_i V_i g_i . q_i)` is therefore directly in joules and is

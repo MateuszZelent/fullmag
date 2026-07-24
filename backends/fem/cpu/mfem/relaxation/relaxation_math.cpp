@@ -532,6 +532,59 @@ double energy_weighted_dot_fields(
     return energy_weighted_dot_fields_with_absolute_term_sum(ctx, a, b).value;
 }
 
+EnergyWeightedDotResult representable_chord_energy_linear_increment(
+    const Context &ctx,
+    const std::vector<double> &current_m_xyz,
+    const std::vector<double> &trial_m_xyz,
+    const std::vector<double> &current_h_eff_xyz)
+{
+    if (current_m_xyz.size() != trial_m_xyz.size() ||
+        current_m_xyz.size() != current_h_eff_xyz.size() ||
+        current_m_xyz.size() % 3u != 0u) {
+        return {invalid_metric_value(), invalid_metric_value()};
+    }
+    std::vector<double> chord(current_m_xyz.size(), 0.0);
+    std::vector<double> ambient_energy_gradient(current_m_xyz.size(), 0.0);
+    for (size_t index = 0; index < current_m_xyz.size(); ++index) {
+        chord[index] = trial_m_xyz[index] - current_m_xyz[index];
+        ambient_energy_gradient[index] = -current_h_eff_xyz[index];
+    }
+    return energy_weighted_dot_fields_with_absolute_term_sum(
+        ctx, ambient_energy_gradient, chord);
+}
+
+namespace {
+
+bool project_node_tangent(
+    const std::vector<double> &m_xyz,
+    const std::vector<double> &vector_xyz,
+    size_t base,
+    double projected[3])
+{
+    const double norm_sq = dot3(m_xyz, m_xyz, base);
+    if (!std::isfinite(norm_sq) || norm_sq <= 0.0) {
+        return false;
+    }
+    const double scale = dot3(m_xyz, vector_xyz, base) / norm_sq;
+    for (size_t component = 0; component < 3u; ++component) {
+        projected[component] =
+            vector_xyz[base + component] - scale * m_xyz[base + component];
+    }
+    const double residual =
+        m_xyz[base + 0u] * projected[0] +
+        m_xyz[base + 1u] * projected[1] +
+        m_xyz[base + 2u] * projected[2];
+    const double correction = residual / norm_sq;
+    for (size_t component = 0; component < 3u; ++component) {
+        projected[component] -= correction * m_xyz[base + component];
+    }
+    return std::isfinite(projected[0]) &&
+        std::isfinite(projected[1]) &&
+        std::isfinite(projected[2]);
+}
+
+} // namespace
+
 void tangent_gradient_from_field(
     const Context &ctx,
     const std::vector<double> &m_xyz,
@@ -553,11 +606,18 @@ void tangent_gradient_from_field(
             continue;
         }
         const size_t base = node * 3u;
-        const double mdoth = dot3(m_xyz, h_eff_xyz, base);
+        double projected[3] = {};
+        if (!project_node_tangent(
+                m_xyz, h_eff_xyz, base, projected)) {
+            const double invalid = std::numeric_limits<double>::quiet_NaN();
+            gradient_xyz[base + 0u] = invalid;
+            gradient_xyz[base + 1u] = invalid;
+            gradient_xyz[base + 2u] = invalid;
+            continue;
+        }
         for (size_t component = 0; component < 3u; ++component) {
             const size_t idx = base + component;
-            const double projected = h_eff_xyz[idx] - mdoth * m_xyz[idx];
-            gradient_xyz[idx] = -projected;
+            gradient_xyz[idx] = -projected[component];
         }
     }
 }
@@ -581,10 +641,18 @@ std::vector<double> project_tangent(
             continue;
         }
         const size_t base = node * 3u;
-        const double mdotv = dot3(m_xyz, vector_xyz, base);
+        double node_projected[3] = {};
+        if (!project_node_tangent(
+                m_xyz, vector_xyz, base, node_projected)) {
+            const double invalid = std::numeric_limits<double>::quiet_NaN();
+            projected[base + 0u] = invalid;
+            projected[base + 1u] = invalid;
+            projected[base + 2u] = invalid;
+            continue;
+        }
         for (size_t component = 0; component < 3u; ++component) {
             const size_t idx = base + component;
-            projected[idx] = vector_xyz[idx] - mdotv * m_xyz[idx];
+            projected[idx] = node_projected[component];
         }
     }
     return projected;

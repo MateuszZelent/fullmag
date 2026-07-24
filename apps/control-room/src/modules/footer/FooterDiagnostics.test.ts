@@ -14,6 +14,26 @@ import {
 const PROFILE_SAMPLE_TIME_MS = new Date(2026, 0, 2, 3, 4, 5, 123).getTime();
 
 const profile: SolverProfileResource = {
+  rates: {
+    end_to_end_steps_per_second: {
+      source_revision: 3,
+      value: 2,
+      window_step_count: 10,
+      window_wall_time_ns: 5_000_000_000,
+    },
+    published_steps_per_second: {
+      source_revision: 7,
+      value: 1,
+      window_step_count: 3,
+      window_wall_time_ns: 3_000_000_000,
+    },
+    solver_steps_per_second: {
+      source_revision: 3,
+      value: 5,
+      window_step_count: 10,
+      window_wall_time_ns: 2_000_000_000,
+    },
+  },
   aggregates: {
     average_demag_ns: 2_000_000,
     average_exchange_ns: 150_000,
@@ -88,6 +108,15 @@ const profile: SolverProfileResource = {
       missing_ns: 25_000,
       native_ffi_overhead_wall_time_ns: 25_000,
       phase_sum_ns: 4_975_000,
+      phase_windows: [
+        {
+          id: "demag_total",
+          label: "Demag total",
+          max_wall_time_ns: 2_100_000,
+          mean_wall_time_ns: 2_000_000,
+          sum_wall_time_ns: 6_000_000,
+        },
+      ],
       phases: [
         {
           id: "exchange",
@@ -167,6 +196,15 @@ const profile: SolverProfileResource = {
       rejected_attempts: 0,
       rhs_evaluations: 2,
       sample_time_unix_ms: PROFILE_SAMPLE_TIME_MS,
+      sample_kinds: ["normal_step"],
+      span_first_step: 11,
+      span_last_step: 13,
+      span_monotonic_wall_time_ns: 100_000_000,
+      span_step_count: 3,
+      profiled_step_total_ns: 30_000_000,
+      native_solver_wall_time_ns: 15_000_000,
+      unprofiled_gap_total_ns: 70_000_000,
+      unprofiled_gap_per_step_ns: 23_333_333,
       step: 12,
       threading: {
         cap_reason: "auto-small-mesh-cap",
@@ -226,6 +264,84 @@ describe("FooterDiagnostics", () => {
     ]);
   });
 
+  it("labels truthful rates and adjacent monotonic counter deltas", () => {
+    const twoSamples = structuredClone(profile);
+    twoSamples.latest_samples.unshift({
+      ...structuredClone(profile.latest_samples[0]!),
+      artifact_queue_depth_current: 2,
+      artifact_queue_depth_max: 9,
+      artifact_writer_jobs_completed: 1,
+      artifact_writer_job_wall_time_ns: 1_000_000,
+      hot_loop_host_sync_count: 1,
+      hot_loop_control_scalar_host_sync_count: 1,
+      hot_loop_control_scalar_d2h_bytes: 8,
+      sample_time_unix_ms: PROFILE_SAMPLE_TIME_MS - 1_000,
+      step: 11,
+    });
+    const model = buildSolverProfilePanelModel(twoSamples);
+    expect(model.rateSummary).toContain("Solver 5.00 steps/s (10 / 2.00 s)");
+    expect(model.rateSummary).toContain("End-to-end 2.00 steps/s (10 / 5.00 s)");
+    expect(model.rateSummary).toContain("Published 1.00 steps/s (3 / 3.00 s)");
+    expect(model.rows[0]?.artifact).toContain("queue current 1 / max 3");
+    expect(model.rows[0]?.artifact).toContain("writer delta 1");
+    expect(model.rows[0]?.gpuSync).toContain("delta 1 sync");
+    expect(model.rows[0]?.gpuSync).toContain("cumulative 2 sync");
+  });
+
+  it("marks deltas unavailable when the retained ring has no predecessor", () => {
+    const model = buildSolverProfilePanelModel(profile);
+
+    expect(model.rows[0]?.artifact).toContain("writer delta unavailable");
+    expect(model.rows[0]?.gpuSync).toContain("delta unavailable");
+    expect(model.rows[0]?.artifact).toContain("writer cumulative 2 / 4.0 ms");
+    expect(model.rows[0]?.gpuSync).toContain("cumulative 2 sync");
+  });
+
+  it("labels monotonic-step counter resets instead of fabricating zero deltas", () => {
+    const resetProfile = structuredClone(profile);
+    resetProfile.latest_samples = [
+      {
+        ...structuredClone(profile.latest_samples[0]!),
+        artifact_writer_jobs_completed: 5,
+        artifact_writer_job_wall_time_ns: 8_000_000,
+        hot_loop_host_sync_count: 7,
+        sample_time_unix_ms: PROFILE_SAMPLE_TIME_MS - 1_000,
+        step: 11,
+      },
+      {
+        ...structuredClone(profile.latest_samples[0]!),
+        artifact_writer_jobs_completed: 2,
+        artifact_writer_job_wall_time_ns: 1_000_000,
+        hot_loop_host_sync_count: 1,
+        step: 12,
+      },
+    ];
+
+    const model = buildSolverProfilePanelModel(resetProfile);
+    expect(model.rows[0]?.artifact).toContain("writer delta reset");
+    expect(model.rows[0]?.gpuSync).toContain("delta reset");
+  });
+
+  it("does not infer deltas from reversed or out-of-order samples", () => {
+    const reversed = structuredClone(profile);
+    reversed.latest_samples = [
+      structuredClone(profile.latest_samples[0]!),
+      {
+        ...structuredClone(profile.latest_samples[0]!),
+        artifact_writer_jobs_completed: 3,
+        artifact_writer_job_wall_time_ns: 5_000_000,
+        hot_loop_host_sync_count: 3,
+        sample_time_unix_ms: PROFILE_SAMPLE_TIME_MS - 1_000,
+        step: 11,
+      },
+    ];
+
+    const model = buildSolverProfilePanelModel(reversed);
+    expect(model.rows[0]?.step).toBe("11");
+    expect(model.rows[0]?.artifact).toContain("writer delta unavailable");
+    expect(model.rows[0]?.gpuSync).toContain("delta unavailable");
+  });
+
   it("builds solver profile rows and warns when OpenMP is effectively single-threaded", () => {
     const model = buildSolverProfilePanelModel(profile);
 
@@ -234,27 +350,34 @@ describe("FooterDiagnostics", () => {
     expect(model.threadSummary).toBe("OMP 8->1 | manual | auto-small-mesh-cap");
     expect(model.hasSingleThreadWarning).toBe(true);
     expect(model.previewModeSummary).toBe("3D preview enabled");
+    expect(model.windowPhaseSummary).toBe(
+      "Window phases: Demag total sum 6.0 ms / mean 2.0 ms / max 2.1 ms",
+    );
     expect(model.livePublisherSummary).toBe(
       "Live publish 7 / replace 20.0 us / merge 12.0 us / clone 8.0 us / sync 3.0 ms / lag 2.0 ms / payload 45.0 KiB / coalesced 4",
     );
     expect(model.rows[0]).toMatchObject({
-      artifact: "100.0 us / 4.0 KiB / q3 / w2 4.0 ms",
+      artifact:
+        "enqueue now 100.0 us / 4.0 KiB / queue current 1 / max 3 / writer delta unavailable / writer cumulative 2 / 4.0 ms",
       demag: "2.0 ms",
       demagDetail: "CG/JACOBI / 1 solve / 12 it / res 1.0e-8 / apply 1.9 ms",
       demagSetup: "reused",
+      deepClones: "0",
       exchange: "150.0 us",
       fieldCopy: "250.0 us / 24.0 MiB",
       finalization: "80.0 us / 8.0 KiB",
-      gap: "n/a",
-      gpuSync: "2 sync / ctrl 2 / 16 B",
+      gapPerStep: "23.3 ms",
+      gapTotal: "70.0 ms",
+      gpuSync: "delta unavailable / cumulative 2 sync / ctrl 2 / 16 B",
       missing: "25.0 us",
       nativeFfi: "25.0 us / upload 15.0 us / grad 30.0 us / metric 10.0 us / ls 5.0 us",
       relaxPreconditioner: "750.0 us",
       rhs: "3.0 ms",
       clock: "03:04:05.123",
+      spanSteps: "11-13 (3)",
+      spanWall: "100.0 ms",
       step: "12",
       total: "5.0 ms",
-      wallDelta: "first sample",
     });
   });
 
@@ -271,6 +394,9 @@ describe("FooterDiagnostics", () => {
           ...profile.latest_samples[0],
           delta_wall_time_ns: 2_333_000_000,
           sample_time_unix_ms: PROFILE_SAMPLE_TIME_MS + 2_333,
+          span_first_step: 14,
+          span_last_step: 16,
+          span_monotonic_wall_time_ns: 2_333_000_000,
           time: 2e-12,
           total_ns: 6_000_000,
         },
@@ -279,7 +405,11 @@ describe("FooterDiagnostics", () => {
     const model = buildSolverProfilePanelModel(duplicateStepProfile);
 
     expect(model.rows.map((row) => row.step)).toEqual(["12", "12"]);
-    expect(model.rows.map((row) => row.wallDelta)).toEqual(["2.333 s", "first sample"]);
+    expect(model.rows.map((row) => row.spanSteps)).toEqual([
+      "14-16 (3)",
+      "11-13 (3)",
+    ]);
+    expect(model.rows.map((row) => row.spanWall)).toEqual(["2.33 s", "100.0 ms"]);
     expect(new Set(model.rows.map((row) => row.id)).size).toBe(2);
   });
 
@@ -297,10 +427,29 @@ describe("FooterDiagnostics", () => {
 
     expect(serializeSolverProfileRows(model.rows)).toBe(
       [
-        "Step\tClock\tDelta wall\tGap\tTotal\tExchange\tDemag\tDemag detail\tSetup\tRelax prec.\tRHS\tPreview\tCache\tField copy\tArtifact\tFinalization\tGPU sync\tNative\tOrchestr.\tMissing",
-        "12\t03:04:05.123\tfirst sample\tn/a\t5.0 ms\t150.0 us\t2.0 ms\tCG/JACOBI / 1 solve / 12 it / res 1.0e-8 / apply 1.9 ms\treused\t750.0 us\t3.0 ms\t0 ns\t0 ns\t250.0 us / 24.0 MiB\t100.0 us / 4.0 KiB / q3 / w2 4.0 ms\t80.0 us / 8.0 KiB\t2 sync / ctrl 2 / 16 B\t25.0 us / upload 15.0 us / grad 30.0 us / metric 10.0 us / ls 5.0 us\t0 ns\t25.0 us",
+        "Last step\tClock\tSpan steps\tSpan wall\tGap total\tGap/step\tTotal (last step)\tExchange (last step)\tDemag (last step)\tDemag detail\tSetup\tRelax prec.\tRHS\tPreview\tCache\tField copy\tArtifact\tFinalization\tGPU sync\tNative\tOrchestr.\tMissing\tDeep clones (last step)",
+        "12\t03:04:05.123\t11-13 (3)\t100.0 ms\t70.0 ms\t23.3 ms\t5.0 ms\t150.0 us\t2.0 ms\tCG/JACOBI / 1 solve / 12 it / res 1.0e-8 / apply 1.9 ms\treused\t750.0 us\t3.0 ms\t0 ns\t0 ns\t250.0 us / 24.0 MiB\tenqueue now 100.0 us / 4.0 KiB / queue current 1 / max 3 / writer delta unavailable / writer cumulative 2 / 4.0 ms\t80.0 us / 8.0 KiB\tdelta unavailable / cumulative 2 sync / ctrl 2 / 16 B\t25.0 us / upload 15.0 us / grad 30.0 us / metric 10.0 us / ls 5.0 us\t0 ns\t25.0 us\t0",
       ].join("\n"),
     );
+  });
+
+  it("degrades safely for an older profiler payload without interval fields", () => {
+    const older = structuredClone(profile) as SolverProfileResource;
+    const sample = older.latest_samples[0] as unknown as Record<string, unknown>;
+    for (const key of [
+      "span_first_step", "span_last_step", "span_step_count",
+      "span_monotonic_wall_time_ns", "unprofiled_gap_total_ns",
+      "unprofiled_gap_per_step_ns", "phase_windows", "step_update_deep_clone_count",
+    ]) delete sample[key];
+
+    const model = buildSolverProfilePanelModel(older);
+    expect(model.rows[0]).toMatchObject({
+      spanSteps: "12-12 (1)",
+      spanWall: "5.0 ms",
+      gapTotal: "0 ns",
+      deepClones: "0",
+    });
+    expect(model.windowPhaseSummary).toBe("Window phases pending");
   });
 
   it("keeps the profiler panel idle when the resource is missing", () => {
@@ -311,6 +460,7 @@ describe("FooterDiagnostics", () => {
     expect(model.sampleCount).toBe(0);
     expect(model.threadSummary).toBe("Threading pending");
     expect(model.previewModeSummary).toBe("Preview mode pending");
+    expect(model.windowPhaseSummary).toBe("Window phases pending");
     expect(model.hasSingleThreadWarning).toBe(false);
   });
 });

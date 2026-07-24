@@ -458,29 +458,6 @@ void exchange_plan_fields_are_imported_by_aggregate() {
 #endif
 }
 
-void progress_report_marks_exchange_split_contract_covered() {
-    const std::string progress = read_text_file(
-        repo_root() / "docs" / "reports" / "16.05.2026" /
-        "fullmag_fem_cpu_refactor_progress_2026-05-16.md");
-
-    check(
-        progress.find("| Wydzielic `ExchangeOperator` | zrobione kontraktowo |") !=
-            std::string::npos,
-        "progress report must mark the exchange split as contract-covered");
-    check(
-        progress.find("`fem_exchange_contract`") != std::string::npos &&
-            progress.find("exchange_operator.*") != std::string::npos &&
-            progress.find("exchange_field.*") != std::string::npos &&
-            progress.find("exchange_runtime.*") != std::string::npos &&
-            progress.find("exchange_mass_projection.*") != std::string::npos &&
-            progress.find("exchange_legacy_gpu_upload.*") != std::string::npos,
-        "progress report must cite the exchange contract and owner modules");
-    check(
-        progress.find("aktywna walidacja sinusoidal-mode MFEM-stack pozostaje osobna") !=
-            std::string::npos,
-        "progress report must keep exchange runtime validation separate from module split coverage");
-}
-
 #if FULLMAG_HAS_MFEM_STACK
 class TestElementwiseScalarCoefficient final : public mfem::Coefficient {
 public:
@@ -953,7 +930,6 @@ int main() {
     exchange_legacy_gpu_upload_is_owned_by_upload_module();
     exchange_source_files_document_module_boundaries();
     exchange_plan_fields_are_imported_by_aggregate();
-    progress_report_marks_exchange_split_contract_covered();
 #if FULLMAG_HAS_MFEM_STACK
     spatial_a_and_ms_exchange_pass_directional_derivative();
     exchange_mass_projection_header_documents_ms_weighted_consistent_projection();

@@ -4,7 +4,9 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNTIME_PARENT="${REPO_ROOT}/.fullmag/runtimes"
 RUNTIME_ROOT="${RUNTIME_PARENT}/fem-gpu-host"
+VARIANTS_ROOT="${RUNTIME_PARENT}/fem-gpu-variants"
 STAGING_ROOT="${RUNTIME_ROOT}.staging.$$"
+STAGING_RELATIVE=".fullmag/runtimes/$(basename "${STAGING_ROOT}")"
 RUNTIME_LOCK="${RUNTIME_PARENT}/.fem-gpu-host.export.lock"
 mkdir -p "${RUNTIME_PARENT}"
 exec 9>"${RUNTIME_LOCK}"
@@ -16,10 +18,6 @@ fi
 cleanup_failed_export() {
   local status="$?"
   rm -rf -- "${STAGING_ROOT}"
-  if [ "${status}" -ne 0 ] && [ -d "${RUNTIME_ROOT}" ] && \
-    ! python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root "${RUNTIME_ROOT}" >/dev/null 2>&1; then
-    rm -f "${RUNTIME_ROOT}/manifest.json"
-  fi
   exit "${status}"
 }
 trap cleanup_failed_export EXIT
@@ -28,6 +26,12 @@ cd "${REPO_ROOT}"
 #rm -rf target/* target/.* 2>/dev/null || true
 
 : "${FULLMAG_FEM_RUNTIME_CARGO_JOBS:=1}"
+: "${FULLMAG_CUDA_ARCHITECTURES:=80-real;89-real;90-real;90-virtual}"
+: "${FULLMAG_HYPRE_GPU_ARCHITECTURES:=60 70 80 89 90}"
+: "${FULLMAG_FEM_RUNTIME_VARIANT:=candidate-sm89}"
+: "${FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY:=8.9}"
+export FULLMAG_CUDA_ARCHITECTURES
+export FULLMAG_HYPRE_GPU_ARCHITECTURES
 FULLMAG_HOST_UID="$(id -u)"
 FULLMAG_HOST_GID="$(id -g)"
 
@@ -35,9 +39,10 @@ docker compose --profile fem-gpu build fem-gpu
 
 docker compose --profile fem-gpu run --rm -T \
   -e FULLMAG_FEM_RUNTIME_CARGO_JOBS="${FULLMAG_FEM_RUNTIME_CARGO_JOBS}" \
+  -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES}" \
   -e FULLMAG_HOST_UID="${FULLMAG_HOST_UID}" \
   -e FULLMAG_HOST_GID="${FULLMAG_HOST_GID}" \
-  -e FULLMAG_RUNTIME_EXPORT_STAGING=".fullmag/runtimes/$(basename "${STAGING_ROOT}")" \
+  -e FULLMAG_RUNTIME_EXPORT_STAGING="${STAGING_RELATIVE}" \
   fem-gpu bash -lc '
 set -euo pipefail
 runtime_root="${FULLMAG_RUNTIME_EXPORT_STAGING:?missing managed FEM runtime staging directory}"
@@ -76,7 +81,7 @@ if ! [[ "$cargo_jobs" =~ ^[1-9][0-9]*$ ]]; then
   exit 2
 fi
 echo "[export_fem_gpu_runtime] cargo build jobs: ${cargo_jobs}"
-FULLMAG_USE_MFEM_STACK=ON cargo +nightly build -j "$cargo_jobs" -p fullmag-cli -p fullmag-api -p fullmag-py-core --features "fullmag-cli/cuda fullmag-cli/fem-gpu fullmag-api/cuda fullmag-api/fem-gpu" --release 2>&1 | tee /tmp/fullmag-build.log
+FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES}" FULLMAG_USE_MFEM_STACK=ON cargo +nightly build -j "$cargo_jobs" -p fullmag-cli -p fullmag-api -p fullmag-py-core --features "fullmag-cli/cuda fullmag-cli/fem-gpu fullmag-api/cuda fullmag-api/fem-gpu" --release 2>&1 | tee /tmp/fullmag-build.log
 echo "[export_fem_gpu_runtime] clearing previous runtime bundle contents"
 clear_runtime_bundle_contents
 echo "[export_fem_gpu_runtime] copying launcher and API binaries"
@@ -394,6 +399,41 @@ payload = {
     encoding="utf-8",
 )
 PY
+python3 - <<PY
+import json
+import subprocess
+from pathlib import Path
+
+result = subprocess.run(
+    [
+        "nvidia-smi",
+        "--query-gpu=name,compute_cap,driver_version",
+        "--format=csv,noheader,nounits",
+    ],
+    check=False,
+    capture_output=True,
+    text=True,
+)
+if result.returncode != 0:
+    raise SystemExit(
+        "[export_fem_gpu_runtime] NVIDIA runtime diagnostics failed: "
+        + (result.stderr.strip() or result.stdout.strip())
+    )
+line = next((line for line in result.stdout.splitlines() if line.strip()), "")
+parts = [part.strip() for part in line.split(",", 2)]
+if len(parts) != 3 or not all(parts):
+    raise SystemExit(
+        f"[export_fem_gpu_runtime] invalid NVIDIA runtime diagnostics: {line!r}"
+    )
+payload = {
+    "device_name": parts[0],
+    "compute_capability": parts[1],
+    "cuda_driver_version": parts[2],
+}
+Path("${runtime_root}/runtime-diagnostics.json").write_text(
+    json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+)
+PY
 chown "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}" .fullmag .fullmag/runtimes
 chown -R "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}" ${runtime_root}
 chmod u+rwx,go+rx,go-w .fullmag .fullmag/runtimes
@@ -551,7 +591,25 @@ manifest = {
 )
 PY
 
-python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root "${STAGING_ROOT}"
+docker run --rm --network none \
+  --user "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}" \
+  -v "${REPO_ROOT}:/workspace" \
+  -w /workspace \
+  fullmag/fem-gpu:local \
+  python3 scripts/build_managed_fem_runtime_manifest.py \
+    --runtime-root "/workspace/${STAGING_RELATIVE}" \
+    --variant "${FULLMAG_FEM_RUNTIME_VARIANT}" \
+    --requested-cuda-architectures "${FULLMAG_CUDA_ARCHITECTURES}" \
+    --runtime-diagnostics-json "/workspace/${STAGING_RELATIVE}/runtime-diagnostics.json" \
+    --docker-image-id "${docker_image_id}" \
+    --created-at "${created_at}"
+
+python3 scripts/validate_managed_fem_runtime_bundle.py \
+  --runtime-root "${STAGING_ROOT}" \
+  --allow-unaddressed-staging \
+  --require-native-cubin fullmag_fem=sm_89 \
+  --require-native-cubin hypre=sm_89 \
+  --require-compute-capability "${FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY}"
 
 cat > "${STAGING_ROOT}/README.md" <<EOF
 # Managed FEM host runtime bundle
@@ -566,27 +624,41 @@ The bundle supports both:
 Run directly with:
 
 \`\`\`bash
-${STAGING_ROOT}/bin/fullmag-fem-gpu examples/py_layer_hole_relax_150nm.py --until 1e-13 --backend fem
+${RUNTIME_ROOT}/bin/fullmag-fem-gpu examples/py_layer_hole_relax_150nm.py --until 1e-13 --backend fem
 \`\`\`
 
-This bundle is not yet automatically resolved by the host launcher. It is a staging artifact for
-the future launcher-owned managed-runtime flow.
+This export publishes an immutable hash-addressed variant and atomically selects it through the
+\`${RUNTIME_ROOT}\` active-runtime alias used by the host launcher.
 EOF
 
 publish_runtime_bundle() {
-  local backup_root="${RUNTIME_ROOT}.previous.$$"
-  python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root "${STAGING_ROOT}"
-  rm -rf -- "${backup_root}"
-  if [ -e "${RUNTIME_ROOT}" ]; then
-    mv "${RUNTIME_ROOT}" "${backup_root}"
+  local manifest_sha256
+  manifest_sha256="$(sha256sum "${STAGING_ROOT}/manifest.json" | awk '{print $1}')"
+  local variant_root="${VARIANTS_ROOT}/${FULLMAG_FEM_RUNTIME_VARIANT}-${manifest_sha256}"
+  local alias_target="fem-gpu-variants/$(basename "${variant_root}")"
+  local next_alias="${RUNTIME_PARENT}/.fem-gpu-host.next.$$"
+  python3 scripts/validate_managed_fem_runtime_bundle.py \
+    --runtime-root "${STAGING_ROOT}" \
+    --allow-unaddressed-staging \
+    --require-native-cubin fullmag_fem=sm_89 \
+    --require-native-cubin hypre=sm_89 \
+    --require-compute-capability "${FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY}"
+  mkdir -p "${VARIANTS_ROOT}"
+  if [ -e "${variant_root}" ]; then
+    python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root "${variant_root}"
+    python3 scripts/validate_managed_fem_runtime_bundle.py \
+      --runtime-root "${variant_root}" --compare-exact "${STAGING_ROOT}"
+    rm -rf -- "${STAGING_ROOT}"
+  else
+    mv "${STAGING_ROOT}" "${variant_root}"
   fi
-  if ! mv "${STAGING_ROOT}" "${RUNTIME_ROOT}"; then
-    if [ -e "${backup_root}" ]; then
-      mv "${backup_root}" "${RUNTIME_ROOT}"
-    fi
-    return 1
+  if [ -e "${RUNTIME_ROOT}" ] && [ ! -L "${RUNTIME_ROOT}" ]; then
+    echo "[export_fem_gpu_runtime] refusing to replace non-symlink active runtime: ${RUNTIME_ROOT}" >&2
+    echo "Select an already preserved schema-v2 variant first." >&2
+    return 2
   fi
-  rm -rf -- "${backup_root}"
+  ln -sfn "${alias_target}" "${next_alias}"
+  mv -Tf "${next_alias}" "${RUNTIME_ROOT}"
 }
 
 publish_runtime_bundle

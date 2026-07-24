@@ -55,6 +55,31 @@ void fullmag_cuda_relax_energy_weighted_dot_blocks(
     int n,
     cudaStream_t stream = nullptr);
 
+void fullmag_cuda_relax_representable_chord_energy_linear_increment_blocks(
+    const double *current_mx,
+    const double *current_my,
+    const double *current_mz,
+    const double *trial_mx,
+    const double *trial_my,
+    const double *trial_mz,
+    const double *current_h_eff_x,
+    const double *current_h_eff_y,
+    const double *current_h_eff_z,
+    const double *ms,
+    const double *lumped_mass,
+    const uint8_t *magnetic_node_mask,
+    double *block_increment,
+    int n,
+    cudaStream_t stream = nullptr);
+
+void fullmag_cuda_relax_pgbb_current_metrics_finite_flags(
+    const double *energy_terms,
+    int energy_term_count,
+    const double *gradient_norm_sq,
+    const double *projected_gradient_norm_sq,
+    double *finite_flags,
+    cudaStream_t stream = nullptr);
+
 void fullmag_cuda_relax_retract_field(
     const double *mx,
     const double *my,
@@ -67,6 +92,18 @@ void fullmag_cuda_relax_retract_field(
     double *out_x,
     double *out_y,
     double *out_z,
+    int n,
+    cudaStream_t stream = nullptr);
+
+void fullmag_cuda_relax_active_state_change_blocks(
+    const double *current_x,
+    const double *current_y,
+    const double *current_z,
+    const double *trial_x,
+    const double *trial_y,
+    const double *trial_z,
+    const uint8_t *magnetic_node_mask,
+    double *block_changed_active_nodes,
     int n,
     cudaStream_t stream = nullptr);
 
@@ -97,16 +134,28 @@ void fullmag_cuda_relax_direct_energy_difference_blocks(
     const double *ms,
     const double *ku,
     const double *ku2,
+    const double *kc1,
+    const double *kc2,
+    const double *kc3,
     const double *axis_x,
     const double *axis_y,
     const double *axis_z,
     const double *lumped_mass,
     const uint8_t *magnetic_node_mask,
     bool demag_enabled,
+    bool external_enabled,
+    bool uniaxial_enabled,
+    bool cubic_enabled,
     double uniform_ku, double uniform_ku2,
     bool use_ku_field, bool use_ku2_field,
+    double uniform_kc1, double uniform_kc2, double uniform_kc3,
+    double cubic_axis1_x, double cubic_axis1_y, double cubic_axis1_z,
+    double cubic_axis2_x, double cubic_axis2_y, double cubic_axis2_z,
+    bool use_kc1_field, bool use_kc2_field, bool use_kc3_field,
     double *block_delta_energy,
     double *block_absolute_terms,
+    double *block_demag_delta,
+    double *block_demag_absolute,
     int n,
     cudaStream_t stream = nullptr);
 

@@ -700,6 +700,16 @@ RelaxToRunResult execute_relax_to_run_once()
         backend != nullptr,
         std::string("create demag relax-to-run backend: ") + last_error(nullptr));
     require_requested_execution_lane(backend);
+    const auto take_accepted_energy_proof = [&]() {
+        fullmag_fem_accepted_energy_proof_v1 proof{};
+        proof.abi_version = FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION;
+        proof.struct_size = sizeof(proof);
+        require(
+            fullmag_fem_backend_take_accepted_energy_proof_v1(backend, &proof) ==
+                FULLMAG_FEM_OK,
+            std::string("take accepted-energy proof: ") + last_error(backend));
+        return proof;
+    };
     fullmag_fem_step_stats relax_stats{};
     fullmag_fem_stage_completion completion{};
     uint64_t relax_steps = 0;
@@ -709,6 +719,14 @@ RelaxToRunResult execute_relax_to_run_once()
                 backend, FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB, &relax_stats) ==
                 FULLMAG_FEM_OK,
             std::string("relax-to-run direct minimizer step: ") + last_error(backend));
+        const auto first_proof = take_accepted_energy_proof();
+        require(
+            first_proof.accepted_energy_proof_available != 0,
+            "accepted PG-BB step must publish one consumable proof");
+        const auto second_proof = take_accepted_energy_proof();
+        require(
+            second_proof.accepted_energy_proof_available == 0,
+            "accepted PG-BB proof must be unavailable after its first take");
         ++relax_steps;
         require(
             fullmag_fem_backend_stage_completion(backend, &completion) == FULLMAG_FEM_OK,
@@ -740,6 +758,9 @@ RelaxToRunResult execute_relax_to_run_once()
     require(
         first_run_status == FULLMAG_FEM_OK,
         std::string("first post-relax RK45 step: ") + last_error(backend));
+    require(
+        take_accepted_energy_proof().accepted_energy_proof_available == 0,
+        "LLG backend step must not expose a prior PG-BB proof");
     require_strict_gpu_hot_loop(backend);
     uint64_t attempt_count = 0;
     require(
@@ -760,6 +781,9 @@ RelaxToRunResult execute_relax_to_run_once()
     require(
         fullmag_fem_backend_snapshot_stats(backend, &endpoint) == FULLMAG_FEM_OK,
         std::string("snapshot post-relax endpoint: ") + last_error(backend));
+    require(
+        take_accepted_energy_proof().accepted_energy_proof_available == 0,
+        "snapshot must not expose a prior PG-BB proof");
     const double field_scale = std::max(1.0, run_stats.max_effective_field_amplitude);
     const bool fresh_fields =
         std::abs(max_vector_norm(h_eff) - run_stats.max_effective_field_amplitude) <=

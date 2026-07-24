@@ -1,0 +1,64 @@
+{
+  "schema": "fullmag.fem_gpu.performance_environment.v1",
+  "evidence_kind": "managed_container_rtx4080_super",
+  "captured_at": "2026-07-20T23:49:58+02:00",
+  "benchmark_command": "COMPOSE_PROJECT_NAME=fullmag just capture-fem-gpu-pre-remediation-performance-baseline",
+  "gpu": {
+    "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937",
+    "name": "NVIDIA GeForce RTX 4080 SUPER",
+    "compute_capability": "8.9",
+    "target_architecture": "sm_89",
+    "driver_version": "591.86",
+    "memory_total_mib": 16376
+  },
+  "cuda": {
+    "toolkit_version": "12.4",
+    "cudart_version_macro": 12040,
+    "bundle_fullmag_code": {
+      "cubins": {
+        "sm_52": 67
+      },
+      "ptx_targets": {
+        "sm_52": 67
+      }
+    },
+    "bundle_hypre_code": {
+      "cubins": {
+        "sm_60": 138,
+        "sm_70": 138,
+        "sm_80": 138,
+        "sm_90": 138
+      },
+      "ptx_targets": {}
+    }
+  },
+  "runtime_bundle": {
+    "artifact_uri": "fullmag-runtime://fem-gpu/pre-remediation/sha256:65e02cbed5dcd5ab26fb2f6362cc7f78bc11c5ddd8c73ea3fef9fe8d1f48a76a",
+    "artifact_descriptor_path": "benchmarks/fem-gpu/runtime-artifacts/pre-remediation-sm52-65e02cbed5dc.json",
+    "artifact_descriptor_sha256": "89785aaf7789e3527e39daba7aa48a6853e45063a2b4ae46fec7a38ab68677ba",
+    "root": ".fullmag/runtimes/fem-gpu-variants/pre-remediation-sm52-65e02cbed5dc",
+    "selection_command": ".fullmag/runtimes/fem-gpu-variants/pre-remediation-sm52-65e02cbed5dc/bin/fullmag-fem-gpu runtime fem-availability --json",
+    "manifest_sha256": "65e02cbed5dcd5ab26fb2f6362cc7f78bc11c5ddd8c73ea3fef9fe8d1f48a76a",
+    "immutable_snapshot_json_sha256": "90f8266084930d66cbe593aa913ee0272355d29922df84cd9ee8ab63efed24d5",
+    "restore_manifest_path": ".fullmag/runtimes/fem-gpu-variants/pre-remediation-sm52-65e02cbed5dc/restore-manifest-v2.json",
+    "restore_manifest_sha256": "e9449f8c978a56e967287840fe0ff75ad48d78c8cce3b7c09a9fa04a843633f0",
+    "libraries": {
+      "libfullmag_fem_sha256": "5c91c5e63d6f1888c12cf5c610aa6883d9d9b142ccca6c3830117b556c5e7650",
+      "libhypre_3_1_sha256": "44f0d0e6a87b8fffd0040dfab8871cd868dad82fbba5cbb54697bf1fbc44f88a",
+      "libhypre_2_22_1_transitive_sha256": "0a6a6c0b46a10a081b7b73fbc41c862035a4f87555025f5b538dd2bb670ff152",
+      "libmfem_sha256": "1619251a4da3c55e516605d6db32902c6cb21b48bf3eb478f3e32ac735288e93",
+      "libceed_sha256": "443ad13bff0beb6a0ae34ceb6a8e12d750493cf5086d949fe94526fbe3ae01bc"
+    }
+  },
+  "fixture": {
+    "manifest_path": "examples/assets/fem_performance/box500_airbox_exchange_demag_v1.fixture.json",
+    "manifest_sha256": "2f646b5f0410a4cd12a39e57c6347a3b9ea27deeb37003b822fc77646ee6be88",
+    "solver_mesh_sha256": "9c410c3b02cc86d3a832b923f13b5f9b0ec18c4be2babda148697c6dbc9c105a",
+    "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+    "problem_ir_sha256": "ec36a24123cfa8d1d84e6da0987628e5da537c63fc5de44d91d15e1bd1c8ac25"
+  },
+  "artifacts": {
+    "benchmark_csv_sha256": "e08cb324d5fb6fbf732b46d3b51ffe86cd71a272de5e8c6ff29dfbfa9068fde2",
+    "summary_json_sha256": "a90d426e453a9883722086ad9cab73900a39c9a80ab8581f00cc92479fd52c9b"
+  }
+}

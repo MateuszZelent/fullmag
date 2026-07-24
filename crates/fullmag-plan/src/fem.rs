@@ -76,40 +76,44 @@ fn fem_plan_has_zhang_li_stt(plan: &FemPlanIR) -> bool {
         && !fem_plan_has_slonczewski_stt(plan)
 }
 
-fn first_elementwise_ms_cpu_owner(plan: &FemPlanIR) -> &'static str {
+fn first_unsupported_elementwise_ms_cpu_owner(plan: &FemPlanIR) -> Option<&'static str> {
     // This is intentionally the same precedence as the native Context
-    // diagnostic. It follows the ABI enable predicates, not merely authored
-    // energy terms, so planner rejection names the runtime owner that would
-    // first require the unavailable element/quadrature material accessor.
-    if plan.external_field.is_some() {
-        return "Zeeman interaction";
+    // diagnostic. Consistent-mass exchange is the required CPU owner;
+    // Poisson demag and Zeeman may be additional consumers. The remaining
+    // owners must continue to fail closed until they migrate to the common
+    // element/quadrature adapter.
+    if !plan.enable_exchange {
+        return Some("exchange-disabled plan");
     }
-    if plan.enable_demag {
-        return "demag interaction";
+    if plan.use_consistent_mass != Some(true) {
+        return Some("lumped-mass exchange projection");
+    }
+    if plan.relaxation.is_some() {
+        return Some("native FEM relaxation algorithms");
     }
     if fem_plan_has_uniaxial_anisotropy(plan) {
-        return "uniaxial anisotropy";
+        return Some("uniaxial anisotropy");
     }
     if fem_plan_has_cubic_anisotropy(plan) {
-        return "cubic anisotropy";
+        return Some("cubic anisotropy");
     }
     if plan.interfacial_dmi.is_some() || plan.dind_field.is_some() {
-        return "interfacial DMI";
+        return Some("interfacial DMI");
     }
     if plan.bulk_dmi.is_some() || plan.dbulk_field.is_some() {
-        return "bulk DMI";
+        return Some("bulk DMI");
     }
     if plan
         .temperature
         .is_some_and(|temperature| temperature > 0.0)
     {
-        return "thermal Brown interaction";
+        return Some("thermal Brown interaction");
     }
     if fem_plan_has_zhang_li_stt(plan) {
-        return "Zhang-Li STT";
+        return Some("Zhang-Li STT");
     }
     if fem_plan_has_slonczewski_stt(plan) {
-        return "Slonczewski STT";
+        return Some("Slonczewski STT");
     }
     if plan.has_oersted_cylinder
         || plan
@@ -117,12 +121,12 @@ fn first_elementwise_ms_cpu_owner(plan: &FemPlanIR) -> &'static str {
             .as_ref()
             .is_some_and(|field| !field.is_empty())
     {
-        return "Oersted interaction";
+        return Some("Oersted interaction");
     }
     if plan.magnetoelastic.is_some() {
-        return "magnetoelastic interaction";
+        return Some("magnetoelastic interaction");
     }
-    "native FEM handle lifecycle fallback"
+    None
 }
 
 pub(crate) fn elementwise_material_legality_error(
@@ -133,13 +137,15 @@ pub(crate) fn elementwise_material_legality_error(
 
     if fem_plan.ms_element_field.is_some() {
         let owner = if gpu {
-            "GPU material-state upload"
+            Some("GPU material-state upload")
         } else {
-            first_elementwise_ms_cpu_owner(fem_plan)
+            first_unsupported_elementwise_ms_cpu_owner(fem_plan)
         };
-        return Some(format!(
-            "Ms_element_field is unsupported for {owner} on resolved device '{device}': this runtime has no common element/quadrature material accessor"
-        ));
+        if let Some(owner) = owner {
+            return Some(format!(
+                "Ms_element_field is unsupported for {owner} on resolved device '{device}': this owner does not consume the common element/quadrature material accessor"
+            ));
+        }
     }
 
     if gpu {
@@ -1292,6 +1298,8 @@ fn build_region_material_fields(
 
     let sharp_conformal_aex_regions =
         sharp_conformal_parameter_regions(problem, fullmag_ir::MaterialParameterNameIR::Aex)?;
+    let sharp_conformal_ms_regions =
+        sharp_conformal_parameter_regions(problem, fullmag_ir::MaterialParameterNameIR::Ms)?;
 
     for segment in object_segments {
         if segment.object_id == AIR_OBJECT_SEGMENT_ID {
@@ -1315,13 +1323,14 @@ fn build_region_material_fields(
         let points: Vec<[f64; 3]> = node_indices.iter().map(|&idx| mesh.nodes[idx]).collect();
         let object_translation = crate::material::object_translation(problem, &segment.object_id);
 
-        let ms_resolved = crate::material::resolve_spatial_parameter(
+        let ms_resolved = crate::material::resolve_spatial_parameter_excluding_regions(
             problem,
             &segment.object_id,
             fullmag_ir::MaterialParameterNameIR::Ms,
             region_material.saturation_magnetisation,
             &points,
             object_translation,
+            &sharp_conformal_ms_regions,
         )
         .map_err(|e| PlanError { reasons: vec![e] })?;
 

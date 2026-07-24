@@ -496,7 +496,12 @@ pub(crate) struct StepUpdateView {
     pub max_torque_T: f64,
     pub wall_time_ns: u64,
     pub grid: [u32; 3],
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_mesh_generation_id: Option<String>,
+    /// Transitional input-only compatibility for legacy publishers.
+    /// Ingestion promotes this payload to the top-level stage mesh resource;
+    /// API responses never serialize it back into a step frame.
+    #[serde(default, skip_serializing)]
     pub fem_mesh: Option<FemMeshPayload>,
     /// **Deprecated (Q16):** Spatial data now flows through `latest_fields`.
     /// Retained for backwards-compatible imports / load_state only.
@@ -504,6 +509,8 @@ pub(crate) struct StepUpdateView {
     pub magnetization: Option<Vec<f64>>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub per_object_scalars: HashMap<String, HashMap<String, f64>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub field_materialization_states: Vec<fullmag_runner::LiveFieldMaterializationStatus>,
     /// **Deprecated (Q17):** Never serialized to the frontend
     /// (`#[serde(skip_serializing)]`). Internal-only cache for preview
     /// rebuild; will be removed once preview pipeline is fully quantities-based.
@@ -654,6 +661,13 @@ pub(crate) struct SimulationPreparationSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct SimulationPreparationClockAdjustmentSnapshot {
+    pub observed_at_unix_ms: u64,
+    pub stage_started_at_unix_ms: u64,
+    pub backward_delta_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct SimulationPreparationStageSnapshot {
     pub id: String,
     pub label: String,
@@ -662,6 +676,8 @@ pub(crate) struct SimulationPreparationStageSnapshot {
     pub started_at_unix_ms: Option<u64>,
     pub completed_at_unix_ms: Option<u64>,
     pub duration_ms: Option<u64>,
+    #[serde(default)]
+    pub clock_adjustment: Option<SimulationPreparationClockAdjustmentSnapshot>,
     pub progress_percent: Option<u8>,
     pub progress_label: Option<String>,
 }
@@ -1581,9 +1597,11 @@ mod tests {
             max_torque_T: 0.0,
             wall_time_ns: 0,
             grid: [2, 1, 1],
+            fem_mesh_generation_id: None,
             fem_mesh: None,
             magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
             per_object_scalars: Default::default(),
+            field_materialization_states: Vec::new(),
             preview_field: None,
             finished: false,
         };

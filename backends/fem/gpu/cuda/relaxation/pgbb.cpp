@@ -19,8 +19,8 @@
 #include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"
 #include "gpu/cuda/integrators/rk/rk_scalar_readback.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
-#include "gpu/cuda/integrators/rk/rk_total_energy_reduction.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
+#include "cpu/mfem/relaxation/relaxation_math.hpp"
 #include "gpu/cuda/relaxation/direct_energy_increment.hpp"
 #include "gpu/cuda/relaxation/pgbb_kernels.hpp"
 #include "gpu/cuda/reductions/reduction_kernels.hpp"
@@ -47,7 +47,6 @@ constexpr double kMinStepSize = 1.0e-15;
 constexpr double kMaxStepSize = 1.0e-3;
 constexpr double kArmijoCoefficient = 1.0e-4;
 constexpr uint32_t kMaxBacktracks = 20;
-constexpr uint32_t kArmijoRecoveryCycles = 1;
 
 struct GpuRelaxPgbbRollbackState {
     double step_size = kDefaultStepSize;
@@ -89,22 +88,6 @@ void mark_gpu_relax_pgbb_device_source_of_truth(Context &ctx)
     gpu.residency.source_of_truth = FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH;
     gpu.residency.device_state = FemGpuSyncState::DeviceDirty;
     gpu.residency.host_state = FemGpuSyncState::HostStale;
-}
-
-bool gpu_relax_accept_monotone_line_search_step(
-    double current_energy,
-    double trial_energy)
-{
-    return relaxation::strict_monotone_energy_accept(current_energy, trial_energy);
-}
-
-bool gpu_relax_accept_monotone_recovery_step(
-    double current_energy,
-    double trial_energy)
-{
-    return gpu_relax_accept_monotone_line_search_step(
-        current_energy,
-        trial_energy);
 }
 
 std::string format_gpu_relax_pgbb_scalar(double value)
@@ -195,6 +178,13 @@ bool gpu_relax_pgbb_preflight(
         reason = "GPU projected-gradient BB requires a second RK scratch field for accepted-step BB curvature";
         return false;
     }
+    if (gpu.relaxation.projected_gradient_accepted_h_eff.x == nullptr ||
+        gpu.relaxation.projected_gradient_accepted_h_eff.y == nullptr ||
+        gpu.relaxation.projected_gradient_accepted_h_eff.z == nullptr) {
+        reason =
+            "GPU projected-gradient BB requires persistent accepted-state H_eff storage";
+        return false;
+    }
     return true;
 }
 
@@ -219,61 +209,13 @@ bool gpu_relax_reduce_scalar_sum(
     return cuda_launch_ok(operation, reason);
 }
 
-bool gpu_relax_compute_effective_field_and_energy(
-    Context &ctx,
-    cudaStream_t stream,
-    int n,
-    int blocks,
-    double &total_energy,
-    std::string &reason)
-{
-    auto &gpu = ctx.gpu_state.device;
-    if (!gpu_rk_compute_effective_field_for_magnetization_fresh_demag(
-            ctx,
-            gpu.magnetization.m,
-            stream,
-            n,
-            ctx.state.current_time,
-            "launch GPU projected-gradient BB h_eff accumulation",
-            reason)) {
-        return false;
-    }
-    if (!gpu_rk_reduce_final_energy_terms(ctx, stream, n, blocks, reason)) {
-        return false;
-    }
-    double scalar = 0.0;
-    if (!gpu_rk_reduce_total_energy_scalar(
-            ctx,
-            stream,
-            gpu.reductions.scalar_result,
-            reason) ||
-        !gpu_rk_read_control_scalar_results(
-            ctx,
-            stream,
-            "cudaMemcpyAsync GPU projected-gradient BB total energy scalar device->host",
-            &scalar,
-            1,
-            reason)) {
-        return false;
-    }
-    total_energy = scalar;
-    if (!std::isfinite(total_energy)) {
-        reason = "GPU projected-gradient BB produced non-finite total energy";
-        return false;
-    }
-    return true;
-}
-
-bool gpu_relax_compute_effective_field_energy_and_tangent_gradient_norm(
+bool gpu_relax_compute_current_metrics(
     Context &ctx,
     cudaStream_t stream,
     int n,
     int blocks,
     FemGpuComponentField &gradient,
-    GpuDirectEnergySnapshot &energy_snapshot,
-    double &total_energy,
-    double &gradient_norm_sq,
-    double &energy_gradient_norm_sq,
+    GpuPgbbCurrentMetrics &metrics,
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
@@ -285,8 +227,7 @@ bool gpu_relax_compute_effective_field_energy_and_tangent_gradient_norm(
             ctx.state.current_time,
             "launch GPU projected-gradient BB h_eff accumulation",
             reason) ||
-        !gpu_rk_reduce_final_energy_terms(ctx, stream, n, blocks, reason) ||
-        !gpu_direct_energy_snapshot(ctx, stream, energy_snapshot, reason)) {
+        !gpu_rk_reduce_final_energy_terms(ctx, stream, n, blocks, reason)) {
         return false;
     }
     fullmag_cuda_relax_tangent_gradient_and_norm_blocks(
@@ -318,17 +259,12 @@ bool gpu_relax_compute_effective_field_energy_and_tangent_gradient_norm(
         n,
         stream);
     if (!cuda_launch_ok("launch GPU projected-gradient BB tangent-gradient blocks", reason) ||
-        !gpu_rk_reduce_total_energy_scalar(
-            ctx,
-            stream,
-            gpu.reductions.scalar_result,
-            reason) ||
         !gpu_relax_reduce_scalar_sum(
             ctx,
             stream,
             gpu.reductions.scalar_workspace,
             blocks,
-            gpu.reductions.scalar_result + 1,
+            gpu.reductions.scalar_result + kGpuPgbbCurrentGradientNormSlot,
             "launch GPU projected-gradient BB volume gradient norm reduction",
             reason) ||
         !gpu_relax_reduce_scalar_sum(
@@ -336,38 +272,42 @@ bool gpu_relax_compute_effective_field_energy_and_tangent_gradient_norm(
             stream,
             gpu.rk.error.x,
             blocks,
-            gpu.reductions.scalar_result + 2,
+            gpu.reductions.scalar_result +
+                kGpuPgbbCurrentProjectedGradientNormSlot,
             "launch GPU projected-gradient BB energy gradient norm reduction",
             reason)) {
         return false;
     }
 
-    double scalars[3] = {0.0, 0.0, 0.0};
-    if (!gpu_rk_read_control_scalar_results(
-            ctx,
-            stream,
-            "cudaMemcpyAsync GPU projected-gradient BB total energy/volume-gradient/energy-gradient scalars device->host",
-            scalars,
-            3,
+    constexpr int first_energy_slot =
+        static_cast<int>(GpuFinalScalarSlot::ExchangeEnergy);
+    constexpr int energy_slot_count =
+        static_cast<int>(GpuFinalScalarSlot::MagnetoelasticEnergy) -
+        first_energy_slot + 1;
+    fullmag_cuda_relax_pgbb_current_metrics_finite_flags(
+        gpu.reductions.scalar_result + first_energy_slot,
+        energy_slot_count,
+        gpu.reductions.scalar_result + kGpuPgbbCurrentGradientNormSlot,
+        gpu.reductions.scalar_result + kGpuPgbbCurrentProjectedGradientNormSlot,
+        gpu.reductions.scalar_result + kGpuPgbbCurrentFiniteFlagsSlot,
+        stream);
+    if (!cuda_launch_ok(
+            "launch GPU projected-gradient BB current metrics finite flags",
             reason)) {
         return false;
     }
-    total_energy = scalars[0];
-    gradient_norm_sq = scalars[1];
-    energy_gradient_norm_sq = scalars[2];
-    if (!std::isfinite(total_energy)) {
-        reason = "GPU projected-gradient BB produced non-finite total energy";
+
+    std::array<double, FEM_GPU_SCALAR_RESULT_SLOTS> packed_scalars{};
+    if (!gpu_rk_read_control_scalar_results(
+            ctx,
+            stream,
+            "cudaMemcpyAsync GPU projected-gradient BB packed current snapshot/gradient metrics device->host",
+            packed_scalars.data(),
+            kGpuPgbbCurrentPackedScalarCount,
+            reason)) {
         return false;
     }
-    if (!std::isfinite(gradient_norm_sq) || gradient_norm_sq < 0.0) {
-        reason = "GPU projected-gradient BB produced a non-finite or negative tangent-gradient norm";
-        return false;
-    }
-    if (!std::isfinite(energy_gradient_norm_sq) || energy_gradient_norm_sq < 0.0) {
-        reason = "GPU projected-gradient BB produced a non-finite or negative J A/m energy-metric tangent-gradient norm";
-        return false;
-    }
-    return true;
+    return gpu_unpack_pgbb_current_metrics(ctx, packed_scalars, metrics, reason);
 }
 
 bool gpu_relax_restore_previous_magnetization(
@@ -422,176 +362,6 @@ int gpu_relax_restore_accepted_step_after_finalize_failure(
         "accepted-step stats finalization failure",
         original_reason,
         error);
-}
-
-bool gpu_relax_retry_pgbb_line_search_with_reset(
-    Context &ctx,
-    cudaStream_t stream,
-    int n,
-    int blocks,
-    double current_energy,
-    double gradient_norm_sq,
-    double &trial_step,
-    double &trial_energy,
-    uint32_t &backtracks,
-    std::string &reason)
-{
-    auto &gpu = ctx.gpu_state.device;
-    for (uint32_t recovery_cycle = 0;
-         recovery_cycle < kArmijoRecoveryCycles;
-         ++recovery_cycle) {
-        ctx.relaxation.reset_consecutive += 1;
-        const double restart_step = std::clamp(
-            kDefaultStepSize /
-                static_cast<double>(ctx.relaxation.reset_consecutive + 1u),
-            kMinStepSize,
-            kMaxStepSize);
-        trial_step = restart_step;
-
-        while (true) {
-            fullmag_cuda_relax_retract_field(
-                gpu.rk.m_backup.x,
-                gpu.rk.m_backup.y,
-                gpu.rk.m_backup.z,
-                gpu.rk.k[0].x,
-                gpu.rk.k[0].y,
-                gpu.rk.k[0].z,
-                gpu.mesh_regions.magnetic_node_mask,
-                -trial_step,
-                gpu.rk.m_stage.x,
-                gpu.rk.m_stage.y,
-                gpu.rk.m_stage.z,
-                n,
-                stream);
-            if (gpu.mesh_regions.has_periodic_reduced_nodes) {
-                fullmag_cuda_relax_project_static_periodic_field(
-                    gpu.rk.m_stage.x,
-                    gpu.rk.m_stage.y,
-                    gpu.rk.m_stage.z,
-                    gpu.mesh_regions.periodic_representative_nodes,
-                    n,
-                    stream);
-            }
-            if (!cuda_launch_ok("launch GPU projected-gradient BB recovery retraction", reason) ||
-                !gpu_rk_copy_component_device(
-                    gpu.rk.m_stage,
-                    gpu.magnetization.m,
-                    gpu.lifecycle.node_count,
-                    stream,
-                    "cudaMemcpyAsync GPU projected-gradient BB recovery m",
-                    reason) ||
-                !gpu_relax_compute_effective_field_and_energy(
-                    ctx,
-                    stream,
-                    n,
-                    blocks,
-                    trial_energy,
-                    reason)) {
-                return false;
-            }
-
-            const bool armijo =
-                trial_energy <=
-                current_energy -
-                    kArmijoCoefficient * trial_step * gradient_norm_sq;
-            if (armijo) {
-                return true;
-            }
-            if (gpu_relax_accept_monotone_recovery_step(
-                    current_energy,
-                    trial_energy)) {
-                return true;
-            }
-            if (backtracks >= 2u * kMaxBacktracks) {
-                break;
-            }
-            trial_step *= 0.5;
-            backtracks += 1;
-        }
-    }
-    return false;
-}
-
-bool gpu_relax_retry_pgbb_line_search_with_raw_gradient_restart(
-    Context &ctx,
-    cudaStream_t stream,
-    int n,
-    int blocks,
-    double current_energy,
-    double volume_gradient_norm_sq,
-    double energy_gradient_norm_sq,
-    double &trial_step,
-    double &trial_energy,
-    uint32_t &backtracks,
-    std::string &reason)
-{
-    auto &gpu = ctx.gpu_state.device;
-    trial_step = relaxation::initial_step_from_volume_norm_sq(
-        volume_gradient_norm_sq,
-        kDefaultStepSize,
-        kMinStepSize,
-        kMaxStepSize);
-
-    while (true) {
-        fullmag_cuda_relax_retract_field(
-            gpu.rk.m_backup.x,
-            gpu.rk.m_backup.y,
-            gpu.rk.m_backup.z,
-            gpu.rk.k[0].x,
-            gpu.rk.k[0].y,
-            gpu.rk.k[0].z,
-            gpu.mesh_regions.magnetic_node_mask,
-            -trial_step,
-            gpu.rk.m_stage.x,
-            gpu.rk.m_stage.y,
-            gpu.rk.m_stage.z,
-            n,
-            stream);
-        if (gpu.mesh_regions.has_periodic_reduced_nodes) {
-            fullmag_cuda_relax_project_static_periodic_field(
-                gpu.rk.m_stage.x,
-                gpu.rk.m_stage.y,
-                gpu.rk.m_stage.z,
-                gpu.mesh_regions.periodic_representative_nodes,
-                n,
-                stream);
-        }
-        if (!cuda_launch_ok(
-                "launch GPU projected-gradient BB raw-gradient recovery retraction",
-                reason) ||
-            !gpu_rk_copy_component_device(
-                gpu.rk.m_stage,
-                gpu.magnetization.m,
-                gpu.lifecycle.node_count,
-                stream,
-                "cudaMemcpyAsync GPU projected-gradient BB raw-gradient recovery m",
-                reason) ||
-            !gpu_relax_compute_effective_field_and_energy(
-                ctx,
-                stream,
-                n,
-                blocks,
-                trial_energy,
-                reason)) {
-            return false;
-        }
-
-        const bool armijo =
-            trial_energy <=
-            current_energy -
-                kArmijoCoefficient * trial_step * energy_gradient_norm_sq;
-        if (armijo || gpu_relax_accept_monotone_recovery_step(
-                current_energy,
-                trial_energy)) {
-            return true;
-        }
-        if (backtracks >= 3u * kMaxBacktracks) {
-            break;
-        }
-        trial_step *= 0.5;
-        backtracks += 1;
-    }
-    return false;
 }
 
 bool gpu_relax_apply_bb_step_size_from_curvature(
@@ -745,20 +515,14 @@ int gpu_relax_projected_gradient_bb_step(
         return FULLMAG_FEM_ERR_INTERNAL;
     }
 
-    double current_energy = 0.0;
-    GpuDirectEnergySnapshot current_snapshot{};
-    double gradient_norm_sq = 0.0;
-    double energy_gradient_norm_sq = 0.0;
-    if (!gpu_relax_compute_effective_field_energy_and_tangent_gradient_norm(
+    GpuPgbbCurrentMetrics current_metrics{};
+    if (!gpu_relax_compute_current_metrics(
             ctx,
             stream,
             n,
             blocks,
             gpu.rk.k[0],
-            current_snapshot,
-            current_energy,
-            gradient_norm_sq,
-            energy_gradient_norm_sq,
+            current_metrics,
             reason)) {
         return gpu_relax_restore_previous_magnetization_after_failure(
             ctx,
@@ -767,11 +531,24 @@ int gpu_relax_projected_gradient_bb_step(
             reason,
             error);
     }
+    const GpuDirectEnergySnapshot &current_snapshot =
+        current_metrics.energy_snapshot;
+    const double current_energy = current_snapshot.total_energy_j;
+    const double gradient_norm_sq = current_metrics.gradient_norm_sq;
+    const double energy_gradient_norm_sq =
+        current_metrics.projected_gradient_norm_sq;
     if (!gpu_rk_copy_component_device(
             gpu.fields.h_demag, gpu.rk.error, gpu.lifecycle.node_count, stream,
             "cudaMemcpyAsync GPU projected-gradient BB backup current H_demag", reason)) {
         return gpu_relax_restore_previous_magnetization_after_failure(
             ctx, stream, "current direct-energy snapshot failure", reason, error);
+    }
+    if (!gpu_rk_copy_component_device(
+            gpu.fields.h_eff, gpu.relaxation.projected_gradient_accepted_h_eff,
+            gpu.lifecycle.node_count, stream,
+            "cudaMemcpyAsync GPU projected-gradient BB backup accepted H_eff", reason)) {
+        return gpu_relax_restore_previous_magnetization_after_failure(
+            ctx, stream, "current accepted H_eff snapshot failure", reason, error);
     }
     if (gradient_norm_sq == 0.0) {
         out_stats.step = ctx.state.step_count;
@@ -798,21 +575,26 @@ int gpu_relax_projected_gradient_bb_step(
         trial_step =
             std::clamp(ctx.relaxation.step_size, kMinStepSize, kMaxStepSize);
     }
-    double trial_energy = current_energy;
+    double last_trial_energy_j = current_energy;
     uint32_t backtracks = 0;
+    uint32_t logical_rhs_evaluations = 1u;
+    uint32_t refinement_rhs_evaluations = 0u;
     bool line_search_accepted = false;
     relaxation::EnergyDifference last_direct_difference{};
+    double accepted_armijo_increment_rhs_j = 0.0;
+    double last_armijo_increment_rhs_j = 0.0;
     relaxation::ArmijoDifferenceDecision last_armijo_decision =
         relaxation::ArmijoDifferenceDecision::Reject;
     bool last_refinement_attempted = false;
     bool last_refinement_accepted = false;
     double last_local_direct_delta = 0.0;
-    double last_residual_delta = 0.0;
+    double last_endpoint_residual_delta = 0.0;
+    double last_endpoint_residual_operand_absolute_sum = 0.0;
     double last_direct_local_component = 0.0;
     double last_direct_exchange_component = 0.0;
     double last_direct_interfacial_dmi_component = 0.0;
     double last_direct_bulk_dmi_component = 0.0;
-    double last_endpoint_replaced_delta = 0.0;
+    bool every_permitted_trial_unchanged = true;
     while (true) {
         fullmag_cuda_relax_retract_field(
             gpu.rk.m_backup.x,
@@ -837,54 +619,79 @@ int gpu_relax_projected_gradient_bb_step(
                 n,
                 stream);
         }
-        if (!cuda_launch_ok("launch GPU projected-gradient BB trial retraction", reason) ||
-            !gpu_rk_copy_component_device(
+        if (!cuda_launch_ok("launch GPU projected-gradient BB trial retraction", reason)) {
+            return gpu_relax_restore_previous_magnetization_after_failure(
+                ctx,
+                stream,
+                "trial retraction failure",
+                reason,
+                error);
+        }
+        if (!gpu_pgbb_precompute_representable_chord_increment(
+                ctx,
+                stream,
+                n,
+                blocks,
+                gpu.rk.m_backup,
+                gpu.rk.m_stage,
+                gpu.relaxation.projected_gradient_accepted_h_eff,
+                reason)) {
+            return gpu_relax_restore_previous_magnetization_after_failure(
+                ctx,
+                stream,
+                "trial representable-chord reduction failure",
+                reason,
+                error);
+        }
+        bool armijo = false;
+        if (!gpu_rk_copy_component_device(
                 gpu.rk.m_stage,
                 gpu.magnetization.m,
                 gpu.lifecycle.node_count,
                 stream,
                 "cudaMemcpyAsync GPU projected-gradient BB trial m",
                 reason) ||
-            !gpu_relax_compute_effective_field_and_energy(
+            !gpu_relax_compute_effective_field_and_energy_terms(
                 ctx,
                 stream,
                 n,
                 blocks,
-                trial_energy,
                 reason)) {
-            return gpu_relax_restore_previous_magnetization_after_failure(
-                ctx,
-                stream,
-                "trial effective-field/energy evaluation failure",
-                reason,
-                error);
-        }
+                return gpu_relax_restore_previous_magnetization_after_failure(
+                    ctx,
+                    stream,
+                    "trial effective-field/energy evaluation failure",
+                    reason,
+                    error);
+            }
+        logical_rhs_evaluations += 1u;
 
-        const double armijo_rhs =
-            -kArmijoCoefficient * trial_step * energy_gradient_norm_sq;
         GpuDirectArmijoResult armijo_result{};
-        if (!gpu_direct_armijo_evaluate(
+        if (!gpu_direct_pgbb_armijo_evaluate(
                 ctx, stream, n, blocks, gpu.rk.m_backup, gpu.rk.error,
-                current_snapshot, armijo_rhs, armijo_result, reason)) {
-            return gpu_relax_restore_previous_magnetization_after_failure(
-                ctx, stream, "trial direct-energy evaluation failure", reason, error);
-        }
-        last_direct_difference = armijo_result.difference;
-        last_local_direct_delta = armijo_result.difference.delta_joules;
-        last_residual_delta = 0.0;
-        last_direct_local_component = armijo_result.local_delta_j;
-        last_direct_exchange_component = armijo_result.exchange_delta_j;
-        last_direct_interfacial_dmi_component =
-            armijo_result.interfacial_dmi_delta_j;
-        last_direct_bulk_dmi_component = armijo_result.bulk_dmi_delta_j;
-        last_endpoint_replaced_delta =
-            armijo_result.endpoint_replaced_delta_j;
-        last_armijo_decision = armijo_result.decision;
-        last_refinement_attempted =
-            armijo_result.decision == relaxation::ArmijoDifferenceDecision::Refine;
-        last_refinement_accepted = false;
-        if (last_refinement_attempted &&
-            !gpu_direct_armijo_refine(
+                current_snapshot, kArmijoCoefficient, true, armijo_result,
+                reason)) {
+                return gpu_relax_restore_previous_magnetization_after_failure(
+                    ctx, stream, "trial direct-energy evaluation failure", reason, error);
+            }
+            last_direct_difference = armijo_result.difference;
+            const double armijo_rhs = armijo_result.armijo_rhs_j;
+            last_armijo_increment_rhs_j = armijo_rhs;
+            last_local_direct_delta = armijo_result.local_delta_j;
+            last_endpoint_residual_delta =
+                armijo_result.endpoint_residual_delta_j;
+            last_endpoint_residual_operand_absolute_sum =
+                armijo_result.endpoint_residual_operand_absolute_sum_j;
+            last_direct_local_component = armijo_result.local_delta_j;
+            last_direct_exchange_component = armijo_result.exchange_delta_j;
+            last_direct_interfacial_dmi_component =
+                armijo_result.interfacial_dmi_delta_j;
+            last_direct_bulk_dmi_component = armijo_result.bulk_dmi_delta_j;
+            last_armijo_decision = armijo_result.decision;
+            last_refinement_attempted = armijo_result.refinement_attempted;
+            last_refinement_accepted = false;
+            if (last_refinement_attempted &&
+                !gpu_direct_armijo_refine(
                 ctx,
                 stream,
                 n,
@@ -895,13 +702,32 @@ int gpu_relax_projected_gradient_bb_step(
                 armijo_rhs,
                 armijo_result,
                 reason)) {
-            return gpu_relax_restore_previous_magnetization_after_failure(
-                ctx, stream, "trial direct-energy refinement failure", reason, error);
-        }
-        last_refinement_accepted = armijo_result.refinement_accepted;
-        const bool armijo =
-            armijo_result.decision == relaxation::ArmijoDifferenceDecision::Accept ||
-            last_refinement_accepted;
+                return gpu_relax_restore_previous_magnetization_after_failure(
+                    ctx, stream, "trial direct-energy refinement failure", reason, error);
+            }
+            last_refinement_accepted = armijo_result.refinement_accepted;
+            refinement_rhs_evaluations +=
+                armijo_result.refinement_rhs_evaluations;
+            last_trial_energy_j = armijo_result.trial_snapshot.total_energy_j;
+            if (!std::isfinite(last_trial_energy_j)) {
+                return gpu_relax_restore_previous_magnetization_after_failure(
+                    ctx,
+                    stream,
+                    "trial direct-energy validation failure",
+                    "GPU projected-gradient BB produced non-finite total energy",
+                    error);
+            }
+            const bool trial_unchanged =
+                armijo_result.trial_active_state_unchanged;
+            every_permitted_trial_unchanged =
+                every_permitted_trial_unchanged && trial_unchanged;
+            armijo = !trial_unchanged &&
+                (armijo_result.decision == relaxation::ArmijoDifferenceDecision::Accept ||
+                 last_refinement_accepted);
+            if (armijo) {
+                last_direct_difference = armijo_result.difference;
+                accepted_armijo_increment_rhs_j = armijo_rhs;
+            }
         if (armijo) {
             line_search_accepted = true;
             break;
@@ -913,16 +739,35 @@ int gpu_relax_projected_gradient_bb_step(
         backtracks += 1;
     }
     if (!line_search_accepted) {
+        if (every_permitted_trial_unchanged) {
+            mark_gpu_relax_pgbb_device_source_of_truth(ctx);
+            out_stats.step = ctx.state.step_count;
+            out_stats.time_seconds = 0.0;
+            out_stats.dt_seconds = 0.0;
+            out_stats.rejected_attempts = backtracks;
+            out_stats.rhs_evaluations = logical_rhs_evaluations;
+            if (!gpu_rk_finalize_step_stats_control_readback(ctx, out_stats, reason)) {
+                error = reason;
+                return FULLMAG_FEM_ERR_INTERNAL;
+            }
+            out_stats.step = ctx.state.step_count;
+            out_stats.time_seconds = 0.0;
+            out_stats.dt_seconds = 0.0;
+            out_stats.max_rhs_amplitude = 0.0;
+            out_stats.rejected_attempts = backtracks;
+            out_stats.rhs_evaluations = logical_rhs_evaluations;
+            relaxation::publish_representability_stationary_completion(ctx);
+            return FULLMAG_FEM_OK;
+        }
         const double armijo_rhs =
-            current_energy -
-                kArmijoCoefficient * trial_step * energy_gradient_norm_sq;
+            current_energy + last_armijo_increment_rhs_j;
         const std::string original_error =
             "GPU projected-gradient BB failed Armijo line search after " +
             std::to_string(backtracks) +
             " backtracks; current_energy_j=" +
             format_gpu_relax_pgbb_scalar(current_energy) +
             " last_trial_energy_j=" +
-            format_gpu_relax_pgbb_scalar(trial_energy) +
+            format_gpu_relax_pgbb_scalar(last_trial_energy_j) +
             " armijo_rhs_j=" + format_gpu_relax_pgbb_scalar(armijo_rhs) +
             " direct_delta_j=" +
             format_gpu_relax_pgbb_scalar(last_direct_difference.delta_joules) +
@@ -935,9 +780,12 @@ int gpu_relax_projected_gradient_bb_step(
                 last_direct_interfacial_dmi_component) +
             " direct_bulk_dmi_component_j=" +
             format_gpu_relax_pgbb_scalar(last_direct_bulk_dmi_component) +
-            " endpoint_replaced_delta_j=" +
+            " endpoint_residual_delta_j=" +
             format_gpu_relax_pgbb_scalar(
-                last_endpoint_replaced_delta) +
+                last_endpoint_residual_delta) +
+            " endpoint_residual_operand_absolute_sum_j=" +
+            format_gpu_relax_pgbb_scalar(
+                last_endpoint_residual_operand_absolute_sum) +
             " direct_roundoff_bound_j=" +
             format_gpu_relax_pgbb_scalar(last_direct_difference.roundoff_bound_joules) +
             " direct_armijo_decision=" +
@@ -959,7 +807,7 @@ int gpu_relax_projected_gradient_bb_step(
             " direct_local_delta_j=" +
             format_gpu_relax_pgbb_scalar(last_local_direct_delta) +
             " residual_delta_j=" +
-            format_gpu_relax_pgbb_scalar(last_residual_delta);
+            format_gpu_relax_pgbb_scalar(last_endpoint_residual_delta);
         return gpu_relax_restore_previous_magnetization_after_failure(
             ctx,
             stream,
@@ -999,7 +847,8 @@ int gpu_relax_projected_gradient_bb_step(
     out_stats.time_seconds = 0.0;
     out_stats.dt_seconds = 0.0;
     out_stats.rejected_attempts = backtracks;
-    out_stats.rhs_evaluations = backtracks + 2u;
+    out_stats.rhs_evaluations =
+        logical_rhs_evaluations + refinement_rhs_evaluations;
     if (!gpu_rk_finalize_step_stats_control_readback(ctx, out_stats, reason)) {
         return gpu_relax_restore_accepted_step_after_finalize_failure(
             ctx,
@@ -1013,7 +862,31 @@ int gpu_relax_projected_gradient_bb_step(
     out_stats.dt_seconds = 0.0;
     out_stats.max_rhs_amplitude = 0.0;
     out_stats.rejected_attempts = backtracks;
-    out_stats.rhs_evaluations = backtracks + 2u;
+    out_stats.rhs_evaluations =
+        logical_rhs_evaluations + refinement_rhs_evaluations;
+    const double accepted_energy_delta_upper_j =
+        last_direct_difference.delta_joules +
+        last_direct_difference.roundoff_bound_joules;
+    const double armijo_increment_rhs_j = accepted_armijo_increment_rhs_j;
+    if (!std::isfinite(accepted_energy_delta_upper_j) ||
+        !std::isfinite(armijo_increment_rhs_j) ||
+        !(accepted_energy_delta_upper_j <= armijo_increment_rhs_j &&
+          armijo_increment_rhs_j <= 0.0)) {
+        return gpu_relax_restore_accepted_step_after_finalize_failure(
+            ctx,
+            stream,
+            rollback,
+            "GPU projected-gradient BB accepted Armijo proof is invalid",
+            error);
+    }
+    ctx.relaxation.accepted_energy_proof.available = true;
+    ctx.relaxation.accepted_energy_proof.delta_j =
+        last_direct_difference.delta_joules;
+    ctx.relaxation.accepted_energy_proof.roundoff_bound_j =
+        last_direct_difference.roundoff_bound_joules;
+    ctx.relaxation.accepted_energy_proof.delta_upper_j =
+        accepted_energy_delta_upper_j;
+    ctx.relaxation.accepted_energy_proof.armijo_rhs_j = armijo_increment_rhs_j;
     update_stage_completion_from_stats(ctx, out_stats);
     return FULLMAG_FEM_OK;
 #else

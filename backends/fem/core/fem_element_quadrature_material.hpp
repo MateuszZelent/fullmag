@@ -39,6 +39,11 @@ struct Aos3MassBilinearTermwiseResult {
     std::size_t scalar_term_count = 0u;
 };
 
+struct MsWeightedAos3AverageReduction {
+    std::array<double, 3> weighted_component_integrals{};
+    double denominator = 0.0;
+};
+
 /*
  * Pure parameter-local realization over one ordered P1 tetrahedral topology.
  *
@@ -83,6 +88,11 @@ public:
     Aos3MassBilinearTermwiseResult ms_weighted_aos3_mass_bilinear_termwise(
         const std::vector<double> &left_aos3_nodal_values,
         const std::vector<double> &right_aos3_nodal_values) const;
+
+    // Direct allocation-free numerator/denominator reduction for P1 m and
+    // element-DG0 Ms over the active material domain.
+    MsWeightedAos3AverageReduction ms_weighted_aos3_average_reduction(
+        const std::vector<double> &aos3_nodal_values) const;
 
     // Versioned digest of topology, active scope, location tags, and values.
     std::uint64_t material_realization_hash() const noexcept;

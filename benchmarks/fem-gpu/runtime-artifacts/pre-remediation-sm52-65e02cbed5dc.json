@@ -1,0 +1,16 @@
+{
+  "schema": "fullmag.fem_gpu.external_runtime_artifact.v1",
+  "artifact_uri": "fullmag-runtime://fem-gpu/pre-remediation/sha256:65e02cbed5dcd5ab26fb2f6362cc7f78bc11c5ddd8c73ea3fef9fe8d1f48a76a",
+  "label": "pre-remediation-sm52",
+  "source_git_commit": "bb46eac50415096d1805b30bab836f1260308863",
+  "bundle_root": ".fullmag/runtimes/fem-gpu-variants/pre-remediation-sm52-65e02cbed5dc",
+  "bundle_manifest_sha256": "65e02cbed5dcd5ab26fb2f6362cc7f78bc11c5ddd8c73ea3fef9fe8d1f48a76a",
+  "restore_manifest_path": ".fullmag/runtimes/fem-gpu-variants/pre-remediation-sm52-65e02cbed5dc/restore-manifest-v2.json",
+  "restore_manifest_sha256": "e9449f8c978a56e967287840fe0ff75ad48d78c8cce3b7c09a9fa04a843633f0",
+  "storage": {
+    "kind": "external_immutable_runtime_bundle",
+    "checked_into_git": false,
+    "retrieval_identity": "manifest_sha256",
+    "required_local_root": ".fullmag/runtimes/fem-gpu-variants/pre-remediation-sm52-65e02cbed5dc"
+  }
+}

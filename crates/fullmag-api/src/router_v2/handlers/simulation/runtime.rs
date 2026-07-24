@@ -24,9 +24,9 @@ use crate::schemas::hysteresis::{
     HysteresisStorageEstimateSchema,
 };
 use crate::schemas::preparation::{
-    PreparationExecutionSummary, PreparationFailureResource, PreparationLogEntryResource,
-    PreparationLogLevel, PreparationProgressStage, PreparationStageId, PreparationStageStatus,
-    PreparationStatus, SimulationPreparationResource,
+    PreparationClockAdjustment, PreparationExecutionSummary, PreparationFailureResource,
+    PreparationLogEntryResource, PreparationLogLevel, PreparationProgressStage, PreparationStageId,
+    PreparationStageStatus, PreparationStatus, SimulationPreparationResource,
 };
 use crate::schemas::relaxation::{
     canonical_torque_apm, torque_t_from_apm, RelaxationAlgorithm, StageMetricKind, StageMetricUnit,
@@ -125,6 +125,13 @@ pub async fn get_simulation_preparation(
                 started_at_unix_ms: stage.started_at_unix_ms,
                 completed_at_unix_ms: stage.completed_at_unix_ms,
                 duration_ms: stage.duration_ms,
+                clock_adjustment: stage.clock_adjustment.as_ref().map(|adjustment| {
+                    PreparationClockAdjustment {
+                        observed_at_unix_ms: adjustment.observed_at_unix_ms,
+                        stage_started_at_unix_ms: adjustment.stage_started_at_unix_ms,
+                        backward_delta_ms: adjustment.backward_delta_ms,
+                    }
+                }),
                 progress_percent: stage.progress_percent,
                 progress_label: stage
                     .progress_label
@@ -431,6 +438,7 @@ pub async fn get_stage_execution(
                     command_id: record.command_id.clone(),
                     started_at_unix_ms: record.started_at_unix_ms,
                     completed_at_unix_ms: record.completed_at_unix_ms,
+                    time_to_tolerance_seconds: time_to_tolerance_seconds(record),
                     reason: record.reason.clone().map(StageStopReason::from),
                     converged: record.converged,
                     artifact_refs: record.artifact_refs.clone(),
@@ -482,6 +490,161 @@ struct StageProgressProjection {
     progress_label: Option<String>,
     progress_detail: Option<String>,
     last_progress_unix_ms: Option<u64>,
+}
+
+fn time_to_tolerance_seconds(record: &StageExecutionRecord) -> Option<f64> {
+    if record.status != crate::types::StageLifecycleState::Completed || !record.converged {
+        return None;
+    }
+    let metric_matches_reason = matches!(
+        (record.reason, record.metric, record.metric_name.as_deref()),
+        (
+            Some(fullmag_ir::StageStopReason::Torque),
+            Some(fullmag_ir::StageMetricKind::MaxTorqueApm),
+            Some("max_torque_apm")
+        ) | (
+            Some(fullmag_ir::StageStopReason::Energy),
+            Some(fullmag_ir::StageMetricKind::TotalEnergyPlateauRangeJ),
+            Some("total_energy_plateau_range_J")
+        )
+    );
+    if !metric_matches_reason {
+        return None;
+    }
+    let metric_value = record.metric_value?;
+    let threshold = record.threshold?;
+    if !metric_value.is_finite()
+        || !threshold.is_finite()
+        || metric_value < 0.0
+        || threshold < 0.0
+        || metric_value > threshold
+    {
+        return None;
+    }
+    let elapsed_ms = record
+        .completed_at_unix_ms?
+        .checked_sub(record.started_at_unix_ms?)?;
+    Some(elapsed_ms as f64 / 1_000.0)
+}
+
+#[cfg(test)]
+mod time_to_tolerance_tests {
+    use super::time_to_tolerance_seconds;
+    use crate::types::StageExecutionRecord;
+    use fullmag_ir::{StageMetricKind, StageStopReason};
+
+    fn completion(
+        reason: StageStopReason,
+        metric: StageMetricKind,
+        metric_name: &str,
+        metric_value: f64,
+        threshold: f64,
+    ) -> StageExecutionRecord {
+        serde_json::from_value(serde_json::json!({
+            "status": "completed",
+            "converged": true,
+            "reason": reason,
+            "metric": metric,
+            "metric_name": metric_name,
+            "metric_value": metric_value,
+            "threshold": threshold,
+            "started_at_unix_ms": 1_000,
+            "completed_at_unix_ms": 6_000,
+        }))
+        .expect("valid stage execution fixture")
+    }
+
+    #[test]
+    fn duration_is_exposed_only_for_tolerance_qualified_completion() {
+        for record in [
+            completion(
+                StageStopReason::Torque,
+                StageMetricKind::MaxTorqueApm,
+                "max_torque_apm",
+                5.0,
+                10.0,
+            ),
+            completion(
+                StageStopReason::Energy,
+                StageMetricKind::TotalEnergyPlateauRangeJ,
+                "total_energy_plateau_range_J",
+                1.0e-20,
+                2.0e-20,
+            ),
+        ] {
+            assert_eq!(time_to_tolerance_seconds(&record), Some(5.0));
+        }
+    }
+
+    #[test]
+    fn duration_fails_closed_for_incoherent_completion_records() {
+        let valid = completion(
+            StageStopReason::Torque,
+            StageMetricKind::MaxTorqueApm,
+            "max_torque_apm",
+            5.0,
+            10.0,
+        );
+        let mut invalid = Vec::new();
+
+        for (status, converged, reason) in [
+            ("completed", false, StageStopReason::MaxSteps),
+            ("completed", false, StageStopReason::MaxPseudotime),
+            ("completed", false, StageStopReason::MaxPhysicalTime),
+            ("cancelled", false, StageStopReason::UserCancelled),
+            ("failed", false, StageStopReason::BackendError),
+        ] {
+            let mut record = valid.clone();
+            record.status = serde_json::from_value(serde_json::json!(status)).unwrap();
+            record.converged = converged;
+            record.reason = Some(reason);
+            invalid.push(record);
+        }
+        let mutate = |change: fn(&mut StageExecutionRecord)| {
+            let mut record = valid.clone();
+            change(&mut record);
+            record
+        };
+        invalid.extend([
+            mutate(|record| record.reason = None),
+            mutate(|record| record.metric = None),
+            mutate(|record| record.metric_name = None),
+            mutate(|record| record.metric_value = None),
+            mutate(|record| record.threshold = None),
+            mutate(|record| record.metric_value = Some(f64::NAN)),
+            mutate(|record| record.threshold = Some(f64::INFINITY)),
+            mutate(|record| record.metric_value = Some(-1.0)),
+            mutate(|record| record.threshold = Some(-1.0)),
+            mutate(|record| record.metric_value = Some(11.0)),
+            mutate(|record| record.metric = Some(StageMetricKind::TotalEnergyPlateauRangeJ)),
+            mutate(|record| record.metric_name = Some("total_energy_plateau_range_J".to_string())),
+            mutate(|record| record.started_at_unix_ms = None),
+            mutate(|record| record.completed_at_unix_ms = None),
+            mutate(|record| record.started_at_unix_ms = Some(7_000)),
+        ]);
+
+        let mut stagnation = valid.clone();
+        stagnation.status = serde_json::from_value(serde_json::json!("failed")).unwrap();
+        stagnation.converged = false;
+        stagnation.reason = Some(StageStopReason::Gradient);
+        stagnation.metric = Some(StageMetricKind::NumericalStagnation);
+        stagnation.metric_name = Some("numerical_stagnation".to_string());
+        stagnation.metric_value = Some(1.0);
+        stagnation.threshold = Some(1.0);
+        invalid.push(stagnation);
+
+        for status in ["skipped", "stopped"] {
+            let mut record = valid.clone();
+            record.status = serde_json::from_value(serde_json::json!(status)).unwrap();
+            record.converged = false;
+            record.reason = None;
+            invalid.push(record);
+        }
+
+        for record in invalid {
+            assert_eq!(time_to_tolerance_seconds(&record), None, "{record:?}");
+        }
+    }
 }
 
 fn frequency_response_stage_progress(
@@ -1182,7 +1345,7 @@ fn average_hysteresis_live_magnetization(
     if values.len() < 3 || values.len() % 3 != 0 {
         return None;
     }
-    if let Some(mesh) = step.fem_mesh.as_ref().or(snapshot_mesh) {
+    if let Some(mesh) = snapshot_mesh {
         if let Some(weighted) = average_fem_magnetization_by_element_volume(values, mesh) {
             return Some(weighted);
         }
@@ -2158,7 +2321,7 @@ fn latest_magnetization_average(
     if values.len() < 3 || values.len() % 3 != 0 {
         return None;
     }
-    if let Some(mesh) = live_state.latest_step.fem_mesh.as_ref() {
+    if let Some(mesh) = snapshot.fem_mesh.as_ref() {
         if let Some(average) = mesh
             .mesh_parts
             .iter()

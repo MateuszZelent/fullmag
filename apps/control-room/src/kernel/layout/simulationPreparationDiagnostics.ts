@@ -32,6 +32,14 @@ export function serializeSimulationPreparationDiagnostics(
       : null,
     revision: snapshot.revision,
     stages: snapshot.stages.map((stage) => ({
+      clock_adjustment: stage.clock_adjustment
+        ? {
+            backward_delta_ms: stage.clock_adjustment.backward_delta_ms,
+            observed_at_unix_ms: stage.clock_adjustment.observed_at_unix_ms,
+            stage_started_at_unix_ms:
+              stage.clock_adjustment.stage_started_at_unix_ms,
+          }
+        : null,
       completed_at_unix_ms: stage.completed_at_unix_ms ?? null,
       detail: stage.detail,
       duration_ms: stage.duration_ms ?? null,

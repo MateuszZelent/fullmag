@@ -309,6 +309,10 @@ pub(crate) fn build_grid_preview_field_from_flat_plan(
 ) -> LivePreviewField {
     LivePreviewField {
         config_revision: request.revision,
+        source_step: 0,
+        source_revision: request.revision,
+        materialized_at_unix_ms: 0,
+        materialization_wall_time_ns: 0,
         quantity: quantity.to_string(),
         unit: quantity_unit(quantity).to_string(),
         spatial_kind: "grid".to_string(),
@@ -369,6 +373,10 @@ pub(crate) fn build_mesh_preview_field_with_active_mask(
     let quantity = normalized_quantity_name(&request.quantity).unwrap_or("m");
     LivePreviewField {
         config_revision: request.revision,
+        source_step: 0,
+        source_revision: request.revision,
+        materialized_at_unix_ms: 0,
+        materialization_wall_time_ns: 0,
         quantity: quantity.to_string(),
         unit: quantity_unit(quantity).to_string(),
         spatial_kind: "mesh".to_string(),
@@ -395,6 +403,10 @@ pub(crate) fn build_mesh_scalar_preview_field_with_active_mask(
     let quantity = normalized_quantity_name(&request.quantity).unwrap_or("m");
     LivePreviewField {
         config_revision: request.revision,
+        source_step: 0,
+        source_revision: request.revision,
+        materialized_at_unix_ms: 0,
+        materialization_wall_time_ns: 0,
         quantity: quantity.to_string(),
         unit: quantity_unit(quantity).to_string(),
         spatial_kind: "mesh".to_string(),

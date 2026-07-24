@@ -34,6 +34,79 @@ fn production_source_before_cfg(path: &Path, cfg_marker: &str) -> String {
 }
 
 #[test]
+fn task5_native_fem_stage_begins_once_before_llg_or_direct_minimizer_execution() {
+    let source = source(&crate_root().join("src/dispatch.rs"));
+    let execute_start = source
+        .find("fn execute_native_fem(")
+        .expect("feature-enabled native FEM executor");
+    let execute_end = source[execute_start..]
+        .find("#[cfg(not(feature = \"fem-gpu\"))]")
+        .map(|offset| execute_start + offset)
+        .expect("end of feature-enabled native FEM executor");
+    let execute = &source[execute_start..execute_end];
+    let begin_stage = "backend.begin_stage(plan.time_stage.start_time_s)?;";
+    assert_eq!(
+        execute.matches(begin_stage).count(),
+        1,
+        "headless native FEM must begin each physical stage exactly once"
+    );
+    let begin_index = execute.find(begin_stage).expect("native FEM stage begin call");
+    let algorithm_index = execute
+        .find("if let Some(native_step_control) = native_relaxation_step {")
+        .expect("LLG/direct-minimizer algorithm dispatch");
+    assert!(
+        begin_index < algorithm_index,
+        "native FEM stage initialization must precede both the direct-minimizer and LLG paths"
+    );
+    assert!(
+        execute[algorithm_index..]
+            .contains("direct_minimizer::execute_direct_minimizer("),
+        "native FEM stage dispatch must retain the direct-minimizer path"
+    );
+    assert!(
+        execute[algorithm_index..].contains("llg_overdamped::execute_llg_overdamped("),
+        "native FEM stage dispatch must retain the LLG path"
+    );
+}
+
+#[test]
+fn task5_interactive_native_fem_execution_begins_each_stage_exactly_once() {
+    let source = source(&crate_root().join("src/interactive_runtime.rs"));
+    let impl_start = source
+        .find("impl GpuInteractiveFemPreviewRuntime {")
+        .expect("interactive FEM GPU runtime implementation");
+    let impl_end = source[impl_start..]
+        .find("\nfn normalize_plan_signature(")
+        .map(|offset| impl_start + offset)
+        .expect("end of interactive FEM GPU runtime implementation");
+    let gpu_runtime = &source[impl_start..impl_end];
+    for (signature, next_signature) in [
+        (
+            "fn execute_with_live_preview(\n",
+            "fn execute_with_live_preview_streaming(\n",
+        ),
+        (
+            "fn execute_with_live_preview_streaming(\n",
+            "\n}\n",
+        ),
+    ] {
+        let start = gpu_runtime
+            .find(signature)
+            .unwrap_or_else(|| panic!("missing interactive FEM method {signature:?}"));
+        let remaining = &gpu_runtime[start + signature.len()..];
+        let end = remaining
+            .find(next_signature)
+            .unwrap_or_else(|| panic!("missing boundary after {signature:?}"));
+        let method = &remaining[..end];
+        assert_eq!(
+            method.matches("self.backend.begin_stage(base_time)?;").count(),
+            1,
+            "interactive FEM method {signature:?} must begin each stage exactly once"
+        );
+    }
+}
+
+#[test]
 fn fem_eigen_path_workflow_has_fem_owner() {
     let root = crate_root();
     let dispatch = production_source(&root.join("src/dispatch.rs"));

@@ -207,7 +207,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: current_local_stats.clone(),
                 grid,
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field,
                 cached_preview_fields,
@@ -292,7 +292,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: local_stats.clone(),
                 grid,
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field,
                 cached_preview_fields: None,
@@ -496,7 +496,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: current_local_stats.clone(),
                 grid,
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field,
                 cached_preview_fields,
@@ -582,7 +582,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: local_stats.clone(),
                 grid,
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field,
                 cached_preview_fields: None,

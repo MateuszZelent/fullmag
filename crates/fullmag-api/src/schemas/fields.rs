@@ -12,6 +12,15 @@ pub struct FieldCatalog {
     pub quantities: Vec<FieldDescriptor>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldMaterializationState {
+    Complete,
+    StaleComplete,
+    Pending,
+    Error,
+}
+
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct FieldDescriptor {
     pub quantity_id: String,
@@ -25,6 +34,14 @@ pub struct FieldDescriptor {
     #[schema(value_type = String)]
     pub domain_generation_id: u64,
     pub available: bool,
+    pub source_step: u64,
+    pub source_revision: u64,
+    pub materialized_at_unix_ms: u64,
+    pub stale_by_steps: u64,
+    pub materialization_wall_time_ns: u64,
+    pub state: FieldMaterializationState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub materialization_error: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -40,6 +57,14 @@ pub struct FieldMeta {
     #[schema(value_type = String)]
     pub domain_generation_id: u64,
     pub stats: Option<FieldStats>,
+    pub source_step: u64,
+    pub source_revision: u64,
+    pub materialized_at_unix_ms: u64,
+    pub stale_by_steps: u64,
+    pub materialization_wall_time_ns: u64,
+    pub state: FieldMaterializationState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub materialization_error: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

@@ -14,11 +14,14 @@ mod diagnostics;
 mod feature_flags;
 mod formatting;
 mod interactive_runtime_host;
+mod live_publisher_diagnostics;
 mod live_workspace;
 mod orchestrator;
 mod python_bridge;
 mod runtime_supervisor;
 mod simulation_preparation;
+mod solver_profile_persistence;
+mod stage_heartbeat;
 mod step_utils;
 mod terminal_logs;
 mod types;
@@ -183,13 +186,7 @@ fn main() -> Result<()> {
                 .map_err(|e| anyhow!("{}", e))?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "status": result.status,
-                    "total_steps": result.steps.len(),
-                    "final_energy": result.steps.last().map(|s| s.e_ex),
-                    "final_total_energy": result.steps.last().map(|s| s.e_total),
-                    "output_dir": output_dir.display().to_string(),
-                }))?
+                serde_json::to_string_pretty(&run_json_summary(&result, &output_dir))?
             );
         }
         Command::ResolveRuntimeInvocation { shell, raw_args } => {
@@ -416,6 +413,35 @@ fn launch_ui(ui: UiCli) -> Result<()> {
     );
     let _ = ui_child.wait();
     Ok(())
+}
+
+fn run_json_summary(
+    result: &fullmag_runner::RunResult,
+    output_dir: &std::path::Path,
+) -> serde_json::Value {
+    serde_json::json!({
+        "status": result.status,
+        "total_steps": result.steps.len(),
+        "final_energy": result.steps.last().map(|step| step.e_ex),
+        "final_total_energy": result.steps.last().map(|step| step.e_total),
+        "backend_create_wall_time_ns": result
+            .steps
+            .iter()
+            .map(|step| step.backend_create_wall_time_ns)
+            .find(|duration| *duration > 0),
+        "first_accepted_step_demag_solver_apply_wall_time_ns": result
+            .steps
+            .iter()
+            .map(|step| step.demag_solver_apply_wall_time_ns)
+            .find(|duration| *duration > 0),
+        "rhs_evals": result.steps.last().map(|step| step.rhs_evals),
+        "total_rhs_evals": result
+            .steps
+            .iter()
+            .map(|step| u64::from(step.rhs_evals))
+            .sum::<u64>(),
+        "output_dir": output_dir.display().to_string(),
+    })
 }
 
 fn is_script_mode(raw_args: &[OsString]) -> bool {
@@ -794,6 +820,39 @@ mod tests {
         IntegratorChoice, MaterialIR, MeshIR, RelaxationAlgorithmIR, RelaxationControlIR,
     };
 
+    #[test]
+    fn run_json_summary_reports_create_and_first_accepted_step_demag_apply_aggregate() {
+        let result = fullmag_runner::RunResult {
+            status: fullmag_runner::RunStatus::Completed,
+            steps: vec![
+                fullmag_runner::StepStats::default(),
+                fullmag_runner::StepStats {
+                    backend_create_wall_time_ns: 91,
+                    demag_solver_apply_wall_time_ns: 41,
+                    rhs_evals: 2,
+                    ..fullmag_runner::StepStats::default()
+                },
+                fullmag_runner::StepStats {
+                    demag_solver_apply_wall_time_ns: 99,
+                    rhs_evals: 3,
+                    ..fullmag_runner::StepStats::default()
+                },
+            ],
+            final_magnetization: Vec::new(),
+            completion: None,
+        };
+
+        let payload = run_json_summary(&result, std::path::Path::new("/tmp/run"));
+
+        assert_eq!(payload["backend_create_wall_time_ns"], 91);
+        assert_eq!(
+            payload["first_accepted_step_demag_solver_apply_wall_time_ns"],
+            41
+        );
+        assert_eq!(payload["rhs_evals"], 3);
+        assert_eq!(payload["total_rhs_evals"], 5);
+    }
+
     fn shared_domain_fem_problem() -> ProblemIR {
         let mut problem = ProblemIR::bootstrap_example();
         problem.backend_policy.requested_backend = BackendTarget::Fem;
@@ -912,10 +971,10 @@ mod tests {
             ..Default::default()
         });
 
-        let update = initial_step_update(&plan);
+        let update = initial_step_update(&plan, None);
         assert_eq!(update.stats.step, 0);
         assert_eq!(update.grid, [4, 3, 1]);
-        assert!(update.fem_mesh.is_none());
+        assert!(update.fem_mesh_generation_id.is_none());
         assert_eq!(update.magnetization.as_ref().map(Vec::len), Some(36));
         assert!(!update.finished);
     }
@@ -1034,13 +1093,15 @@ mod tests {
             use_consistent_mass: None,
         });
 
-        let update = initial_step_update(&plan);
+        let stage_asset = fullmag_runner::StageFemMeshAsset::build_from_backend_plan(&plan)
+            .expect("FEM stage asset");
+        let update = initial_step_update(
+            &plan,
+            Some(stage_asset.identity.generation_id().to_string()),
+        );
         assert_eq!(update.stats.step, 0);
         assert_eq!(update.grid, [0, 0, 0]);
-        assert_eq!(
-            update.fem_mesh.as_ref().map(|payload| payload.nodes.len()),
-            Some(mesh.nodes.len())
-        );
+        assert!(update.fem_mesh_generation_id.is_some());
         assert_eq!(update.magnetization.as_ref().map(Vec::len), Some(12));
         assert!(!update.finished);
     }

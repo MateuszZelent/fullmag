@@ -1,6 +1,6 @@
 {
   "schema_version": "capability_matrix.v0",
-  "updated_at": "2026-07-10",
+  "updated_at": "2026-07-23",
   "status_vocabulary": {
     "unsupported": "The current lane has no legal executable realization for this feature.",
     "source_visible": "Source or planner scaffolding exists, but the lane is not a legal public executable path.",
@@ -476,6 +476,40 @@
       },
       "validated_workloads": [],
       "notes": "Planned artifact-backed FFT of m(r,t)-m0(r). It is a response product and remains separate from the antenna source spectrum."
+    },
+    {
+      "id": "fem_element_dg0_ms_time_evolution",
+      "label": "FEM element-DG0 Ms time evolution",
+      "lanes": {
+        "fdm_cpu_reference": "unsupported",
+        "fdm_gpu_production": "unsupported",
+        "fem_cpu_public": "partial_production_executable",
+        "fem_gpu_public": "unsupported"
+      },
+      "validated_workloads": [
+        "CPU double time evolution with consistent-mass exchange",
+        "optional Poisson demag and Zeeman with the same DG0 material owner",
+        "conservative node-aligned energy projection preserving tetrahedral weak-form integrals"
+      ],
+      "notes": "The bounded CPU lane requires exchange enabled with use_consistent_mass=true. Poisson demag and Zeeman may be added, but demag-only and Zeeman-only plans do not promote DG0 Ms. Anisotropy, interfacial or bulk DMI, thermal, STT, Oersted, magnetoelastic coupling, direct native relaxation, and every FEM GPU DG0 plan reject before execution. Direct relaxation rejects at both planner and native ABI boundaries. DG0 step statistics use a direct allocation-free material-weighted reduction. There is no nodal fallback for the sharp coefficient."
+    },
+    {
+      "id": "fem_preview_energy_density_bounded",
+      "label": "FEM live preview energy density",
+      "lanes": {
+        "fdm_cpu_reference": "unsupported",
+        "fdm_gpu_production": "unsupported",
+        "fem_cpu_public": "partial_production_executable",
+        "fem_gpu_public": "partial_production_executable"
+      },
+      "validated_workloads": [
+        "CPU element-DG0 Ms with consistent-mass exchange plus Poisson demag and Zeeman",
+        "GPU uniform-Ms uniaxial anisotropy",
+        "GPU uniform-Ms cubic anisotropy",
+        "GPU uniform-Ms interfacial DMI",
+        "GPU uniform-Ms bulk DMI"
+      ],
+      "notes": "Each bounded managed fixture compares the integrated node-aligned energy payload at source step 52 with the matching native scalar term and E_total. DG0 field-dot terms use fem_nodal_conservative_tetra_projection; uniform-Ms GPU terms use fem_nodal_visualization_projection. These fixtures qualify energy observation semantics only and do not promote GPU DG0, canonical FEM element/quadrature density output, or the broader interaction/runtime surface to validated."
     }
   ]
 }

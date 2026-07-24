@@ -24,8 +24,7 @@ use crate::fdm::artifacts::select_state_observable_field;
 use crate::fdm::multilayer::make_multilayer_step_stats as make_step_stats;
 use crate::fdm::schedules::record_due_fields;
 use crate::relaxation::{
-    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow,
-    RelaxationTorqueConfirmation,
+    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
 };
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
@@ -241,7 +240,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
             let action = on_step(StepUpdate {
                 stats: latest_stats.clone(),
                 grid: [grid[0], grid[1], grid[2]],
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field: None,
                 cached_preview_fields: None,

@@ -151,9 +151,10 @@ pub fn magnitude(values: &[f64], n_comp: usize) -> Vec<f64> {
 
 /// Build the raw token (before quoting) for the field vector ETag.
 ///
-/// Format: `fmvp:{quantity_id}:{field_revision}:{domain_generation_id}:{component}:v2`
+/// Format: `fmvp:{quantity_id}:{session_id}:{field_revision}:{domain_generation_id}:{component}:v3`
 pub fn component_etag_token(
     quantity_id: &str,
+    session_id: &str,
     field_revision: u64,
     domain_generation_id: u64,
     component: &ComponentSelection,
@@ -165,7 +166,7 @@ pub fn component_etag_token(
         ComponentSelection::AbsIndex(i) => format!("abs_c{}", i),
         ComponentSelection::Index(i) => format!("c{}", i),
     };
-    format!("fmvp:{quantity_id}:{field_revision}:{domain_generation_id}:{comp_str}:v2")
+    format!("fmvp:{quantity_id}:{session_id}:{field_revision}:{domain_generation_id}:{comp_str}:v3")
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -328,13 +329,13 @@ mod tests {
 
     #[test]
     fn etag_token_format() {
-        let tok = component_etag_token("m", 91, 42, &ComponentSelection::Magnitude);
-        assert_eq!(tok, "fmvp:m:91:42:magnitude:v2");
+        let tok = component_etag_token("m", "session-17", 91, 42, &ComponentSelection::Magnitude);
+        assert_eq!(tok, "fmvp:m:session-17:91:42:magnitude:v3");
     }
 
     #[test]
     fn etag_token_index() {
-        let tok = component_etag_token("H_eff", 5, 1, &ComponentSelection::Index(2));
-        assert_eq!(tok, "fmvp:H_eff:5:1:c2:v2");
+        let tok = component_etag_token("H_eff", "session-17", 5, 1, &ComponentSelection::Index(2));
+        assert_eq!(tok, "fmvp:H_eff:session-17:5:1:c2:v3");
     }
 }

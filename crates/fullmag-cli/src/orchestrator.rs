@@ -1146,19 +1146,30 @@ fn publish_live_step_update(
     run_id: &str,
     session_id: &str,
     artifact_dir: &Path,
-    update: &fullmag_runner::StepUpdate,
+    update: fullmag_runner::StepUpdate,
     include_scalar_row: bool,
-) {
-    live_workspace.update(|state| {
-        apply_live_step_update_to_workspace_state(
+) -> fullmag_runner::StepUpdate {
+    let mut remainder = None;
+    let timings = live_workspace.update_profiled(|state| {
+        remainder = Some(apply_live_step_update_to_workspace_state(
             state,
             run_id,
             session_id,
             artifact_dir,
             update,
             include_scalar_row,
-        );
+        ));
     });
+    let mut update = remainder.expect("live step update should be consumed under workspace lock");
+    update.stats.live_state_build_wall_time_ns = update
+        .stats
+        .live_state_build_wall_time_ns
+        .saturating_add(timings.live_state_build_wall_time_ns);
+    update.stats.publisher_replace_wall_time_ns = update
+        .stats
+        .publisher_replace_wall_time_ns
+        .saturating_add(timings.publisher_replace_wall_time_ns);
+    update
 }
 
 fn solver_profile_config_from_command(
@@ -1192,18 +1203,69 @@ fn drain_solver_profile_commands(
     }
 }
 
-fn record_solver_profile_step_with_orchestration(
+#[derive(Clone, Copy)]
+struct SolverProfileCallbackRecord {
+    step: u64,
+    recorded_callback_wall_time_ns: u64,
+    callback_thread_cpu_started_ns: Option<u64>,
+    recorded_callback_thread_cpu_time_ns: u64,
+    sampled: bool,
+    record_start: Instant,
+}
+
+fn begin_solver_profile_step_with_orchestration(
     live_workspace: &LocalLiveWorkspace,
-    stats: &fullmag_runner::StepStats,
-    callback_start: Instant,
-) {
+    stats: &mut fullmag_runner::StepStats,
+    callback_start: Option<Instant>,
+) -> Option<SolverProfileCallbackRecord> {
+    let Some(callback_start) = callback_start else {
+        return None;
+    };
     let orchestration_wall_time_ns = callback_start.elapsed().as_nanos() as u64;
-    let mut profiled_stats = stats.clone();
-    profiled_stats.orchestration_wall_time_ns = orchestration_wall_time_ns;
-    profiled_stats.wall_time_ns = profiled_stats
+    stats.orchestration_wall_time_ns = orchestration_wall_time_ns;
+    let callback_thread_cpu_started_ns = stats.preview_callback_thread_cpu_started_ns;
+    let callback_thread_cpu_time_ns =
+        fullmag_runner::elapsed_current_thread_cpu_ns(callback_thread_cpu_started_ns);
+    stats.preview_callback_thread_cpu_time_ns = callback_thread_cpu_time_ns;
+    stats.wall_time_ns = stats
         .wall_time_ns
         .saturating_add(orchestration_wall_time_ns);
-    live_workspace.record_solver_profile_step(&profiled_stats);
+    let record_start = Instant::now();
+    let sampled = live_workspace.record_solver_profile_step(stats);
+    Some(SolverProfileCallbackRecord {
+        step: stats.step,
+        recorded_callback_wall_time_ns: orchestration_wall_time_ns,
+        callback_thread_cpu_started_ns,
+        recorded_callback_thread_cpu_time_ns: callback_thread_cpu_time_ns,
+        sampled,
+        record_start,
+    })
+}
+
+fn finish_solver_profile_step_with_orchestration(
+    live_workspace: &LocalLiveWorkspace,
+    callback_start: Option<Instant>,
+    record: Option<SolverProfileCallbackRecord>,
+) {
+    let (Some(callback_start), Some(record)) = (callback_start, record) else {
+        return;
+    };
+    let callback_wall_time_ns = saturating_nanos_u64(callback_start.elapsed());
+    let callback_thread_cpu_time_ns =
+        fullmag_runner::elapsed_current_thread_cpu_ns(record.callback_thread_cpu_started_ns);
+    live_workspace.finish_solver_profile_callback(
+        record.step,
+        record.recorded_callback_wall_time_ns,
+        callback_wall_time_ns,
+        record.recorded_callback_thread_cpu_time_ns,
+        callback_thread_cpu_time_ns,
+        record.sampled,
+        record.record_start,
+    );
+}
+
+fn solver_profile_callback_start(live_workspace: &LocalLiveWorkspace) -> Option<Instant> {
+    live_workspace.solver_profile_enabled().then(Instant::now)
 }
 
 fn force_record_solver_profile_finalization(
@@ -1228,87 +1290,107 @@ fn force_record_solver_profile_finalization(
     live_workspace.force_record_solver_profile_step(&adjusted);
 }
 
-fn live_step_ingest_legacy_mag_len(update: &fullmag_runner::StepUpdate) -> usize {
-    update
-        .magnetization
-        .as_ref()
-        .map(|values| values.len())
-        .unwrap_or(0)
-}
-
-fn live_step_ingest_preview_len(update: &fullmag_runner::StepUpdate) -> usize {
-    update
-        .preview_field
-        .as_ref()
-        .map(|field| field.vector_field_values.len())
-        .unwrap_or(0)
-}
-
-fn live_step_ingest_cached_m_preview_len(update: &fullmag_runner::StepUpdate) -> usize {
-    update
-        .cached_preview_fields
-        .as_ref()
-        .and_then(|fields| fields.iter().find(|field| field.quantity == "m"))
-        .map(|field| field.vector_field_values.len())
-        .unwrap_or(0)
-}
-
 fn apply_live_step_update_to_workspace_state(
     state: &mut LocalLiveWorkspaceState,
     run_id: &str,
     session_id: &str,
     artifact_dir: &Path,
-    update: &fullmag_runner::StepUpdate,
+    mut update: fullmag_runner::StepUpdate,
     include_scalar_row: bool,
-) {
-    let mut update = update.clone();
+) -> fullmag_runner::StepUpdate {
     preserve_frequency_response_progress_scalars_from_live_state(state, &mut update);
-    let cached_preview_count = update
-        .cached_preview_fields
-        .as_ref()
-        .map(|fields| fields.len())
-        .unwrap_or(0);
-    if update.stats.step <= 2 || update.preview_field.is_some() || cached_preview_count > 0 {
-        eprintln!(
-            "[fullmag-cli] live step ingest step={} legacy_mag_len={} preview_field={} preview_quantity={} preview_len={} cached_preview_fields={} cached_m_preview_len={} scalar_row_due={} finished={}",
-            update.stats.step,
-            live_step_ingest_legacy_mag_len(&update),
-            update.preview_field.is_some(),
-            update
-                .preview_field
-                .as_ref()
-                .map(|field| field.quantity.as_str())
-                .unwrap_or("-"),
-            live_step_ingest_preview_len(&update),
-            cached_preview_count,
-            live_step_ingest_cached_m_preview_len(&update),
-            update.scalar_row_due,
-            update.finished,
-        );
-    }
     state.session.status = if update.finished {
         "completed".to_string()
     } else {
         "running".to_string()
     };
     state.run = running_run_manifest_from_update(run_id, session_id, artifact_dir, &update);
-    let previous_step = state.live_state.latest_step.clone();
-    state.live_state = live_state_manifest_from_update(&update);
-    if state.live_state.latest_step.magnetization.is_none()
-        && !step_update_has_magnetization_preview(&update)
-    {
-        state.live_state.latest_step.magnetization = previous_step.magnetization;
-    }
-    if state.live_state.latest_step.fem_mesh.is_none() {
-        state.live_state.latest_step.fem_mesh = previous_step.fem_mesh;
-    }
-    merge_cached_preview_fields_from_update(state, &update);
+    let previous_magnetization = state.live_state.latest_step.magnetization.take();
+    let previous_fem_mesh_generation_id =
+        state.live_state.latest_step.fem_mesh_generation_id.take();
+    let incoming_has_magnetization = ingest_magnetization_field_from_update(state, &mut update);
+    let incoming_has_magnetization_preview = step_update_has_magnetization_preview(&update);
+    crate::live_workspace::ingest_preview_fields_from_update(state, &mut update);
     apply_hysteresis_progress_to_stage_execution(state, &update);
     apply_fem_eigen_progress_to_stage_execution(state, &update);
     apply_fem_frequency_response_progress_to_stage_execution(state, &update);
     if include_scalar_row {
         set_latest_scalar_row_if_due(state, &update);
     }
+    let remainder = fullmag_runner::StepUpdate {
+        stats: update.stats.clone(),
+        grid: update.grid,
+        fem_mesh_generation_id: update.fem_mesh_generation_id.clone(),
+        magnetization: None,
+        preview_field: None,
+        cached_preview_fields: None,
+        hysteresis_field_m_t: update.hysteresis_field_m_t,
+        hysteresis_point_index: update.hysteresis_point_index,
+        hysteresis_settle_step_index: update.hysteresis_settle_step_index,
+        hysteresis_settle_step_kind: update.hysteresis_settle_step_kind.clone(),
+        hysteresis_settle_step_method: update.hysteresis_settle_step_method.clone(),
+        scalar_row_due: update.scalar_row_due,
+        finished: update.finished,
+    };
+    state.live_state = live_state_manifest_from_update(update);
+    if state.live_state.latest_step.magnetization.is_none()
+        && !incoming_has_magnetization
+        && !incoming_has_magnetization_preview
+    {
+        state.live_state.latest_step.magnetization = previous_magnetization;
+    }
+    if state
+        .live_state
+        .latest_step
+        .fem_mesh_generation_id
+        .is_none()
+    {
+        state.live_state.latest_step.fem_mesh_generation_id = previous_fem_mesh_generation_id;
+    }
+    remainder
+}
+
+fn ingest_magnetization_field_from_update(
+    state: &mut LocalLiveWorkspaceState,
+    update: &mut fullmag_runner::StepUpdate,
+) -> bool {
+    let Some(values) = update.magnetization.take() else {
+        return false;
+    };
+    let source_step = update
+        .stats
+        .magnetization_source_step
+        .unwrap_or(update.stats.step);
+    let source_revision = update
+        .stats
+        .magnetization_source_revision
+        .unwrap_or(source_step);
+    let materialized_at_unix_ms = update
+        .stats
+        .magnetization_materialized_at_unix_ms
+        .unwrap_or_else(current_unix_millis_u64);
+    let materialization_wall_time_ns = update
+        .stats
+        .magnetization_materialization_wall_time_ns
+        .unwrap_or(update.stats.field_copy_wall_time_ns);
+    state.latest_fields.insert(
+        "m".to_string(),
+        serde_json::json!({
+            "quantity": "m",
+            "unit": "1",
+            "values": values,
+            "source_step": source_step,
+            "source_revision": source_revision,
+            "materialized_at_unix_ms": materialized_at_unix_ms,
+            "materialization_wall_time_ns": materialization_wall_time_ns,
+            "layout": {
+                "grid_cells": update.grid,
+                "spatial_kind": "mesh",
+                "quantity_domain": "magnetic_only",
+            }
+        }),
+    );
+    true
 }
 
 fn preserve_frequency_response_progress_scalars_from_live_state(
@@ -1350,31 +1432,6 @@ fn active_stage_kind_is_frequency_response(state: &LocalLiveWorkspaceState) -> b
 
 fn is_frequency_response_stage_kind(kind: &str) -> bool {
     matches!(kind, "frequency_response" | "flat_frequency_response")
-}
-
-fn preserve_frequency_response_progress_scalars_from_previous_update(
-    previous: &fullmag_runner::StepUpdate,
-    update: &mut fullmag_runner::StepUpdate,
-) {
-    if update
-        .stats
-        .per_object_scalars
-        .contains_key(FEM_FREQUENCY_RESPONSE_PROGRESS_KEY)
-    {
-        return;
-    }
-    let Some(previous_progress) = previous
-        .stats
-        .per_object_scalars
-        .get(FEM_FREQUENCY_RESPONSE_PROGRESS_KEY)
-        .cloned()
-    else {
-        return;
-    };
-    update.stats.per_object_scalars.insert(
-        FEM_FREQUENCY_RESPONSE_PROGRESS_KEY.to_string(),
-        previous_progress,
-    );
 }
 
 fn apply_fem_frequency_response_progress_to_stage_execution(
@@ -1967,15 +2024,8 @@ fn ensure_frequency_response_relaxed_continuation_is_qualified(
     );
 }
 
-#[derive(Clone)]
-struct StageHeartbeatSnapshot {
-    latest_update: fullmag_runner::StepUpdate,
-    last_step_at: Instant,
-    stage_started_at: Instant,
-}
-
 struct StageProgressHeartbeat {
-    snapshot: Arc<Mutex<StageHeartbeatSnapshot>>,
+    snapshot: Arc<Mutex<crate::stage_heartbeat::StageHeartbeatProgress>>,
     stop_tx: Option<mpsc::Sender<()>>,
     join_handle: Option<JoinHandle<()>>,
 }
@@ -1985,18 +2035,15 @@ impl StageProgressHeartbeat {
         initial_update: fullmag_runner::StepUpdate,
         live_workspace: LocalLiveWorkspace,
         run_id: String,
-        session_id: String,
-        artifact_dir: PathBuf,
+        _session_id: String,
+        _artifact_dir: PathBuf,
         terminal_prefix: String,
         ui_label: String,
         torque_mode: Option<TorqueDisplayMode>,
     ) -> Self {
-        let stage_started_at = Instant::now();
-        let snapshot = Arc::new(Mutex::new(StageHeartbeatSnapshot {
-            latest_update: initial_update,
-            last_step_at: stage_started_at,
-            stage_started_at,
-        }));
+        let snapshot = Arc::new(Mutex::new(
+            crate::stage_heartbeat::StageHeartbeatProgress::new(&initial_update),
+        ));
         let (stop_tx, stop_rx) = mpsc::channel();
         let thread_snapshot = Arc::clone(&snapshot);
         let join_handle = std::thread::Builder::new()
@@ -2009,41 +2056,45 @@ impl StageProgressHeartbeat {
                     Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
                 }
-                let snapshot = match thread_snapshot.lock() {
+                let progress = match thread_snapshot.lock() {
                     Ok(snapshot) => snapshot.clone(),
                     Err(_) => break,
                 };
-                if snapshot.latest_update.finished
-                    || snapshot.last_step_at.elapsed() < LIVE_PROGRESS_PUBLISH_INTERVAL
+                if progress.finished
+                    || progress.last_step_at.elapsed() < LIVE_PROGRESS_PUBLISH_INTERVAL
                 {
                     continue;
                 }
 
-                let mut heartbeat_update = snapshot.latest_update.clone();
-                heartbeat_update.stats.wall_time_ns = heartbeat_update
+                let mut progress = progress;
+                progress.stats.wall_time_ns = progress
                     .stats
                     .wall_time_ns
-                    .max(saturating_nanos_u64(snapshot.stage_started_at.elapsed()));
-                let idle_for = snapshot.last_step_at.elapsed();
+                    .max(saturating_nanos_u64(progress.stage_started_at.elapsed()));
+                let idle_for = progress.last_step_at.elapsed();
                 let terminal_line = format_stage_progress_line(
                     &terminal_prefix,
-                    &heartbeat_update.stats,
+                    &progress.stats,
                     torque_mode,
                     Some(idle_for),
-                    heartbeat_update.hysteresis_field_m_t,
+                    progress.hysteresis_field_m_t,
                 );
                 eprintln!("{terminal_line}");
                 let heartbeat_message =
-                    format_stage_heartbeat_message(&ui_label, &heartbeat_update, idle_for);
+                    format_stage_heartbeat_message(&ui_label, &progress.stats, idle_for);
                 live_workspace.update(|state| {
-                    apply_live_step_update_to_workspace_state(
-                        state,
-                        &run_id,
-                        &session_id,
-                        &artifact_dir,
-                        &heartbeat_update,
-                        false,
+                    state.session.status = if progress.finished {
+                        "completed".to_string()
+                    } else {
+                        "running".to_string()
+                    };
+                    progress.apply_to_run(&mut state.run);
+                    state.live_state.status = state.session.status.clone();
+                    state.live_state.runtime_status = Some(
+                        fullmag_runner::RuntimeStatus::from_status_code(&state.session.status),
                     );
+                    state.live_state.updated_at_unix_ms = unix_time_millis().unwrap_or(0);
+                    progress.apply_to_live_step(&mut state.live_state.latest_step);
                     if let Some(stage_execution) = state.stage_execution.as_mut() {
                         if let Some(active_index) = stage_execution.active_stage_index {
                             if let Some(stage) = stage_execution.stages.get_mut(active_index) {
@@ -2067,15 +2118,9 @@ impl StageProgressHeartbeat {
         }
     }
 
-    fn record(&mut self, update: &fullmag_runner::StepUpdate) {
+    fn record(&mut self, update: &mut fullmag_runner::StepUpdate) {
         if let Ok(mut snapshot) = self.snapshot.lock() {
-            let mut update = update.clone();
-            preserve_frequency_response_progress_scalars_from_previous_update(
-                &snapshot.latest_update,
-                &mut update,
-            );
-            snapshot.latest_update = update;
-            snapshot.last_step_at = Instant::now();
+            snapshot.record(update);
         }
     }
 
@@ -2091,16 +2136,16 @@ impl StageProgressHeartbeat {
 
 fn format_stage_heartbeat_message(
     ui_label: &str,
-    update: &fullmag_runner::StepUpdate,
+    stats: &fullmag_runner::StepStats,
     idle_for: Duration,
 ) -> String {
     let mut message = format!(
         "{STAGE_HEARTBEAT_LOG_PREFIX}{ui_label}: last completed step {} at t={:.4e}, waiting {:.1}s for the next solver update",
-        update.stats.step,
-        update.stats.time,
+        stats.step,
+        stats.time,
         idle_for.as_secs_f64(),
     );
-    if let Some(progress) = frequency_response_step_progress_segment(&update.stats) {
+    if let Some(progress) = frequency_response_step_progress_segment(stats) {
         message.push_str("; ");
         message.push_str(&progress);
     }
@@ -2196,6 +2241,7 @@ fn fem_mesh_payload_from_backend_plan(
     }
 }
 
+#[cfg(test)]
 fn fem_live_mesh_payload_and_initial_magnetization(
     backend_plan: &BackendPlanIR,
 ) -> anyhow::Result<(fullmag_runner::FemMeshPayload, Vec<[f64; 3]>)> {
@@ -2215,10 +2261,11 @@ fn fem_live_mesh_payload_and_initial_magnetization(
 fn initial_live_state_manifest_from_backend_plan(
     update: &fullmag_runner::StepUpdate,
     backend_plan: &BackendPlanIR,
+    mesh_payload: Option<fullmag_runner::FemMeshPayload>,
     continuation_magnetization: Option<&[[f64; 3]]>,
-) -> anyhow::Result<LiveStateManifest> {
-    let mut live_state = live_state_manifest_from_update(update);
-    if let Some(mesh_payload) = fem_mesh_payload_from_backend_plan(backend_plan) {
+) -> anyhow::Result<(LiveStateManifest, Option<fullmag_runner::FemMeshPayload>)> {
+    let mut live_state = live_state_manifest_from_update(update.clone());
+    if let Some(mesh_payload) = mesh_payload.as_ref() {
         let initial_magnetization =
             current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
         if mesh_payload.nodes.len() != initial_magnetization.len() {
@@ -2228,10 +2275,10 @@ fn initial_live_state_manifest_from_backend_plan(
                 initial_magnetization.len()
             );
         }
-        live_state.latest_step.fem_mesh = Some(mesh_payload);
+        live_state.latest_step.fem_mesh_generation_id = mesh_payload.generation_id.clone();
         live_state.latest_step.magnetization = Some(flatten_magnetization(&initial_magnetization));
     }
-    Ok(live_state)
+    Ok((live_state, mesh_payload))
 }
 
 fn default_domain_region_markers(
@@ -4257,7 +4304,9 @@ fn execute_manual_interactive_remesh(
                     "quality_data_artifact": remesh_result.quality_data_artifact.clone(),
                 }));
                 live_workspace.update(|state| {
-                    state.live_state.latest_step.fem_mesh = Some(live_mesh_payload);
+                    state.live_state.latest_step.fem_mesh_generation_id =
+                        live_mesh_payload.generation_id.clone();
+                    state.fem_mesh = Some(live_mesh_payload);
                     state.live_state.latest_step.magnetization =
                         Some(flatten_magnetization(&remeshed_magnetization));
                     let mut workspace = current_fem_mesh_workspace(
@@ -4399,6 +4448,7 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
     stage: &mut ResolvedScriptStage,
     execution_plan: &mut ExecutionPlanIR,
     stage_result: &mut fullmag_runner::RunResult,
+    stage_fem_mesh_asset: &mut Option<fullmag_runner::StageFemMeshAsset>,
     live_workspace: &LocalLiveWorkspace,
     stage_index: usize,
     stage_count: usize,
@@ -4778,10 +4828,11 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
 
         let candidate_execution_plan =
             fullmag_plan::plan(&candidate_stage.ir).map_err(|error| anyhow!(error.to_string()))?;
-        let mesh_payload = fem_mesh_payload_from_backend_plan(
+        let remeshed_mesh_asset = fullmag_runner::StageFemMeshAsset::build_from_backend_plan(
             &candidate_execution_plan.backend_plan,
         )
         .ok_or_else(|| anyhow!("adaptive FEM replan did not produce an exact FEM mesh payload"))?;
+        let mesh_payload = remeshed_mesh_asset.payload.clone();
 
         // Commit only after transfer, marker propagation, IR validation and replanning succeed.
         *stage = candidate_stage;
@@ -4809,7 +4860,9 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
         }));
         live_workspace.update(|state| {
             state.metadata = Some(current_live_metadata(&stage.ir, execution_plan, "running"));
-            state.live_state.latest_step.fem_mesh = Some(mesh_payload);
+            state.live_state.latest_step.fem_mesh_generation_id =
+                mesh_payload.generation_id.clone();
+            state.fem_mesh = Some(mesh_payload);
             state.live_state.latest_step.magnetization =
                 Some(flatten_magnetization(&transferred_magnetization));
             state.mesh_workspace = current_mesh_workspace(
@@ -4836,13 +4889,14 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
             current_stage_artifact_dir.join(format!("adaptive_pass_{:02}", remesh_pass_count));
         fs::create_dir_all(&pass_output_dir)?;
         let adaptive_pass_label = format!("adaptive remesh pass {}", remesh_pass_count);
+        let mut adaptive_initial_update = initial_step_update(
+            &execution_plan.backend_plan,
+            Some(remeshed_mesh_asset.identity.generation_id().to_string()),
+        );
+        adaptive_initial_update.stats.step += global_step_offset + local_step_offset;
+        adaptive_initial_update.stats.time += global_time_offset + local_time_offset;
         let mut stage_heartbeat = Some(StageProgressHeartbeat::spawn(
-            offset_step_update(
-                &initial_step_update(&execution_plan.backend_plan),
-                global_step_offset + local_step_offset,
-                global_time_offset + local_time_offset,
-                false,
-            ),
+            adaptive_initial_update,
             live_workspace.clone(),
             run_id.to_string(),
             session_id.to_string(),
@@ -4852,31 +4906,40 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
             torque_mode,
         ));
         let mut live_cadence = LiveProgressCadence::default();
-        let pass_result = fullmag_runner::run_problem_with_callback(
+        let pass_result = fullmag_runner::run_planned_problem_with_callback_and_fem_mesh_identity(
             &stage.ir,
+            execution_plan,
+            Some(&remeshed_mesh_asset.identity),
             stage.until_seconds,
             &pass_output_dir,
             field_every_n,
             |update| {
-                let adjusted = offset_step_update(
-                    &update,
+                let callback_start = solver_profile_callback_start(live_workspace);
+                let mut adjusted = offset_step_update(
+                    update,
                     global_step_offset + local_step_offset,
                     global_time_offset + local_time_offset,
                     false,
                 );
                 if let Some(heartbeat) = stage_heartbeat.as_mut() {
-                    heartbeat.record(&adjusted);
+                    heartbeat.record(&mut adjusted);
                 }
+                let profile_record = begin_solver_profile_step_with_orchestration(
+                    live_workspace,
+                    &mut adjusted.stats,
+                    callback_start,
+                );
                 if live_cadence.should_publish(&adjusted) {
-                    live_workspace.update(|state| {
-                        apply_live_step_update_to_workspace_state(
+                    let mut next_adjusted = None;
+                    let timings = live_workspace.update_profiled(|state| {
+                        next_adjusted = Some(apply_live_step_update_to_workspace_state(
                             state,
                             run_id,
                             session_id,
                             artifact_dir,
-                            &adjusted,
+                            adjusted,
                             true,
-                        );
+                        ));
                         state.metadata =
                             Some(current_live_metadata(&stage.ir, execution_plan, "running"));
                         state.mesh_workspace = current_mesh_workspace(
@@ -4887,7 +4950,22 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
                             current_mesh_history,
                         );
                     });
+                    adjusted = next_adjusted
+                        .expect("adaptive live update should be consumed under workspace lock");
+                    adjusted.stats.live_state_build_wall_time_ns = adjusted
+                        .stats
+                        .live_state_build_wall_time_ns
+                        .saturating_add(timings.live_state_build_wall_time_ns);
+                    adjusted.stats.publisher_replace_wall_time_ns = adjusted
+                        .stats
+                        .publisher_replace_wall_time_ns
+                        .saturating_add(timings.publisher_replace_wall_time_ns);
                 }
+                finish_solver_profile_step_with_orchestration(
+                    live_workspace,
+                    callback_start,
+                    profile_record,
+                );
                 fullmag_runner::StepAction::Continue
             },
         );
@@ -4905,6 +4983,7 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
         stage_result.steps.extend(pass_steps);
         stage_result.final_magnetization = pass_result.final_magnetization;
         stage_result.status = pass_result.status;
+        *stage_fem_mesh_asset = Some(remeshed_mesh_asset);
 
         eprintln!(
             "stage {}/{} ({}) adaptive pass {} complete",
@@ -5260,7 +5339,7 @@ fn refresh_problem_energy_state(
 fn is_control_checkpoint_only(update: &fullmag_runner::StepUpdate) -> bool {
     update.preview_field.is_none()
         && !update.scalar_row_due
-        && update.fem_mesh.is_none()
+        && update.fem_mesh_generation_id.is_none()
         && update.magnetization.is_none()
         && !update.finished
 }
@@ -5297,6 +5376,7 @@ fn wait_for_solve_prompt(backend_plan: &BackendPlanIR) -> &'static str {
 enum WaitForSolveCommandAction {
     RefreshFields,
     RefreshEnergies,
+    ConfigureProfiler,
     StartSolver,
     Remesh,
     Stop,
@@ -5307,6 +5387,7 @@ fn classify_wait_for_solve_command(kind: &str) -> WaitForSolveCommandAction {
     match kind {
         "compute_fields" => WaitForSolveCommandAction::RefreshFields,
         "compute_energies" => WaitForSolveCommandAction::RefreshEnergies,
+        "set_solver_profile" => WaitForSolveCommandAction::ConfigureProfiler,
         "solve" | "compute" | "run" => WaitForSolveCommandAction::StartSolver,
         "remesh" => WaitForSolveCommandAction::Remesh,
         "stop" => WaitForSolveCommandAction::Stop,
@@ -5850,6 +5931,35 @@ fn execute_synthetic_stage(
 
 // ── main orchestration entry point ───────────────────────────────────────────
 
+fn resolve_preview_field_every_n(
+    preview_3d_disabled: bool,
+    requested_backend_name: &str,
+    override_raw: Option<&str>,
+) -> Result<u64> {
+    if preview_3d_disabled {
+        return Ok(u64::MAX);
+    }
+    if let Some(raw) = override_raw {
+        let every_n = match raw.trim().parse::<u64>() {
+            Ok(every_n) => every_n,
+            Err(_) => bail!("FULLMAG_PREVIEW_EVERY_N must be a positive integer, got '{raw}'"),
+        };
+        if every_n == 0 || every_n > u64::from(u32::MAX) {
+            bail!(
+                "FULLMAG_PREVIEW_EVERY_N must be between 1 and {}, got {}",
+                u32::MAX,
+                every_n
+            );
+        }
+        return Ok(every_n);
+    }
+    Ok(if requested_backend_name == "fem" {
+        10
+    } else {
+        50
+    })
+}
+
 pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let args = ScriptCli::parse_from(raw_args);
     if args.headless {
@@ -5953,15 +6063,19 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     // When 3D preview is disabled, set field_every_n to infinity to skip expensive computations.
     // Keep FEM cadence aligned with interactive control-room expectations:
     // too-large step intervals make 3D magnetization look "stuck" even while
-    // the run progresses in wall-clock time.
+    // the run progresses in wall-clock time. The explicit override exists for
+    // reproducible preview performance qualification and applies to both the
+    // active field and the cached-field refresh cadence.
     let preview_3d_disabled = crate::live_workspace::feature_flags().disable_preview_3d;
-    let field_every_n: u64 = if preview_3d_disabled {
-        u64::MAX
-    } else if requested_backend_name == "fem" {
-        10
-    } else {
-        50
-    };
+    let preview_every_n_override_raw = std::env::var("FULLMAG_PREVIEW_EVERY_N").ok();
+    let field_every_n = resolve_preview_field_every_n(
+        preview_3d_disabled,
+        &requested_backend_name,
+        preview_every_n_override_raw.as_deref(),
+    )?;
+    let preview_every_n_override = preview_every_n_override_raw
+        .as_ref()
+        .map(|_| field_every_n as u32);
     let current_live_publisher = CurrentLivePublisher::spawn(&session_id);
     let bootstrapping_runtime = requested_runtime_selection(
         &requested_backend_name,
@@ -5999,6 +6113,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             session: bootstrapping_session_manifest.clone(),
             run: bootstrapping_run_manifest.clone(),
             live_state: bootstrap_live_state_manifest.clone(),
+            fem_mesh: None,
             metadata: None,
             mesh_workspace: None,
             stage_execution: None,
@@ -6007,7 +6122,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             latest_fields: CurrentLiveLatestFields::default(),
             preview_fields: CurrentLivePreviewFieldCache::default(),
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
+            superseded_pending_preview_fields: Vec::new(),
             clear_preview_cache: false,
+            preview_cache_revision: 0,
             engine_log: Vec::new(),
             solver_profile: fullmag_runner::SolverProfileState::default(),
             published_fem_mesh_generation_id: None,
@@ -6297,6 +6414,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     live_state.latest_step.finished = true;
                     live_state
                 },
+                fem_mesh: failed_snapshot.fem_mesh,
                 metadata: failed_snapshot.metadata,
                 mesh_workspace: failed_snapshot.mesh_workspace,
                 stage_execution: None,
@@ -6305,7 +6423,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 latest_fields: CurrentLiveLatestFields::default(),
                 preview_fields: CurrentLivePreviewFieldCache::default(),
                 pending_preview_fields: CurrentLivePreviewFieldCache::default(),
+                superseded_pending_preview_fields: Vec::new(),
                 clear_preview_cache: false,
+                preview_cache_revision: 0,
                 engine_log: failed_snapshot.engine_log,
                 solver_profile: fullmag_runner::SolverProfileState::default(),
                 published_fem_mesh_generation_id: None,
@@ -6354,6 +6474,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         mut current_plan_summary,
         initial_execution_plan,
         initial_live_state,
+        initial_fem_mesh,
+        mut initial_fem_mesh_asset,
     ) = run_solver_initialization(&live_workspace, !solver_initialization_required, || {
         let initial_magnetization_override = run_solver_initialization_safety_check(
             &live_workspace,
@@ -6393,13 +6515,24 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             },
         )?;
         let initial_execution_plan = stage_execution_plans[0].clone();
-        let initial_update = initial_step_update(&initial_execution_plan.backend_plan);
+        let initial_fem_mesh_asset = fullmag_runner::StageFemMeshAsset::build_from_backend_plan(
+            &initial_execution_plan.backend_plan,
+        );
+        let initial_update = initial_step_update(
+            &initial_execution_plan.backend_plan,
+            initial_fem_mesh_asset
+                .as_ref()
+                .map(|asset| asset.identity.generation_id().to_string()),
+        );
         let initial_magnetization_override_values = initial_magnetization_override
             .as_ref()
             .map(|state| state.values.clone());
-        let initial_live_state = initial_live_state_manifest_from_backend_plan(
+        let (initial_live_state, initial_fem_mesh) = initial_live_state_manifest_from_backend_plan(
             &initial_update,
             &initial_execution_plan.backend_plan,
+            initial_fem_mesh_asset
+                .as_ref()
+                .map(|asset| asset.payload.clone()),
             initial_magnetization_override_values.as_deref(),
         )?;
         Ok((
@@ -6407,6 +6540,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             current_plan_summary,
             initial_execution_plan,
             initial_live_state,
+            initial_fem_mesh,
+            initial_fem_mesh_asset,
         ))
     })?;
     let mut current_mesh_history = Vec::<serde_json::Value>::new();
@@ -6505,6 +6640,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         ),
         run: build_run_manifest(&run_id, &session_id, "running", &artifact_dir),
         live_state: initial_live_state,
+        fem_mesh: initial_fem_mesh,
         metadata: Some(current_live_metadata(
             &stages[0].ir,
             &initial_execution_plan,
@@ -6526,7 +6662,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         latest_fields: CurrentLiveLatestFields::default(),
         preview_fields: CurrentLivePreviewFieldCache::default(),
         pending_preview_fields: CurrentLivePreviewFieldCache::default(),
+        superseded_pending_preview_fields: Vec::new(),
         clear_preview_cache: false,
+        preview_cache_revision: 0,
         engine_log: previous_workspace.engine_log,
         solver_profile: fullmag_runner::SolverProfileState::default(),
         published_fem_mesh_generation_id: None,
@@ -6574,6 +6712,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     // If the script declared `fm.visualization(active_quantity_id="...")`, push a
     // synthetic display-sync so the control room opens on that quantity.
     // If airbox or geometry hints are present, patch visualization overrides once.
+    let mut initial_display_hint_applied = false;
     if let Some(viz_hint) = stages[0]
         .ir
         .problem_meta
@@ -6582,7 +6721,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     {
         if let Some(qty) = viz_hint.get("active_quantity_id").and_then(|v| v.as_str()) {
             if !qty.is_empty() {
-                display_selection_handle.set_quantity_hint(qty);
+                display_selection_handle.set_quantity_hint(qty, preview_every_n_override);
+                initial_display_hint_applied = true;
             }
         }
 
@@ -6918,6 +7058,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             }
         }
     }
+    if !initial_display_hint_applied {
+        if let Some(every_n) = preview_every_n_override {
+            display_selection_handle.set_quantity_hint("m", Some(every_n));
+        }
+    }
 
     // ── wait_for_solve gate ──────────────────────────────────────────────
     let wait_for_solve_requested = stages
@@ -7089,7 +7234,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                     new_ram as f64 / 1e9
                                 );
 
-                                let (live_mesh_payload, remeshed_magnetization, remeshed_plan) = {
+                                let (remeshed_mesh_asset, remeshed_magnetization, remeshed_plan) = {
                                     let mut remeshed_problem = stages[0].ir.clone();
                                     apply_current_fem_overrides(
                                         &mut remeshed_problem,
@@ -7138,14 +7283,22 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                     }
                                     let remeshed_plan = fullmag_plan::plan(&remeshed_problem)
                                         .map_err(|error| anyhow!(error.to_string()))?;
-                                    let (mesh_payload, magnetization) =
-                                        fem_live_mesh_payload_and_initial_magnetization(
-                                            &remeshed_plan.backend_plan,
-                                        )
-                                        .context(
-                                            "auto-coarsen updated backend plan is inconsistent",
-                                        )?;
-                                    (mesh_payload, magnetization, remeshed_plan)
+                                    let mesh_asset = fullmag_runner::StageFemMeshAsset::build_from_backend_plan(
+                                        &remeshed_plan.backend_plan,
+                                    )
+                                    .ok_or_else(|| anyhow!("auto-coarsen updated backend plan did not produce a FEM mesh asset"))?;
+                                    let magnetization = current_stage_magnetization_vectors(
+                                        None,
+                                        &remeshed_plan.backend_plan,
+                                    );
+                                    if mesh_asset.payload.nodes.len() != magnetization.len() {
+                                        bail!(
+                                            "auto-coarsen FEM mesh has {} nodes but initial magnetization has {} vectors",
+                                            mesh_asset.payload.nodes.len(),
+                                            magnetization.len()
+                                        );
+                                    }
+                                    (mesh_asset, magnetization, remeshed_plan)
                                 };
                                 let prepared_remesh = prepare_remesh_stage_transaction(
                                     &stages,
@@ -7161,6 +7314,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 )?;
 
                                 if new_ram <= ram_budget {
+                                    let live_mesh_payload = remeshed_mesh_asset.payload.clone();
+                                    initial_fem_mesh_asset = Some(remeshed_mesh_asset);
                                     current_mesh_quality = remesh_result.quality.clone();
                                     current_fem_mesh_override = Some(new_mesh.clone());
                                     current_fem_hmax_override = Some(current_hmax);
@@ -7179,8 +7334,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                         "quality_data_artifact": remesh_result.quality_data_artifact.clone(),
                                     }));
                                     live_workspace.update(|state| {
-                                        state.live_state.latest_step.fem_mesh =
-                                            Some(live_mesh_payload);
+                                        state.live_state.latest_step.fem_mesh_generation_id =
+                                            live_mesh_payload.generation_id.clone();
+                                        state.fem_mesh = Some(live_mesh_payload);
                                         state.live_state.latest_step.magnetization =
                                             Some(flatten_magnetization(&remeshed_magnetization));
                                         state.mesh_workspace = Some(current_fem_mesh_workspace(
@@ -7377,6 +7533,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         Err(error) => live_workspace
                             .push_log("error", format!("Compute energies failed: {}", error)),
                     }
+                    continue;
+                }
+                WaitForSolveCommandAction::ConfigureProfiler => {
+                    apply_solver_profile_command(&live_workspace, &cmd);
                     continue;
                 }
                 WaitForSolveCommandAction::StartSolver => {
@@ -7577,8 +7737,18 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 .get("sampling_resolution"),
         )?;
 
+        let mut stage_fem_mesh_asset = if stage_index == 0 {
+            initial_fem_mesh_asset.take()
+        } else {
+            fullmag_runner::StageFemMeshAsset::build_from_backend_plan(&execution_plan.backend_plan)
+        };
         let stage_initial_update = offset_step_update(
-            &initial_step_update(&execution_plan.backend_plan),
+            initial_step_update(
+                &execution_plan.backend_plan,
+                stage_fem_mesh_asset
+                    .as_ref()
+                    .map(|asset| asset.identity.generation_id().to_string()),
+            ),
             step_offset,
             time_offset,
             false,
@@ -7627,7 +7797,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 &artifact_dir,
                 &stage_initial_update,
             );
-            state.live_state = live_state_manifest_from_update(&stage_initial_update);
+            state.live_state = live_state_manifest_from_update(stage_initial_update.clone());
             state.stage_execution = Some(scripted_stage_execution_state(
                 stage_count,
                 stage_index,
@@ -7703,6 +7873,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             let synthetic_stats = aggregated_steps.last().cloned().unwrap_or_default();
             let final_update = snapshot_step_update_from_stats(
                 &execution_plan.backend_plan,
+                stage_fem_mesh_asset
+                    .as_ref()
+                    .map(|asset| asset.identity.generation_id().to_string()),
                 synthetic_stats,
                 &synthetic_outcome.magnetization,
                 is_session_final_stage,
@@ -7720,7 +7893,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     &artifact_dir,
                     &final_update,
                 );
-                state.live_state = live_state_manifest_from_update(&final_update);
+                state.live_state = live_state_manifest_from_update(final_update.clone());
                 state.stage_execution = Some(scripted_stage_execution_state(
                     stage_count,
                     stage_index,
@@ -7785,7 +7958,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         );
         let mut stage_heartbeat = use_live_callback.then(|| {
             StageProgressHeartbeat::spawn(
-                stage_initial_update.clone(),
+                stage_initial_update,
                 live_workspace.clone(),
                 run_id.clone(),
                 session_id.clone(),
@@ -7800,9 +7973,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 let mut live_cadence = LiveProgressCadence::default();
                 let display_selection = || display_selection_handle.display_selection_snapshot();
                 let interrupt_signal = display_selection_handle.running_interrupt_signal();
-                fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id(
+                fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id_and_fem_mesh_identity(
                     &stage.ir,
                     &execution_plan,
+                    stage_fem_mesh_asset.as_ref().map(|asset| &asset.identity),
                     stage.until_seconds,
                     &current_stage_artifact_dir,
                     field_every_n,
@@ -7811,51 +7985,56 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     !args.headless && !preview_3d_disabled,
                     Some(&current_stage_id),
                     |update| {
-                        let callback_start = Instant::now();
-                        let adjusted = offset_step_update(
-                            &update,
+                        let callback_start = solver_profile_callback_start(&live_workspace);
+                        let finished = update.finished && is_session_final_stage;
+                        let mut adjusted = offset_step_update(
+                            update,
                             step_offset,
                             time_offset,
-                            update.finished && is_session_final_stage,
+                            finished,
                         );
                         if let Some(heartbeat) = stage_heartbeat.as_mut() {
-                            heartbeat.record(&adjusted);
+                            heartbeat.record(&mut adjusted);
                         }
                         drain_solver_profile_commands(&display_selection_handle, &live_workspace);
+                        let profile_record = begin_solver_profile_step_with_orchestration(
+                            &live_workspace,
+                            &mut adjusted.stats,
+                            callback_start,
+                        );
                         if is_control_checkpoint_only(&adjusted) {
                             if live_cadence.should_publish(&adjusted) {
-                                publish_live_step_update(
+                                adjusted = publish_live_step_update(
                                     &live_workspace,
                                     &run_id,
                                     &session_id,
                                     &artifact_dir,
-                                    &adjusted,
+                                    adjusted,
                                     false,
                                 );
                             }
                             if let Some(action) = display_selection_handle.process_running_control()
                             {
-                                record_solver_profile_step_with_orchestration(
+                                finish_solver_profile_step_with_orchestration(
                                     &live_workspace,
-                                    &adjusted.stats,
                                     callback_start,
+                                    profile_record,
                                 );
                                 return action;
                             }
-                            record_solver_profile_step_with_orchestration(
+                            finish_solver_profile_step_with_orchestration(
                                 &live_workspace,
-                                &adjusted.stats,
                                 callback_start,
+                                profile_record,
                             );
                             return fullmag_runner::StepAction::Continue;
                         }
-                        let s = &adjusted.stats;
                         if live_cadence.should_log(&adjusted) {
                             eprintln!(
                                 "{}",
                                 format_stage_progress_line(
                                     &stage_progress_label,
-                                    s,
+                                    &adjusted.stats,
                                     torque_mode,
                                     None,
                                     adjusted.hysteresis_field_m_t,
@@ -7864,27 +8043,27 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         }
 
                         if live_cadence.should_publish(&adjusted) {
-                            publish_live_step_update(
+                            adjusted = publish_live_step_update(
                                 &live_workspace,
                                 &run_id,
                                 &session_id,
                                 &artifact_dir,
-                                &adjusted,
+                                adjusted,
                                 true,
                             );
                         }
                         if let Some(action) = display_selection_handle.process_running_control() {
-                            record_solver_profile_step_with_orchestration(
+                            finish_solver_profile_step_with_orchestration(
                                 &live_workspace,
-                                s,
                                 callback_start,
+                                profile_record,
                             );
                             return action;
                         }
-                        record_solver_profile_step_with_orchestration(
+                        finish_solver_profile_step_with_orchestration(
                             &live_workspace,
-                            s,
                             callback_start,
+                            profile_record,
                         );
                         fullmag_runner::StepAction::Continue
                     },
@@ -7899,24 +8078,25 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     field_every_n,
                     Some(&current_stage_id),
                     |update| {
-                        let callback_start = Instant::now();
-                        let adjusted = offset_step_update(
-                            &update,
-                            step_offset,
-                            time_offset,
-                            update.finished && is_session_final_stage,
-                        );
-                        let s = &adjusted.stats;
+                        let callback_start = solver_profile_callback_start(&live_workspace);
+                        let finished = update.finished && is_session_final_stage;
+                        let mut adjusted =
+                            offset_step_update(update, step_offset, time_offset, finished);
                         if let Some(heartbeat) = stage_heartbeat.as_mut() {
-                            heartbeat.record(&adjusted);
+                            heartbeat.record(&mut adjusted);
                         }
                         drain_solver_profile_commands(&display_selection_handle, &live_workspace);
+                        let profile_record = begin_solver_profile_step_with_orchestration(
+                            &live_workspace,
+                            &mut adjusted.stats,
+                            callback_start,
+                        );
                         if live_cadence.should_log(&adjusted) {
                             eprintln!(
                                 "{}",
                                 format_stage_progress_line(
                                     &stage_progress_label,
-                                    s,
+                                    &adjusted.stats,
                                     torque_mode,
                                     None,
                                     adjusted.hysteresis_field_m_t,
@@ -7925,19 +8105,19 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         }
 
                         if live_cadence.should_publish(&adjusted) {
-                            publish_live_step_update(
+                            adjusted = publish_live_step_update(
                                 &live_workspace,
                                 &run_id,
                                 &session_id,
                                 &artifact_dir,
-                                &adjusted,
+                                adjusted,
                                 true,
                             );
                         }
-                        record_solver_profile_step_with_orchestration(
+                        finish_solver_profile_step_with_orchestration(
                             &live_workspace,
-                            s,
                             callback_start,
+                            profile_record,
                         );
                         fullmag_runner::StepAction::Continue
                     },
@@ -8005,6 +8185,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             &mut stage,
             &mut execution_plan,
             &mut stage_result,
+            &mut stage_fem_mesh_asset,
             &live_workspace,
             stage_index,
             stage_count,
@@ -8050,14 +8231,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 | BackendPlanIR::FemEigen(_)
                 | BackendPlanIR::FemFrequencyResponse(_) => [0, 0, 0],
             };
-            let fem_mesh = match &execution_plan.backend_plan {
-                BackendPlanIR::Fem(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
-                BackendPlanIR::FemEigen(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
-                BackendPlanIR::FemFrequencyResponse(fem) => {
-                    Some(fullmag_runner::FemMeshPayload::from(fem))
-                }
-                BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
-            };
+            let fem_mesh_generation_id = stage_fem_mesh_asset
+                .as_ref()
+                .map(|asset| asset.identity.generation_id().to_string());
             let mut live_cadence = LiveProgressCadence::default();
             for (index, stats) in stage_result.steps.iter().enumerate() {
                 let is_final_step = index + 1 == stage_result.steps.len();
@@ -8067,7 +8243,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         .next()
                         .expect("single step should offset"),
                     grid,
-                    fem_mesh: fem_mesh.clone(),
+                    fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                     magnetization: if is_final_step
                         && is_session_final_stage
                         && matches!(&execution_plan.backend_plan, BackendPlanIR::Fdm(_))
@@ -8099,7 +8275,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             &artifact_dir,
                             &update,
                         );
-                        state.live_state = live_state_manifest_from_update(&update);
+                        state.live_state = live_state_manifest_from_update(update.clone());
                         set_latest_scalar_row_if_due(state, &update);
                     });
                 }
@@ -8108,6 +8284,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
         if let Some(final_update) = final_stage_step_update(
             &execution_plan.backend_plan,
+            stage_fem_mesh_asset
+                .as_ref()
+                .map(|asset| asset.identity.generation_id().to_string()),
             &stage_result.steps,
             &stage_result.final_magnetization,
             step_offset,
@@ -8126,7 +8305,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     &artifact_dir,
                     &final_update,
                 );
-                state.live_state = live_state_manifest_from_update(&final_update);
+                state.live_state = live_state_manifest_from_update(final_update.clone());
                 set_latest_scalar_row_if_due(state, &final_update);
             });
         }
@@ -8932,8 +9111,16 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     .get("sampling_resolution"),
             )?;
             let running_at_unix_ms = unix_time_millis()?;
+            let stage_fem_mesh_asset = fullmag_runner::StageFemMeshAsset::build_from_backend_plan(
+                &execution_plan.backend_plan,
+            );
             let stage_initial_update = offset_step_update(
-                &initial_step_update(&execution_plan.backend_plan),
+                initial_step_update(
+                    &execution_plan.backend_plan,
+                    stage_fem_mesh_asset
+                        .as_ref()
+                        .map(|asset| asset.identity.generation_id().to_string()),
+                ),
                 step_offset,
                 time_offset,
                 false,
@@ -8971,7 +9158,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 state.stage_execution = active_sequence.as_ref().map(|sequence| {
                     sequence.stage_execution(Some(&stage.entrypoint_kind), "running")
                 });
-                state.live_state = live_state_manifest_from_update(&stage_initial_update);
+                state.live_state = live_state_manifest_from_update(stage_initial_update.clone());
                 clear_cached_preview_fields(state);
             });
 
@@ -8979,7 +9166,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             let interactive_progress_label = format!("interactive {}", stage.entrypoint_kind);
             let mut stage_heartbeat = use_live_callback.then(|| {
                 StageProgressHeartbeat::spawn(
-                    stage_initial_update.clone(),
+                    stage_initial_update,
                     live_workspace.clone(),
                     run_id.clone(),
                     session_id.clone(),
@@ -8996,45 +9183,50 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     let display_selection = || running_control.display_selection_snapshot();
                     let interrupt_signal = running_control.running_interrupt_signal();
                     let mut on_step = |update| {
-                        let callback_start = Instant::now();
-                        let adjusted = offset_step_update(&update, step_offset, time_offset, false);
+                        let callback_start = solver_profile_callback_start(&live_workspace);
+                        let mut adjusted =
+                            offset_step_update(update, step_offset, time_offset, false);
                         if let Some(heartbeat) = stage_heartbeat.as_mut() {
-                            heartbeat.record(&adjusted);
+                            heartbeat.record(&mut adjusted);
                         }
                         drain_solver_profile_commands(&running_control, &live_workspace);
+                        let profile_record = begin_solver_profile_step_with_orchestration(
+                            &live_workspace,
+                            &mut adjusted.stats,
+                            callback_start,
+                        );
                         if is_control_checkpoint_only(&adjusted) {
                             if live_cadence.should_publish(&adjusted) {
-                                publish_live_step_update(
+                                adjusted = publish_live_step_update(
                                     &live_workspace,
                                     &run_id,
                                     &session_id,
                                     &artifact_dir,
-                                    &adjusted,
+                                    adjusted,
                                     false,
                                 );
                             }
                             if let Some(action) = running_control.process_running_control() {
-                                record_solver_profile_step_with_orchestration(
+                                finish_solver_profile_step_with_orchestration(
                                     &live_workspace,
-                                    &adjusted.stats,
                                     callback_start,
+                                    profile_record,
                                 );
                                 return action;
                             }
-                            record_solver_profile_step_with_orchestration(
+                            finish_solver_profile_step_with_orchestration(
                                 &live_workspace,
-                                &adjusted.stats,
                                 callback_start,
+                                profile_record,
                             );
                             return fullmag_runner::StepAction::Continue;
                         }
-                        let s = &adjusted.stats;
                         if live_cadence.should_log(&adjusted) {
                             eprintln!(
                                 "{}",
                                 format_stage_progress_line(
                                     &interactive_progress_label,
-                                    s,
+                                    &adjusted.stats,
                                     torque_mode,
                                     None,
                                     adjusted.hysteresis_field_m_t,
@@ -9043,28 +9235,28 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         }
 
                         if live_cadence.should_publish(&adjusted) {
-                            publish_live_step_update(
+                            adjusted = publish_live_step_update(
                                 &live_workspace,
                                 &run_id,
                                 &session_id,
                                 &artifact_dir,
-                                &adjusted,
+                                adjusted,
                                 true,
                             );
                         }
 
                         if let Some(action) = running_control.process_running_control() {
-                            record_solver_profile_step_with_orchestration(
+                            finish_solver_profile_step_with_orchestration(
                                 &live_workspace,
-                                s,
                                 callback_start,
+                                profile_record,
                             );
                             return action;
                         }
-                        record_solver_profile_step_with_orchestration(
+                        finish_solver_profile_step_with_orchestration(
                             &live_workspace,
-                            s,
                             callback_start,
+                            profile_record,
                         );
                         fullmag_runner::StepAction::Continue
                     };
@@ -9079,6 +9271,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         if let Err(error) = interactive_runtime_host.ensure_runtime_for_problem(
                             &stage.ir,
                             &execution_plan,
+                            stage_fem_mesh_asset.as_ref(),
                             continuation_magnetization.as_deref(),
                             &live_workspace,
                         ) {
@@ -9094,9 +9287,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     }
 
                     if hysteresis_study {
-                        fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id(
+                        fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id_and_fem_mesh_identity(
                             &stage.ir,
                             &execution_plan,
+                            stage_fem_mesh_asset.as_ref().map(|asset| &asset.identity),
                             stage.until_seconds,
                             &current_stage_artifact_dir,
                             field_every_n,
@@ -9119,9 +9313,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             &mut on_step,
                         )
                     } else {
-                        fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id(
+                        fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id_and_fem_mesh_identity(
                             &stage.ir,
                             &execution_plan,
+                            stage_fem_mesh_asset.as_ref().map(|asset| &asset.identity),
                             stage.until_seconds,
                             &current_stage_artifact_dir,
                             field_every_n,
@@ -9142,20 +9337,24 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         field_every_n,
                         Some(&current_stage_id),
                         |update| {
-                            let callback_start = Instant::now();
-                            let adjusted =
-                                offset_step_update(&update, step_offset, time_offset, false);
-                            let s = &adjusted.stats;
+                            let callback_start = solver_profile_callback_start(&live_workspace);
+                            let mut adjusted =
+                                offset_step_update(update, step_offset, time_offset, false);
                             if let Some(heartbeat) = stage_heartbeat.as_mut() {
-                                heartbeat.record(&adjusted);
+                                heartbeat.record(&mut adjusted);
                             }
                             drain_solver_profile_commands(&running_control, &live_workspace);
+                            let profile_record = begin_solver_profile_step_with_orchestration(
+                                &live_workspace,
+                                &mut adjusted.stats,
+                                callback_start,
+                            );
                             if live_cadence.should_log(&adjusted) {
                                 eprintln!(
                                     "{}",
                                     format_stage_progress_line(
                                         &interactive_progress_label,
-                                        s,
+                                        &adjusted.stats,
                                         torque_mode,
                                         None,
                                         adjusted.hysteresis_field_m_t,
@@ -9164,30 +9363,28 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             }
 
                             if live_cadence.should_publish(&adjusted) {
-                                live_workspace.update(|state| {
-                                    apply_live_step_update_to_workspace_state(
-                                        state,
-                                        &run_id,
-                                        &session_id,
-                                        &artifact_dir,
-                                        &adjusted,
-                                        true,
-                                    );
-                                });
+                                adjusted = publish_live_step_update(
+                                    &live_workspace,
+                                    &run_id,
+                                    &session_id,
+                                    &artifact_dir,
+                                    adjusted,
+                                    true,
+                                );
                             }
 
                             if let Some(action) = running_control.process_running_control() {
-                                record_solver_profile_step_with_orchestration(
+                                finish_solver_profile_step_with_orchestration(
                                     &live_workspace,
-                                    s,
                                     callback_start,
+                                    profile_record,
                                 );
                                 return action;
                             }
-                            record_solver_profile_step_with_orchestration(
+                            finish_solver_profile_step_with_orchestration(
                                 &live_workspace,
-                                s,
                                 callback_start,
+                                profile_record,
                             );
                             fullmag_runner::StepAction::Continue
                         },
@@ -9608,14 +9805,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     | BackendPlanIR::FemEigen(_)
                     | BackendPlanIR::FemFrequencyResponse(_) => [0, 0, 0],
                 };
-                let fem_mesh = match &execution_plan.backend_plan {
-                    BackendPlanIR::Fem(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
-                    BackendPlanIR::FemEigen(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
-                    BackendPlanIR::FemFrequencyResponse(fem) => {
-                        Some(fullmag_runner::FemMeshPayload::from(fem))
-                    }
-                    BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
-                };
+                let fem_mesh_generation_id = stage_fem_mesh_asset
+                    .as_ref()
+                    .map(|asset| asset.identity.generation_id().to_string());
                 let mut live_cadence = LiveProgressCadence::default();
                 for stats in &stage_result.steps {
                     let update = fullmag_runner::StepUpdate {
@@ -9628,7 +9820,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         .next()
                         .expect("single step should offset"),
                         grid,
-                        fem_mesh: fem_mesh.clone(),
+                        fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                         magnetization: None,
                         preview_field: None,
                         cached_preview_fields: None,
@@ -9649,7 +9841,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 &artifact_dir,
                                 &update,
                             );
-                            state.live_state = live_state_manifest_from_update(&update);
+                            state.live_state = live_state_manifest_from_update(update.clone());
                             set_latest_scalar_row_if_due(state, &update);
                         });
                     }
@@ -9658,6 +9850,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
             if let Some(final_update) = final_stage_step_update(
                 &execution_plan.backend_plan,
+                stage_fem_mesh_asset
+                    .as_ref()
+                    .map(|asset| asset.identity.generation_id().to_string()),
                 &stage_result.steps,
                 &stage_result.final_magnetization,
                 step_offset,
@@ -9676,7 +9871,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         &artifact_dir,
                         &final_update,
                     );
-                    state.live_state = live_state_manifest_from_update(&final_update);
+                    state.live_state = live_state_manifest_from_update(final_update.clone());
                     set_latest_scalar_row_if_due(state, &final_update);
                 });
             }
@@ -9850,6 +10045,14 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         final_e_dmi: aggregated_steps.last().map(|step| step.e_dmi),
         final_e_total: aggregated_steps.last().map(|step| step.e_total),
         wall_time_ns: aggregated_steps.last().map(|step| step.wall_time_ns),
+        backend_create_wall_time_ns: aggregated_steps
+            .iter()
+            .map(|step| step.backend_create_wall_time_ns)
+            .find(|duration| *duration > 0),
+        first_accepted_step_demag_solver_apply_wall_time_ns: aggregated_steps
+            .iter()
+            .map(|step| step.demag_solver_apply_wall_time_ns)
+            .find(|duration| *duration > 0),
         exchange_wall_time_ns: aggregated_steps
             .last()
             .map(|step| step.exchange_wall_time_ns),
@@ -10036,6 +10239,7 @@ pub(crate) fn prepare_live_workspace_for_ui(
             session: bootstrapping_session_manifest,
             run: bootstrapping_run_manifest,
             live_state: bootstrap_live_state_manifest,
+            fem_mesh: None,
             metadata: None,
             mesh_workspace: None,
             stage_execution: None,
@@ -10044,7 +10248,9 @@ pub(crate) fn prepare_live_workspace_for_ui(
             latest_fields: CurrentLiveLatestFields::default(),
             preview_fields: CurrentLivePreviewFieldCache::default(),
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
+            superseded_pending_preview_fields: Vec::new(),
             clear_preview_cache: false,
+            preview_cache_revision: 0,
             engine_log: Vec::new(),
             solver_profile: fullmag_runner::SolverProfileState::default(),
             published_fem_mesh_generation_id: None,
@@ -10088,12 +10294,11 @@ mod tests {
         format_stage_progress_line, has_heavy_live_payload,
         initial_live_state_manifest_from_backend_plan, initial_magnetization_state_override,
         initial_step_update, interactive_session_should_stay_alive,
-        live_step_ingest_cached_m_preview_len, live_step_ingest_legacy_mag_len,
-        live_step_ingest_preview_len, mark_ui_shell_preparation_ready,
-        mesh_build_pipeline_status_json, mesh_source_scene_revision,
-        own_preparation_boundary_failure, plan_materialized_stage_snapshot,
-        prepare_remesh_stage_transaction, project_script_export_failure,
-        resolve_adaptive_convergence_metric, resolved_shared_domain_object_region_markers,
+        mark_ui_shell_preparation_ready, mesh_build_pipeline_status_json,
+        mesh_source_scene_revision, offset_step_update, own_preparation_boundary_failure,
+        plan_materialized_stage_snapshot, prepare_remesh_stage_transaction,
+        project_script_export_failure, resolve_adaptive_convergence_metric,
+        resolve_preview_field_every_n, resolved_shared_domain_object_region_markers,
         run_owned_preparation_stage, run_script_preparation_preflight, run_solver_initialization,
         run_solver_initialization_safety_check, scripted_stage_execution_state,
         shared_domain_object_region_mesh_specs, stage_allows_sampled_continuation_initial_state,
@@ -10102,7 +10307,7 @@ mod tests {
         wait_for_solve_prompt, wait_for_solve_should_block, wait_for_solve_supported,
         write_sampling_resolution_stage_record, ActiveSequenceState, LiveProgressCadence,
         LoadedInitialMagnetizationState, RuntimeCommandPrecondition, SceneProblemPatch,
-        WaitForSolveCommandAction, FEM_FREQUENCY_RESPONSE_PROGRESS_KEY,
+        StageProgressHeartbeat, WaitForSolveCommandAction, FEM_FREQUENCY_RESPONSE_PROGRESS_KEY,
         LIVE_PROGRESS_PUBLISH_INTERVAL,
     };
     use crate::live_workspace::{CurrentLivePublisher, LocalLiveWorkspace};
@@ -10110,6 +10315,88 @@ mod tests {
         PreparationStageId, PreparationStageStatus, PreparationStatus, SimulationPreparationState,
     };
     use crate::types::PythonProgressEvent;
+
+    #[test]
+    fn adaptive_followup_callback_and_heartbeat_clone_sites_stay_profiled() {
+        let source = include_str!("orchestrator.rs");
+        let production = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production orchestrator source");
+        let adaptive = source
+            .split("fn maybe_execute_adaptive_relaxation_followup_passes")
+            .nth(1)
+            .and_then(|tail| tail.split("pub(crate) fn build_session_manifest").next())
+            .expect("adaptive follow-up implementation");
+        assert!(adaptive.contains("solver_profile_callback_start(live_workspace)"));
+        assert!(adaptive.contains("live_workspace.update_profiled"));
+        assert!(adaptive.contains("begin_solver_profile_step_with_orchestration"));
+        assert!(adaptive.contains("finish_solver_profile_step_with_orchestration"));
+        assert_eq!(
+            production.matches("stage_initial_update.clone()").count(),
+            0
+        );
+        assert_eq!(
+            production.matches("snapshot.latest_update.clone()").count(),
+            0
+        );
+        assert!(production.contains("StageHeartbeatProgress::new(&initial_update)"));
+        assert!(!adaptive.contains("offset_step_update(\n                &initial_step_update"));
+        assert!(adaptive
+            .contains("StageProgressHeartbeat::spawn(\n            adaptive_initial_update"));
+    }
+
+    #[test]
+    fn task4_step_update_offset_and_heartbeat_are_lightweight_by_contract() {
+        let step_utils = include_str!("step_utils.rs");
+        assert!(
+            step_utils.contains(
+                "pub(crate) fn offset_step_update(\n    mut update: fullmag_runner::StepUpdate,"
+            ),
+            "offset_step_update must consume StepUpdate so callback payload ownership can move"
+        );
+        assert!(
+            !step_utils.contains("let mut adjusted = update.clone();"),
+            "offsetting must not deep-clone the step payload"
+        );
+
+        let heartbeat = include_str!("stage_heartbeat.rs");
+        let heartbeat_fields = heartbeat
+            .split("struct StageHeartbeatProgress {")
+            .nth(1)
+            .and_then(|source| source.split_once('}'))
+            .map(|(fields, _)| fields)
+            .expect("StageHeartbeatProgress fields");
+        assert!(heartbeat_fields.contains("stats: fullmag_runner::StepStats"));
+        for forbidden in [
+            "StepUpdate",
+            "magnetization",
+            "preview_field",
+            "cached_preview_fields",
+            "FemMeshPayload",
+        ] {
+            assert!(
+                !heartbeat_fields.contains(forbidden),
+                "heartbeat state must not retain heavy field `{forbidden}`"
+            );
+        }
+    }
+
+    #[test]
+    fn remesh_paths_keep_one_authoritative_stage_mesh_asset() {
+        let source = include_str!("orchestrator.rs");
+        let production = source;
+        assert!(production.contains("initial_fem_mesh_asset = Some(remeshed_mesh_asset)"));
+        let adaptive = production
+            .split("fn maybe_execute_adaptive_relaxation_followup_passes")
+            .nth(1)
+            .and_then(|tail| tail.split("pub(crate) fn build_session_manifest").next())
+            .expect("adaptive follow-up implementation");
+        assert!(adaptive.contains("stage_fem_mesh_asset: &mut Option<"));
+        assert!(adaptive.contains("run_planned_problem_with_callback_and_fem_mesh_identity"));
+        assert!(!adaptive.contains("run_problem_with_callback("));
+        assert!(adaptive.contains("*stage_fem_mesh_asset = Some(remeshed_mesh_asset)"));
+    }
 
     #[test]
     fn mesh_source_scene_revision_reads_geometry_realization_contract() {
@@ -10471,7 +10758,7 @@ mod tests {
                 ..StepStats::default()
             },
             grid: [1, 1, 1],
-            fem_mesh: None,
+            fem_mesh_generation_id: None,
             magnetization: None,
             preview_field: None,
             cached_preview_fields: None,
@@ -10488,6 +10775,10 @@ mod tests {
     fn test_preview_field(quantity: &str, revision: u64, z: f64) -> LivePreviewField {
         LivePreviewField {
             config_revision: revision,
+            source_step: 0,
+            source_revision: revision,
+            materialized_at_unix_ms: 0,
+            materialization_wall_time_ns: 0,
             quantity: quantity.to_string(),
             unit: "A/m".to_string(),
             spatial_kind: "mesh".to_string(),
@@ -10506,22 +10797,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn live_step_ingest_diagnostics_distinguish_preview_m_from_legacy_magnetization() {
-        let mut update = test_step_update(50);
-        update.preview_field = Some(test_preview_field("m", 7, -1.0));
-        update.cached_preview_fields = Some(vec![
-            test_preview_field("m", 7, -1.0),
-            test_preview_field("H_eff", 7, 2.0),
-        ]);
-
-        assert_eq!(live_step_ingest_legacy_mag_len(&update), 0);
-        assert_eq!(live_step_ingest_preview_len(&update), 3);
-        assert_eq!(live_step_ingest_cached_m_preview_len(&update), 3);
-    }
-
     fn test_workspace_state() -> crate::live_workspace::LocalLiveWorkspaceState {
         crate::live_workspace::LocalLiveWorkspaceState {
+            fem_mesh: None,
             session: SessionManifest {
                 session_id: "session-test".to_string(),
                 run_id: "run-test".to_string(),
@@ -10574,7 +10852,9 @@ mod tests {
             latest_fields: CurrentLiveLatestFields::default(),
             preview_fields: CurrentLivePreviewFieldCache::default(),
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
+            superseded_pending_preview_fields: Vec::new(),
             clear_preview_cache: false,
+            preview_cache_revision: 0,
             engine_log: Vec::new(),
             solver_profile: fullmag_runner::SolverProfileState::default(),
             published_fem_mesh_generation_id: None,
@@ -11218,12 +11498,12 @@ mod tests {
         update.hysteresis_settle_step_kind = Some("minimize".to_string());
         update.hysteresis_settle_step_method = Some("projected_gradient_bb".to_string());
 
-        apply_live_step_update_to_workspace_state(
+        let _ = apply_live_step_update_to_workspace_state(
             &mut state,
             "run-test",
             "session-test",
             PathBuf::from("/tmp/artifacts").as_path(),
-            &update,
+            update,
             false,
         );
 
@@ -11274,12 +11554,12 @@ mod tests {
             .per_object_scalars
             .insert("fem_eigen_progress".to_string(), progress);
 
-        apply_live_step_update_to_workspace_state(
+        let _ = apply_live_step_update_to_workspace_state(
             &mut state,
             "run-test",
             "session-test",
             PathBuf::from("/tmp/artifacts").as_path(),
-            &update,
+            update,
             false,
         );
 
@@ -11354,12 +11634,12 @@ mod tests {
             .per_object_scalars
             .insert("fem_frequency_response_progress".to_string(), progress);
 
-        apply_live_step_update_to_workspace_state(
+        let _ = apply_live_step_update_to_workspace_state(
             &mut state,
             "run-test",
             "session-test",
             PathBuf::from("/tmp/artifacts").as_path(),
-            &update,
+            update,
             false,
         );
 
@@ -11412,22 +11692,22 @@ mod tests {
             .per_object_scalars
             .insert("fem_frequency_response_progress".to_string(), progress);
 
-        apply_live_step_update_to_workspace_state(
+        let _ = apply_live_step_update_to_workspace_state(
             &mut state,
             "run-test",
             "session-test",
             PathBuf::from("/tmp/artifacts").as_path(),
-            &progress_update,
+            progress_update,
             false,
         );
 
         let generic_update = test_step_update(258);
-        apply_live_step_update_to_workspace_state(
+        let _ = apply_live_step_update_to_workspace_state(
             &mut state,
             "run-test",
             "session-test",
             PathBuf::from("/tmp/artifacts").as_path(),
-            &generic_update,
+            generic_update,
             false,
         );
 
@@ -11515,7 +11795,7 @@ mod tests {
                 ..fullmag_runner::StepStats::default()
             },
             grid: [0, 0, 0],
-            fem_mesh: None,
+            fem_mesh_generation_id: Some("test-generation".to_string()),
             magnetization: None,
             preview_field: None,
             cached_preview_fields: None,
@@ -11528,8 +11808,11 @@ mod tests {
             finished: false,
         };
 
-        let message =
-            format_stage_heartbeat_message("Frequency response 3", &update, Duration::from_secs(8));
+        let message = format_stage_heartbeat_message(
+            "Frequency response 3",
+            &update.stats,
+            Duration::from_secs(8),
+        );
 
         assert!(message.contains("Frequency response 3"));
         assert!(message.contains("waiting 8.0s for the next solver update"));
@@ -11615,7 +11898,7 @@ mod tests {
     }
 
     #[test]
-    fn stage_heartbeat_reuses_live_step_ingest_for_frequency_response_progress() {
+    fn stage_heartbeat_applies_lightweight_progress_without_full_live_ingest() {
         let source = include_str!("orchestrator.rs");
         let heartbeat_block = source
             .split("let heartbeat_message =")
@@ -11624,9 +11907,10 @@ mod tests {
             .expect("heartbeat publish block should stay visible to the contract test");
 
         assert!(
-            heartbeat_block.contains("apply_live_step_update_to_workspace_state("),
-            "heartbeat publishing must reuse live-step ingest so frequency-response sweep progress is re-applied before generic idle progress"
+            heartbeat_block.contains("progress.apply_to_live_step("),
+            "heartbeat publishing must update scalar progress through its lightweight state"
         );
+        assert!(!heartbeat_block.contains("apply_live_step_update_to_workspace_state("));
     }
 
     #[test]
@@ -11674,7 +11958,7 @@ mod tests {
             "orchestrator must resolve the preview-disabled benchmark flag once"
         );
         assert!(
-            source.contains("let field_every_n: u64 = if preview_3d_disabled {\n        u64::MAX"),
+            source.contains("resolve_preview_field_every_n(\n        preview_3d_disabled"),
             "preview-disabled benchmark mode must disable heavy payload cadence"
         );
         assert!(
@@ -11682,6 +11966,28 @@ mod tests {
                 && source.contains("!preview_3d_disabled"),
             "preview-disabled benchmark mode must also disable initial 3D preview snapshots"
         );
+    }
+
+    #[test]
+    fn preview_matrix_cadence_override_is_positive_and_explicit() {
+        assert_eq!(
+            resolve_preview_field_every_n(false, "fem", Some("25")).unwrap(),
+            25
+        );
+        assert_eq!(
+            resolve_preview_field_every_n(false, "fem", None).unwrap(),
+            10
+        );
+        assert_eq!(
+            resolve_preview_field_every_n(false, "fdm", None).unwrap(),
+            50
+        );
+        assert_eq!(
+            resolve_preview_field_every_n(true, "fem", Some("25")).unwrap(),
+            u64::MAX
+        );
+        assert!(resolve_preview_field_every_n(false, "fem", Some("0")).is_err());
+        assert!(resolve_preview_field_every_n(false, "fem", Some("not-a-number")).is_err());
     }
 
     #[test]
@@ -11738,6 +12044,22 @@ mod tests {
             source.contains("resolve_planned_runtime_engine(problem, plan)")
                 && source.contains("resolve_planned_runtime_capabilities(problem, plan)"),
             "live metadata must resolve runtime information from the materialized plan"
+        );
+    }
+
+    #[test]
+    fn production_interactive_route_threads_authoritative_fem_mesh_asset() {
+        let orchestrator = include_str!("orchestrator.rs");
+        let host = include_str!("interactive_runtime_host.rs");
+        let runner = include_str!("../../fullmag-runner/src/lib.rs");
+
+        assert!(orchestrator.contains(
+            "ensure_runtime_for_problem(\n                            &stage.ir,\n                            &execution_plan,\n                            stage_fem_mesh_asset.as_ref(),"
+        ));
+        assert!(host.contains("stage_fem_mesh_asset: Option<&fullmag_runner::StageFemMeshAsset>"));
+        assert!(host.contains("create_planned_interactive_runtime_with_stage_fem_mesh_asset("));
+        assert!(
+            runner.contains("pub fn create_planned_interactive_runtime_with_stage_fem_mesh_asset(")
         );
     }
 
@@ -11857,6 +12179,10 @@ mod tests {
         let mut heavy = test_step_update(3);
         heavy.preview_field = Some(LivePreviewField {
             config_revision: 1,
+            source_step: 0,
+            source_revision: 1,
+            materialized_at_unix_ms: 0,
+            materialization_wall_time_ns: 0,
             quantity: "m".to_string(),
             unit: "A/m".to_string(),
             spatial_kind: "grid".to_string(),
@@ -11922,23 +12248,27 @@ mod tests {
             test_preview_field("h_eff", 3, 2.0),
         ]);
 
-        apply_live_step_update_to_workspace_state(
+        let _ = apply_live_step_update_to_workspace_state(
             &mut state,
             "run-test",
             "session-test",
             PathBuf::from("/tmp/artifacts").as_path(),
-            &update,
+            update,
             true,
         );
 
         assert_eq!(state.live_state.latest_step.step, 12);
-        assert!(state.live_state.latest_step.preview_field.is_some());
-        assert_eq!(state.preview_fields.to_vec().len(), 2);
+        assert!(state.live_state.latest_step.preview_field.is_none());
+        assert!(state.preview_fields.is_empty());
+        assert!(state.latest_fields.is_empty());
         assert_eq!(state.pending_preview_fields.to_vec().len(), 2);
         assert_eq!(
             state.latest_scalar_row.as_ref().map(|row| row.step),
             Some(12)
         );
+        let delta = state.publish_delta();
+        assert_eq!(delta.preview_fields.as_ref().map(Vec::len), Some(2));
+        assert_eq!(state.preview_fields.to_vec().len(), 2);
     }
 
     #[test]
@@ -11947,12 +12277,12 @@ mod tests {
         state.live_state.latest_step.magnetization = Some(vec![1.0, 0.0, 0.0]);
 
         let update = test_step_update(13);
-        apply_live_step_update_to_workspace_state(
+        let _ = apply_live_step_update_to_workspace_state(
             &mut state,
             "run-test",
             "session-test",
             PathBuf::from("/tmp/artifacts").as_path(),
-            &update,
+            update,
             true,
         );
 
@@ -11963,27 +12293,127 @@ mod tests {
     }
 
     #[test]
+    fn production_ingest_preserves_large_retained_magnetization_by_pointer() {
+        let mut state = test_workspace_state();
+        state.live_state.latest_step.magnetization = Some(vec![1.0; 3_000_000]);
+        let retained_ptr = state
+            .live_state
+            .latest_step
+            .magnetization
+            .as_ref()
+            .unwrap()
+            .as_ptr();
+        let publisher = crate::live_workspace::CurrentLivePublisher::spawn_with_test_sink(
+            "production-retained-magnetization-ingest",
+            |_, _| Ok(()),
+        );
+        let workspace = crate::live_workspace::LocalLiveWorkspace::new(state, publisher);
+        let mut callback_durations = Vec::new();
+
+        for step in 1..=5 {
+            let update = test_step_update(step);
+            let mut observed_ptr = std::ptr::null();
+            let started = Instant::now();
+            workspace.update_profiled(|state| {
+                let _ = apply_live_step_update_to_workspace_state(
+                    state,
+                    "run-test",
+                    "session-test",
+                    PathBuf::from("/tmp/artifacts").as_path(),
+                    update,
+                    false,
+                );
+                observed_ptr = state
+                    .live_state
+                    .latest_step
+                    .magnetization
+                    .as_ref()
+                    .unwrap()
+                    .as_ptr();
+            });
+            callback_durations.push(started.elapsed());
+            assert_eq!(
+                observed_ptr, retained_ptr,
+                "thin ingest must preserve Vec ownership"
+            );
+        }
+
+        callback_durations.sort_unstable();
+        assert!(callback_durations[callback_durations.len() - 1] < Duration::from_millis(10));
+    }
+
+    #[test]
+    fn production_ingest_moves_large_preview_into_single_pending_owner() {
+        let publisher = crate::live_workspace::CurrentLivePublisher::spawn_with_test_sink(
+            "production-preview-ingest",
+            |_, _| Ok(()),
+        );
+        let workspace =
+            crate::live_workspace::LocalLiveWorkspace::new(test_workspace_state(), publisher);
+        let mut callback_durations = Vec::new();
+
+        for step in 1..=5 {
+            let mut preview = test_preview_field("h_eff", step, 2.0);
+            preview.vector_field_values = vec![step as f64; 3_000_000];
+            let input_ptr = preview.vector_field_values.as_ptr();
+            let mut update = test_step_update(step);
+            update.preview_field = Some(preview);
+            let mut observed_ptr = std::ptr::null();
+            let started = Instant::now();
+            workspace.update_profiled(|state| {
+                let _ = apply_live_step_update_to_workspace_state(
+                    state,
+                    "run-test",
+                    "session-test",
+                    PathBuf::from("/tmp/artifacts").as_path(),
+                    update,
+                    false,
+                );
+                observed_ptr = state
+                    .pending_preview_fields
+                    .vector_values_ptr("h_eff")
+                    .unwrap();
+                assert_ne!(
+                    state.preview_fields.vector_values_ptr("h_eff"),
+                    Some(input_ptr),
+                    "the current preview must not be cloned into the persistent cache in callback"
+                );
+                assert!(state.latest_fields.is_empty());
+            });
+            callback_durations.push(started.elapsed());
+            assert_eq!(
+                observed_ptr, input_ptr,
+                "preview Vec must move into pending cache"
+            );
+        }
+
+        callback_durations.sort_unstable();
+        assert!(callback_durations[callback_durations.len() - 1] < Duration::from_millis(10));
+    }
+
+    #[test]
     fn publish_live_step_update_does_not_shadow_fresh_m_preview_with_previous_magnetization() {
         let mut state = test_workspace_state();
         state.live_state.latest_step.magnetization = Some(vec![1.0, 0.0, 0.0]);
 
         let mut update = test_step_update(14);
         update.preview_field = Some(test_preview_field("m", 2, -1.0));
-        apply_live_step_update_to_workspace_state(
+        let _ = apply_live_step_update_to_workspace_state(
             &mut state,
             "run-test",
             "session-test",
             PathBuf::from("/tmp/artifacts").as_path(),
-            &update,
+            update,
             true,
         );
 
         assert_eq!(state.live_state.latest_step.magnetization, None);
+        let delta = state.publish_delta();
         assert_eq!(
-            state
+            delta
                 .preview_fields
-                .to_vec()
-                .first()
+                .as_ref()
+                .and_then(|fields| fields.first())
                 .map(|field| field.vector_field_values.as_slice()),
             Some(&[0.0, 0.0, -1.0][..])
         );
@@ -12783,6 +13213,10 @@ mod tests {
             WaitForSolveCommandAction::RefreshFields
         );
         assert_eq!(
+            classify_wait_for_solve_command("set_solver_profile"),
+            WaitForSolveCommandAction::ConfigureProfiler
+        );
+        assert_eq!(
             classify_wait_for_solve_command("run"),
             WaitForSolveCommandAction::StartSolver
         );
@@ -12842,6 +13276,100 @@ mod tests {
     }
 
     #[test]
+    fn profiled_step_update_clone_carries_only_mesh_generation_and_clone_count() {
+        let mut update = test_step_update(7);
+        update.fem_mesh_generation_id = Some("mesh-gen-1".to_string());
+
+        let adjusted = offset_step_update(update, 10, 2.0, true);
+
+        assert_eq!(adjusted.stats.step, 17);
+        assert_eq!(adjusted.stats.time, 2.0);
+        assert_eq!(adjusted.stats.step_update_deep_clone_count, 0);
+        assert_eq!(adjusted.stats.mesh_payload_wall_time_ns, 0);
+        assert_eq!(
+            adjusted.fem_mesh_generation_id.as_deref(),
+            Some("mesh-gen-1")
+        );
+        assert!(adjusted.finished);
+    }
+
+    #[test]
+    fn fem_stage_mesh_payload_is_built_once_until_generation_changes() {
+        let plan = tiny_shared_domain_fem_plan();
+        let stage_mesh = fem_mesh_payload_from_backend_plan(&plan)
+            .expect("shared-domain plan should produce a FEM stage mesh");
+        let stage_generation = stage_mesh.generation_id.clone();
+        for step in 1..=12 {
+            let mut update = test_step_update(step);
+            update.fem_mesh_generation_id = stage_generation.clone();
+            let adjusted = offset_step_update(update, 0, 0.0, false);
+            assert_eq!(adjusted.fem_mesh_generation_id, stage_generation);
+            assert_eq!(adjusted.stats.step_update_deep_clone_count, 0);
+        }
+
+        let mut remeshed_plan = plan.clone();
+        let BackendPlanIR::Fem(remeshed_fem) = &mut remeshed_plan else {
+            unreachable!("fixture is FEM")
+        };
+        remeshed_fem.mesh.nodes[7][0] += 0.25;
+        let remeshed = fem_mesh_payload_from_backend_plan(&remeshed_plan)
+            .expect("remesh should produce a replacement FEM stage mesh");
+        assert_ne!(remeshed.generation_id, stage_mesh.generation_id);
+    }
+
+    #[test]
+    fn heartbeat_snapshot_retains_only_lightweight_progress() {
+        let initial = test_step_update(0);
+        let snapshot = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::stage_heartbeat::StageHeartbeatProgress::new(&initial),
+        ));
+        let mut heartbeat = StageProgressHeartbeat {
+            snapshot: std::sync::Arc::clone(&snapshot),
+            stop_tx: None,
+            join_handle: None,
+        };
+        let mut adjusted = offset_step_update(test_step_update(1), 0, 0.0, false);
+        assert_eq!(adjusted.stats.step_update_deep_clone_count, 0);
+        heartbeat.record(&mut adjusted);
+        assert_eq!(adjusted.stats.step_update_deep_clone_count, 0);
+        assert_eq!(
+            snapshot.lock().unwrap().stats.step_update_deep_clone_count,
+            0
+        );
+    }
+
+    #[test]
+    fn lightweight_heartbeat_preserves_heavy_live_field_identity() {
+        let mut state = test_workspace_state();
+        state.live_state.latest_step.grid = [17, 19, 23];
+        state.live_state.latest_step.fem_mesh_generation_id = Some("mesh-gen-stable".to_string());
+        state.live_state.latest_step.magnetization = Some(vec![1.0, 0.0, 0.0]);
+        state.live_state.latest_step.preview_field = Some(test_preview_field("h_eff", 1, 2.0));
+        let mut update = test_step_update(9);
+        update.stats.e_total = 42.0;
+        let progress = crate::stage_heartbeat::StageHeartbeatProgress::new(&update);
+
+        progress.apply_to_live_step(&mut state.live_state.latest_step);
+
+        assert_eq!(state.live_state.latest_step.step, 9);
+        assert_eq!(state.live_state.latest_step.e_total, 42.0);
+        assert_eq!(state.live_state.latest_step.grid, [17, 19, 23]);
+        assert_eq!(
+            state
+                .live_state
+                .latest_step
+                .fem_mesh_generation_id
+                .as_deref(),
+            Some("mesh-gen-stable")
+        );
+        assert_eq!(
+            state.live_state.latest_step.magnetization.as_deref(),
+            Some([1.0, 0.0, 0.0].as_slice())
+        );
+        assert!(state.live_state.latest_step.preview_field.is_some());
+    }
+
+    #[test]
     fn fem_live_mesh_payload_carries_matching_initial_magnetization() {
         let (payload, initial_magnetization) =
             fem_live_mesh_payload_and_initial_magnetization(&tiny_shared_domain_fem_plan())
@@ -12854,31 +13382,43 @@ mod tests {
     #[test]
     fn initial_live_state_publishes_shared_domain_fem_mesh_before_solver_start() {
         let plan = tiny_shared_domain_fem_plan();
-        let update = initial_step_update(&plan);
+        let asset = fullmag_runner::StageFemMeshAsset::build_from_backend_plan(&plan)
+            .expect("shared-domain FEM asset");
+        let update = initial_step_update(&plan, Some(asset.identity.generation_id().to_string()));
 
-        let live_state = initial_live_state_manifest_from_backend_plan(&update, &plan, None)
-            .expect("initial FEM live state should carry shared-domain mesh");
+        let (live_state, _) = initial_live_state_manifest_from_backend_plan(
+            &update,
+            &plan,
+            Some(asset.payload),
+            None,
+        )
+        .expect("initial FEM live state should carry shared-domain mesh");
 
-        let mesh = live_state
-            .latest_step
-            .fem_mesh
-            .as_ref()
-            .expect("shared-domain FEM mesh should be published before compute");
-        assert_eq!(mesh.object_segments.len(), 2);
+        let generation_id = live_state.latest_step.fem_mesh_generation_id.as_deref();
+        assert!(
+            generation_id.is_some(),
+            "FEM mesh generation should be referenced before compute"
+        );
+        let node_count = fem_mesh_payload_from_backend_plan(&plan)
+            .expect("shared-domain plan should produce a stage mesh")
+            .nodes
+            .len();
         assert_eq!(
             live_state
                 .latest_step
                 .magnetization
                 .as_ref()
                 .map(|values| values.len()),
-            Some(mesh.nodes.len() * 3)
+            Some(node_count * 3)
         );
     }
 
     #[test]
     fn initial_live_state_uses_loaded_initial_magnetization_override() {
         let plan = tiny_shared_domain_fem_plan();
-        let update = initial_step_update(&plan);
+        let asset = fullmag_runner::StageFemMeshAsset::build_from_backend_plan(&plan)
+            .expect("shared-domain FEM asset");
+        let update = initial_step_update(&plan, Some(asset.identity.generation_id().to_string()));
         let override_m = vec![
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
@@ -12890,9 +13430,13 @@ mod tests {
             [0.0, 0.5, 0.5],
         ];
 
-        let live_state =
-            initial_live_state_manifest_from_backend_plan(&update, &plan, Some(&override_m))
-                .expect("initial FEM live state should accept matching override");
+        let (live_state, _) = initial_live_state_manifest_from_backend_plan(
+            &update,
+            &plan,
+            Some(asset.payload),
+            Some(&override_m),
+        )
+        .expect("initial FEM live state should accept matching override");
 
         assert_eq!(
             live_state.latest_step.magnetization.as_deref(),

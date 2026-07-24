@@ -172,7 +172,7 @@ impl CpuInteractiveFemPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: current_local_stats.clone(),
                 grid: [0, 0, 0],
-                fem_mesh: (current_local_stats.step == 0).then_some(self.mesh.clone()),
+                fem_mesh_generation_id: self.mesh.generation_id.clone(),
                 magnetization: None,
                 preview_field,
                 cached_preview_fields,
@@ -286,7 +286,7 @@ impl CpuInteractiveFemPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: local_stats.clone(),
                 grid: [0, 0, 0],
-                fem_mesh: (local_stats.step <= 1).then_some(self.mesh.clone()),
+                fem_mesh_generation_id: self.mesh.generation_id.clone(),
                 magnetization: None,
                 preview_field,
                 cached_preview_fields,
@@ -463,7 +463,7 @@ impl CpuInteractiveFemPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: current_local_stats.clone(),
                 grid: [0, 0, 0],
-                fem_mesh: (current_local_stats.step == 0).then_some(self.mesh.clone()),
+                fem_mesh_generation_id: self.mesh.generation_id.clone(),
                 magnetization: None,
                 preview_field,
                 cached_preview_fields: None,
@@ -595,7 +595,7 @@ impl CpuInteractiveFemPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: local_stats.clone(),
                 grid: [0, 0, 0],
-                fem_mesh: (local_stats.step <= 1).then_some(self.mesh.clone()),
+                fem_mesh_generation_id: self.mesh.generation_id.clone(),
                 magnetization: None,
                 preview_field,
                 cached_preview_fields: None,

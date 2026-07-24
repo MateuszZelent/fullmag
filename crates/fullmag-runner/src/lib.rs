@@ -269,18 +269,22 @@ pub use runtime_registry::{
     RuntimeRegistry,
 };
 pub use solver_profile::{
-    LivePublisherDiagnostics, SolverProfileAggregates, SolverProfileConfig,
+    current_thread_cpu_time_ns, elapsed_current_thread_cpu_ns, LivePublisherDiagnostics,
+    RateMetric, SolverProfileAggregates, SolverProfileConfig, SolverProfileOverheadDiagnostics,
     SolverProfilePhaseSample, SolverProfileSnapshot, SolverProfileState, SolverProfileStepSample,
-    SolverProfileThreading,
+    SolverProfileThreading, SolverRateDiagnostics,
 };
 pub use types::{
-    fem_mesh_topology_fingerprint, ExecutionProvenance, FemEigenRunResult, FemMeshObjectSegment,
-    FemMeshPartPayload, FemMeshPayload, InitialTimestepReason, LegacyDtPolicy, LivePreviewField,
+    fem_eigen_mesh_generation_id, fem_frequency_response_mesh_generation_id,
+    fem_mesh_topology_fingerprint, fem_plan_mesh_generation_id, live_preview_values_sha256,
+    ExecutionProvenance, FemEigenRunResult,
+    FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload, InitialTimestepReason, LegacyDtPolicy,
+    LiveFieldMaterializationState, LiveFieldMaterializationStatus, LivePreviewField,
     LivePreviewRequest, LiveVectorFieldSnapshot, LlgTimestepCapabilityId,
     LlgTimestepQualificationId, RequestedTimestepPolicy, ResolvedFallback, ResolvedTimestepPolicy,
-    RunError, RunResult, RunStatus, RuntimeEngineInfo, SolverAttemptRecord, StepAction, StepStats,
-    StepUpdate, TimestepBackend, TimestepDevice, TimestepExecutionIdentity,
-    TimestepPolicyProvenance, TimestepValidationState,
+    RunError, RunResult, RunStatus, RuntimeEngineInfo, SolverAttemptRecord, StageFemMeshAsset,
+    StageFemMeshIdentity, StepAction, StepStats, StepUpdate, TimestepBackend, TimestepDevice,
+    TimestepExecutionIdentity, TimestepPolicyProvenance, TimestepValidationState,
 };
 
 use crate::capabilities::{
@@ -1561,8 +1565,15 @@ pub fn run_planned_problem(
             dispatch::execute_fem_eigen(engine, fem, &plan.output_plan.outputs)
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
-            frequency_response::execute_fem_frequency_response_validation(
-                response, output_dir, None, None,
+            let stage_context =
+                types::FemStageExecutionContext::from_backend_plan(&plan.backend_plan)
+                    .expect("FEM stage context");
+            frequency_response::execute_fem_frequency_response_validation_with_context(
+                response,
+                &stage_context,
+                output_dir,
+                None,
+                None,
             )
         }
     });
@@ -1637,7 +1648,10 @@ pub fn fem_observables_for_magnetization(
     fem_baseline::fem_observables_for_magnetization(plan, magnetization)
 }
 
-fn fem_eigen_progress_update(progress: fem_eigen::FemEigenProgress) -> StepUpdate {
+fn fem_eigen_progress_update(
+    progress: fem_eigen::FemEigenProgress,
+    fem_mesh_generation_id: Option<String>,
+) -> StepUpdate {
     let mut progress_scalars = std::collections::HashMap::new();
     progress_scalars.insert("phase_code".to_string(), f64::from(progress.phase_index));
     progress_scalars.insert("phase_count".to_string(), f64::from(progress.phase_count));
@@ -1709,7 +1723,7 @@ fn fem_eigen_progress_update(progress: fem_eigen::FemEigenProgress) -> StepUpdat
             ..StepStats::default()
         },
         grid: [0, 0, 0],
-        fem_mesh: None,
+        fem_mesh_generation_id,
         magnetization: None,
         preview_field: None,
         cached_preview_fields: None,
@@ -1754,6 +1768,27 @@ pub fn run_planned_problem_with_callback(
     until_seconds: f64,
     output_dir: &Path,
     field_every_n: u64,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    let stage_asset = StageFemMeshAsset::build_from_backend_plan(&plan.backend_plan);
+    run_planned_problem_with_callback_and_fem_mesh_identity(
+        problem,
+        plan,
+        stage_asset.as_ref().map(|asset| &asset.identity),
+        until_seconds,
+        output_dir,
+        field_every_n,
+        on_step,
+    )
+}
+
+pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     require_resolved_runtime_sampling(problem, plan)?;
@@ -1765,9 +1800,13 @@ pub fn run_planned_problem_with_callback(
             output_dir,
             field_every_n,
             None,
+            fem_mesh_identity,
             &mut on_step,
         );
     }
+    let fem_stage_context = fem_mesh_identity
+        .cloned()
+        .map(types::FemStageExecutionContext::from_mesh_identity);
     let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
         output_dir.to_path_buf(),
         artifacts::build_field_context(problem, plan),
@@ -1825,18 +1864,20 @@ pub fn run_planned_problem_with_callback(
                 on_step: &mut on_step,
             });
             let mut executed = if fem.relaxation.is_some() {
-                fem::relax::execute_fem_relax(
+                fem::relax::execute_fem_relax_with_context(
                     fem_engine_kind(resolution.engine),
                     fem,
+                    fem_stage_context.as_ref().expect("FEM stage context"),
                     until_seconds,
                     &plan.output_plan.outputs,
                     live,
                     artifact_writer.clone(),
                 )
             } else {
-                dispatch::execute_fem(
+                dispatch::execute_fem_with_context(
                     resolution.engine,
                     fem,
+                    fem_stage_context.as_ref().expect("FEM stage context"),
                     until_seconds,
                     &plan.output_plan.outputs,
                     live,
@@ -1848,7 +1889,14 @@ pub fn run_planned_problem_with_callback(
         }
         BackendPlanIR::FemEigen(fem) => {
             let engine = dispatch::resolve_fem_engine(problem)?;
-            let mut progress_callback = |progress| on_step(fem_eigen_progress_update(progress));
+            let mut progress_callback = |progress| {
+                on_step(fem_eigen_progress_update(
+                    progress,
+                    fem_stage_context
+                        .as_ref()
+                        .and_then(|context| context.generation_id()),
+                ))
+            };
             dispatch::execute_fem_eigen_with_progress(
                 engine,
                 fem,
@@ -1857,8 +1905,9 @@ pub fn run_planned_problem_with_callback(
             )
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
-            frequency_response::execute_fem_frequency_response_validation(
+            frequency_response::execute_fem_frequency_response_validation_with_context(
                 response,
+                fem_stage_context.as_ref().expect("FEM stage context"),
                 output_dir,
                 None,
                 Some(&mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction),
@@ -1917,12 +1966,17 @@ pub fn run_planned_problem_with_callback(
         wall_time_ns: 0,
         ..StepStats::default()
     });
-    let final_m: Vec<f64> = executed
-        .result
-        .final_magnetization
-        .iter()
-        .flat_map(|v| v.iter().copied())
-        .collect();
+    let final_m = match &plan.backend_plan {
+        BackendPlanIR::Fem(_) => None,
+        _ => Some(
+            executed
+                .result
+                .final_magnetization
+                .iter()
+                .flat_map(|v| v.iter().copied())
+                .collect(),
+        ),
+    };
     let final_grid = match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]],
         BackendPlanIR::FdmMultilayer(fdm) => [
@@ -1937,13 +1991,10 @@ pub fn run_planned_problem_with_callback(
     on_step(StepUpdate {
         stats: final_stats,
         grid: final_grid,
-        fem_mesh: match &plan.backend_plan {
-            BackendPlanIR::Fem(fem) => Some(FemMeshPayload::from(fem)),
-            BackendPlanIR::FemEigen(eigen) => Some(FemMeshPayload::from(eigen)),
-            BackendPlanIR::FemFrequencyResponse(response) => Some(FemMeshPayload::from(response)),
-            BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
-        },
-        magnetization: Some(final_m),
+        fem_mesh_generation_id: fem_stage_context
+            .as_ref()
+            .and_then(|context| context.generation_id()),
+        magnetization: final_m,
         preview_field: None,
         cached_preview_fields: None,
         hysteresis_field_m_t: None,
@@ -1977,6 +2028,7 @@ pub fn run_planned_problem_with_callback_and_hysteresis_stage_id(
             output_dir,
             field_every_n,
             hysteresis_stage_id,
+            None,
             &mut on_step,
         );
     }
@@ -2069,6 +2121,33 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     initial_snapshot: bool,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    let stage_asset = StageFemMeshAsset::build_from_backend_plan(&plan.backend_plan);
+    run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity(
+        problem,
+        plan,
+        stage_asset.as_ref().map(|asset| &asset.identity),
+        until_seconds,
+        output_dir,
+        field_every_n,
+        display_selection,
+        interrupt_requested,
+        initial_snapshot,
+        on_step,
+    )
+}
+
+pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    initial_snapshot: bool,
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     require_resolved_runtime_sampling(problem, plan)?;
@@ -2076,6 +2155,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         return hysteresis::run_planned_hysteresis_with_live_preview(
             problem,
             plan,
+            fem_mesh_identity,
             until_seconds,
             output_dir,
             field_every_n,
@@ -2086,6 +2166,9 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             &mut on_step,
         );
     }
+    let fem_stage_context = fem_mesh_identity
+        .cloned()
+        .map(types::FemStageExecutionContext::from_mesh_identity);
     let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
         output_dir.to_path_buf(),
         artifacts::build_field_context(problem, plan),
@@ -2149,18 +2232,20 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                 on_step: &mut on_step,
             });
             let mut executed = if fem.relaxation.is_some() {
-                fem::relax::execute_fem_relax(
+                fem::relax::execute_fem_relax_with_context(
                     fem_engine_kind(resolution.engine),
                     fem,
+                    fem_stage_context.as_ref().expect("FEM stage context"),
                     until_seconds,
                     &plan.output_plan.outputs,
                     live,
                     artifact_writer.clone(),
                 )
             } else {
-                dispatch::execute_fem(
+                dispatch::execute_fem_with_context(
                     resolution.engine,
                     fem,
+                    fem_stage_context.as_ref().expect("FEM stage context"),
                     until_seconds,
                     &plan.output_plan.outputs,
                     live,
@@ -2172,7 +2257,14 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         }
         BackendPlanIR::FemEigen(fem) => {
             let engine = dispatch::resolve_fem_engine(problem)?;
-            let mut progress_callback = |progress| on_step(fem_eigen_progress_update(progress));
+            let mut progress_callback = |progress| {
+                on_step(fem_eigen_progress_update(
+                    progress,
+                    fem_stage_context
+                        .as_ref()
+                        .and_then(|context| context.generation_id()),
+                ))
+            };
             dispatch::execute_fem_eigen_with_progress(
                 engine,
                 fem,
@@ -2181,8 +2273,9 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             )
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
-            frequency_response::execute_fem_frequency_response_validation(
+            frequency_response::execute_fem_frequency_response_validation_with_context(
                 response,
+                fem_stage_context.as_ref().expect("FEM stage context"),
                 output_dir,
                 interrupt_requested,
                 Some(&mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction),
@@ -2254,12 +2347,9 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     on_step(StepUpdate {
         stats: final_stats,
         grid: final_grid,
-        fem_mesh: match &plan.backend_plan {
-            BackendPlanIR::Fem(fem) => Some(FemMeshPayload::from(fem)),
-            BackendPlanIR::FemEigen(eigen) => Some(FemMeshPayload::from(eigen)),
-            BackendPlanIR::FemFrequencyResponse(response) => Some(FemMeshPayload::from(response)),
-            BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
-        },
+        fem_mesh_generation_id: fem_stage_context
+            .as_ref()
+            .and_then(|context| context.generation_id()),
         magnetization: None,
         preview_field: None,
         cached_preview_fields: None,
@@ -2286,6 +2376,35 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     initial_snapshot: bool,
     hysteresis_stage_id: Option<&str>,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    let stage_asset = StageFemMeshAsset::build_from_backend_plan(&plan.backend_plan);
+    run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id_and_fem_mesh_identity(
+        problem,
+        plan,
+        stage_asset.as_ref().map(|asset| &asset.identity),
+        until_seconds,
+        output_dir,
+        field_every_n,
+        display_selection,
+        interrupt_requested,
+        initial_snapshot,
+        hysteresis_stage_id,
+        on_step,
+    )
+}
+
+pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id_and_fem_mesh_identity(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    initial_snapshot: bool,
+    hysteresis_stage_id: Option<&str>,
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     require_resolved_runtime_sampling(problem, plan)?;
@@ -2293,6 +2412,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         return hysteresis::run_planned_hysteresis_with_live_preview(
             problem,
             plan,
+            fem_mesh_identity,
             until_seconds,
             output_dir,
             field_every_n,
@@ -2303,9 +2423,10 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             &mut on_step,
         );
     }
-    run_planned_problem_with_live_preview_interruptible_with_initial_snapshot(
+    run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity(
         problem,
         plan,
+        fem_mesh_identity,
         until_seconds,
         output_dir,
         field_every_n,
@@ -2430,7 +2551,7 @@ pub fn run_problem_with_interactive_fdm_runtime_live_preview_interruptible(
     on_step(StepUpdate {
         stats: final_stats,
         grid: fdm.grid.cells,
-        fem_mesh: None,
+        fem_mesh_generation_id: None,
         magnetization: Some(final_m),
         preview_field: None,
         cached_preview_fields: None,
@@ -2486,6 +2607,7 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
                 .to_string(),
         });
     };
+    let fem_mesh_generation_id = runtime.stage_context().generation_id();
 
     let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
         output_dir.to_path_buf(),
@@ -2552,7 +2674,7 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
     on_step(StepUpdate {
         stats: final_stats,
         grid: [0, 0, 0],
-        fem_mesh: Some(FemMeshPayload::from(fem)),
+        fem_mesh_generation_id,
         magnetization: Some(
             executed
                 .result
@@ -2597,12 +2719,29 @@ pub fn create_planned_interactive_runtime(
     plan: &fullmag_ir::ExecutionPlanIR,
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> Result<InteractiveRuntime, RunError> {
+    create_planned_interactive_runtime_with_stage_fem_mesh_asset(
+        problem,
+        plan,
+        None,
+        continuation_magnetization,
+    )
+}
+
+/// Create a unified interactive runtime while reusing the stage-owned FEM mesh asset.
+pub fn create_planned_interactive_runtime_with_stage_fem_mesh_asset(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    stage_fem_mesh_asset: Option<&StageFemMeshAsset>,
+    continuation_magnetization: Option<&[[f64; 3]]>,
+) -> Result<InteractiveRuntime, RunError> {
     let backend: Box<dyn InteractiveBackend> = match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => Box::new(InteractiveFdmPreviewRuntime::create_from_plan(
             problem, fdm,
         )?),
         BackendPlanIR::Fem(fem) => Box::new(InteractiveFemPreviewRuntime::create_from_plan(
-            problem, fem,
+            problem,
+            fem,
+            stage_fem_mesh_asset,
         )?),
         _ => {
             return Err(RunError {
@@ -3622,7 +3761,10 @@ mod tests {
     fn fem_relaxation_entrypoints_route_through_fem_relax_module() {
         let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
             .expect("read lib.rs");
-        let route_count = source.matches("fem::relax::execute_fem_relax(").count();
+        let route_count = source.matches("fem::relax::execute_fem_relax(").count()
+            + source
+                .matches("fem::relax::execute_fem_relax_with_context(")
+                .count();
         assert!(
             route_count >= 3,
             "run entrypoints should route FEM relaxation through fem::relax::execute_fem_relax, found {route_count}"
@@ -4258,10 +4400,6 @@ mod tests {
             "preview snapshots must use the native FEM wait ABI"
         );
         assert!(
-            source.contains("fullmag_fem_preview_snapshot_ready"),
-            "preview snapshots must expose a nonblocking readiness ABI for live handoff"
-        );
-        assert!(
             source.contains("fullmag_fem_preview_snapshot_destroy"),
             "preview snapshots must destroy native FEM snapshot handles"
         );
@@ -4276,17 +4414,15 @@ mod tests {
             let source = fs::read_to_string(format!("{}{}", env!("CARGO_MANIFEST_DIR"), path))
                 .expect("read FEM relaxation source");
             assert!(
-                source.contains("FemLivePreviewHandoff::default()"),
+                source.contains("FemPreviewHandoff::default()"),
                 "{path} must keep live preview snapshot state across solver steps"
             );
             assert!(
-                source.contains("live_preview_handoff.poll_completed()?"),
+                source.contains("preview_handoff.poll_active()?"),
                 "{path} must poll completed preview snapshots without blocking"
             );
             assert!(
-                source.contains(
-                    "live_preview_handoff.request_preview(backend, &request, node_count)?"
-                ),
+                source.contains("preview_handoff.request_preview("),
                 "{path} must request live preview through the handoff boundary"
             );
             assert!(
@@ -4301,16 +4437,57 @@ mod tests {
         ))
         .expect("read fem/relax/preview.rs");
         assert!(
-            preview.contains("struct FemLivePreviewHandoff"),
+            preview.contains("struct FemPreviewHandoff"),
             "fem/relax/preview.rs must own live preview handoff state"
         );
         assert!(
-            preview.contains("snapshot.is_ready()"),
-            "live preview handoff must use the nonblocking native readiness check"
+            preview.contains("try_take_completed"),
+            "live preview handoff must poll the bounded worker without blocking"
         );
         assert!(
             preview.contains("last_good"),
             "live preview handoff must retain the last completed preview"
+        );
+    }
+
+    #[test]
+    fn fem_preview_materialization_stays_outside_callback_deadline() {
+        let preview = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/fem/relax/preview.rs"
+        ))
+        .expect("read fem/relax/preview.rs");
+        let hot_path = preview
+            .split("/// Build the active FEM preview field.")
+            .next()
+            .expect("preview hot-path section");
+
+        assert!(
+            preview.contains("struct PendingFemPreviewState"),
+            "FEM live and cache previews must share one bounded materialization state"
+        );
+        assert!(
+            preview.contains("preview_superseded_count"),
+            "busy preview requests must be counted explicitly"
+        );
+        assert!(
+            !hot_path.contains("backend.copy_live_preview_field(request, node_count)?"),
+            "energy-density previews must not synchronously copy fields on the solver callback"
+        );
+        assert!(
+            !preview.contains("pending: Vec<(LivePreviewRequest, NativeFemPreviewSnapshot)>"),
+            "cached previews must not accumulate an unbounded set of native snapshots"
+        );
+        assert!(
+            preview.contains("PreviewDestination::Active => self.active_ready = Some(result.field)")
+                && preview.contains("PreviewDestination::Cache => self.cached_ready.push(result.field)"),
+            "completed preview payloads must be moved from the worker result into the bounded solver-side handoff"
+        );
+        let removed_callback_clone = ["let mut last_good_field = field.", "clone();"].concat();
+        let removed_reader = ["result.", "last_good_field"].concat();
+        assert!(
+            !preview.contains(&removed_callback_clone) && !preview.contains(&removed_reader),
+            "the callback contract must not regress to a duplicated last-good clone/reader handoff"
         );
     }
 
@@ -4348,17 +4525,13 @@ mod tests {
             "field snapshots must use the native FEM wait ABI"
         );
         assert!(
-            source.contains("fullmag_fem_field_snapshot_ready"),
-            "field snapshots must expose a nonblocking readiness ABI for live handoff"
-        );
-        assert!(
             source.contains("fullmag_fem_field_snapshot_destroy"),
             "field snapshots must destroy native FEM snapshot handles"
         );
     }
 
     #[test]
-    fn fem_live_magnetization_uses_nonblocking_snapshot_handoff() {
+    fn fem_live_magnetization_uses_bounded_deferred_snapshot_handoff() {
         for path in [
             "/src/fem/relax/direct_minimizer.rs",
             "/src/fem/relax/llg_overdamped.rs",
@@ -4366,16 +4539,20 @@ mod tests {
             let source = fs::read_to_string(format!("{}{}", env!("CARGO_MANIFEST_DIR"), path))
                 .expect("read FEM relaxation source");
             assert!(
-                source.contains("FemLiveMagnetizationHandoff::default()"),
-                "{path} must keep live magnetization snapshot state across solver steps"
+                source.contains("FemPreviewHandoff::default()"),
+                "{path} must keep the bounded snapshot frame state across solver steps"
             );
             assert!(
-                source.contains("live_magnetization_handoff.request_magnetization"),
-                "{path} must start magnetization snapshots through the handoff boundary"
+                source.contains("preview_handoff.request_magnetization"),
+                "{path} must stage magnetization capture through the shared handoff boundary"
             );
             assert!(
-                source.contains("live_magnetization_handoff.poll_completed"),
-                "{path} must poll completed magnetization snapshots without blocking"
+                source.contains("preview_handoff.poll_magnetization"),
+                "{path} must poll completed magnetization payloads without blocking"
+            );
+            assert!(
+                source.contains("preview_handoff.flush_schedule_fence()"),
+                "{path} must fence native enqueue before the next solver mutation"
             );
             assert!(
                 !source.contains(
@@ -4391,12 +4568,16 @@ mod tests {
         ))
         .expect("read fem/relax/preview.rs");
         assert!(
-            preview.contains("struct FemLiveMagnetizationHandoff"),
-            "fem/relax/preview.rs must own live magnetization handoff state"
+            preview.contains("struct DeferredFemSnapshotFrame"),
+            "fem/relax/preview.rs must own one bounded deferred snapshot frame"
         );
         assert!(
-            preview.contains("snapshot.is_ready()"),
-            "live magnetization handoff must use the nonblocking native readiness check"
+            preview.contains("schedule_tx.send(())"),
+            "snapshot worker must acknowledge native enqueue before materialization"
+        );
+        assert!(
+            preview.contains("fn flush_schedule(&mut self) -> u64"),
+            "solver must expose the exact-step pre-mutation schedule fence"
         );
     }
 
@@ -4407,9 +4588,14 @@ mod tests {
             "/../../backends/fem/src/api.cpp"
         ))
         .expect("read native FEM api.cpp");
+        let pool = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../backends/fem/gpu/cuda/transfer/snapshot_pool.cpp"
+        ))
+        .expect("read native FEM snapshot_pool.cpp");
         assert!(
-            source.contains("cudaHostAlloc(&snapshot.host_aos"),
-            "native FEM GPU snapshots must allocate pinned host storage"
+            pool.contains("cudaHostAlloc(&slot.host_aos"),
+            "native FEM GPU snapshot pool must preallocate pinned host storage"
         );
         assert!(
             source.contains("cudaMemcpyAsync(\n        snapshot.staging.x"),
@@ -4494,9 +4680,9 @@ mod tests {
             "fem/relax/preview.rs must own native FEM relaxation cached-preview helpers"
         );
         assert!(
-            module.contains("pub(crate) fn build_fem_final_cached_preview_fields")
+            module.contains("pub(crate) fn finalize_terminal_cache")
                 && module.contains("quantity_ids.push(display_selection.selection.quantity.as_str())"),
-            "fem/relax/preview.rs must own final cached-preview flushing that includes the active vector field"
+            "fem/relax/preview.rs must own bounded asynchronous terminal cache flushing that includes the active vector field"
         );
         assert!(
             module.contains("field_materialization_quantity_ids()"),
@@ -4516,9 +4702,9 @@ mod tests {
             "interactive FEM mesh preview cache must materialize spatial scalar fields such as eden_total"
         );
         assert!(
-            module.contains("struct FemCachedPreviewHandoff")
+            module.contains("struct FemPreviewHandoff")
                 && module.contains("request_cached_previews(")
-                && module.contains("snapshot.is_ready()"),
+                && module.contains("try_take_completed"),
             "fem/relax/preview.rs must own nonblocking cached-preview handoff state"
         );
         for path in [
@@ -4533,12 +4719,12 @@ mod tests {
                 "{path} must use the resolved FEM engine for cached-preview quantities, not hard-code CPU"
             );
             assert!(
-                source.contains("FemCachedPreviewHandoff::default()"),
-                "{path} must keep cached-preview snapshot state across solver steps"
+                source.contains("FemPreviewHandoff::default()"),
+                "{path} must keep one shared preview materializer across solver steps"
             );
             assert!(
-                source.contains("cached_preview_handoff.request_cached_previews(")
-                    && source.contains("cached_preview_handoff.poll_completed()?"),
+                source.contains("preview_handoff.request_cached_previews(")
+                    && source.contains("preview_handoff.poll_cached("),
                 "{path} must use cached-preview handoff readiness instead of synchronous waits"
             );
             assert!(
@@ -4556,9 +4742,27 @@ mod tests {
             "FEM relaxation finalization must use the resolved engine for cached-preview flushes"
         );
         assert!(
-            finalize.contains("build_fem_final_cached_preview_fields(")
+            finalize.contains("preview_handoff.finalize_pending_until(")
+                && finalize.contains("preview_handoff.finalize_terminal_cache(")
+                && !finalize.contains("build_fem_final_cached_preview_fields(")
                 && !finalize.contains("build_fem_cached_preview_fields("),
-            "FEM relaxation finalization must flush active and inactive cached preview fields"
+            "FEM relaxation finalization must drain and publish active/inactive fields through the bounded asynchronous handoff"
+        );
+        assert!(
+            finalize.contains("if pending_preview_completed {")
+                && finalize.contains("preview_handoff.take_terminal_publication("),
+            "an expired terminal drain must publish explicit errors without retrying backend scheduling"
+        );
+        assert!(
+            module.contains("self.finish_terminal_publication(fields, magnetization,")
+                && finalize.contains("*last_step = live_stats.clone();"),
+            "terminal FEM payloads, materialization states, and provenance must survive the later finished=true update"
+        );
+        let runner = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
+            .expect("read runner lib.rs");
+        assert!(
+            runner.contains("BackendPlanIR::Fem(_) => None,"),
+            "the generic finished=true update must not mask asynchronous FEM terminal magnetization with a synchronous final-m copy"
         );
     }
 

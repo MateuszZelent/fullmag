@@ -12,8 +12,10 @@
 #include "gpu/cuda/demag_poisson/poisson.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/interactions/zeeman/regional_field_kernels.cuh"
+#include "gpu/cuda/transfer/snapshot_pool.hpp"
 
 #include <cstdint>
+#include <memory>
 
 namespace fullmag::fem {
 
@@ -47,6 +49,17 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
             error)) {
         return gpu_bootstrap_failed(ctx);
     }
+#if FULLMAG_HAS_CUDA_RUNTIME
+    if (ctx.gpu_state.device.lifecycle.allocated) {
+        ctx.gpu_state.cuda.snapshot_pool = std::make_shared<FemGpuSnapshotPoolState>();
+        if (!initialize_gpu_snapshot_pool(
+                *ctx.gpu_state.cuda.snapshot_pool,
+                ctx.gpu_state.device.lifecycle.node_count,
+                error)) {
+            return gpu_bootstrap_failed(ctx);
+        }
+    }
+#endif
 #if FULLMAG_HAS_MFEM_STACK
     if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON &&
         !ctx.gpu_state.device.lifecycle.allocated) {

@@ -1977,6 +1977,28 @@ describe("useViewport3DSceneModel", () => {
     });
   });
 
+  it.each(["stale_complete", "pending"] as const)(
+    "keeps topology-compatible %s field payloads in the render frame",
+    (materializationState) => {
+      expect(
+        resolveViewport3DResourceFrameState({
+          dataAvailable: true,
+          error: null,
+          id: "field-vector",
+          materializationState,
+          payloadRevision: "etag-step-40",
+          revision: "freshness-step-50",
+          status: "ready",
+        }),
+      ).toEqual({
+        error: null,
+        id: "field-vector",
+        revision: "etag-step-40",
+        status: "ready",
+      });
+    },
+  );
+
   it("builds immediate region overlays from the committed scene while the region resource refreshes", () => {
     expect(
       resolveViewport3DRegionOverlays({

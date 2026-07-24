@@ -34,13 +34,15 @@ export interface SolverProfileRow {
   artifact: string;
   cache: string;
   clock: string;
+  deepClones: string;
   demag: string;
   demagDetail: string;
   demagSetup: string;
   exchange: string;
   fieldCopy: string;
   finalization: string;
-  gap: string;
+  gapPerStep: string;
+  gapTotal: string;
   gpuSync: string;
   id: string;
   missing: string;
@@ -50,20 +52,24 @@ export interface SolverProfileRow {
   preview: string;
   relaxPreconditioner: string;
   rhs: string;
+  spanSteps: string;
+  spanWall: string;
   step: string;
   total: string;
-  wallDelta: string;
 }
 
 export interface SolverProfilePanelModel {
   allRows: SolverProfileRow[];
   hasSingleThreadWarning: boolean;
   livePublisherSummary: string;
+  overheadSummary: string;
   previewModeSummary: string;
+  rateSummary: string;
   rows: SolverProfileRow[];
   sampleCount: number;
   state: string;
   threadSummary: string;
+  windowPhaseSummary: string;
 }
 
 type SolverProfileCopyStatus = "copied" | "failed" | "idle";
@@ -204,6 +210,18 @@ export function FooterDiagnostics() {
               <Timer size={13} aria-hidden="true" />
               <span>{profileModel.previewModeSummary}</span>
             </div>
+            <div className="fm-footer-diagnostics__threading">
+              <Timer size={13} aria-hidden="true" />
+              <span>{profileModel.windowPhaseSummary}</span>
+            </div>
+            <div className="fm-footer-diagnostics__threading">
+              <Timer size={13} aria-hidden="true" />
+              <span>{profileModel.rateSummary}</span>
+            </div>
+            <div className="fm-footer-diagnostics__threading">
+              <Timer size={13} aria-hidden="true" />
+              <span>{profileModel.overheadSummary}</span>
+            </div>
             {profileModel.hasSingleThreadWarning ? (
               <div className="fm-footer-diagnostics__warning" role="status">
                 <AlertTriangle size={13} aria-hidden="true" />
@@ -211,17 +229,22 @@ export function FooterDiagnostics() {
               </div>
             ) : null}
             <div className="fm-footer-diagnostics__profile-table" role="table">
+              <div className="fm-footer-diagnostics__threading">
+                Last-step phases (interval aggregates are shown separately above)
+              </div>
               <div
                 className="fm-footer-diagnostics__profile-row fm-footer-diagnostics__profile-row--header"
                 role="row"
               >
-                <span role="columnheader">Step</span>
+                <span role="columnheader">Last step</span>
                 <span role="columnheader">Clock</span>
-                <span role="columnheader">Delta wall</span>
-                <span role="columnheader">Gap</span>
-                <span role="columnheader">Total</span>
-                <span role="columnheader">Exchange</span>
-                <span role="columnheader">Demag</span>
+                <span role="columnheader">Span steps</span>
+                <span role="columnheader">Span wall</span>
+                <span role="columnheader">Gap total</span>
+                <span role="columnheader">Gap/step</span>
+                <span role="columnheader">Total (last step)</span>
+                <span role="columnheader">Exchange (last step)</span>
+                <span role="columnheader">Demag (last step)</span>
                 <span role="columnheader">Demag detail</span>
                 <span role="columnheader">Setup</span>
                 <span role="columnheader">Relax prec.</span>
@@ -235,6 +258,7 @@ export function FooterDiagnostics() {
                 <span role="columnheader">Native</span>
                 <span role="columnheader">Orchestr.</span>
                 <span role="columnheader">Missing</span>
+                <span role="columnheader">Deep clones (last step)</span>
               </div>
               {profileModel.rows.map((row) => (
                 <div
@@ -244,8 +268,10 @@ export function FooterDiagnostics() {
                 >
                   <span role="cell">{row.step}</span>
                   <span role="cell">{row.clock}</span>
-                  <span role="cell">{row.wallDelta}</span>
-                  <span role="cell">{row.gap}</span>
+                  <span role="cell">{row.spanSteps}</span>
+                  <span role="cell">{row.spanWall}</span>
+                  <span role="cell">{row.gapTotal}</span>
+                  <span role="cell">{row.gapPerStep}</span>
                   <span role="cell">{row.total}</span>
                   <span role="cell">{row.exchange}</span>
                   <span role="cell">{row.demag}</span>
@@ -262,6 +288,7 @@ export function FooterDiagnostics() {
                   <span role="cell">{row.nativeFfi}</span>
                   <span role="cell">{row.orchestration}</span>
                   <span role="cell">{row.missing}</span>
+                  <span role="cell">{row.deepClones}</span>
                 </div>
               ))}
             </div>
@@ -368,13 +395,15 @@ export function serializeSolverProfileRows(
   rows: readonly SolverProfileRow[],
 ): string {
   const headers = [
-    "Step",
+    "Last step",
     "Clock",
-    "Delta wall",
-    "Gap",
-    "Total",
-    "Exchange",
-    "Demag",
+    "Span steps",
+    "Span wall",
+    "Gap total",
+    "Gap/step",
+    "Total (last step)",
+    "Exchange (last step)",
+    "Demag (last step)",
     "Demag detail",
     "Setup",
     "Relax prec.",
@@ -388,13 +417,16 @@ export function serializeSolverProfileRows(
     "Native",
     "Orchestr.",
     "Missing",
+    "Deep clones (last step)",
   ];
   const body = rows.map((row) =>
     [
       row.step,
       row.clock,
-      row.wallDelta,
-      row.gap,
+      row.spanSteps,
+      row.spanWall,
+      row.gapTotal,
+      row.gapPerStep,
       row.total,
       row.exchange,
       row.demag,
@@ -411,6 +443,7 @@ export function serializeSolverProfileRows(
       row.nativeFfi,
       row.orchestration,
       row.missing,
+      row.deepClones,
     ].join("\t"),
   );
   return [headers.join("\t"), ...body].join("\n");
@@ -468,7 +501,13 @@ export function buildSolverProfilePanelModel(
     }))
     .reverse()
     .map(({ sample, sourceIndex }) => {
-      const previousSample = latestSamples[sourceIndex - 1] ?? null;
+      const previous = sourceIndex > 0 ? latestSamples[sourceIndex - 1] : undefined;
+      const hasMonotonicPredecessor =
+        previous !== undefined &&
+        sample.step > previous.step &&
+        typeof sample.sample_time_unix_ms === "number" &&
+        typeof previous.sample_time_unix_ms === "number" &&
+        sample.sample_time_unix_ms > previous.sample_time_unix_ms;
       const phaseById = new Map(sample.phases.map((phase) => [phase.id, phase]));
       const demagPhaseById = new Map(
         sample.demag_subphases.map((phase) => [phase.id, phase]),
@@ -487,12 +526,24 @@ export function buildSolverProfilePanelModel(
         artifact: formatArtifactCost(
           phaseById.get("artifact_enqueue")?.wall_time_ns ?? 0,
           sample.artifact_enqueue_bytes ?? 0,
+          sample.artifact_queue_depth_current ?? 0,
           sample.artifact_queue_depth_max ?? 0,
+          formatCounterPairDelta(
+            sample.artifact_writer_jobs_completed ?? 0,
+            sample.artifact_writer_job_wall_time_ns ?? 0,
+            hasMonotonicPredecessor
+              ? (previous?.artifact_writer_jobs_completed ?? 0)
+              : undefined,
+            hasMonotonicPredecessor
+              ? (previous?.artifact_writer_job_wall_time_ns ?? 0)
+              : undefined,
+          ),
           sample.artifact_writer_jobs_completed ?? 0,
           sample.artifact_writer_job_wall_time_ns ?? 0,
         ),
         cache: formatNs(phaseById.get("cached_preview")?.wall_time_ns ?? 0),
         clock: formatWallClockMs(sample.sample_time_unix_ms),
+        deepClones: String(sample.step_update_deep_clone_count ?? 0),
         demag: formatNs(phaseById.get("demag_total")?.wall_time_ns ?? 0),
         demagDetail: formatDemagDetail(sample, demagPhaseById),
         demagSetup: formatDemagSetup(sample, phaseById),
@@ -505,8 +556,12 @@ export function buildSolverProfilePanelModel(
           phaseById.get("finalization")?.wall_time_ns ?? 0,
           sample.finalization_field_copy_bytes ?? 0,
         ),
-        gap: formatOptionalNs(sample.unprofiled_gap_wall_time_ns),
-        gpuSync: formatGpuSync(sample),
+        gapPerStep: formatNs(sample.unprofiled_gap_per_step_ns ?? 0),
+        gapTotal: formatNs(sample.unprofiled_gap_total_ns ?? 0),
+        gpuSync: formatGpuSync(
+          sample,
+          hasMonotonicPredecessor ? previous : undefined,
+        ),
         id: `${sample.step}:${sample.time}:${sample.sample_time_unix_ms}:${sourceIndex}`,
         missing: formatNs(sample.missing_ns),
         nativeFfi: formatNativeCost(phaseById),
@@ -517,13 +572,10 @@ export function buildSolverProfilePanelModel(
           phaseById.get("relax_preconditioner")?.wall_time_ns ?? 0,
         ),
         rhs: formatNs(phaseById.get("rhs_total")?.wall_time_ns ?? 0),
+        spanSteps: `${sample.span_first_step ?? sample.step}-${sample.span_last_step ?? sample.step} (${sample.span_step_count ?? 1})`,
+        spanWall: formatNs(sample.span_monotonic_wall_time_ns ?? sample.total_ns),
         step: String(sample.step),
         total: formatNs(sample.total_ns),
-        wallDelta: formatWallDelta(
-          sample.delta_wall_time_ns,
-          sample.sample_time_unix_ms,
-          previousSample?.sample_time_unix_ms,
-        ),
       };
     });
   const rows = allRows.slice(0, 5);
@@ -535,12 +587,32 @@ export function buildSolverProfilePanelModel(
     allRows,
     hasSingleThreadWarning: threading?.effective_omp_threads === 1,
     livePublisherSummary: formatLivePublisherSummary(profile?.live_publisher),
+    overheadSummary: profile?.overhead
+      ? `Profiler overhead: record ${formatNs(profile.overhead.last_record_wall_time_ns)} / persist ${formatNs(profile.overhead.last_persist_wall_time_ns)} / publish ${formatNs(profile.overhead.last_publisher_replace_wall_time_ns)} / async clones seed ${profile.overhead.heartbeat_seed_deep_clone_count ?? 0}, worker ${profile.overhead.heartbeat_worker_deep_clone_count ?? 0}`
+      : "Profiler overhead pending",
     previewModeSummary: formatPreviewModeSummary(profile),
+    rateSummary: formatRateSummary(profile),
     rows,
     sampleCount: profile?.aggregates.sample_count ?? 0,
     state: profile?.state ?? "pending",
     threadSummary: threading ? formatThreadSummary(threading) : "Threading pending",
+    windowPhaseSummary: formatWindowPhaseSummary(profile?.latest_samples.at(-1)),
   };
+}
+
+function formatWindowPhaseSummary(
+  sample: SolverProfileStepSampleResource | null | undefined,
+) {
+  const phaseWindows = sample?.phase_windows ?? [];
+  if (phaseWindows.length === 0) return "Window phases pending";
+  const visible = phaseWindows.filter((phase) => phase.sum_wall_time_ns > 0);
+  if (visible.length === 0) return "Window phases: all zero";
+  return `Window phases: ${visible
+    .map(
+      (phase) =>
+        `${phase.label} sum ${formatNs(phase.sum_wall_time_ns)} / mean ${formatNs(phase.mean_wall_time_ns)} / max ${formatNs(phase.max_wall_time_ns)}`,
+    )
+    .join(" | ")}`;
 }
 
 function formatPreviewModeSummary(profile: SolverProfileResource | null | undefined) {
@@ -615,28 +687,6 @@ function formatWallClockMs(value: number | null | undefined) {
   return `${hours}:${minutes}:${seconds}.${millis}`;
 }
 
-function formatWallDelta(
-  deltaWallTimeNs: number | null | undefined,
-  sampleTimeUnixMs: number | null | undefined,
-  previousSampleTimeUnixMs: number | null | undefined,
-) {
-  if (deltaWallTimeNs != null && Number.isFinite(deltaWallTimeNs)) {
-    if (deltaWallTimeNs <= 0) return "first sample";
-    return formatMs(deltaWallTimeNs / 1_000_000);
-  }
-  if (
-    sampleTimeUnixMs == null ||
-    previousSampleTimeUnixMs == null ||
-    !Number.isFinite(sampleTimeUnixMs) ||
-    !Number.isFinite(previousSampleTimeUnixMs) ||
-    sampleTimeUnixMs <= 0 ||
-    previousSampleTimeUnixMs <= 0
-  ) {
-    return "first sample";
-  }
-  return formatMs(Math.max(0, sampleTimeUnixMs - previousSampleTimeUnixMs));
-}
-
 function formatPercent(value: number) {
   return `${Math.round(value)}%`;
 }
@@ -658,32 +708,51 @@ function formatCopyCost(wallTimeNs: number, bytes: number) {
   return `${time} / ${formatBytes(bytes)}`;
 }
 
-function formatOptionalNs(value: number | null | undefined) {
-  if (value == null || !Number.isFinite(value)) return "n/a";
-  return formatNs(value);
-}
-
 function formatArtifactCost(
   wallTimeNs: number,
   bytes: number,
-  queueDepth: number,
-  writerJobsCompleted: number,
-  writerWallTimeNs: number,
+  queueDepthCurrent: number,
+  queueDepthMax: number,
+  writerDelta: CounterPairDelta,
+  writerJobsCumulative: number,
+  writerWallTimeCumulativeNs: number,
 ) {
-  const cost = formatCopyCost(wallTimeNs, bytes);
-  const parts = [cost];
-  if (Number.isFinite(queueDepth) && queueDepth > 0) {
-    parts.push(`q${Math.round(queueDepth)}`);
+  return [
+    `enqueue now ${formatCopyCost(wallTimeNs, bytes)}`,
+    `queue current ${Math.max(0, Math.round(queueDepthCurrent))} / max ${Math.max(0, Math.round(queueDepthMax))}`,
+    formatWriterDelta(writerDelta),
+    `writer cumulative ${Math.max(0, Math.round(writerJobsCumulative))} / ${formatNs(Math.max(0, writerWallTimeCumulativeNs))}`,
+  ].join(" / ");
+}
+
+type CounterPairDelta =
+  | { kind: "value"; count: number; wallTimeNs: number }
+  | { kind: "reset" }
+  | { kind: "unavailable" };
+
+function formatCounterPairDelta(
+  count: number,
+  wallTimeNs: number,
+  previousCount: number | undefined,
+  previousWallTimeNs: number | undefined,
+): CounterPairDelta {
+  if (previousCount === undefined || previousWallTimeNs === undefined) {
+    return { kind: "unavailable" };
   }
-  if (
-    Number.isFinite(writerJobsCompleted) &&
-    writerJobsCompleted > 0 &&
-    Number.isFinite(writerWallTimeNs) &&
-    writerWallTimeNs > 0
-  ) {
-    parts.push(`w${Math.round(writerJobsCompleted)} ${formatNs(writerWallTimeNs)}`);
+  if (count < previousCount || wallTimeNs < previousWallTimeNs) {
+    return { kind: "reset" };
   }
-  return parts.join(" / ");
+  return {
+    kind: "value",
+    count: count - previousCount,
+    wallTimeNs: wallTimeNs - previousWallTimeNs,
+  };
+}
+
+function formatWriterDelta(delta: CounterPairDelta) {
+  if (delta.kind === "unavailable") return "writer delta unavailable";
+  if (delta.kind === "reset") return "writer delta reset";
+  return `writer delta ${Math.round(delta.count)} / ${formatNs(delta.wallTimeNs)}`;
 }
 
 function formatNativeCost(phaseById: Map<string, SolverProfilePhaseResource>) {
@@ -722,17 +791,49 @@ function formatLivePublisherSummary(
   ].join(" / ");
 }
 
-function formatGpuSync(sample: SolverProfileResource["latest_samples"][number]) {
+function formatGpuSync(
+  sample: SolverProfileResource["latest_samples"][number],
+  previous?: SolverProfileResource["latest_samples"][number],
+) {
   const syncCount = sample.hot_loop_host_sync_count ?? 0;
+  const previousSyncCount = previous?.hot_loop_host_sync_count;
+  const deltaLabel =
+    previousSyncCount === undefined
+      ? "delta unavailable"
+      : syncCount < previousSyncCount
+        ? "delta reset"
+        : `delta ${Math.round(syncCount - previousSyncCount)} sync`;
   const controlSyncCount = sample.hot_loop_control_scalar_host_sync_count ?? 0;
   const controlBytes = sample.hot_loop_control_scalar_d2h_bytes ?? 0;
-  if (syncCount <= 0 && controlSyncCount <= 0 && controlBytes <= 0) return "0";
+  if (syncCount <= 0 && controlSyncCount <= 0 && controlBytes <= 0) {
+    return `${deltaLabel} / cumulative 0 sync`;
+  }
   if (controlSyncCount > 0 || controlBytes > 0) {
-    return `${Math.round(syncCount)} sync / ctrl ${Math.round(controlSyncCount)} / ${formatBytes(controlBytes)}`;
+    return `${deltaLabel} / cumulative ${Math.round(syncCount)} sync / ctrl ${Math.round(controlSyncCount)} / ${formatBytes(controlBytes)}`;
   }
   const totalBytes = (sample.hot_loop_h2d_bytes ?? 0) + (sample.hot_loop_d2h_bytes ?? 0);
-  if (totalBytes > 0) return `${Math.round(syncCount)} sync / ${formatBytes(totalBytes)}`;
-  return `${Math.round(syncCount)} sync`;
+  if (totalBytes > 0) {
+    return `${deltaLabel} / cumulative ${Math.round(syncCount)} sync / ${formatBytes(totalBytes)}`;
+  }
+  return `${deltaLabel} / cumulative ${Math.round(syncCount)} sync`;
+}
+
+function formatRateSummary(profile: SolverProfileResource | null | undefined) {
+  const values = [
+    ["Solver", profile?.rates?.solver_steps_per_second],
+    ["End-to-end", profile?.rates?.end_to_end_steps_per_second],
+    ["Published", profile?.rates?.published_steps_per_second],
+  ] as const;
+  const visible = values.flatMap(([label, metric]) =>
+    metric
+      ? [
+          `${label} ${metric.value.toFixed(2)} steps/s (${metric.window_step_count} / ${(
+            metric.window_wall_time_ns / 1.0e9
+          ).toFixed(2)} s)`,
+        ]
+      : [],
+  );
+  return visible.length > 0 ? visible.join(" | ") : "Rates pending";
 }
 
 function formatBytes(value: number) {
@@ -740,22 +841,6 @@ function formatBytes(value: number) {
   if (value >= 1_048_576) return `${(value / 1_048_576).toFixed(1)} MiB`;
   if (value >= 1024) return `${(value / 1024).toFixed(1)} KiB`;
   return `${Math.round(value)} B`;
-}
-
-function formatMs(value: number) {
-  if (value >= 3_600_000) {
-    const hours = Math.floor(value / 3_600_000);
-    const minutes = Math.floor((value % 3_600_000) / 60_000);
-    const seconds = ((value % 60_000) / 1_000).toFixed(3).padStart(6, "0");
-    return `${hours}h ${String(minutes).padStart(2, "0")}m ${seconds}s`;
-  }
-  if (value >= 60_000) {
-    const minutes = Math.floor(value / 60_000);
-    const seconds = ((value % 60_000) / 1_000).toFixed(3).padStart(6, "0");
-    return `${minutes}m ${seconds}s`;
-  }
-  if (value >= 1_000) return `${(value / 1_000).toFixed(3)} s`;
-  return `${value.toFixed(0)} ms`;
 }
 
 function clampPercent(value: number) {

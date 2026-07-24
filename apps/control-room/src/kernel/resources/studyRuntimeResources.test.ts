@@ -43,6 +43,7 @@ import {
   frequencyDomainManifestRevision,
   frequencyDomainSweepProgressRevision,
   frequencyDomainTextArtifactRevision,
+  fieldMetaFreshnessRevision,
   resolveHysteresisExecutionTreeResourceKey,
   resolveFieldMetaResourceKey,
   runtimeCommandControlSessionStatusEquals,
@@ -266,6 +267,47 @@ describe("study runtime command resource bundles", () => {
       }),
     ).toBe(
       `${expectedPath}?component=x&scope_id=permalloy_layer&scope_kind=object`,
+    );
+  });
+
+  it("tracks field freshness independently of the payload revision", () => {
+    const base = {
+      components: 3,
+      domain_generation_id: "8",
+      field_revision: 12,
+      kind: "vector_field",
+      label: "Demagnetizing field",
+      location: "magnetic_only",
+      materialization_wall_time_ns: 80_000_000,
+      materialized_at_unix_ms: 1_700_000_000_000,
+      quantity_id: "H_demag",
+      source_revision: 7,
+      source_step: 40,
+      stale_by_steps: 10,
+      state: "stale_complete",
+      stats: null,
+      unit: "A/m",
+    } as const;
+
+    expect(fieldMetaFreshnessRevision(base as never)).toBe(
+      "12:stale_complete:7:40:10:1700000000000:80000000:",
+    );
+    expect(
+      fieldMetaFreshnessRevision({
+        ...base,
+        source_step: 50,
+        stale_by_steps: 0,
+        state: "complete",
+      } as never),
+    ).not.toBe(fieldMetaFreshnessRevision(base as never));
+    expect(
+      fieldMetaFreshnessRevision({
+        ...base,
+        materialization_error: "native preview snapshot failed",
+        state: "error",
+      } as never),
+    ).toBe(
+      "12:error:7:40:10:1700000000000:80000000:native preview snapshot failed",
     );
   });
 

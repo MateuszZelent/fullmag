@@ -79,6 +79,13 @@ FemMaterialRuntimeAdapter::ms_weighted_aos3_mass_bilinear_termwise(
         left_aos3_nodal_values, right_aos3_nodal_values);
 }
 
+MsWeightedAos3AverageReduction
+FemMaterialRuntimeAdapter::ms_weighted_aos3_average_reduction(
+    const std::vector<double> &aos3_nodal_values) const
+{
+    return realization_.ms_weighted_aos3_average_reduction(aos3_nodal_values);
+}
+
 bool initialize_material_runtime(Context &ctx, std::string &error) {
     if (ctx.material_fields.runtime.has_value()) {
         return true;

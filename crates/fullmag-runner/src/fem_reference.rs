@@ -32,8 +32,7 @@ use crate::preview::{
 };
 use crate::quantities::normalized_quantity_name;
 use crate::relaxation::{
-    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow,
-    RelaxationTorqueConfirmation,
+    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
 };
 use crate::scalar_metrics::{
     apply_average_m_to_step_stats, average_magnetization_components,
@@ -45,8 +44,9 @@ use crate::schedules::{
     OutputSchedule,
 };
 use crate::types::{
-    ExecutedRun, ExecutionProvenance, FieldSnapshot, LivePreviewRequest, LiveStepConsumer,
-    RunError, RunResult, RunStatus, StateObservables, StepAction, StepStats, StepUpdate,
+    ExecutedRun, ExecutionProvenance, FemStageExecutionContext, FieldSnapshot, LivePreviewRequest,
+    LiveStepConsumer, RunError, RunResult, RunStatus, StateObservables, StepAction, StepStats,
+    StepUpdate,
 };
 
 use std::time::Instant;
@@ -58,7 +58,33 @@ pub(crate) fn execute_reference_fem(
     live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
-    execute_reference_fem_impl(plan, until_seconds, outputs, live, artifact_writer)
+    let stage_context = FemStageExecutionContext::from_fem_plan(plan);
+    execute_reference_fem_with_context(
+        plan,
+        &stage_context,
+        until_seconds,
+        outputs,
+        live,
+        artifact_writer,
+    )
+}
+
+pub(crate) fn execute_reference_fem_with_context(
+    plan: &FemPlanIR,
+    stage_context: &FemStageExecutionContext,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    live: Option<LiveStepConsumer<'_>>,
+    artifact_writer: Option<ArtifactPipelineSender>,
+) -> Result<ExecutedRun, RunError> {
+    execute_reference_fem_impl(
+        plan,
+        stage_context,
+        until_seconds,
+        outputs,
+        live,
+        artifact_writer,
+    )
 }
 
 pub(crate) fn snapshot_preview(
@@ -515,11 +541,13 @@ fn reference_demag_provenance_name(plan: &FemPlanIR) -> Option<String> {
 
 fn execute_reference_fem_impl(
     plan: &FemPlanIR,
+    stage_context: &FemStageExecutionContext,
     until_seconds: f64,
     outputs: &[OutputIR],
     mut live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    let fem_mesh_generation_id = stage_context.generation_id();
     if until_seconds <= 0.0 {
         return Err(RunError {
             message: "until_seconds must be positive".to_string(),
@@ -667,8 +695,7 @@ fn execute_reference_fem_impl(
                 let action = (live.on_step)(StepUpdate {
                     stats: current_stats.clone(),
                     grid: live.grid,
-                    fem_mesh: (current_stats.step == 0)
-                        .then_some(crate::types::FemMeshPayload::from(plan)),
+                    fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                     magnetization: None,
                     preview_field,
                     cached_preview_fields: None,
@@ -813,11 +840,7 @@ fn execute_reference_fem_impl(
                 let action = (live.on_step)(StepUpdate {
                     stats: update_stats,
                     grid: live.grid,
-                    fem_mesh: if step_count <= 1 {
-                        Some(crate::types::FemMeshPayload::from(plan))
-                    } else {
-                        None
-                    },
+                    fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                     magnetization,
                     preview_field,
                     cached_preview_fields: None,
@@ -888,11 +911,7 @@ fn execute_reference_fem_impl(
             let action = (live.on_step)(StepUpdate {
                 stats: update_stats,
                 grid: live.grid,
-                fem_mesh: if step_count <= 1 {
-                    Some(crate::types::FemMeshPayload::from(plan))
-                } else {
-                    None
-                },
+                fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                 magnetization,
                 preview_field,
                 cached_preview_fields: None,

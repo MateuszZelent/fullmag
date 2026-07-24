@@ -27,8 +27,7 @@ use crate::preview::{
 use crate::quantities::normalized_quantity_name;
 use crate::relaxation::{
     apply_energy_minimizer_provenance, execute_nonlinear_cg, execute_projected_gradient_bb,
-    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow,
-    RelaxationTorqueConfirmation,
+    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
     CPU_SOA_DIRECT_MINIMIZER_REALIZATION,
 };
 use crate::scalar_metrics::{
@@ -916,7 +915,7 @@ pub(crate) fn execute_reference_fdm(
                         stats: current_stats.clone(),
                         scalar_row_due: preview_due && preview_targets_global_scalar,
                         grid: live.grid,
-                        fem_mesh: None,
+                        fem_mesh_generation_id: None,
                         magnetization: Some(flatten_vectors(state.magnetization())),
                         preview_field,
                         cached_preview_fields: None,
@@ -1095,7 +1094,7 @@ pub(crate) fn execute_reference_fdm(
                     stats: update_stats,
                     scalar_row_due: due_scalar_row,
                     grid: live.grid,
-                    fem_mesh: None,
+                    fem_mesh_generation_id: None,
                     magnetization,
                     preview_field,
                     cached_preview_fields: None,

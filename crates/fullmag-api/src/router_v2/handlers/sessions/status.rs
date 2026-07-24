@@ -230,14 +230,7 @@ pub(crate) fn build_live_status(
         .saturating_sub(snapshot.session.started_at_unix_ms as u64 / 1000);
     let total_steps = latest.map(|s| s.step).unwrap_or(0);
 
-    // Compute instantaneous steps/s from the solver profiler's per-step wall
-    // time when available, falling back to the lifetime average.
-    let steps_per_second = instantaneous_steps_per_second(&snapshot.solver_profile).or_else(|| {
-        latest
-            .and_then(|step| (step.wall_time_ns > 0).then_some(step.wall_time_ns as f64 / 1.0e9))
-            .filter(|elapsed| *elapsed > 0.0)
-            .map(|elapsed| total_steps as f64 / elapsed)
-    });
+    let steps_per_second = compat_end_to_end_steps_per_second(&snapshot.solver_profile);
     let metrics = MetricsSummary {
         uptime_seconds: uptime,
         total_steps,
@@ -539,25 +532,19 @@ pub(crate) fn artifact_revision(snapshot: &SessionStateResponse) -> u64 {
 /// Compute instantaneous steps/s from the solver profiler's recent per-step
 /// wall time samples.  Returns `None` when the profiler is inactive or has
 /// no samples, allowing the caller to fall back to the lifetime average.
-fn instantaneous_steps_per_second(
+fn compat_end_to_end_steps_per_second(
     profile: &crate::schemas::diagnostics::SolverProfileResource,
 ) -> Option<f64> {
-    if profile.latest_samples.is_empty() {
-        return None;
-    }
-    // Average the per-step wall time from the most recent samples (up to 5).
-    let window = &profile.latest_samples[profile.latest_samples.len().saturating_sub(5)..];
-    let total_ns: u64 = window.iter().map(|s| s.total_ns).sum();
-    if total_ns == 0 || window.is_empty() {
-        return None;
-    }
-    let avg_ns = total_ns as f64 / window.len() as f64;
-    Some(1.0e9 / avg_ns)
+    profile
+        .rates
+        .end_to_end_steps_per_second
+        .as_ref()
+        .map(|metric| metric.value)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::relaxation_algorithms_available;
+    use super::{compat_end_to_end_steps_per_second, relaxation_algorithms_available};
 
     #[test]
     fn session_status_advertises_production_relaxation_algorithms() {
@@ -570,5 +557,20 @@ mod tests {
                 "tangent_plane_implicit".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn compatibility_rate_alias_is_only_the_closed_end_to_end_rate() {
+        let mut profile = crate::schemas::diagnostics::SolverProfileResource::default();
+        profile.rates.end_to_end_steps_per_second =
+            Some(crate::schemas::diagnostics::RateMetricResource {
+                value: 2.0,
+                window_step_count: 10,
+                window_wall_time_ns: 5_000_000_000,
+                source_revision: 7,
+            });
+        assert_eq!(compat_end_to_end_steps_per_second(&profile), Some(2.0));
+        profile.rates.end_to_end_steps_per_second = None;
+        assert_eq!(compat_end_to_end_steps_per_second(&profile), None);
     }
 }

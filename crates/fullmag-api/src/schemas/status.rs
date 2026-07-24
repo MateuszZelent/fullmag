@@ -169,5 +169,7 @@ pub struct EnergySummary {
 pub struct MetricsSummary {
     pub uptime_seconds: u64,
     pub total_steps: u64,
+    /// Deprecated compatibility alias of the diagnostics end-to-end rate.
+    #[schema(deprecated)]
     pub steps_per_second: Option<f64>,
 }

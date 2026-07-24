@@ -4034,7 +4034,19 @@ export interface components {
             kind: string;
             label: string;
             location: string;
+            materialization_error?: string | null;
+            /** Format: int64 */
+            materialization_wall_time_ns: number;
+            /** Format: int64 */
+            materialized_at_unix_ms: number;
             quantity_id: string;
+            /** Format: int64 */
+            source_revision: number;
+            /** Format: int64 */
+            source_step: number;
+            /** Format: int64 */
+            stale_by_steps: number;
+            state: components["schemas"]["FieldMaterializationState"];
             unit: string;
         };
         FieldDriveCreateRequest: {
@@ -4079,6 +4091,8 @@ export interface components {
             width_m?: number | null;
             window?: string;
         };
+        /** @enum {string} */
+        FieldMaterializationState: "complete" | "stale_complete" | "pending" | "error";
         FieldMatrixResponse: {
             aggregation?: string | null;
             bounds: components["schemas"]["FieldSliceBounds"];
@@ -4119,7 +4133,19 @@ export interface components {
             kind: string;
             label: string;
             location: string;
+            materialization_error?: string | null;
+            /** Format: int64 */
+            materialization_wall_time_ns: number;
+            /** Format: int64 */
+            materialized_at_unix_ms: number;
             quantity_id: string;
+            /** Format: int64 */
+            source_revision: number;
+            /** Format: int64 */
+            source_step: number;
+            /** Format: int64 */
+            stale_by_steps: number;
+            state: components["schemas"]["FieldMaterializationState"];
             stats?: null | components["schemas"]["FieldStats"];
             unit: string;
         };
@@ -5305,6 +5331,12 @@ export interface components {
             /** Format: int64 */
             replace_count: number;
             /** Format: int64 */
+            successful_publish_source_revision?: number;
+            /** Format: int64 */
+            successful_publish_step_count?: number;
+            /** Format: int64 */
+            successful_publish_window_wall_time_ns?: number;
+            /** Format: int64 */
             total_clone_wall_time_ns: number;
             /** Format: int64 */
             total_merge_wall_time_ns: number;
@@ -6071,7 +6103,11 @@ export interface components {
             revision: number;
         };
         MetricsSummary: {
-            /** Format: double */
+            /**
+             * Format: double
+             * @deprecated
+             * @description Deprecated compatibility alias of the diagnostics end-to-end rate.
+             */
             steps_per_second?: number | null;
             /** Format: int64 */
             total_steps: number;
@@ -6477,6 +6513,14 @@ export interface components {
             vector_style: components["schemas"]["PlanarVectorStyleState"];
             view_scope: components["schemas"]["PlanarViewScopeState"];
         };
+        PreparationClockAdjustment: {
+            /** Format: int64 */
+            backward_delta_ms: number;
+            /** Format: int64 */
+            observed_at_unix_ms: number;
+            /** Format: int64 */
+            stage_started_at_unix_ms: number;
+        };
         PreparationExecutionSummary: {
             backend?: string | null;
             device?: string | null;
@@ -6502,6 +6546,7 @@ export interface components {
         /** @enum {string} */
         PreparationLogLevel: "info" | "warning" | "error";
         PreparationProgressStage: {
+            clock_adjustment?: null | components["schemas"]["PreparationClockAdjustment"];
             /** Format: int64 */
             completed_at_unix_ms?: number | null;
             detail: string;
@@ -6574,6 +6619,16 @@ export interface components {
             /** Format: double */
             contrast_min?: number | null;
             field_component: components["schemas"]["FieldComponent"];
+        };
+        RateMetricResource: {
+            /** Format: int64 */
+            source_revision: number;
+            /** Format: double */
+            value: number;
+            /** Format: int64 */
+            window_step_count: number;
+            /** Format: int64 */
+            window_wall_time_ns: number;
         };
         RealizedGeometryBody: {
             body_id: string;
@@ -7567,6 +7622,24 @@ export interface components {
             /** Format: int64 */
             sample_interval_wall_ms?: number;
         };
+        SolverProfileOverheadDiagnosticsResource: {
+            /** Format: int64 */
+            heartbeat_seed_deep_clone_count?: number;
+            /** Format: int64 */
+            heartbeat_worker_deep_clone_count?: number;
+            /** Format: int64 */
+            last_persist_wall_time_ns: number;
+            /** Format: int64 */
+            last_publisher_replace_wall_time_ns: number;
+            /** Format: int64 */
+            last_record_wall_time_ns: number;
+            /** Format: int64 */
+            total_persist_wall_time_ns: number;
+            /** Format: int64 */
+            total_publisher_replace_wall_time_ns: number;
+            /** Format: int64 */
+            total_record_wall_time_ns: number;
+        };
         SolverProfilePhaseResource: {
             id: string;
             label: string;
@@ -7575,18 +7648,32 @@ export interface components {
             /** Format: int64 */
             wall_time_ns: number;
         };
+        SolverProfilePhaseWindowResource: {
+            id: string;
+            label: string;
+            /** Format: int64 */
+            max_wall_time_ns: number;
+            /** Format: int64 */
+            mean_wall_time_ns: number;
+            /** Format: int64 */
+            sum_wall_time_ns: number;
+        };
         SolverProfileResource: {
             aggregates: components["schemas"]["SolverProfileAggregatesResource"];
             artifact_refs: string[];
             config: components["schemas"]["SolverProfileCommandConfig"];
             latest_samples: components["schemas"]["SolverProfileStepSampleResource"][];
             live_publisher?: null | components["schemas"]["LivePublisherDiagnosticsResource"];
+            overhead?: components["schemas"]["SolverProfileOverheadDiagnosticsResource"];
             preview_3d_disabled?: boolean;
+            rates?: components["schemas"]["SolverRateDiagnosticsResource"];
             /** Format: int64 */
             revision: number;
             state: string;
             threading?: null | components["schemas"]["SolverProfileThreadingResource"];
         };
+        /** @enum {string} */
+        SolverProfileSampleKindResource: "normal_step" | "publish" | "preview" | "finalization" | "stall";
         SolverProfileStepSampleResource: {
             /** Format: int64 */
             artifact_enqueue_bytes?: number;
@@ -7604,6 +7691,8 @@ export interface components {
             artifact_writer_job_wall_time_ns?: number;
             /** Format: int64 */
             artifact_writer_jobs_completed?: number;
+            /** Format: int64 */
+            backend_create_wall_time_ns?: number;
             /** Format: int64 */
             delta_wall_time_ns?: number | null;
             demag_preconditioner?: string | null;
@@ -7639,12 +7728,17 @@ export interface components {
             /** Format: int64 */
             native_ffi_overhead_wall_time_ns?: number;
             /** Format: int64 */
+            native_solver_wall_time_ns?: number;
+            /** Format: int64 */
             phase_sum_ns: number;
+            phase_windows?: components["schemas"]["SolverProfilePhaseWindowResource"][];
             phases: components["schemas"]["SolverProfilePhaseResource"][];
             /** Format: double */
             poisson_final_residual: number;
             /** Format: int32 */
             poisson_iterations: number;
+            /** Format: int64 */
+            profiled_step_total_ns?: number;
             /** Format: int32 */
             rejected_attempts: number;
             /** Format: int64 */
@@ -7667,15 +7761,30 @@ export interface components {
             relaxation_update_wall_time_ns?: number;
             /** Format: int32 */
             rhs_evaluations: number;
+            sample_kinds?: components["schemas"]["SolverProfileSampleKindResource"][];
             /** Format: int64 */
             sample_time_unix_ms?: number;
             /** Format: int64 */
+            span_first_step?: number;
+            /** Format: int64 */
+            span_last_step?: number;
+            /** Format: int64 */
+            span_monotonic_wall_time_ns?: number;
+            /** Format: int64 */
+            span_step_count?: number;
+            /** Format: int64 */
             step: number;
+            /** Format: int64 */
+            step_update_deep_clone_count?: number;
             threading: components["schemas"]["SolverProfileThreadingResource"];
             /** Format: double */
             time: number;
             /** Format: int64 */
             total_ns: number;
+            /** Format: int64 */
+            unprofiled_gap_per_step_ns?: number;
+            /** Format: int64 */
+            unprofiled_gap_total_ns?: number;
             /** Format: int64 */
             unprofiled_gap_wall_time_ns?: number | null;
         };
@@ -7689,6 +7798,11 @@ export interface components {
             /** Format: int32 */
             requested_omp_threads: number;
             thread_mode: string;
+        };
+        SolverRateDiagnosticsResource: {
+            end_to_end_steps_per_second?: null | components["schemas"]["RateMetricResource"];
+            published_steps_per_second?: null | components["schemas"]["RateMetricResource"];
+            solver_steps_per_second?: null | components["schemas"]["RateMetricResource"];
         };
         SolverStatusResource: {
             /** Format: double */
@@ -7858,6 +7972,8 @@ export interface components {
             status: string;
             /** Format: double */
             threshold?: number | null;
+            /** Format: double */
+            time_to_tolerance_seconds?: number | null;
         };
         StageExecutionResource: {
             /** Format: int32 */

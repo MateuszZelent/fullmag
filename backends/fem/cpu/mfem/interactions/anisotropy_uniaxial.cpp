@@ -10,9 +10,6 @@
 #include "context.hpp"
 #include "fem_common.hpp"
 
-#include <cmath>
-#include <limits>
-
 #include <array>
 #include <cmath>
 #include <limits>
@@ -44,6 +41,63 @@ constexpr std::array<double, 3> kGl3Weights = {
     0.444444444444444444444444444444444,
     0.277777777777777777777777777777778,
 };
+
+struct DoubleDouble {
+    double hi;
+    double lo;
+};
+
+DoubleDouble two_sum(double a, double b)
+{
+    const double hi = a + b;
+    const double b_virtual = hi - a;
+    return {hi, (a - (hi - b_virtual)) + (b - b_virtual)};
+}
+
+DoubleDouble two_product(double a, double b)
+{
+    const double hi = a * b;
+    if (a != 0.0 && b != 0.0 && std::isfinite(a) && std::isfinite(b) &&
+        (!std::isfinite(hi) ||
+         std::abs(hi) < std::numeric_limits<double>::min())) {
+        return {hi, std::numeric_limits<double>::quiet_NaN()};
+    }
+    return {hi, std::fma(a, b, -hi)};
+}
+
+DoubleDouble add(DoubleDouble a, DoubleDouble b)
+{
+    const DoubleDouble sum = two_sum(a.hi, b.hi);
+    const DoubleDouble correction = two_sum(sum.lo, a.lo + b.lo);
+    const DoubleDouble normalized = two_sum(sum.hi, correction.hi);
+    return {normalized.hi, normalized.lo + correction.lo};
+}
+
+DoubleDouble subtract(DoubleDouble a, DoubleDouble b)
+{
+    return add(a, {-b.hi, -b.lo});
+}
+
+DoubleDouble multiply(DoubleDouble a, DoubleDouble b)
+{
+    const DoubleDouble product = two_product(a.hi, b.hi);
+    const double correction =
+        product.lo + a.hi * b.lo + a.lo * b.hi + a.lo * b.lo;
+    return two_sum(product.hi, correction);
+}
+
+DoubleDouble dot3(
+    double ax,
+    double ay,
+    double az,
+    double bx,
+    double by,
+    double bz)
+{
+    return add(
+        add(two_product(ax, bx), two_product(ay, by)),
+        two_product(az, bz));
+}
 
 void require_p1_scalar(const std::vector<double> &values, std::size_t nodes, const char *name) {
     if (values.size() != nodes) {
@@ -332,22 +386,92 @@ relaxation::EnergyDifference uniaxial_anisotropy_energy_difference(
     const bool axis_field = !ctx.anisotropy.uniaxial_axis_x_field.empty() &&
         !ctx.anisotropy.uniaxial_axis_y_field.empty() &&
         !ctx.anisotropy.uniaxial_axis_z_field.empty();
+    std::size_t active_nodes = 0u;
+    DoubleDouble accumulated_difference{0.0, 0.0};
+    long double accumulated_operand_scale = 0.0L;
     for (size_t node = 0; node < nodes; ++node) {
         if (!ctx.mesh.magnetic_node_mask.empty() && ctx.mesh.magnetic_node_mask[node] == 0u) continue;
+        ++active_nodes;
         const double ku1 = ctx.material_fields.Ku_field.empty() ? ctx.anisotropy.uniaxial_Ku : ctx.material_fields.Ku_field[node];
         const double ku2 = ctx.material_fields.Ku2_field.empty() ? ctx.anisotropy.uniaxial_Ku2 : ctx.material_fields.Ku2_field[node];
         const double ux = axis_field ? ctx.anisotropy.uniaxial_axis_x_field[node] : ctx.anisotropy.uniaxial_axis[0];
         const double uy = axis_field ? ctx.anisotropy.uniaxial_axis_y_field[node] : ctx.anisotropy.uniaxial_axis[1];
         const double uz = axis_field ? ctx.anisotropy.uniaxial_axis_z_field[node] : ctx.anisotropy.uniaxial_axis[2];
         const size_t base = 3u * node;
-        const double q0 = current_m_xyz[base]*ux + current_m_xyz[base+1u]*uy + current_m_xyz[base+2u]*uz;
-        const double q1 = trial_m_xyz[base]*ux + trial_m_xyz[base+1u]*uy + trial_m_xyz[base+2u]*uz;
-        const double term = ctx.integration_weights.mfem_lumped_mass[node] *
-            (-ku1 * (q1*q1 - q0*q0) - ku2 * (q1*q1*q1*q1 - q0*q0*q0*q0));
-        result.delta_joules += term;
-        result.absolute_term_sum_joules += std::abs(term);
+        const DoubleDouble q0 = dot3(
+            current_m_xyz[base], current_m_xyz[base+1u],
+            current_m_xyz[base+2u], ux, uy, uz);
+        const DoubleDouble q1 = dot3(
+            trial_m_xyz[base], trial_m_xyz[base+1u],
+            trial_m_xyz[base+2u], ux, uy, uz);
+        const DoubleDouble q0_squared = multiply(q0, q0);
+        const DoubleDouble q1_squared = multiply(q1, q1);
+        const DoubleDouble quadratic_difference = multiply(
+            subtract(q1, q0), add(q1, q0));
+        const DoubleDouble quartic_difference = multiply(
+            quadratic_difference, add(q1_squared, q0_squared));
+        const double volume = ctx.integration_weights.mfem_lumped_mass[node];
+        DoubleDouble ku1_coefficient = two_product(volume, ku1);
+        DoubleDouble ku2_coefficient = two_product(volume, ku2);
+        ku1_coefficient = {-ku1_coefficient.hi, -ku1_coefficient.lo};
+        ku2_coefficient = {-ku2_coefficient.hi, -ku2_coefficient.lo};
+        const DoubleDouble ku1_term =
+            multiply(quadratic_difference, ku1_coefficient);
+        const DoubleDouble ku2_term =
+            multiply(quartic_difference, ku2_coefficient);
+        accumulated_difference = add(
+            accumulated_difference, add(ku1_term, ku2_term));
+        const long double q0_operand_scale =
+            std::abs(static_cast<long double>(current_m_xyz[base]) * ux) +
+            std::abs(static_cast<long double>(current_m_xyz[base+1u]) * uy) +
+            std::abs(static_cast<long double>(current_m_xyz[base+2u]) * uz);
+        const long double q1_operand_scale =
+            std::abs(static_cast<long double>(trial_m_xyz[base]) * ux) +
+            std::abs(static_cast<long double>(trial_m_xyz[base+1u]) * uy) +
+            std::abs(static_cast<long double>(trial_m_xyz[base+2u]) * uz);
+        const long double projection_scale = q0_operand_scale + q1_operand_scale;
+        const long double quadratic_operand_scale =
+            projection_scale * projection_scale;
+        const long double quartic_operand_scale =
+            quadratic_operand_scale * projection_scale * projection_scale;
+        accumulated_operand_scale +=
+            std::abs(static_cast<long double>(volume) * ku1) *
+                quadratic_operand_scale +
+            std::abs(static_cast<long double>(volume) * ku2) *
+                quartic_operand_scale;
     }
-    result.roundoff_bound_joules = relaxation::reduction_roundoff_bound(nodes) * result.absolute_term_sum_joules;
+    // Conservatively covers every primitive operation in the double-double
+    // projection, polynomial products, scaling, and global accumulation.
+    constexpr std::size_t kScalarOperationsPerActiveNode = 256u;
+    const std::size_t scalar_operation_count =
+        active_nodes > std::numeric_limits<std::size_t>::max() /
+                kScalarOperationsPerActiveNode
+        ? std::numeric_limits<std::size_t>::max()
+        : kScalarOperationsPerActiveNode * active_nodes;
+    const long double double_epsilon =
+        std::numeric_limits<double>::epsilon();
+    const long double n_epsilon = static_cast<long double>(scalar_operation_count) *
+        double_epsilon * double_epsilon;
+    const long double relative_operation_bound =
+        !std::isfinite(n_epsilon) || n_epsilon >= 1.0L
+        ? std::numeric_limits<long double>::infinity()
+        : n_epsilon / (1.0L - n_epsilon) * accumulated_operand_scale;
+    const long double denormal_operation_floor =
+        static_cast<long double>(scalar_operation_count) *
+        static_cast<long double>(std::numeric_limits<double>::denorm_min());
+    const long double operation_bound =
+        relative_operation_bound + denormal_operation_floor;
+    result.delta_joules = accumulated_difference.hi + accumulated_difference.lo;
+    result.absolute_term_sum_joules = std::nextafter(
+        static_cast<double>(accumulated_operand_scale),
+        std::numeric_limits<double>::infinity());
+    const long double cast_error = std::abs(
+        static_cast<long double>(result.delta_joules) -
+        (static_cast<long double>(accumulated_difference.hi) +
+         static_cast<long double>(accumulated_difference.lo)));
+    result.roundoff_bound_joules = std::nextafter(
+        static_cast<double>(operation_bound + cast_error),
+        std::numeric_limits<double>::infinity());
     return result;
 }
 

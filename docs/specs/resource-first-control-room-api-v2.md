@@ -42,7 +42,7 @@ The API is organized by platform concepts, not by frontend screens:
 | `workspace` | UI shell state: layout, ribbon, selection, active tree node |
 | `analysis` | Analysis products such as eigenmodes and dispersion |
 | `persistence` | Checkpoints, exports, imports, recovery |
-| `diagnostics` | GPU telemetry and engine logs |
+| `diagnostics` | GPU/CPU telemetry, engine logs, and revisioned solver/publisher performance diagnostics |
 
 The default frontend base path is `/v2/sessions/current`.
 
@@ -125,8 +125,9 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `model/geometry/*` | geometry capability, validation, realization, and diagnostic projections derived from the current scene |
 | `simulation/runs/current` and `simulation/runs/{run_id}` | run metadata, requested/resolved execution, artifact location, run-level totals |
 | `simulation/preparation` | bounded startup preparation aggregate: canonical stage order/status, current progress, stage timing, requested/resolved execution summaries, safe log tail, and safe failure correlation |
-| `simulation/stages/execution` | full stage tree and stage state |
+| `simulation/stages/execution` | full stage tree and stage state, including tolerance-qualified completion duration |
 | `simulation/solver/status` | live solver state: runtime state, algorithm, step, algorithm-appropriate `dt`, exact torque, separate RHS norm, convergence, stop reason/metric/unit, warnings |
+| `diagnostics/solver-profile` | opt-in bounded phase profile plus explicit solver, end-to-end, and successful-publication rate objects |
 | `simulation/solver/energies/*` | current and historical energy samples |
 | `data/tables/default/rows` | table-shaped scalar history for ECharts windows, including `cursor`, `from_row`/`to_row`, `from_t`/`to_t`, `limit`, `target_points`, `decimation`, and `include_tail` query identity; JSON rows are the control-plane/debug view, while `rows.bin` is the production data-plane payload for chart values |
 | `data/scalars` | compatibility projection of the default scalar table, not a second scalar-history owner |
@@ -151,6 +152,14 @@ explicit aggregate/stage/log enums, optional backend-reported progress in the
 inclusive range `0..100`, monotonic-derived stage durations, requested and
 resolved execution summaries, at most 200 bounded safe log entries, and an
 optional safe failure with a diagnostics correlation id.
+
+Stage ordering is defined by the aggregate `revision` and canonical stage
+sequence, not by Unix wall-clock ordering. If the system wall clock moves
+backward while a stage is active, the transition continues, `duration_ms`
+remains monotonic-derived, the raw observed Unix timestamp is preserved, and
+the stage exposes `clock_adjustment` with the observed timestamp, stage-start
+timestamp, and backward delta. The runtime must not silently clamp or retry a
+preparation transition after a wall-clock adjustment.
 
 `GET /v2/sessions/current/status` exposes only
 `resources.simulation_preparation_revision`; it does not copy preparation
@@ -180,6 +189,21 @@ The simulation resources expose one algorithm-specific relaxation contract:
   threshold, and diagnostics. Budget exhaustion is completed/non-converged;
   numerical stagnation is failed/non-converged. Table rows and artifacts do
   not infer completion.
+- `time_to_tolerance_seconds` uses stage start/completion timestamps only
+  when `status=completed`, `converged=true`, the reason and canonical metric
+  kind/name form a coherent torque or energy tolerance, both value and
+  threshold are finite and non-negative, and `value <= threshold`; it is absent
+  for gradient/numerical stagnation, `max_steps`, time budgets, cancellation,
+  skipped, stopped, failed, missing, mismatched, or non-finite records.
+- solver and end-to-end rates share the same closed profiler window and source
+  revision. Successful-publication rate is the accepted-step delta between
+  ordered same-run successful HTTP endpoints divided by their completion span;
+  duplicates and out-of-order endpoints are ignored, while a run change resets
+  the zero-count boundary. Each rate is
+  `{ value, window_step_count, window_wall_time_ns, source_revision }`.
+- deprecated `status.metrics.steps_per_second` is only an end-to-end scalar
+  alias. Without a closed monotonic profiler span it is null; status never
+  carries the full rate objects.
 
 The Study Explorer node and its Inspector consume these typed v2 resources
 through the generated transport, handwritten facade, and resource hooks. They
@@ -195,6 +219,30 @@ Realtime invalidation follows the same single-owner rule. `visualization/state`
 may project the current active quantity, camera, and layer policy, but it does
 not own field payload freshness; `data/fields/*` does. Conversely,
 `data/fields/*` does not own camera or workspace-shell freshness.
+
+### Field materialization freshness
+
+Field catalog descriptors and `data/fields/{quantity_id}/meta` own the
+materialization state for each quantity. Both resources expose
+`source_step`, `source_revision`, `materialized_at_unix_ms`,
+`stale_by_steps`, `materialization_wall_time_ns`, and `state`, where `state`
+is one of `complete`, `stale_complete`, `pending`, or `error`.
+
+- `complete` means the materialized payload was produced from the current
+  solver step.
+- `stale_complete` means a complete payload remains available, but its
+  `source_step` precedes the current solver step by `stale_by_steps`.
+- `pending` means the selected quantity is being materialized and no complete
+  payload for that quantity is available yet.
+- `error` is reserved for an explicit materialization failure; it must not be
+  inferred from ordinary staleness.
+
+A client must retain and render `stale_complete` data while its topology
+generation remains compatible. A quantity switch resolves to the last
+complete frame for that quantity or to explicit `pending`; waiting must not
+clear an otherwise compatible viewport payload. The thin session status owns
+only field-family revision pointers and never copies these per-quantity
+freshness fields.
 
 ## 3.2 Capability ownership
 

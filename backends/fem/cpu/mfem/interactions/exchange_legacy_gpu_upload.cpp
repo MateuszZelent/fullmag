@@ -13,12 +13,96 @@
 #include <mfem.hpp>
 #endif
 
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace fullmag::fem {
+
+bool canonicalize_legacy_exchange_graph_laplacian(
+    const std::vector<uint32_t> &row_offsets,
+    const std::vector<uint32_t> &col_indices,
+    std::vector<double> &values,
+    bool materialize_diagonal,
+    std::string &error)
+{
+    if (row_offsets.size() < 2u || row_offsets.back() != col_indices.size() ||
+        values.size() != col_indices.size()) {
+        error = "legacy exchange graph canonicalization received invalid CSR";
+        return false;
+    }
+    const size_t rows = row_offsets.size() - 1u;
+    std::unordered_map<uint64_t, size_t> positions;
+    positions.reserve(values.size());
+    std::vector<size_t> diagonal_positions(rows, values.size());
+    for (size_t row = 0; row < rows; ++row) {
+        for (uint32_t p = row_offsets[row]; p < row_offsets[row + 1u]; ++p) {
+            const uint32_t col = col_indices[p];
+            if (col >= rows) {
+                error = "legacy exchange graph canonicalization column is out of bounds";
+                return false;
+            }
+            const uint64_t key = (static_cast<uint64_t>(row) << 32u) | col;
+            if (!positions.emplace(key, p).second) {
+                error = "legacy exchange graph canonicalization requires unique CSR entries";
+                return false;
+            }
+        }
+    }
+    for (size_t row = 0; row < rows; ++row) {
+        for (uint32_t p = row_offsets[row]; p < row_offsets[row + 1u]; ++p) {
+            const uint32_t col = col_indices[p];
+            if (col == row) {
+                diagonal_positions[row] = p;
+                continue;
+            }
+            const uint64_t transpose_key =
+                (static_cast<uint64_t>(col) << 32u) | static_cast<uint32_t>(row);
+            const auto transpose = positions.find(transpose_key);
+            if (transpose == positions.end()) {
+                error = "legacy exchange graph canonicalization requires symmetric sparsity";
+                return false;
+            }
+            if (row < col) {
+                const double symmetric = 0.5 * (values[p] + values[transpose->second]);
+                if (!std::isfinite(symmetric)) {
+                    error = "legacy exchange graph canonicalization produced non-finite weight";
+                    return false;
+                }
+                values[p] = symmetric;
+                values[transpose->second] = symmetric;
+            }
+        }
+    }
+    for (size_t row = 0; row < rows; ++row) {
+        double off_diagonal_sum = 0.0;
+        bool has_off_diagonal = false;
+        for (uint32_t p = row_offsets[row]; p < row_offsets[row + 1u]; ++p) {
+            if (col_indices[p] != row) {
+                has_off_diagonal = true;
+                off_diagonal_sum += values[p];
+            }
+        }
+        if (!std::isfinite(off_diagonal_sum)) {
+            error = "legacy exchange graph canonicalization produced a non-finite row sum";
+            return false;
+        }
+        if (diagonal_positions[row] == values.size()) {
+            if (materialize_diagonal && has_off_diagonal) {
+                error = "legacy exchange graph canonicalization cannot materialize a missing active diagonal";
+                return false;
+            }
+            continue;
+        }
+        values[diagonal_positions[row]] = materialize_diagonal
+            ? -off_diagonal_sum
+            : 0.0;
+    }
+    return true;
+}
 
 #if FULLMAG_HAS_MFEM_STACK
 bool upload_legacy_sparse_exchange_to_gpu_state(
@@ -76,6 +160,12 @@ bool upload_legacy_sparse_exchange_to_gpu_state(
         col_indices[static_cast<size_t>(i)] = static_cast<uint32_t>(col_indices_raw[i]);
     }
 
+    std::vector<double> canonical_values(values_raw, values_raw + nnz);
+    if (!canonicalize_legacy_exchange_graph_laplacian(
+            row_offsets, col_indices, canonical_values, false, error)) {
+        return false;
+    }
+
     std::vector<double> inv_lumped(ctx.integration_weights.mfem_lumped_mass.size(), 0.0);
     for (size_t i = 0; i < ctx.integration_weights.mfem_lumped_mass.size(); ++i) {
         const double mass = ctx.integration_weights.mfem_lumped_mass[i];
@@ -90,7 +180,7 @@ bool upload_legacy_sparse_exchange_to_gpu_state(
         static_cast<uint64_t>(row_offsets.size()),
         col_indices.data(),
         static_cast<uint64_t>(col_indices.size()),
-        values_raw,
+        canonical_values.data(),
         static_cast<uint64_t>(nnz),
         ctx.integration_weights.mfem_lumped_mass.data(),
         static_cast<uint64_t>(ctx.integration_weights.mfem_lumped_mass.size()),

@@ -958,6 +958,7 @@ export class ControlRoomApi {
           DATA_FIELD_VECTOR_PATH,
           { quantity_id: storedQuantityId },
           fieldVectorQueryParams(query),
+          fieldMetaQueryParams(query),
           options,
         ).then((result) => transformFieldVectorForDisplay(requestedQuantityId, result));
       },
@@ -2514,10 +2515,14 @@ export class ControlRoomApi {
     path: OpenApiV2Path,
     pathParams: PathParams,
     query: QueryParams,
+    metaQuery: QueryParams,
     options: BinaryRequestOptions = {},
   ): Promise<BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata>> {
     const result = await this.requestFieldVector(path, pathParams, query, options);
     if (result.status !== "not-applicable") {
+      return result;
+    }
+    if (await this.livePublisherOwnsFieldMaterialization(quantityId, metaQuery, options)) {
       return result;
     }
     await this.materializeFieldsForQuantity(quantityId, options);
@@ -2528,6 +2533,35 @@ export class ControlRoomApi {
       query,
       options,
     );
+  }
+
+  private async livePublisherOwnsFieldMaterialization(
+    quantityId: string,
+    query: QueryParams,
+    options: RequestOptions,
+  ): Promise<boolean> {
+    try {
+      const meta = await this.requestJson<FieldMetaResource>(
+        DATA_FIELD_META_PATH,
+        options,
+        {
+          path: { quantity_id: quantityId },
+          query,
+        },
+      );
+      return ["complete", "pending", "stale_complete", "error"].includes(
+        meta.state,
+      );
+    } catch (error) {
+      if (shouldMaterializeFieldAfterJsonError(error)) {
+        const solver = await this.requestOptionalJson<SolverStatusResource>(
+          SIMULATION_SOLVER_STATUS_PATH,
+          options,
+        );
+        return solver?.is_busy === true || solver?.runtime_state === "running";
+      }
+      throw error;
+    }
   }
 
   private async materializeFieldsForQuantity(

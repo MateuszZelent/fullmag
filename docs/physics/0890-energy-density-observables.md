@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owners: Fullmag
-- Last updated: 2026-05-26
+- Last updated: 2026-07-23
 - Related ADRs: `docs/adr/0011-resource-first-api.md`
 - Related specs: `docs/specs/resource-first-control-room-api-v2.md`, `docs/physics/0870-active-observable-and-energy-availability.md`, `docs/physics/0880-active-effective-field-terms.md`
 
@@ -28,6 +28,8 @@ epsilon_ext   = -1.0 * mu0 * M_s * dot(m, H_ext)
 ```
 
 Anisotropy and coupled terms must use the same local energy model used by the backend scalar energy. They must not be redefined in the browser. `eden_total` is the pointwise sum of the active, available density terms.
+
+For native FEM, `eden_ani` is the sum of every resolved anisotropy operator, including both uniaxial (`H_ani`) and cubic (`H_ani_cubic`) contributions. The term set for `eden_total` is resolved once from the same plan flags and material fields passed to the native backend; the preview path must not maintain a narrower, independently guessed term list.
 
 The scalar consistency invariant is:
 
@@ -55,6 +57,7 @@ For uniform FDM cells this is `sum(epsilon_i[cell] * cell_volume)`. For FEM this
 - `eden_total` includes only terms available in the resolved backend snapshot.
 - FDM density is cell-centered.
 - FEM density is element/quadrature-owned; nodal or surface coloring is a visualization projection, not the canonical physical location.
+- A sharp regional `M_s` realization remains element-DG0. A nodal visualization payload may use a volume-lumped projection of that DG0 coefficient, but it must be labelled as a nodal visualization projection and must not be presented as the canonical FEM density location.
 
 ## 3. Numerical interpretation
 
@@ -64,7 +67,71 @@ FDM CPU computes energy densities from the same field buffers used for scalar en
 
 ### 3.2 FEM
 
-FEM backends must expose element or quadrature density according to the operator contract. Native FEM CPU already has local energy-cache concepts; those should be the source for density publication. A viewport projection may resample to nodes or faces, but the API metadata must preserve the canonical location.
+FEM backends must expose element or quadrature density according to the operator contract. Native FEM CPU already has local energy-cache concepts; those should be the source for density publication. A viewport projection may resample to nodes or faces, but the API metadata must preserve the projection provenance.
+
+The current live FEM preview payload is a node-aligned visualization projection. Its coefficient realization is resolved as follows:
+
+- uniform `M_s`: the scalar plan value is repeated on active magnetic nodes;
+- nodal-P1 `M_s`: the resolved nodal field is used directly;
+- element-DG0/regional `M_s`: non-energy display coefficients use the volume-lumped nodal weighted mean, but field-derived energy densities use the conservative tetrahedral projection below.
+
+For DG0 `M_s` and P1 fields `u` and `v`, the exact element contribution is
+
+```text
+integral_T M_s (u . v) dV
+  = M_s V_T / 20 * (sum_i u_i . v_i + (sum_i u_i) . (sum_i v_i)).
+```
+
+The live preview distributes one quarter of this element integral to each
+incident node and divides the accumulated numerator by the node's lumped
+volume. Therefore integrating the node-aligned payload with the usual P1
+lumped-volume rule exactly preserves the element weak-form integral, including
+the off-diagonal consistent-mass contributions. This restricted DG0 path must
+carry `fem_nodal_conservative_tetra_projection` location/provenance. Uniform and
+nodal-P1 paths carry `fem_nodal_visualization_projection`. The backend scalar
+energies remain authoritative. Validation must independently integrate each
+projected term with the matching FEM lumped-volume rule and compare it with the
+native scalar term for qualified fixtures; passing a pointwise dot-product unit
+test alone is insufficient.
+
+The production-executable DG0 scope is deliberately narrower than the general
+FEM material model. Native FEM CPU may accept element-DG0 `M_s` only when every
+active owner uses the common element/quadrature material realization. The
+qualified Task 5 slice requires enabled consistent-mass exchange. Poisson
+demag and Zeeman may be additional owners, but neither a Zeeman-only nor a
+demag-only plan promotes DG0 `M_s`. GPU DG0 material upload and CPU DG0
+combined with anisotropy, interfacial or bulk DMI, thermal, STT, Oersted, or
+magnetoelastic owners remain unsupported and must be rejected by both planner
+and native validation. There is no nodal fallback for a sharp DG0 coefficient.
+Direct native FEM relaxation algorithms also remain unsupported with
+element-DG0 `M_s`; the qualified CPU path is the ordinary time-evolution owner
+set, whose reported average magnetization must use the same DG0 mass
+integration rather than a scalar-`M_s` fallback. This workflow restriction is
+enforced twice: by canonical planning and again at the native ABI/runtime
+boundary. A reusable ordinary-time handle must reject PG-BB, nonlinear-CG, and
+tangent-plane relaxation calls, while an LLG-overdamped plan must reject before
+its first RK relaxation step. The ordinary explicit-RK time-evolution call on
+the same qualified CPU exchange/consistent-mass material lane remains legal.
+
+The DG0 average-magnetization observable is
+
+```text
+<m> = (integral_Omega_m M_s m dV) / (integral_Omega_m M_s dV).
+```
+
+For P1 `m` and element-DG0 `M_s`, each active tetrahedron contributes
+`M_s V_T (sum_i m_i) / 4` to the vector numerator and `M_s V_T` to the
+denominator. Native step statistics must accumulate all four values in one
+direct element traversal. Constructing nodal unit fields, projecting DG0
+`M_s`, or allocating mesh-sized scratch vectors per accepted step is not a
+qualified realization.
+
+Uniform-`M_s` uniaxial and cubic anisotropy, and interfacial and bulk DMI
+density semantics, are qualified as four separate native GPU plans. The
+anisotropy cases prove selection of `H_ani` versus `H_ani_cubic` and
+`eden_ani` versus native `E_ani`. The DMI cases prove selection of the distinct
+`H_dmi` and `H_dmi_bulk` operators and `eden_dmi` versus native `E_dmi`. None
+of these cases implies GPU DG0 support or DG0 combined with those owners.
 
 ### 3.3 Hybrid
 
@@ -97,6 +164,9 @@ The planner should advertise density quantities only for backends that can compu
 - FDM CPU is the first reference path.
 - FDM CUDA must match FDM CPU in double precision before single precision is exposed.
 - FEM density must match FEM scalar energy under its documented quadrature rule.
+- Native FEM qualification includes separate uniaxial and cubic anisotropy activation, interfacial versus bulk DMI selection, uniform/nodal-P1/element-DG0 `M_s`, and `eden_total` versus the sum of active native scalar terms.
+- Element-DG0 `M_s` qualification uses the restricted native FEM CPU owner set above; uniform-`M_s` uniaxial, cubic, interfacial DMI, and bulk DMI qualification uses four separate native FEM GPU fixtures.
+- Native ABI regressions must prove fail-closed DG0 behavior for every relaxation route and continued ordinary CPU RK execution. A hot-path allocation regression must prove the DG0 average-magnetization reduction performs no heap allocation per call.
 
 ### 5.3 Regression tests
 
@@ -109,18 +179,18 @@ The planner should advertise density quantities only for backends that can compu
 
 - [ ] Python API
 - [x] ProblemIR
-- [ ] Planner
-- [ ] Capability matrix
+- [x] Planner for the bounded FEM slices
+- [x] Capability matrix
 - [ ] FDM backend
-- [ ] FEM backend
+- [x] FEM backend for the bounded CPU-DG0 and uniform-GPU slices
 - [ ] Hybrid backend
-- [ ] Outputs / observables
-- [ ] Tests / benchmarks
+- [x] Outputs / observables for the bounded FEM slices
+- [x] Tests / managed qualification for the bounded FEM slices
 - [x] Documentation
 
 ## 7. Known limits and deferred work
 
-- CUDA density kernels and FEM element/quadrature publication are staged after the CPU/data-plane contract.
+- Canonical FEM element/quadrature density publication remains deferred. Until then, the live node-aligned payload is explicitly a visualization projection and backend scalar energies remain authoritative.
 - `eden_*` scalar fields are not global scalar history columns; scalar history remains owned by `data/scalars` and solver-energy resources.
 - Energy density visualization is scalar coloring, not vector glyph rendering.
 

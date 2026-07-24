@@ -61,6 +61,13 @@ pub struct PreparationExecutionSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct PreparationClockAdjustment {
+    pub observed_at_unix_ms: u64,
+    pub stage_started_at_unix_ms: u64,
+    pub backward_delta_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PreparationProgressStage {
     pub id: PreparationStageId,
     #[schema(max_length = 128)]
@@ -71,6 +78,7 @@ pub struct PreparationProgressStage {
     pub started_at_unix_ms: Option<u64>,
     pub completed_at_unix_ms: Option<u64>,
     pub duration_ms: Option<u64>,
+    pub clock_adjustment: Option<PreparationClockAdjustment>,
     #[schema(minimum = 0, maximum = 100)]
     pub progress_percent: Option<u8>,
     #[schema(max_length = 256)]

@@ -30,7 +30,8 @@ pub mod stop;
 use fullmag_ir::{FemPlanIR, OutputIR};
 
 use crate::artifact_pipeline::ArtifactPipelineSender;
-use crate::dispatch::{execute_fem, FemEngine};
+use crate::dispatch::{execute_fem, execute_fem_with_context, FemEngine};
+use crate::types::FemStageExecutionContext;
 use crate::types::{ExecutedRun, LiveStepConsumer, RunError};
 
 use super::engine::FemEngineKind;
@@ -70,6 +71,31 @@ pub fn execute_fem_relax<'a>(
     execute_fem(
         dispatch_engine,
         plan,
+        until_seconds,
+        outputs,
+        live,
+        artifact_writer,
+    )
+}
+
+pub(crate) fn execute_fem_relax_with_context<'a>(
+    engine: FemEngineKind,
+    plan: &FemPlanIR,
+    stage_context: &FemStageExecutionContext,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    live: Option<LiveStepConsumer<'a>>,
+    artifact_writer: Option<ArtifactPipelineSender>,
+) -> Result<ExecutedRun, RunError> {
+    algorithm::check_algorithm_support(plan.relaxation.as_ref(), engine)?;
+    let dispatch_engine = match engine {
+        FemEngineKind::CpuNative => FemEngine::CpuNative,
+        FemEngineKind::NativeGpu => FemEngine::NativeGpu,
+    };
+    execute_fem_with_context(
+        dispatch_engine,
+        plan,
+        stage_context,
         until_seconds,
         outputs,
         live,

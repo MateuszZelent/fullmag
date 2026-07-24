@@ -32,7 +32,6 @@
 #include "gpu/cuda/integrators/rk/rk_scalar_readback.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_transaction_device.hpp"
-#include "gpu/cuda/integrators/rk/rk_total_energy_reduction.hpp"
 #include "gpu/cuda/relaxation/direct_energy_increment.hpp"
 #include "gpu/cuda/relaxation/pgbb_kernels.hpp"
 #include "gpu/cuda/reductions/reduction_kernels.hpp"
@@ -407,48 +406,6 @@ bool gpu_relax_reduce_scalar_sum(
         reduce_bytes,
         stream);
     return cuda_launch_ok(operation, reason);
-}
-
-bool gpu_relax_compute_effective_field_and_energy(
-    Context &ctx,
-    cudaStream_t stream,
-    int n,
-    int blocks,
-    double &total_energy,
-    std::string &reason)
-{
-    auto &gpu = ctx.gpu_state.device;
-    if (!gpu_rk_compute_effective_field_for_magnetization_fresh_demag(
-            ctx,
-            gpu.magnetization.m,
-            stream,
-            n,
-            ctx.state.current_time,
-            "launch GPU nonlinear-CG h_eff accumulation",
-            reason)) {
-        return false;
-    }
-    if (!gpu_rk_reduce_final_energy_terms(ctx, stream, n, blocks, reason)) {
-        return false;
-    }
-    if (!gpu_rk_reduce_total_energy_scalar(
-            ctx,
-            stream,
-            gpu.reductions.scalar_result,
-            reason) ||
-        !gpu_rk_read_control_scalar_result(
-            ctx,
-            stream,
-            "cudaMemcpyAsync GPU nonlinear-CG total energy scalar device->host",
-            total_energy,
-            reason)) {
-        return false;
-    }
-    if (!std::isfinite(total_energy)) {
-        reason = "GPU nonlinear-CG produced non-finite total energy";
-        return false;
-    }
-    return true;
 }
 
 bool gpu_relax_compute_tangent_gradient_norm(
@@ -901,11 +858,13 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
     double &p_dot_g,
     double &direction_norm_sq,
     double &trial_step,
-    double &trial_energy,
+    double &last_trial_energy_j,
     uint32_t &backtracks,
     GpuDirectEnergySnapshot &accepted_snapshot,
     bool &accepted_refined,
+    uint32_t &logical_rhs_evaluations,
     uint32_t &refinement_rhs_evaluations,
+    bool &every_permitted_trial_unchanged,
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
@@ -931,7 +890,6 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
             kMinStepSize,
             kMaxStepSize);
         trial_step = restart_step;
-
         while (true) {
             fullmag_cuda_relax_retract_field(
                 gpu.rk.m_backup.x,
@@ -964,15 +922,15 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
                     stream,
                     "cudaMemcpyAsync GPU nonlinear-CG recovery m",
                     reason) ||
-                !gpu_relax_compute_effective_field_and_energy(
+                !gpu_relax_compute_effective_field_and_energy_terms(
                     ctx,
                     stream,
                     n,
                     blocks,
-                    trial_energy,
                     reason)) {
                 return false;
             }
+            logical_rhs_evaluations += 1u;
 
             const double armijo_rhs =
                 kArmijoCoefficient * trial_step * p_dot_g;
@@ -986,10 +944,15 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
                     base_h_demag,
                     current_snapshot,
                     armijo_rhs,
+                    true,
                     armijo_result,
                     reason)) {
                 return false;
             }
+            const bool trial_unchanged =
+                armijo_result.trial_active_state_unchanged;
+            every_permitted_trial_unchanged =
+                every_permitted_trial_unchanged && trial_unchanged;
             if (armijo_result.refinement_attempted &&
                 !gpu_direct_armijo_refine(
                     ctx,
@@ -1010,9 +973,16 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
             }
             refinement_rhs_evaluations +=
                 armijo_result.refinement_rhs_evaluations;
-            if (armijo_result.decision ==
-                    relaxation::ArmijoDifferenceDecision::Accept ||
-                armijo_result.refinement_accepted) {
+            last_trial_energy_j =
+                armijo_result.trial_snapshot.total_energy_j;
+            if (!std::isfinite(last_trial_energy_j)) {
+                reason = "GPU nonlinear-CG produced non-finite total energy";
+                return false;
+            }
+            if (!trial_unchanged &&
+                (armijo_result.decision ==
+                     relaxation::ArmijoDifferenceDecision::Accept ||
+                 armijo_result.refinement_accepted)) {
                 accepted_snapshot = armijo_result.trial_snapshot;
                 accepted_refined = armijo_result.refinement_accepted;
                 return true;
@@ -1144,7 +1114,10 @@ int gpu_relax_nonlinear_cg_step(
     GpuDirectEnergySnapshot current_snapshot{};
     const bool reused_current =
         consume_ncg_accepted_evaluation(ctx, current_snapshot);
-    const uint32_t current_evaluation_count = reused_current ? 0u : 1u;
+    // rhs_evaluations is a logical line-search record count. Reusing the
+    // accepted endpoint avoids physical work but still supplies this step's
+    // nominal current-state record.
+    uint32_t logical_rhs_evaluations = 1u;
     double gradient_norm_sq = 0.0;
     double gradient_energy_norm_sq = 0.0;
     double p_dot_g = 0.0;
@@ -1246,11 +1219,12 @@ int gpu_relax_nonlinear_cg_step(
             error);
     }
 
-    double trial_energy = current_energy;
+    double last_trial_energy_j = current_energy;
     uint32_t backtracks = 0;
     bool line_search_accepted = false;
     bool accepted_snapshot_valid = false;
     bool accepted_refined = false;
+    bool every_permitted_trial_unchanged = true;
     uint32_t refinement_rhs_evaluations = 0;
     GpuDirectEnergySnapshot accepted_snapshot{};
     while (true) {
@@ -1285,12 +1259,11 @@ int gpu_relax_nonlinear_cg_step(
                 stream,
                 "cudaMemcpyAsync GPU nonlinear-CG trial m",
                 reason) ||
-            !gpu_relax_compute_effective_field_and_energy(
+            !gpu_relax_compute_effective_field_and_energy_terms(
                 ctx,
                 stream,
                 n,
                 blocks,
-                trial_energy,
                 reason)) {
             return gpu_relax_restore_previous_state_after_failure(
                 ctx,
@@ -1300,6 +1273,7 @@ int gpu_relax_nonlinear_cg_step(
                 reason,
                 error);
         }
+        logical_rhs_evaluations += 1u;
 
         const double armijo_rhs =
             kArmijoCoefficient * trial_step * p_dot_g;
@@ -1313,6 +1287,7 @@ int gpu_relax_nonlinear_cg_step(
                 gpu.rk.error,
                 current_snapshot,
                 armijo_rhs,
+                true,
                 armijo_result,
                 reason)) {
             return gpu_relax_restore_previous_state_after_failure(
@@ -1323,6 +1298,10 @@ int gpu_relax_nonlinear_cg_step(
                 reason,
                 error);
         }
+        const bool trial_unchanged =
+            armijo_result.trial_active_state_unchanged;
+        every_permitted_trial_unchanged =
+            every_permitted_trial_unchanged && trial_unchanged;
         if (armijo_result.refinement_attempted &&
             !gpu_direct_armijo_refine(
                 ctx,
@@ -1349,9 +1328,22 @@ int gpu_relax_nonlinear_cg_step(
         }
         refinement_rhs_evaluations +=
             armijo_result.refinement_rhs_evaluations;
+        last_trial_energy_j =
+            armijo_result.trial_snapshot.total_energy_j;
+        if (!std::isfinite(last_trial_energy_j)) {
+            return gpu_relax_restore_previous_state_after_failure(
+                ctx,
+                stream,
+                rollback,
+                "trial direct-energy validation failure",
+                "GPU nonlinear-CG produced non-finite total energy",
+                error);
+        }
         const bool armijo =
-            armijo_result.decision == relaxation::ArmijoDifferenceDecision::Accept ||
-            armijo_result.refinement_accepted;
+            !trial_unchanged &&
+            (armijo_result.decision ==
+                 relaxation::ArmijoDifferenceDecision::Accept ||
+             armijo_result.refinement_accepted);
         if (armijo) {
             line_search_accepted = true;
             accepted_snapshot = armijo_result.trial_snapshot;
@@ -1378,11 +1370,13 @@ int gpu_relax_nonlinear_cg_step(
                 p_dot_g,
                 direction_norm_sq,
                 trial_step,
-                trial_energy,
+                last_trial_energy_j,
                 backtracks,
                 accepted_snapshot,
                 accepted_refined,
+                logical_rhs_evaluations,
                 refinement_rhs_evaluations,
+                every_permitted_trial_unchanged,
                 reason)) {
             line_search_accepted = true;
             accepted_snapshot_valid = true;
@@ -1408,6 +1402,48 @@ int gpu_relax_nonlinear_cg_step(
             error);
     }
     if (!line_search_accepted) {
+        if (every_permitted_trial_unchanged) {
+            std::string restore_reason;
+            if (!gpu_rk_restore_step_transaction_device(ctx, restore_reason) ||
+                !gpu_relax_restore_previous_direction(
+                    ctx, stream, rollback, restore_reason)) {
+                error =
+                    "GPU nonlinear-CG failed to restore the representability-stationary state: " +
+                    restore_reason;
+                return FULLMAG_FEM_ERR_INTERNAL;
+            }
+            restore_gpu_relax_ncg_metadata(ctx, rollback);
+            mark_gpu_relax_ncg_device_source_of_truth(ctx);
+            if (!gpu_relax_compute_effective_field_and_energy_terms(
+                    ctx, stream, n, blocks, reason)) {
+                error =
+                    "GPU nonlinear-CG failed to refresh the representability-stationary state: " +
+                    reason;
+                return FULLMAG_FEM_ERR_INTERNAL;
+            }
+            logical_rhs_evaluations += 1u;
+            out_stats.step = ctx.state.step_count;
+            out_stats.time_seconds = 0.0;
+            out_stats.dt_seconds = 0.0;
+            out_stats.rejected_attempts = backtracks;
+            out_stats.rhs_evaluations =
+                logical_rhs_evaluations + refinement_rhs_evaluations;
+            if (!gpu_rk_finalize_step_stats_control_readback(
+                    ctx, out_stats, reason)) {
+                error = reason;
+                return FULLMAG_FEM_ERR_INTERNAL;
+            }
+            out_stats.step = ctx.state.step_count;
+            out_stats.time_seconds = 0.0;
+            out_stats.dt_seconds = 0.0;
+            out_stats.max_rhs_amplitude = 0.0;
+            out_stats.rejected_attempts = backtracks;
+            out_stats.rhs_evaluations =
+                logical_rhs_evaluations + refinement_rhs_evaluations;
+            gpu.relaxation.nonlinear_cg_direction_valid = false;
+            relaxation::publish_representability_stationary_completion(ctx);
+            return FULLMAG_FEM_OK;
+        }
         const double armijo_rhs =
             current_energy + kArmijoCoefficient * trial_step * p_dot_g;
         const std::string original_error =
@@ -1416,7 +1452,7 @@ int gpu_relax_nonlinear_cg_step(
             " backtracks; current_energy_j=" +
             std::to_string(current_energy) +
             " last_trial_energy_j=" +
-            std::to_string(trial_energy) +
+            std::to_string(last_trial_energy_j) +
             " armijo_rhs_j=" + std::to_string(armijo_rhs) +
             " last_trial_step=" + std::to_string(trial_step) +
             " direction_dot_gradient=" + std::to_string(p_dot_g) +
@@ -1467,7 +1503,7 @@ int gpu_relax_nonlinear_cg_step(
     out_stats.dt_seconds = 0.0;
     out_stats.rejected_attempts = backtracks;
     out_stats.rhs_evaluations =
-        backtracks + 1u + current_evaluation_count + refinement_rhs_evaluations;
+        logical_rhs_evaluations + refinement_rhs_evaluations;
     double ncg_tail_scalars[kNcgScalarTailCount] = {0.0, 0.0, 0.0};
     if (!gpu_rk_finalize_step_stats_control_readback_with_scalar_tail(
             ctx,
@@ -1526,7 +1562,7 @@ int gpu_relax_nonlinear_cg_step(
     out_stats.max_rhs_amplitude = 0.0;
     out_stats.rejected_attempts = backtracks;
     out_stats.rhs_evaluations =
-        backtracks + 1u + current_evaluation_count + refinement_rhs_evaluations;
+        logical_rhs_evaluations + refinement_rhs_evaluations;
     publish_ncg_accepted_evaluation(
         ctx, accepted_step, accepted_snapshot, accepted_refined);
     update_stage_completion_from_stats(ctx, out_stats);

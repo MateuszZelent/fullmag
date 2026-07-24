@@ -89,6 +89,9 @@ pub(crate) struct ScriptRunSummary {
     pub final_e_dmi: Option<f64>,
     pub final_e_total: Option<f64>,
     pub wall_time_ns: Option<u64>,
+    pub backend_create_wall_time_ns: Option<u64>,
+    /// First non-zero accepted-step aggregate, not a literal single solve.
+    pub first_accepted_step_demag_solver_apply_wall_time_ns: Option<u64>,
     pub exchange_wall_time_ns: Option<u64>,
     pub demag_wall_time_ns: Option<u64>,
     pub demag_assemble_wall_time_ns: Option<u64>,
@@ -219,11 +222,14 @@ pub(crate) struct LiveStepView {
     pub max_torque_T: f64,
     pub wall_time_ns: u64,
     pub grid: [u32; 3],
-    pub fem_mesh: Option<fullmag_runner::FemMeshPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_mesh_generation_id: Option<String>,
     /// **Deprecated (Q16):** Spatial data flows through `latest_fields`.
     pub magnetization: Option<Vec<f64>>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub per_object_scalars: HashMap<String, HashMap<String, f64>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub field_materialization_states: Vec<fullmag_runner::LiveFieldMaterializationStatus>,
     /// **Deprecated (Q17):** Preview fields flow through `preview_fields`
     /// in `CurrentLiveSnapshotPayload`, not inside the step view.
     pub preview_field: Option<fullmag_runner::LivePreviewField>,
@@ -900,6 +906,7 @@ impl CurrentLiveLatestFields {
     pub fn insert(&mut self, quantity: String, value: serde_json::Value) {
         self.0.insert(quantity, value);
     }
+
 }
 
 #[derive(Debug, Clone, Default)]
@@ -918,6 +925,13 @@ impl CurrentLivePreviewFieldCache {
         self.0.insert(field.quantity.clone(), field);
     }
 
+    pub fn insert_replacing(
+        &mut self,
+        field: fullmag_runner::LivePreviewField,
+    ) -> Option<fullmag_runner::LivePreviewField> {
+        self.0.insert(field.quantity.clone(), field)
+    }
+
     pub fn replace_all(
         &mut self,
         fields: impl IntoIterator<Item = fullmag_runner::LivePreviewField>,
@@ -934,6 +948,13 @@ impl CurrentLivePreviewFieldCache {
 
     pub fn take_vec(&mut self) -> Vec<fullmag_runner::LivePreviewField> {
         std::mem::take(&mut self.0).into_values().collect()
+    }
+
+    #[cfg(test)]
+    pub fn vector_values_ptr(&self, quantity: &str) -> Option<*const f64> {
+        self.0
+            .get(quantity)
+            .map(|field| field.vector_field_values.as_ptr())
     }
 }
 

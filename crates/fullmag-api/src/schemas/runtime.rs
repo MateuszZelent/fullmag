@@ -115,6 +115,8 @@ pub struct StageExecutionRecordResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed_at_unix_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_to_tolerance_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<StageStopReason>,
     pub converged: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

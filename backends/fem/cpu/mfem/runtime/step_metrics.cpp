@@ -19,9 +19,26 @@ namespace fullmag::fem {
 
 std::array<double, 3> average_magnetization_components(const Context &ctx)
 {
+    const size_t nodes = ctx.state.m_xyz.size() / 3u;
+    const auto *material = ctx.material_fields.runtime.has_value()
+        ? &ctx.material_fields.runtime.value()
+        : nullptr;
+    if (material != nullptr && material->has_elementwise_ms()) {
+        const auto reduction =
+            material->ms_weighted_aos3_average_reduction(ctx.state.m_xyz);
+        if (!(std::isfinite(reduction.denominator) && reduction.denominator > 0.0)) {
+            return {0.0, 0.0, 0.0};
+        }
+        const double inv = 1.0 / reduction.denominator;
+        return {
+            reduction.weighted_component_integrals[0] * inv,
+            reduction.weighted_component_integrals[1] * inv,
+            reduction.weighted_component_integrals[2] * inv,
+        };
+    }
+
     std::array<double, 3> sum{};
     double weight_sum = 0.0;
-    const size_t nodes = ctx.state.m_xyz.size() / 3u;
     const auto &lumped_volume = !ctx.integration_weights.mfem_lumped_mass.empty()
         ? ctx.integration_weights.mfem_lumped_mass
         : ctx.mesh.node_volumes;

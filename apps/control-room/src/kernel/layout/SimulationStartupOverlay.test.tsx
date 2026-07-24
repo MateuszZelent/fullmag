@@ -401,8 +401,9 @@ describe("SimulationStartupOverlay", () => {
   });
 
   it("serializes only the bounded safe preparation projection", () => {
+    const preparation = preparationResource();
     const unsafe = {
-      ...preparationResource(),
+      ...preparation,
       environment: { token: "secret-token" },
       host_path: "/home/user/private/model.py",
       log_tail: Array.from({ length: 205 }, (_, index) => ({
@@ -411,11 +412,32 @@ describe("SimulationStartupOverlay", () => {
         stage_id: "meshing" as const,
         timestamp_unix_ms: index,
       })),
+      stages: preparation.stages.map((stage, index) =>
+        index === 1
+          ? {
+              ...stage,
+              clock_adjustment: {
+                backward_delta_ms: 32_000,
+                observed_at_unix_ms: 8_000,
+                stage_started_at_unix_ms: 40_000,
+              },
+              completed_at_unix_ms: 8_000,
+            }
+          : stage,
+      ),
     };
     const diagnostics = serializeSimulationPreparationDiagnostics(unsafe);
-    const projection = JSON.parse(diagnostics) as { log_tail: unknown[] };
+    const projection = JSON.parse(diagnostics) as {
+      log_tail: unknown[];
+      stages: Array<{ clock_adjustment?: unknown }>;
+    };
 
     expect(projection.log_tail).toHaveLength(200);
+    expect(projection.stages[1]?.clock_adjustment).toEqual({
+      backward_delta_ms: 32_000,
+      observed_at_unix_ms: 8_000,
+      stage_started_at_unix_ms: 40_000,
+    });
     expect(diagnostics).not.toContain("secret-token");
     expect(diagnostics).not.toContain("/home/user/private/model.py");
   });

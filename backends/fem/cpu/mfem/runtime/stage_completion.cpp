@@ -241,6 +241,16 @@ void set_stage_completion(
     ctx.stage_completion.snapshot.threshold = threshold;
 }
 
+void relaxation::publish_representability_stationary_completion(Context &ctx)
+{
+    set_stage_completion(
+        ctx,
+        FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT,
+        "representability_stationary",
+        1.0,
+        1.0);
+}
+
 fullmag_fem_stage_completion stage_completion_snapshot(const Context &ctx)
 {
     auto snapshot = ctx.stage_completion.snapshot;

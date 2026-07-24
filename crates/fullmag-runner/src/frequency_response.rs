@@ -250,12 +250,31 @@ fn frequency_response_solver_method_rejection_reason(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn execute_fem_frequency_response_validation(
     plan: &fullmag_ir::FemFrequencyResponsePlanIR,
     output_dir: &Path,
     interrupt_requested: Option<&AtomicBool>,
     on_step: Option<&mut dyn FnMut(StepUpdate) -> StepAction>,
 ) -> Result<ExecutedRun, RunError> {
+    let stage_asset = crate::types::StageFemMeshAsset::build_from_fem_frequency_response_plan(plan);
+    execute_fem_frequency_response_validation_with_context(
+        plan,
+        &crate::types::FemStageExecutionContext::from_mesh_identity(stage_asset.identity),
+        output_dir,
+        interrupt_requested,
+        on_step,
+    )
+}
+
+pub(crate) fn execute_fem_frequency_response_validation_with_context(
+    plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+    stage_context: &crate::types::FemStageExecutionContext,
+    output_dir: &Path,
+    interrupt_requested: Option<&AtomicBool>,
+    on_step: Option<&mut dyn FnMut(StepUpdate) -> StepAction>,
+) -> Result<ExecutedRun, RunError> {
+    let fem_mesh_generation_id = stage_context.generation_id();
     let mut on_step = on_step;
     #[cfg(not(feature = "fem-gpu"))]
     let _ = &on_step;
@@ -286,6 +305,7 @@ pub(crate) fn execute_fem_frequency_response_validation(
         output_dir,
         interrupt_requested,
         &mut on_step,
+        &fem_mesh_generation_id,
     )? {
         return Ok(executed);
     }
@@ -353,6 +373,7 @@ pub(crate) fn execute_fem_frequency_response_validation(
                 if let Some(on_step) = on_step.as_deref_mut() {
                     let completed_frequency_count = completed_points as u64;
                     let action = on_step(dense_frequency_response_progress_update(
+                        fem_mesh_generation_id.clone(),
                         completed_frequency_count,
                         plan.frequencies_hz.values_hz.len() as u64,
                         plan.frequencies_hz.values_hz[completed_points - 1],
@@ -416,6 +437,7 @@ pub(crate) fn execute_fem_frequency_response_validation(
 }
 
 fn dense_frequency_response_progress_update(
+    fem_mesh_generation_id: Option<String>,
     completed_frequency_count: u64,
     total_frequency_count: u64,
     frequency_hz: f64,
@@ -464,7 +486,7 @@ fn dense_frequency_response_progress_update(
             ..StepStats::default()
         },
         grid: [0, 0, 0],
-        fem_mesh: None,
+        fem_mesh_generation_id,
         magnetization: None,
         preview_field: None,
         cached_preview_fields: None,
@@ -480,6 +502,7 @@ fn dense_frequency_response_progress_update(
 
 #[cfg(any(feature = "fem-gpu", test))]
 fn native_frequency_response_progress_update(
+    fem_mesh_generation_id: Option<String>,
     progress: NativeFrequencyDomainProgress,
     frequency_range_hz: Option<(f64, f64)>,
     drive_norm: f64,
@@ -558,7 +581,7 @@ fn native_frequency_response_progress_update(
             ..StepStats::default()
         },
         grid: [0, 0, 0],
-        fem_mesh: None,
+        fem_mesh_generation_id,
         magnetization: None,
         preview_field: None,
         cached_preview_fields: None,
@@ -1717,6 +1740,7 @@ fn try_execute_fem_frequency_response_native_production_cpu(
     output_dir: &Path,
     interrupt_requested: Option<&AtomicBool>,
     on_step: &mut Option<&mut dyn FnMut(StepUpdate) -> StepAction>,
+    fem_mesh_generation_id: &Option<String>,
 ) -> Result<Option<ExecutedRun>, RunError> {
     let requested_gpu = plan.requested_device == fullmag_ir::ExecutionDevice::Gpu;
     if plan.solver_policy.as_ref().and_then(|policy| policy.method)
@@ -1815,6 +1839,7 @@ fn try_execute_fem_frequency_response_native_production_cpu(
         }
         if let Some(on_step) = live_progress_sink.borrow_mut().as_deref_mut() {
             let action = on_step(native_frequency_response_progress_update(
+                fem_mesh_generation_id.clone(),
                 progress,
                 response_frequency_range_hz,
                 payload.drive_norm,
@@ -4682,12 +4707,17 @@ mod tests {
         };
 
         let update = native_frequency_response_progress_update(
+            Some("mesh-gen-test".to_string()),
             progress,
             Some((1.0e9, 4.0e9)),
             3.5,
             true,
             true,
             false,
+        );
+        assert_eq!(
+            update.fem_mesh_generation_id.as_deref(),
+            Some("mesh-gen-test")
         );
 
         assert_eq!(update.stats.step, 2);
@@ -4734,12 +4764,17 @@ mod tests {
         };
 
         let update = native_frequency_response_progress_update(
+            Some("mesh-gen-test".to_string()),
             progress,
             Some((2.0e9, 5.0e9)),
             1.0,
             true,
             true,
             false,
+        );
+        assert_eq!(
+            update.fem_mesh_generation_id.as_deref(),
+            Some("mesh-gen-test")
         );
 
         let live_progress = update

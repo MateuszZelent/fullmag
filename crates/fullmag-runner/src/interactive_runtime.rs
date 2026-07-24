@@ -25,17 +25,16 @@ use crate::quantities::{
     active_fdm_preview_quantities, active_fem_preview_quantities, normalized_quantity_name,
 };
 use crate::relaxation::{
-    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow,
-    RelaxationTorqueConfirmation,
+    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
 };
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
     OutputSchedule,
 };
 use crate::types::{
-    ExecutedRun, ExecutionProvenance, FieldSnapshot, LivePreviewField, LivePreviewRequest,
-    ResolvedFallback, RunError, RunResult, RunStatus, StateObservables, StepAction, StepStats,
-    StepUpdate,
+    ExecutedRun, ExecutionProvenance, FemStageExecutionContext, FieldSnapshot, LivePreviewField,
+    LivePreviewRequest, ResolvedFallback, RunError, RunResult, RunStatus, StateObservables,
+    StepAction, StepStats, StepUpdate,
 };
 use crate::DisplaySelectionState;
 
@@ -212,6 +211,22 @@ mod tests {
         ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR, FdmPlanIR, GridDimensions,
         IntegratorChoice, RelaxationAlgorithmIR, RelaxationControlIR,
     };
+
+    #[test]
+    fn interactive_fem_runtime_reuses_runtime_owned_stage_context() {
+        let runtime_source = include_str!("interactive_runtime.rs");
+        assert!(runtime_source.contains("stage_context: FemStageExecutionContext"));
+        assert!(runtime_source
+            .contains("pub(crate) fn stage_context(&self) -> &FemStageExecutionContext"));
+        let runner_source = include_str!("lib.rs");
+        let interactive = runner_source
+            .split("pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible")
+            .nth(1)
+            .and_then(|tail| tail.split("/// Create an interactive runtime").next())
+            .expect("interactive FEM execution function");
+        assert!(interactive.contains("runtime.stage_context()"));
+        assert!(!interactive.contains("StageFemMeshAsset::build_from_fem_plan"));
+    }
 
     fn make_soa_fdm_plan() -> FdmPlanIR {
         FdmPlanIR {
@@ -538,6 +553,7 @@ struct CudaInteractiveFdmPreviewRuntime {
 
 pub struct InteractiveFemPreviewRuntime {
     inner: InteractiveFemPreviewRuntimeInner,
+    stage_context: FemStageExecutionContext,
 }
 
 enum InteractiveFemPreviewRuntimeInner {
@@ -792,6 +808,16 @@ impl InteractiveFdmPreviewRuntime {
     }
 }
 
+#[cfg_attr(not(any(test, feature = "fem-gpu")), allow(dead_code))]
+pub(crate) fn reuse_stage_fem_mesh_asset(
+    stage_asset: &crate::types::StageFemMeshAsset,
+) -> (crate::types::FemMeshPayload, FemStageExecutionContext) {
+    (
+        stage_asset.payload.clone(),
+        FemStageExecutionContext::from_mesh_identity(stage_asset.identity.clone()),
+    )
+}
+
 impl InteractiveFemPreviewRuntime {
     pub fn create(problem: &ProblemIR) -> Result<Self, RunError> {
         let plan = fullmag_plan::plan(problem)?;
@@ -808,12 +834,13 @@ impl InteractiveFemPreviewRuntime {
             dispatch::fem_engine_label(resolution.engine),
             resolution.fallback.as_ref().map(|f| &f.reason),
         );
-        Self::from_fem_plan(fem, resolution.engine, resolution.fallback)
+        Self::from_fem_plan(fem, resolution.engine, resolution.fallback, None)
     }
 
     pub(crate) fn create_from_plan(
         problem: &ProblemIR,
         plan: &FemPlanIR,
+        stage_asset: Option<&crate::types::StageFemMeshAsset>,
     ) -> Result<Self, RunError> {
         let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, plan)?;
         eprintln!(
@@ -821,17 +848,18 @@ impl InteractiveFemPreviewRuntime {
             dispatch::fem_engine_label(resolution.engine),
             resolution.fallback.as_ref().map(|f| &f.reason),
         );
-        Self::from_fem_plan(plan, resolution.engine, resolution.fallback)
+        Self::from_fem_plan(plan, resolution.engine, resolution.fallback, stage_asset)
     }
 
     fn from_fem_plan(
         plan: &FemPlanIR,
         engine: FemEngine,
         fallback: Option<ResolvedFallback>,
+        stage_asset: Option<&crate::types::StageFemMeshAsset>,
     ) -> Result<Self, RunError> {
         #[cfg(not(feature = "fem-gpu"))]
         {
-            let _ = (plan, engine, fallback);
+            let _ = (plan, engine, fallback, stage_asset);
             return Err(RunError {
                 message:
                     "interactive native FEM runtime requested but the runner was built without fem-gpu"
@@ -845,7 +873,16 @@ impl InteractiveFemPreviewRuntime {
                 FemEngine::CpuNative => fem_plan_for_cpu_native(plan),
                 FemEngine::NativeGpu => fem_plan_for_native_gpu(plan),
             };
-            let mesh = crate::types::FemMeshPayload::from(&effective_plan);
+            let owned_stage_asset;
+            let stage_asset = match stage_asset {
+                Some(stage_asset) => stage_asset,
+                None => {
+                    owned_stage_asset =
+                        crate::types::StageFemMeshAsset::build_from_fem_plan(&effective_plan);
+                    &owned_stage_asset
+                }
+            };
+            let (mesh, stage_context) = reuse_stage_fem_mesh_asset(stage_asset);
             let backend = NativeFemBackend::create(&effective_plan)?;
             let device_info = backend.device_info()?;
             let antenna_field = crate::antenna_fields::compute_antenna_field(&effective_plan)?;
@@ -861,8 +898,15 @@ impl InteractiveFemPreviewRuntime {
                 total_time: effective_plan.time_stage.start_time_s,
                 antenna_field,
             });
-            Ok(Self { inner })
+            Ok(Self {
+                inner,
+                stage_context,
+            })
         }
+    }
+
+    pub(crate) fn stage_context(&self) -> &FemStageExecutionContext {
+        &self.stage_context
     }
 
     pub fn matches_plan(&self, plan: &FemPlanIR) -> bool {
@@ -1248,7 +1292,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: current_local_stats.clone(),
                 grid,
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field,
                 cached_preview_fields,
@@ -1357,7 +1401,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: local_stats.clone(),
                 grid,
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field,
                 cached_preview_fields,
@@ -1593,7 +1637,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: current_local_stats.clone(),
                 grid,
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field,
                 cached_preview_fields: None,
@@ -1709,7 +1753,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: local_stats.clone(),
                 grid,
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field,
                 cached_preview_fields: None,
@@ -2015,7 +2059,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: current_local_stats.clone(),
                 grid,
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field,
                 cached_preview_fields,
@@ -2111,7 +2155,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: local_stats.clone(),
                 grid,
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field,
                 cached_preview_fields: None,
@@ -2334,7 +2378,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: current_local_stats.clone(),
                 grid,
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field,
                 cached_preview_fields,
@@ -2431,7 +2475,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: local_stats.clone(),
                 grid,
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: None,
                 preview_field,
                 cached_preview_fields: None,
@@ -2721,7 +2765,7 @@ impl CpuInteractiveFemPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: current_local_stats.clone(),
                 grid: [0, 0, 0],
-                fem_mesh: (current_local_stats.step == 0).then_some(self.mesh.clone()),
+                fem_mesh_generation_id: self.mesh.generation_id.clone(),
                 magnetization: None,
                 preview_field,
                 cached_preview_fields,
@@ -2846,7 +2890,7 @@ impl CpuInteractiveFemPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: local_stats.clone(),
                 grid: [0, 0, 0],
-                fem_mesh: (local_stats.step <= 1).then_some(self.mesh.clone()),
+                fem_mesh_generation_id: self.mesh.generation_id.clone(),
                 magnetization: None,
                 preview_field,
                 cached_preview_fields,
@@ -3047,7 +3091,7 @@ impl CpuInteractiveFemPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: current_local_stats.clone(),
                 grid: [0, 0, 0],
-                fem_mesh: (current_local_stats.step == 0).then_some(self.mesh.clone()),
+                fem_mesh_generation_id: self.mesh.generation_id.clone(),
                 magnetization: None,
                 preview_field,
                 cached_preview_fields: None,
@@ -3190,7 +3234,7 @@ impl CpuInteractiveFemPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: local_stats.clone(),
                 grid: [0, 0, 0],
-                fem_mesh: (local_stats.step <= 1).then_some(self.mesh.clone()),
+                fem_mesh_generation_id: self.mesh.generation_id.clone(),
                 magnetization: None,
                 preview_field,
                 cached_preview_fields: None,
@@ -3455,7 +3499,7 @@ impl GpuInteractiveFemPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: current_local_stats.clone(),
                 grid: [0, 0, 0],
-                fem_mesh: (current_local_stats.step == 0).then_some(self.mesh.clone()),
+                fem_mesh_generation_id: self.mesh.generation_id.clone(),
                 magnetization: None,
                 preview_field,
                 cached_preview_fields,
@@ -3543,7 +3587,7 @@ impl GpuInteractiveFemPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: local_stats.clone(),
                 grid: [0, 0, 0],
-                fem_mesh: (local_stats.step <= 1).then_some(self.mesh.clone()),
+                fem_mesh_generation_id: self.mesh.generation_id.clone(),
                 magnetization: None,
                 preview_field,
                 cached_preview_fields,
@@ -3720,7 +3764,7 @@ impl GpuInteractiveFemPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: current_local_stats.clone(),
                 grid: [0, 0, 0],
-                fem_mesh: (current_local_stats.step == 0).then_some(self.mesh.clone()),
+                fem_mesh_generation_id: self.mesh.generation_id.clone(),
                 magnetization: None,
                 preview_field,
                 cached_preview_fields: None,
@@ -3789,7 +3833,7 @@ impl GpuInteractiveFemPreviewRuntime {
             let action = on_step(StepUpdate {
                 stats: local_stats.clone(),
                 grid: [0, 0, 0],
-                fem_mesh: (local_stats.step <= 1).then_some(self.mesh.clone()),
+                fem_mesh_generation_id: self.mesh.generation_id.clone(),
                 magnetization: None,
                 preview_field,
                 cached_preview_fields: None,
@@ -4428,7 +4472,10 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         ignored_terms: Vec::new(),
         random_seed: None,
         requested_integrator: None,
-        resolved_integrator: plan.integrator.map(crate::integrator_choice_name).map(str::to_string),
+        resolved_integrator: plan
+            .integrator
+            .map(crate::integrator_choice_name)
+            .map(str::to_string),
         requested_energy_minimizer: None,
         resolved_energy_minimizer: None,
         energy_minimizer_realization: None,
@@ -4520,7 +4567,10 @@ fn cuda_execution_provenance(
         ignored_terms: Vec::new(),
         random_seed: None,
         requested_integrator: None,
-        resolved_integrator: plan.integrator.map(crate::integrator_choice_name).map(str::to_string),
+        resolved_integrator: plan
+            .integrator
+            .map(crate::integrator_choice_name)
+            .map(str::to_string),
         requested_energy_minimizer: None,
         resolved_energy_minimizer: None,
         energy_minimizer_realization: None,

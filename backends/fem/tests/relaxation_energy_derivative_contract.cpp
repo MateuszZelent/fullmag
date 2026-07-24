@@ -5,12 +5,22 @@
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag_poisson_energy.hpp"
 #include "cpu/mfem/interactions/anisotropy_uniaxial.hpp"
+#include "cpu/mfem/interactions/exchange_energy_difference.hpp"
+#include "cpu/mfem/interactions/exchange_legacy_gpu_upload.hpp"
 #include "cpu/mfem/interactions/zeeman_energy.hpp"
 #include "cpu/mfem/relaxation/relaxation_math.hpp"
+#include "cpu/mfem/runtime/aos_field.hpp"
 #include "fem_common.hpp"
 #include "src/relaxation_numerics.hpp"
+#if FULLMAG_HAS_MFEM_STACK
+#include <mfem.hpp>
+#endif
 #if FULLMAG_HAS_CUDA_RUNTIME
+#include "gpu/cuda/exchange/exchange_kernels.hpp"
+#include "gpu/cuda/interactions/dmi/dmi_kernels.hpp"
+#include "gpu/cuda/relaxation/direct_energy_increment.hpp"
 #include "gpu/cuda/relaxation/pgbb_kernels.hpp"
+#include "gpu/cuda/relaxation/relaxation_memory.hpp"
 #endif
 
 #include <algorithm>
@@ -24,6 +34,48 @@
 #include <vector>
 
 namespace {
+
+void check(bool condition, const std::string &message);
+
+void exchange_gpu_graph_canonicalization_removes_near_laplacian_residual()
+{
+    const std::vector<uint32_t> rows = {0u, 2u, 4u};
+    const std::vector<uint32_t> cols = {0u, 1u, 0u, 1u};
+    std::vector<double> values = {
+        1.0 + 0x1p-45, -1.0 - 0x1p-44,
+        -1.0 + 0x1p-43, 1.0 - 0x1p-42};
+    std::string error;
+    check(
+        fullmag::fem::canonicalize_legacy_exchange_graph_laplacian(
+            rows, cols, values, false, error),
+        "GPU exchange graph canonicalization must accept symmetric sparsity: " + error);
+    check(
+        values[0] == 0.0 && values[3] == 0.0 && values[1] == values[2],
+        "GPU exchange graph canonicalization must zero diagonals and exactly symmetrize off-diagonal weights");
+    const long double dm[2] = {0x1p-40L, -0x1p-42L};
+    const long double sum[2] = {1.5L, -0.25L};
+    const long double full =
+        dm[0] * static_cast<long double>(values[1]) * (sum[1] - sum[0]) +
+        dm[1] * static_cast<long double>(values[2]) * (sum[0] - sum[1]);
+    const long double edge = -static_cast<long double>(values[1]) *
+        (dm[0] - dm[1]) * (sum[0] - sum[1]);
+    check(
+        full == edge,
+        "canonical GPU exchange edge increment must equal the complete canonical dm^T K s reference");
+
+    std::vector<double> materialized = {
+        1.0 + 0x1p-45, -1.0 - 0x1p-44,
+        -1.0 + 0x1p-43, 1.0 - 0x1p-42};
+    check(
+        fullmag::fem::canonicalize_legacy_exchange_graph_laplacian(
+            rows, cols, materialized, true, error),
+        "CPU exchange graph canonicalization must materialize a Laplacian: " + error);
+    check(
+        materialized[1] == materialized[2] &&
+            materialized[0] == -materialized[1] &&
+            materialized[3] == -materialized[2],
+        "CPU exchange graph canonicalization must materialize exact zero row sums");
+}
 
 constexpr size_t kNodeCount = 4;
 constexpr size_t kFieldLength = 3 * kNodeCount;
@@ -60,22 +112,383 @@ void check(bool condition, const std::string &message)
     }
 }
 
-void direct_increment_composition_does_not_subtract_replaced_terms_twice()
+#if FULLMAG_HAS_CUDA_RUNTIME
+void check_cuda(cudaError_t status, const char *message);
+
+template <typename T>
+T *copy_to_device(const std::vector<T> &host);
+
+double copy_scalar_from_device(const double *device);
+#endif
+
+void term_complete_composition_preserves_endpoint_operand_uncertainty()
 {
-    const auto difference =
-        fullmag::fem::relaxation::compose_direct_energy_difference(
-            -10.0e-31,
-            -8.0e-31,
-            -8.0e-31,
-            8.5e-31,
-            3000);
+    using fullmag::fem::relaxation::ArmijoDifferenceDecision;
+    using fullmag::fem::relaxation::compose_term_complete_energy_difference;
+    using fullmag::fem::relaxation::reduction_roundoff_bound;
+    using fullmag::fem::relaxation::strict_armijo_difference_decision;
+
+    const double endpoint_total = -2.0e-17;
+    const double exchange_direct = -2.1037518401e-39;
+    const double zeeman_direct = 7.9035597018e-49;
+    const auto difference = compose_term_complete_energy_difference(
+        0.0,
+        0.0,
+        exchange_direct + zeeman_direct,
+        std::abs(exchange_direct) + std::abs(zeeman_direct),
+        96u);
     check(
-        std::abs(difference.delta_joules - (-10.0e-31)) < 1.0e-45,
-        "direct Armijo composition must replace endpoint terms exactly once");
+        difference.delta_joules < -2.103751e-39,
+        "term-complete composition must retain the descending exchange increment");
     check(
-        std::abs(difference.absolute_term_sum_joules - 10.5e-31) < 1.0e-45,
-        "direct Armijo composition must retain the residual absolute scale");
+        strict_armijo_difference_decision(difference, -6.0314e-43) ==
+            ArmijoDifferenceDecision::Accept,
+        "retained GPU exchange-plus-Zeeman failure components must satisfy strict Armijo");
+
+    const double endpoint_residual_operand_absolute_sum =
+        2.0 * std::abs(endpoint_total);
+    const auto residual = compose_term_complete_energy_difference(
+        0.0,
+        endpoint_residual_operand_absolute_sum,
+        zeeman_direct,
+        std::abs(zeeman_direct),
+        96u);
+    const double endpoint_ulp = std::abs(
+        std::nextafter(endpoint_total, std::numeric_limits<double>::infinity()) -
+        endpoint_total);
+    check(
+        residual.absolute_term_sum_joules >=
+            endpoint_residual_operand_absolute_sum,
+        "term-complete composition must retain the endpoint operands in its absolute scale");
+    check(
+        residual.roundoff_bound_joules >=
+            reduction_roundoff_bound(96u) *
+                endpoint_residual_operand_absolute_sum &&
+            residual.roundoff_bound_joules > endpoint_ulp &&
+            residual.roundoff_bound_joules > 1.0e-33,
+        "endpoint residual operand scale must produce a conservative subtraction bound");
+
+    const auto uphill = compose_term_complete_energy_difference(
+        0.0,
+        0.0,
+        zeeman_direct,
+        std::abs(zeeman_direct),
+        96u);
+    check(
+        strict_armijo_difference_decision(uphill, -5.0e-49) ==
+            ArmijoDifferenceDecision::Reject,
+        "term-complete composition must reject a resolved uphill increment");
 }
+
+void adverse_drive_endpoint_delta_controls_strict_armijo()
+{
+    using fullmag::fem::relaxation::ArmijoDifferenceDecision;
+    using fullmag::fem::relaxation::compose_term_complete_energy_difference;
+    using fullmag::fem::relaxation::strict_armijo_difference_decision;
+
+    const double direct_decrement = -4.0e-31;
+    const double adverse_drive_delta = 7.0e-31;
+    const double drive_base = -1.1e-17;
+    const double drive_trial = drive_base + adverse_drive_delta;
+    const auto complete = compose_term_complete_energy_difference(
+        drive_trial - drive_base,
+        std::abs(drive_base) + std::abs(drive_trial),
+        direct_decrement,
+        std::abs(direct_decrement),
+        2u);
+    const auto omitted = compose_term_complete_energy_difference(
+        0.0,
+        0.0,
+        direct_decrement,
+        std::abs(direct_decrement),
+        1u);
+
+    check(
+        strict_armijo_difference_decision(omitted, -2.0e-31) ==
+            ArmijoDifferenceDecision::Accept,
+        "drive omission fixture must otherwise satisfy strict Armijo");
+    check(
+        strict_armijo_difference_decision(complete, -2.0e-31) ==
+            ArmijoDifferenceDecision::Reject,
+        "an adverse regional-drive endpoint delta must make strict Armijo reject");
+}
+
+struct PolarizedExchangeOracle {
+    long double value = 0.0L;
+    long double absolute_term_sum = 0.0L;
+    std::vector<double> difference;
+    std::vector<double> applied_sum;
+};
+
+PolarizedExchangeOracle polarized_exchange_long_double_oracle(
+    const std::vector<std::vector<long double>> &matrix,
+    const std::vector<double> &base,
+    const std::vector<double> &trial)
+{
+    check(
+        !matrix.empty() && matrix.size() == base.size() &&
+            trial.size() == base.size(),
+        "polarized exchange oracle dimensions must agree");
+    PolarizedExchangeOracle oracle;
+    oracle.difference.resize(base.size());
+    oracle.applied_sum.resize(base.size());
+    for (size_t row = 0; row < matrix.size(); ++row) {
+        check(
+            matrix[row].size() == matrix.size(),
+            "polarized exchange oracle matrix must be square");
+        const long double difference =
+            static_cast<long double>(trial[row]) -
+            static_cast<long double>(base[row]);
+        long double applied_sum = 0.0L;
+        for (size_t column = 0; column < matrix.size(); ++column) {
+            applied_sum += matrix[row][column] *
+                (static_cast<long double>(trial[column]) +
+                 static_cast<long double>(base[column]));
+        }
+        const long double term = difference * applied_sum;
+        oracle.value += term;
+        oracle.absolute_term_sum += std::abs(term);
+        oracle.difference[row] = static_cast<double>(difference);
+        oracle.applied_sum[row] = static_cast<double>(applied_sum);
+    }
+    return oracle;
+}
+
+long double quadratic_energy_long_double(
+    const std::vector<std::vector<long double>> &matrix,
+    const std::vector<double> &state)
+{
+    long double energy = 0.0L;
+    for (size_t row = 0; row < matrix.size(); ++row) {
+        long double applied = 0.0L;
+        for (size_t column = 0; column < matrix.size(); ++column) {
+            applied += matrix[row][column] *
+                static_cast<long double>(state[column]);
+        }
+        energy += static_cast<long double>(state[row]) * applied;
+    }
+    return energy;
+}
+
+void polarized_exchange_difference_matches_long_double_and_endpoint_oracles()
+{
+    using fullmag::fem::polarized_exchange_difference_from_applied_sum;
+
+    const std::vector<std::vector<long double>> matrix = {
+        {2.0L, -1.0L, 0.0L},
+        {-1.0L, 2.0L, -1.0L},
+        {0.0L, -1.0L, 1.0L},
+    };
+    const std::vector<double> base = {0.25, -0.5, 0.75};
+    const std::vector<double> trial = {0.375, -0.25, 0.625};
+    const auto oracle = polarized_exchange_long_double_oracle(
+        matrix, base, trial);
+    const auto actual = polarized_exchange_difference_from_applied_sum(
+        oracle.difference.data(), oracle.applied_sum.data(), oracle.difference.size());
+    const long double endpoint_delta =
+        quadratic_energy_long_double(matrix, trial) -
+        quadratic_energy_long_double(matrix, base);
+    const long double tolerance =
+        8.0L * static_cast<long double>(std::numeric_limits<double>::epsilon()) *
+        std::max(1.0L, oracle.absolute_term_sum);
+    check(
+        std::abs(static_cast<long double>(actual.delta_joules) - oracle.value) <=
+            tolerance,
+        "production polarized exchange accumulation must match its long-double oracle");
+    check(
+        std::abs(static_cast<long double>(actual.absolute_term_sum_joules) -
+                 oracle.absolute_term_sum) <= tolerance,
+        "production polarized exchange accumulation must retain the long-double absolute-term sum");
+    check(
+        std::abs(static_cast<long double>(actual.delta_joules) - endpoint_delta) <=
+            tolerance,
+        "polarized exchange difference must match m^T K_A m endpoint subtraction at resolvable scale");
+
+    const std::vector<std::vector<long double>> near_nullspace_matrix = {
+        {1.0L, 0.0L},
+        {0.0L, 1.0e-12L},
+    };
+    const std::vector<double> near_nullspace_base = {1.0, 1.0e-3};
+    const std::vector<double> near_nullspace_trial = {1.0, 1.0e-3 - 1.0e-9};
+    const auto near_nullspace = polarized_exchange_long_double_oracle(
+        near_nullspace_matrix, near_nullspace_base, near_nullspace_trial);
+    const double endpoint_base = static_cast<double>(
+        quadratic_energy_long_double(near_nullspace_matrix, near_nullspace_base));
+    const double endpoint_trial = static_cast<double>(
+        quadratic_energy_long_double(near_nullspace_matrix, near_nullspace_trial));
+    check(
+        endpoint_trial == endpoint_base,
+        "near-nullspace fixture must hide its decrement in binary64 endpoint energies");
+    const auto retained = polarized_exchange_difference_from_applied_sum(
+        near_nullspace.difference.data(),
+        near_nullspace.applied_sum.data(),
+        near_nullspace.difference.size());
+    check(
+        near_nullspace.value < 0.0L && retained.delta_joules < 0.0 &&
+            std::isfinite(retained.delta_joules),
+        "production polarized exchange accumulation must retain a finite negative near-nullspace increment");
+
+    const double nonfinite[] = {std::numeric_limits<double>::quiet_NaN()};
+    const auto invalid = polarized_exchange_difference_from_applied_sum(
+        nonfinite, nonfinite, 1u);
+    check(
+        std::isnan(invalid.delta_joules) &&
+            std::isnan(invalid.absolute_term_sum_joules) &&
+            std::isnan(invalid.roundoff_bound_joules),
+        "production polarized exchange accumulation must fail closed on non-finite terms");
+}
+
+#if FULLMAG_HAS_MFEM_STACK
+mfem::Mesh magnetic_and_air_exchange_mesh()
+{
+    mfem::Mesh mesh(3, 8, 2, 0, 3);
+    const double vertices[][3] = {
+        {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0},
+        {2.0, 0.0, 0.0}, {3.0, 0.0, 0.0}, {2.0, 1.0, 0.0}, {2.0, 0.0, 1.0},
+    };
+    for (const auto &vertex : vertices) {
+        mesh.AddVertex(vertex);
+    }
+    const int magnetic[] = {0, 1, 2, 3};
+    const int air[] = {4, 5, 6, 7};
+    mesh.AddTet(magnetic, 1);
+    mesh.AddTet(air, 2);
+    mesh.FinalizeTopology();
+    mesh.Finalize(false, true);
+    return mesh;
+}
+
+long double exchange_endpoint_energy(
+    mfem::BilinearForm &form,
+    const std::vector<double> &state,
+    std::size_t component)
+{
+    const int nodes = form.FESpace()->GetNDofs();
+    mfem::Vector component_state(nodes);
+    for (int node = 0; node < nodes; ++node) {
+        component_state[node] = state[3u * static_cast<std::size_t>(node) + component];
+    }
+    mfem::Vector applied(nodes);
+    form.Mult(component_state, applied);
+    long double energy = 0.0L;
+    for (int node = 0; node < nodes; ++node) {
+        energy += static_cast<long double>(component_state[node]) *
+            static_cast<long double>(applied[node]);
+    }
+    return energy;
+}
+
+long double exchange_endpoint_difference(
+    mfem::BilinearForm &form,
+    const std::vector<double> &base,
+    const std::vector<double> &trial)
+{
+    long double difference = 0.0L;
+    for (std::size_t component = 0; component < 3u; ++component) {
+        difference += exchange_endpoint_energy(form, trial, component) -
+            exchange_endpoint_energy(form, base, component);
+    }
+    return difference;
+}
+
+void production_exchange_energy_difference_uses_assembled_mfem_form()
+{
+    mfem::Mesh mesh = magnetic_and_air_exchange_mesh();
+    mfem::H1_FECollection collection(1, 3);
+    mfem::FiniteElementSpace space(&mesh, &collection);
+    mfem::ConstantCoefficient stiffness(1.3e-11);
+    mfem::Array<int> magnetic_marker(mesh.attributes.Max());
+    magnetic_marker = 0;
+    magnetic_marker[0] = 1;
+    mfem::BilinearForm magnetic_form(&space);
+    magnetic_form.AddDomainIntegrator(
+        new mfem::DiffusionIntegrator(stiffness), magnetic_marker);
+    magnetic_form.Assemble();
+    magnetic_form.Finalize();
+
+    mfem::BilinearForm all_domain_form(&space);
+    all_domain_form.AddDomainIntegrator(new mfem::DiffusionIntegrator(stiffness));
+    all_domain_form.Assemble();
+    all_domain_form.Finalize();
+
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = static_cast<uint32_t>(space.GetNDofs());
+    ctx.mesh.magnetic_node_mask.assign(ctx.mesh.n_nodes, 0u);
+    for (std::size_t node = 0; node < 4u; ++node) {
+        ctx.mesh.magnetic_node_mask[node] = 1u;
+    }
+    ctx.exchange.enabled = true;
+    ctx.exchange.mfem.exchange_form = &magnetic_form;
+    ctx.mfem_context.ready = true;
+
+    std::vector<double> base(3u * ctx.mesh.n_nodes, 0.0);
+    std::vector<double> trial(3u * ctx.mesh.n_nodes, 0.0);
+    for (std::size_t node = 0; node < ctx.mesh.n_nodes; ++node) {
+        base[3u * node + 0u] = 0.11 + 0.07 * static_cast<double>(node);
+        base[3u * node + 1u] = -0.23 + 0.03 * static_cast<double>(node);
+        base[3u * node + 2u] = 0.37 - 0.02 * static_cast<double>(node);
+        trial[3u * node + 0u] = base[3u * node + 0u] + 0.013 * static_cast<double>(node + 1u);
+        trial[3u * node + 1u] = base[3u * node + 1u] - 0.009 * static_cast<double>(node + 2u);
+        trial[3u * node + 2u] = base[3u * node + 2u] + 0.005 * static_cast<double>(2u * node + 1u);
+    }
+
+    std::string error;
+    const auto actual = fullmag::fem::exchange_energy_difference(
+        ctx, base, trial, false, error);
+    const long double endpoint = exchange_endpoint_difference(
+        magnetic_form, base, trial);
+    const long double scale = std::max(1.0e-40L, std::abs(endpoint));
+    check(error.empty(), "production exchange difference must accept the assembled MFEM form");
+    check(
+        std::abs(static_cast<long double>(actual.delta_joules) - endpoint) <=
+            64.0L * static_cast<long double>(std::numeric_limits<double>::epsilon()) * scale,
+        "production exchange difference must preserve AoS component-to-MFEM-DOF mapping against endpoint energy");
+    check(
+        std::abs(exchange_endpoint_difference(all_domain_form, base, trial) - endpoint) >
+            1.0e-18L * scale,
+        "magnetic-marker form selection must observably exclude the nonmagnetic tetrahedron");
+
+    std::vector<double> air_changed_base = base;
+    std::vector<double> air_changed_trial = trial;
+    for (std::size_t node = 4u; node < ctx.mesh.n_nodes; ++node) {
+        for (std::size_t component = 0; component < 3u; ++component) {
+            air_changed_base[3u * node + component] += 1.0e6 * static_cast<double>(node + component + 1u);
+            air_changed_trial[3u * node + component] -= 2.0e6 * static_cast<double>(node + component + 1u);
+        }
+    }
+    const auto air_changed = fullmag::fem::exchange_energy_difference(
+        ctx, air_changed_base, air_changed_trial, false, error);
+    check(
+        error.empty() && air_changed.delta_joules == actual.delta_joules,
+        "production exchange difference must ignore magnetization changes confined to the nonmagnetic domain");
+
+    ctx.mesh.periodic_reduced_node.resize(ctx.mesh.n_nodes);
+    ctx.mesh.periodic_representative_nodes.resize(ctx.mesh.n_nodes);
+    for (uint32_t node = 0; node < ctx.mesh.n_nodes; ++node) {
+        ctx.mesh.periodic_reduced_node[node] = node;
+        ctx.mesh.periodic_representative_nodes[node] = node;
+    }
+    ctx.mesh.periodic_reduced_node[1] = 0u;
+    auto periodic_base = base;
+    auto periodic_trial = trial;
+    fullmag::fem::project_static_periodic_aos(ctx, periodic_base);
+    fullmag::fem::project_static_periodic_aos(ctx, periodic_trial);
+    const auto periodic_actual = fullmag::fem::exchange_energy_difference(
+        ctx, periodic_base, periodic_trial, false, error);
+    const long double periodic_endpoint = exchange_endpoint_difference(
+        magnetic_form, periodic_base, periodic_trial);
+    const long double periodic_scale =
+        std::max(1.0e-40L, std::abs(periodic_endpoint));
+    check(
+        error.empty() &&
+            std::abs(
+                static_cast<long double>(periodic_actual.delta_joules) -
+                periodic_endpoint) <=
+                64.0L * static_cast<long double>(std::numeric_limits<double>::epsilon()) *
+                    periodic_scale,
+        "production exchange difference must preserve endpoint identity for static-periodic class-projected states");
+}
+#endif
 
 std::array<double, 3> normalized(std::array<double, 3> value)
 {
@@ -753,12 +1166,565 @@ void direct_uniaxial_energy_difference_uses_local_density_difference()
         ctx, current_m, trial_m);
     const double q0 = current_m[2];
     const double q1 = trial_m[2];
+    const double quadratic_difference = (q1 - q0) * (q1 + q0);
+    const double quartic_difference =
+        quadratic_difference * (q1 * q1 + q0 * q0);
     const double expected = 4.0e-27 *
-        (-2.0e5 * (q1 * q1 - q0 * q0) -
-         3.0e4 * (q1 * q1 * q1 * q1 - q0 * q0 * q0 * q0));
+        (-2.0e5 * quadratic_difference - 3.0e4 * quartic_difference);
     check(
         std::abs(difference.delta_joules - expected) <= 1.0e-45,
-        "direct uniaxial difference must subtract local energy densities before reduction");
+        "direct uniaxial difference must factor local quadratic and quartic increments before reduction");
+}
+
+void direct_uniaxial_roundoff_bound_contains_cancelling_axis_projection()
+{
+    const double axis_component = std::sqrt(0.5);
+    fullmag::fem::Context ctx;
+    ctx.mesh.magnetic_node_mask = {1u, 1u};
+    ctx.integration_weights.mfem_lumped_mass = {4.0e-27, 7.0e-27};
+    ctx.anisotropy.uniaxial_enabled = true;
+    ctx.anisotropy.uniaxial_Ku = 7.0e5;
+    ctx.anisotropy.uniaxial_Ku2 = -2.5e5;
+    ctx.anisotropy.uniaxial_axis = {
+        axis_component, -axis_component, 0.0};
+    const std::vector<double> current_m = {
+        1.0, std::nextafter(1.0, 0.0), 0.0,
+        0.75, std::nextafter(0.75, 1.0), 0.0,
+    };
+    const std::vector<double> trial_m = {
+        std::nextafter(1.0, 2.0), 1.0, 0.0,
+        std::nextafter(0.75, 0.0), 0.75, 0.0,
+    };
+
+    const auto difference = fullmag::fem::uniaxial_anisotropy_energy_difference(
+        ctx, current_m, trial_m);
+    long double oracle = 0.0L;
+    for (std::size_t node = 0; node < 2u; ++node) {
+        const std::size_t base = 3u * node;
+        const long double ux = static_cast<long double>(axis_component);
+        const long double uy = -ux;
+        const long double q0 =
+            static_cast<long double>(current_m[base]) * ux +
+            static_cast<long double>(current_m[base + 1u]) * uy;
+        const long double q1 =
+            static_cast<long double>(trial_m[base]) * ux +
+            static_cast<long double>(trial_m[base + 1u]) * uy;
+        const long double quadratic_difference = (q1 - q0) * (q1 + q0);
+        const long double quartic_difference = quadratic_difference *
+            (q1 * q1 + q0 * q0);
+        oracle -= static_cast<long double>(ctx.integration_weights.mfem_lumped_mass[node]) *
+            (static_cast<long double>(ctx.anisotropy.uniaxial_Ku) * quadratic_difference +
+             static_cast<long double>(ctx.anisotropy.uniaxial_Ku2) * quartic_difference);
+    }
+    const long double actual_error = std::abs(
+        static_cast<long double>(difference.delta_joules) - oracle);
+    check(
+        actual_error <= static_cast<long double>(difference.roundoff_bound_joules),
+        "CPU direct uniaxial roundoff bound must contain cancellation in axis projections and mixed Ku1/Ku2 products");
+}
+
+void direct_uniaxial_roundoff_bound_contains_inexact_material_coefficient()
+{
+    fullmag::fem::Context ctx;
+    ctx.mesh.magnetic_node_mask = {1u};
+    ctx.integration_weights.mfem_lumped_mass = {1.1e-27};
+    ctx.anisotropy.uniaxial_enabled = true;
+    ctx.anisotropy.uniaxial_Ku = 3.3e5;
+    ctx.anisotropy.uniaxial_Ku2 = 0.0;
+    ctx.anisotropy.uniaxial_axis = {0.0, 0.0, 1.0};
+    const std::vector<double> current_m = {1.0, 0.0, 0.0};
+    const std::vector<double> trial_m = {0.0, 0.0, 1.0};
+
+    const auto difference = fullmag::fem::uniaxial_anisotropy_energy_difference(
+        ctx, current_m, trial_m);
+    const long double q0 = current_m[2];
+    const long double q1 = trial_m[2];
+    const long double quadratic_difference = (q1 - q0) * (q1 + q0);
+    const long double quartic_difference = quadratic_difference *
+        (q1 * q1 + q0 * q0);
+    const long double oracle =
+        -static_cast<long double>(ctx.integration_weights.mfem_lumped_mass[0]) *
+        (static_cast<long double>(ctx.anisotropy.uniaxial_Ku) * quadratic_difference +
+         static_cast<long double>(ctx.anisotropy.uniaxial_Ku2) * quartic_difference);
+    const long double actual_error = std::abs(
+        static_cast<long double>(difference.delta_joules) - oracle);
+    check(
+        actual_error <= static_cast<long double>(difference.roundoff_bound_joules),
+        "CPU direct uniaxial roundoff bound must contain an inexact volume times Ku coefficient");
+}
+
+void direct_uniaxial_roundoff_bound_retains_denormal_operation_floor()
+{
+    fullmag::fem::Context ctx;
+    ctx.mesh.magnetic_node_mask = {1u};
+    ctx.integration_weights.mfem_lumped_mass = {1.0};
+    ctx.anisotropy.uniaxial_enabled = true;
+    ctx.anisotropy.uniaxial_Ku = 0.0;
+    ctx.anisotropy.uniaxial_Ku2 = 0.0;
+    ctx.anisotropy.uniaxial_axis = {0.0, 0.0, 1.0};
+    const auto difference = fullmag::fem::uniaxial_anisotropy_energy_difference(
+        ctx, {1.0, 0.0, 0.0}, {0.0, 0.0, 1.0});
+    const long double required_floor = 256.0L *
+        static_cast<long double>(std::numeric_limits<double>::denorm_min());
+    check(
+        static_cast<long double>(difference.roundoff_bound_joules) >=
+            required_floor,
+        "CPU direct uniaxial roundoff bound must retain one denormal floor per certified scalar operation");
+}
+
+void representably_nonunit_tangent_projection_is_orthogonal()
+{
+    constexpr double mx = -1.3449016199589132e-8;
+    constexpr double mz = 1.0;
+    constexpr double h_ext_z = 39788.735772973836;
+    fullmag::fem::Context ctx;
+    ctx.mesh.magnetic_node_mask = {1u};
+    const std::vector<double> m = {mx, 0.0, mz};
+    const std::vector<double> h = {0.0, 0.0, h_ext_z};
+    std::vector<double> gradient;
+    fullmag::fem::relaxation::tangent_gradient_from_field(
+        ctx, m, h, gradient);
+    check(
+        m[0] * m[0] + m[2] * m[2] == 1.0000000000000002,
+        "pinned tangent fixture must retain its representably non-unit norm");
+    check(
+        m[0] * gradient[0] + m[1] * gradient[1] +
+                m[2] * gradient[2] ==
+            0.0,
+        "CPU tangent projector must remove the representable longitudinal residual exactly");
+
+    const std::vector<double> ambient = {2.0, -3.0, 4.0};
+    const auto projected =
+        fullmag::fem::relaxation::project_tangent(ctx, m, ambient);
+    check(
+        m[0] * projected[0] + m[1] * projected[1] +
+                m[2] * projected[2] ==
+            0.0,
+        "CPU tangent transport must remove the representable longitudinal residual exactly");
+
+#if FULLMAG_HAS_CUDA_RUNTIME
+    double *d_mx = copy_to_device(std::vector<double>{mx});
+    double *d_my = copy_to_device(std::vector<double>{0.0});
+    double *d_mz = copy_to_device(std::vector<double>{mz});
+    double *d_hx = copy_to_device(std::vector<double>{0.0});
+    double *d_hy = copy_to_device(std::vector<double>{0.0});
+    double *d_hz = copy_to_device(std::vector<double>{h_ext_z});
+    double *d_mass = copy_to_device(std::vector<double>{1.0});
+    uint8_t *d_mask = copy_to_device(std::vector<uint8_t>{1u});
+    double *d_gx = copy_to_device(std::vector<double>{0.0});
+    double *d_gy = copy_to_device(std::vector<double>{0.0});
+    double *d_gz = copy_to_device(std::vector<double>{0.0});
+    double *d_norm = copy_to_device(std::vector<double>{0.0});
+    fullmag::fem::fullmag_cuda_relax_tangent_gradient_and_norm_blocks(
+        d_mx, d_my, d_mz,
+        d_hx, d_hy, d_hz,
+        d_mass, d_mask,
+        d_gx, d_gy, d_gz, d_norm,
+        1, nullptr);
+    check_cuda(cudaGetLastError(), "CUDA representably non-unit tangent projection launch");
+    check_cuda(
+        cudaDeviceSynchronize(),
+        "CUDA representably non-unit tangent projection synchronize");
+    const double gx = copy_scalar_from_device(d_gx);
+    const double gy = copy_scalar_from_device(d_gy);
+    const double gz = copy_scalar_from_device(d_gz);
+    check(
+        mx * gx + 0.0 * gy + mz * gz == 0.0,
+        "CUDA tangent projector must remove the representable longitudinal residual exactly");
+    for (void *pointer : {
+             static_cast<void *>(d_mx), static_cast<void *>(d_my),
+             static_cast<void *>(d_mz), static_cast<void *>(d_hx),
+             static_cast<void *>(d_hy), static_cast<void *>(d_hz),
+             static_cast<void *>(d_mass), static_cast<void *>(d_mask),
+             static_cast<void *>(d_gx), static_cast<void *>(d_gy),
+             static_cast<void *>(d_gz), static_cast<void *>(d_norm)}) {
+        cudaFree(pointer);
+    }
+#endif
+}
+
+void representable_chord_armijo_matches_the_fp_retraction()
+{
+    using fullmag::fem::relaxation::ArmijoDifferenceDecision;
+    using fullmag::fem::relaxation::representable_chord_energy_linear_increment;
+    using fullmag::fem::relaxation::strict_armijo_difference_decision;
+
+    constexpr double mx = -1.3449016199589132e-8;
+    constexpr double h_x = 1.0;
+    constexpr double h_z = 39788.735772973836;
+    constexpr double step = 1.9385449670430598e-11;
+    constexpr double mass = 4.1666666666666659e-23;
+    constexpr double ms = 8.0e5;
+    fullmag::fem::Context ctx;
+    ctx.mesh.magnetic_node_mask = {1u};
+    ctx.integration_weights.mfem_lumped_mass = {mass};
+    ctx.material_fields.Ms_field = {ms};
+    ctx.zeeman.has_external_field = true;
+    ctx.zeeman.h_ext_xyz = {h_x, 0.0, h_z};
+    const std::vector<double> current_m = {mx, 0.0, 1.0};
+    const std::vector<double> h_eff = ctx.zeeman.h_ext_xyz;
+    std::vector<double> gradient;
+    fullmag::fem::relaxation::tangent_gradient_from_field(
+        ctx, current_m, h_eff, gradient);
+    const auto direction = fullmag::fem::relaxation::negative_field(gradient);
+    const auto trial_m = fullmag::fem::relaxation::retracted_step(
+        ctx, current_m, direction, step);
+    check(
+        trial_m[0] != current_m[0] && trial_m[2] == current_m[2],
+        "pinned chord fixture must move the transverse component while the Zeeman component remains bitwise fixed");
+
+    const auto chord = representable_chord_energy_linear_increment(
+        ctx, current_m, trial_m, h_eff);
+    const double weight = fullmag::fem::kMu0 * ms * mass;
+    const double expected = -weight *
+        (h_x * (trial_m[0] - current_m[0]) +
+         h_z * (trial_m[2] - current_m[2]));
+    const double classical = step *
+        fullmag::fem::relaxation::energy_weighted_dot_fields(
+            ctx, gradient, direction);
+    check(
+        chord.value == expected && chord.value < 0.0 && classical < 0.0 &&
+            std::abs(chord.value - classical) <=
+                1.0e-3 * std::abs(classical),
+        "representable-chord Armijo must exclude the frozen FP64 Zeeman component while remaining consistent with the exact tangent decrement");
+    const auto direct = fullmag::fem::zeeman_energy_difference_from_field(
+        ctx, current_m, trial_m);
+    const double armijo_rhs =
+        fullmag::fem::relaxation::kArmijoCoefficient * chord.value;
+    check(
+        direct.delta_joules == chord.value && armijo_rhs < 0.0 &&
+            strict_armijo_difference_decision(direct, armijo_rhs) ==
+                ArmijoDifferenceDecision::Accept,
+        "pinned representable chord must retain strict direct-increment Armijo acceptance");
+
+    const std::vector<double> ordinary_m = {1.0, 0.0, 0.0};
+    const std::vector<double> ordinary_h = {0.0, 2.0, 0.0};
+    std::vector<double> ordinary_g;
+    fullmag::fem::relaxation::tangent_gradient_from_field(
+        ctx, ordinary_m, ordinary_h, ordinary_g);
+    const auto ordinary_direction =
+        fullmag::fem::relaxation::negative_field(ordinary_g);
+    constexpr double ordinary_step = 1.0e-6;
+    const auto ordinary_trial = fullmag::fem::relaxation::retracted_step(
+        ctx, ordinary_m, ordinary_direction, ordinary_step);
+    const auto ordinary_chord = representable_chord_energy_linear_increment(
+        ctx, ordinary_m, ordinary_trial, ordinary_h);
+    const double ordinary_classical = ordinary_step *
+        fullmag::fem::relaxation::energy_weighted_dot_fields(
+            ctx, ordinary_g, ordinary_direction);
+    check(
+        ordinary_chord.value < 0.0 && ordinary_classical < 0.0 &&
+            std::abs(ordinary_chord.value - ordinary_classical) <=
+                2.0e-6 * std::abs(ordinary_classical),
+        "ordinary-scale representable chord must converge to the classical Armijo decrement");
+
+#if FULLMAG_HAS_CUDA_RUNTIME
+    const std::vector<double> current_x = {current_m[0]};
+    const std::vector<double> current_y = {current_m[1]};
+    const std::vector<double> current_z = {current_m[2]};
+    const std::vector<double> trial_x = {trial_m[0]};
+    const std::vector<double> trial_y = {trial_m[1]};
+    const std::vector<double> trial_z = {trial_m[2]};
+    double *d_current_x = copy_to_device(current_x);
+    double *d_current_y = copy_to_device(current_y);
+    double *d_current_z = copy_to_device(current_z);
+    double *d_trial_x = copy_to_device(trial_x);
+    double *d_trial_y = copy_to_device(trial_y);
+    double *d_trial_z = copy_to_device(trial_z);
+    double *d_hx = copy_to_device(std::vector<double>{h_x});
+    double *d_hy = copy_to_device(std::vector<double>{0.0});
+    double *d_hz = copy_to_device(std::vector<double>{h_z});
+    double *d_ms = copy_to_device(std::vector<double>{ms});
+    double *d_mass = copy_to_device(std::vector<double>{mass});
+    uint8_t *d_mask = copy_to_device(std::vector<uint8_t>{1u});
+    double *d_increment = copy_to_device(std::vector<double>{0.0});
+    fullmag::fem::fullmag_cuda_relax_representable_chord_energy_linear_increment_blocks(
+        d_current_x, d_current_y, d_current_z,
+        d_trial_x, d_trial_y, d_trial_z,
+        d_hx, d_hy, d_hz,
+        d_ms, d_mass, d_mask, d_increment, 1, nullptr);
+    check_cuda(cudaGetLastError(), "CUDA representable-chord Armijo launch");
+    check_cuda(cudaDeviceSynchronize(), "CUDA representable-chord Armijo synchronize");
+    check(
+        copy_scalar_from_device(d_increment) == chord.value,
+        "CUDA representable-chord Armijo increment must equal the CPU SI-weighted result");
+    for (void *pointer : {
+             static_cast<void *>(d_current_x), static_cast<void *>(d_current_y),
+             static_cast<void *>(d_current_z), static_cast<void *>(d_trial_x),
+             static_cast<void *>(d_trial_y), static_cast<void *>(d_trial_z),
+             static_cast<void *>(d_hx), static_cast<void *>(d_hy),
+             static_cast<void *>(d_hz), static_cast<void *>(d_ms),
+             static_cast<void *>(d_mass), static_cast<void *>(d_mask),
+             static_cast<void *>(d_increment)}) {
+        cudaFree(pointer);
+    }
+#endif
+}
+
+void pgbb_stationary_requires_every_permitted_active_trial_to_be_bitwise_unchanged()
+{
+    fullmag::fem::Context ctx;
+    ctx.mesh.magnetic_node_mask = {1u, 1u, 0u};
+    const std::vector<double> current_m = {
+        0.6, 0.8, 0.0,
+        1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0,
+    };
+    const std::vector<double> stationary_direction = {
+        -0.8e-20, 0.6e-20, 0.0,
+        0.0, std::numeric_limits<double>::denorm_min(), 0.0,
+        1.0e12, -2.0e12, 3.0e12,
+    };
+
+    double trial_step = fullmag::fem::relaxation::kDefaultStepSize;
+    for (uint32_t backtracks = 0;
+         backtracks <= fullmag::fem::relaxation::kProjectedGradientMaxBacktracks;
+         ++backtracks) {
+        const auto trial = fullmag::fem::relaxation::retracted_step(
+            ctx, current_m, stationary_direction, trial_step);
+        check(
+            fullmag::fem::relaxation::all_active_magnetic_dofs_bitwise_unchanged(
+                current_m.data(),
+                trial.data(),
+                ctx.mesh.magnetic_node_mask.data(),
+                ctx.mesh.magnetic_node_mask.size()),
+            "CPU PG-BB stationary fixture must prove every permitted retracted active trial bitwise unchanged");
+        trial_step *= 0.5;
+    }
+
+    auto masked_only_difference = current_m;
+    masked_only_difference[6] = -1.0;
+    masked_only_difference[7] = 2.0;
+    masked_only_difference[8] = -3.0;
+    check(
+        fullmag::fem::relaxation::all_active_magnetic_dofs_bitwise_unchanged(
+            current_m.data(),
+            masked_only_difference.data(),
+            ctx.mesh.magnetic_node_mask.data(),
+            ctx.mesh.magnetic_node_mask.size()),
+        "CPU PG-BB stationary proof must ignore masked nonmagnetic differences");
+
+    const std::vector<double> representable_direction = {
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0,
+        1.0e12, -2.0e12, 3.0e12,
+    };
+    const auto changed_trial = fullmag::fem::relaxation::retracted_step(
+        ctx,
+        current_m,
+        representable_direction,
+        fullmag::fem::relaxation::kDefaultStepSize);
+    check(
+        !fullmag::fem::relaxation::all_active_magnetic_dofs_bitwise_unchanged(
+            current_m.data(),
+            changed_trial.data(),
+            ctx.mesh.magnetic_node_mask.data(),
+            ctx.mesh.magnetic_node_mask.size()),
+        "CPU PG-BB stationary proof must reject one representably changed active DOF");
+}
+
+void direct_minimizer_stationary_accepts_only_fp64_unrepresentable_energy_intervals()
+{
+    using fullmag::fem::relaxation::EnergyDifference;
+    using fullmag::fem::relaxation::energy_difference_unrepresentable_at_baseline;
+
+    constexpr double baseline = -2.49999999999999921e-16;
+    const EnergyDifference observed_stationary = {
+        -8.70175686476036030e-43,
+        8.70204626921856570e-43,
+        3.01429818438535183e-56,
+    };
+    check(
+        energy_difference_unrepresentable_at_baseline(
+            baseline, observed_stationary),
+        "direct minimizer must classify the full observed energy-uncertainty interval as FP64-unrepresentable at the baseline");
+
+    const double next_lower =
+        std::nextafter(baseline, -std::numeric_limits<double>::infinity());
+    const EnergyDifference representable = {
+        next_lower - baseline,
+        std::abs(next_lower - baseline),
+        0.0,
+    };
+    check(
+        !energy_difference_unrepresentable_at_baseline(
+            baseline, representable),
+        "direct minimizer stationary classification must reject a one-ULP representable decrease");
+
+    const EnergyDifference uncertainty_crosses_one_ulp = {
+        0.0,
+        std::abs(next_lower - baseline),
+        std::abs(next_lower - baseline),
+    };
+    check(
+        !energy_difference_unrepresentable_at_baseline(
+            baseline, uncertainty_crosses_one_ulp),
+        "direct minimizer stationary classification must reject an uncertainty interval reaching a representable energy");
+}
+
+void near_aligned_uniaxial_increment_preserves_descent_and_strict_armijo()
+{
+    using fullmag::fem::relaxation::ArmijoDifferenceDecision;
+    using fullmag::fem::relaxation::strict_armijo_difference_decision;
+
+    constexpr double step = 9.58738002183924504e-13;
+    constexpr double armijo_c1 = 1.0e-4;
+    constexpr double ku1 = 5.0e5;
+    constexpr double ku2 = 1.0e5;
+    constexpr double volume0 = 5.96863945012836256e-28;
+    constexpr double volume1 = 1.58877452989028360e-28;
+
+    double trial_q0 = 0.995;
+    for (int i = 0; i < 3; ++i) {
+        trial_q0 = std::nextafter(
+            trial_q0, std::numeric_limits<double>::infinity());
+    }
+    double trial_q1 = 0.99;
+    for (int i = 0; i < 10; ++i) {
+        trial_q1 = std::nextafter(
+            trial_q1, -std::numeric_limits<double>::infinity());
+    }
+    const auto unit_state = [](double q) {
+        return std::array<double, 3>{std::sqrt(1.0 - q * q), 0.0, q};
+    };
+    const auto current0 = unit_state(0.995);
+    const auto current1 = unit_state(0.99);
+    const auto trial0 = unit_state(trial_q0);
+    const auto trial1 = unit_state(trial_q1);
+    const std::vector<double> current_m = {
+        current0[0], current0[1], current0[2],
+        current1[0], current1[1], current1[2],
+    };
+    const std::vector<double> trial_m = {
+        trial0[0], trial0[1], trial0[2],
+        trial1[0], trial1[1], trial1[2],
+    };
+
+    fullmag::fem::Context ctx;
+    ctx.mesh.magnetic_node_mask = {1u, 1u};
+    ctx.integration_weights.mfem_lumped_mass = {volume0, volume1};
+    ctx.anisotropy.uniaxial_enabled = true;
+    ctx.anisotropy.uniaxial_Ku = ku1;
+    ctx.anisotropy.uniaxial_Ku2 = ku2;
+    ctx.anisotropy.uniaxial_axis = {0.0, 0.0, 1.0};
+
+    const auto first_order_increment = [&](double q0, double q1, double volume) {
+        const double dq_d_step = (q1 - q0) / step;
+        return step * -volume *
+            (2.0 * ku1 * q0 + 4.0 * ku2 * q0 * q0 * q0) * dq_d_step;
+    };
+    const double directional_derivative =
+        first_order_increment(0.995, trial_q0, volume0) / step +
+        first_order_increment(0.99, trial_q1, volume1) / step;
+    const double expected_first_order = step * directional_derivative;
+    const double armijo_rhs = armijo_c1 * expected_first_order;
+    check(
+        std::abs(directional_derivative - (-3.44696709241104388e-26)) <=
+                1.0e-12 * std::abs(directional_derivative) &&
+            std::abs(armijo_rhs - (-3.30473834377189575e-42)) <=
+                1.0e-12 * std::abs(armijo_rhs),
+        "near-aligned uniaxial fixture must reproduce the observed derivative and Armijo scales");
+    const auto cpu_difference =
+        fullmag::fem::uniaxial_anisotropy_energy_difference(
+            ctx, current_m, trial_m);
+
+    check(
+        std::isfinite(cpu_difference.delta_joules) &&
+            std::isfinite(cpu_difference.absolute_term_sum_joules) &&
+            std::isfinite(cpu_difference.roundoff_bound_joules),
+        "near-aligned CPU uniaxial increment and uncertainty must be finite");
+    check(
+        directional_derivative < 0.0 && cpu_difference.delta_joules < 0.0,
+        "near-aligned CPU uniaxial increment must retain the descent sign");
+    check(
+        std::abs(cpu_difference.delta_joules - expected_first_order) <=
+            1.0e-12 * std::abs(expected_first_order),
+        "near-aligned CPU uniaxial increment must agree with its first-order directional derivative");
+    check(
+        strict_armijo_difference_decision(cpu_difference, armijo_rhs) ==
+            ArmijoDifferenceDecision::Accept,
+        "near-aligned CPU uniaxial increment must satisfy the strict Armijo comparison");
+
+#if FULLMAG_HAS_CUDA_RUNTIME
+    const std::vector<double> current_x = {current0[0], current1[0]};
+    const std::vector<double> current_y = {0.0, 0.0};
+    const std::vector<double> current_z = {0.995, 0.99};
+    const std::vector<double> trial_x = {trial0[0], trial1[0]};
+    const std::vector<double> trial_z = {trial_q0, trial_q1};
+    const std::vector<double> zero = {0.0, 0.0};
+    const std::vector<double> one = {1.0, 1.0};
+    const std::vector<double> volume = {volume0, volume1};
+    const std::vector<uint8_t> mask = {1u, 1u};
+    double *d_current_x = copy_to_device(current_x);
+    double *d_current_y = copy_to_device(current_y);
+    double *d_current_z = copy_to_device(current_z);
+    double *d_trial_x = copy_to_device(trial_x);
+    double *d_trial_z = copy_to_device(trial_z);
+    double *d_zero = copy_to_device(zero);
+    double *d_one = copy_to_device(one);
+    double *d_volume = copy_to_device(volume);
+    uint8_t *d_mask = copy_to_device(mask);
+    double *d_delta = copy_to_device(std::vector<double>{0.0});
+    double *d_absolute = copy_to_device(std::vector<double>{0.0});
+    double *d_demag_delta = copy_to_device(std::vector<double>{0.0});
+    double *d_demag_absolute = copy_to_device(std::vector<double>{0.0});
+
+    fullmag::fem::fullmag_cuda_relax_direct_energy_difference_blocks(
+        d_current_x, d_current_y, d_current_z,
+        d_trial_x, d_current_y, d_trial_z,
+        d_zero, d_zero, d_zero,
+        d_zero, d_zero, d_zero,
+        d_zero, d_zero, d_zero,
+        d_zero, d_zero, d_zero,
+        d_zero, d_zero, d_zero,
+        d_zero, d_zero, d_one,
+        d_volume, d_mask,
+        false, false, true, false,
+        ku1, ku2, false, false,
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+        false, false, false,
+        d_delta, d_absolute, d_demag_delta, d_demag_absolute, 2, nullptr);
+    check_cuda(cudaGetLastError(), "CUDA near-aligned uniaxial increment launch");
+    check_cuda(
+        cudaDeviceSynchronize(),
+        "CUDA near-aligned uniaxial increment synchronize");
+    fullmag::fem::relaxation::EnergyDifference gpu_difference;
+    gpu_difference.delta_joules = copy_scalar_from_device(d_delta);
+    gpu_difference.absolute_term_sum_joules =
+        copy_scalar_from_device(d_absolute);
+    gpu_difference.roundoff_bound_joules =
+        fullmag::fem::relaxation::reduction_roundoff_bound(256u) *
+        gpu_difference.absolute_term_sum_joules;
+
+    check(
+        std::isfinite(gpu_difference.delta_joules) &&
+            std::isfinite(gpu_difference.absolute_term_sum_joules) &&
+            std::isfinite(gpu_difference.roundoff_bound_joules),
+        "near-aligned CUDA uniaxial increment and uncertainty must be finite");
+    check(
+        gpu_difference.delta_joules < 0.0,
+        "near-aligned CUDA uniaxial increment must retain the descent sign");
+    check(
+        std::abs(gpu_difference.delta_joules - expected_first_order) <=
+            1.0e-12 * std::abs(expected_first_order),
+        "near-aligned CUDA uniaxial increment must agree with its first-order directional derivative");
+    check(
+        strict_armijo_difference_decision(gpu_difference, armijo_rhs) ==
+            ArmijoDifferenceDecision::Accept,
+        "double-double CUDA uniaxial increment must resolve the near-aligned Armijo descent without an endpoint-energy fallback");
+
+    for (void *pointer : {
+             static_cast<void *>(d_current_x), static_cast<void *>(d_current_y),
+             static_cast<void *>(d_current_z), static_cast<void *>(d_trial_x),
+             static_cast<void *>(d_trial_z), static_cast<void *>(d_zero),
+             static_cast<void *>(d_one), static_cast<void *>(d_volume),
+             static_cast<void *>(d_mask), static_cast<void *>(d_delta),
+             static_cast<void *>(d_absolute), static_cast<void *>(d_demag_delta),
+             static_cast<void *>(d_demag_absolute)}) {
+        cudaFree(pointer);
+    }
+#endif
 }
 
 void transported_bb_secant_lives_in_the_accepted_tangent_space()
@@ -807,6 +1773,364 @@ void transported_bb_secant_lives_in_the_accepted_tangent_space()
 }
 
 #if FULLMAG_HAS_CUDA_RUNTIME
+void gpu_energy_increment_ownership_is_context_derived_and_exhaustive()
+{
+    using fullmag::fem::GpuEnergyIncrementOwner;
+    using fullmag::fem::GpuFinalScalarSlot;
+    using fullmag::fem::gpu_energy_increment_owner;
+
+    fullmag::fem::Context enabled;
+    enabled.exchange.enabled = true;
+    enabled.demag.enabled = true;
+    enabled.zeeman.has_external_field = true;
+    enabled.zeeman.regional_drives.emplace_back();
+    enabled.anisotropy.uniaxial_enabled = true;
+    enabled.anisotropy.cubic_enabled = true;
+    enabled.dmi.interfacial_enabled = true;
+    enabled.dmi.bulk_enabled = true;
+    enabled.magnetoelastic.enabled = true;
+
+    for (int raw = 0; raw < static_cast<int>(GpuFinalScalarSlot::Count); ++raw) {
+        check(
+            gpu_energy_increment_owner(
+                enabled, static_cast<GpuFinalScalarSlot>(raw)) !=
+                GpuEnergyIncrementOwner::Unsupported,
+            "every current GPU final scalar slot must have an explicit Armijo owner");
+    }
+    check(
+        gpu_energy_increment_owner(enabled, GpuFinalScalarSlot::ExchangeEnergy) ==
+                GpuEnergyIncrementOwner::Direct &&
+            gpu_energy_increment_owner(enabled, GpuFinalScalarSlot::DemagEnergy) ==
+                GpuEnergyIncrementOwner::Direct &&
+            gpu_energy_increment_owner(enabled, GpuFinalScalarSlot::ExternalEnergy) ==
+                GpuEnergyIncrementOwner::Direct &&
+            gpu_energy_increment_owner(enabled, GpuFinalScalarSlot::AnisotropyEnergy) ==
+                GpuEnergyIncrementOwner::Direct &&
+            gpu_energy_increment_owner(
+                enabled, GpuFinalScalarSlot::CubicAnisotropyEnergy) ==
+                GpuEnergyIncrementOwner::Direct &&
+            gpu_energy_increment_owner(enabled, GpuFinalScalarSlot::DmiEnergy) ==
+                GpuEnergyIncrementOwner::Direct &&
+            gpu_energy_increment_owner(enabled, GpuFinalScalarSlot::BulkDmiEnergy) ==
+                GpuEnergyIncrementOwner::Direct,
+        "qualified CUDA exchange, demag, external, uniaxial, cubic, and DMI terms must be direct exactly once");
+    check(
+        gpu_energy_increment_owner(enabled, GpuFinalScalarSlot::DriveEnergy) ==
+                GpuEnergyIncrementOwner::EndpointResidual &&
+            gpu_energy_increment_owner(
+                enabled, GpuFinalScalarSlot::MagnetoelasticEnergy) ==
+                GpuEnergyIncrementOwner::EndpointResidual,
+        "drive and magnetoelastic terms without qualified CUDA direct owners must use explicit endpoint residuals");
+    check(
+        gpu_energy_increment_owner(
+            enabled, GpuFinalScalarSlot::DemagRobinBoundaryEnergy) ==
+            GpuEnergyIncrementOwner::NotEnergy,
+        "Robin boundary diagnostics must not double-count the polarized demag energy");
+    for (GpuFinalScalarSlot observable : {
+             GpuFinalScalarSlot::MaxRhs,
+             GpuFinalScalarSlot::MaxHEff,
+             GpuFinalScalarSlot::MaxHDemag,
+             GpuFinalScalarSlot::MaxTorque,
+             GpuFinalScalarSlot::MxSum,
+             GpuFinalScalarSlot::MySum,
+             GpuFinalScalarSlot::MzSum,
+             GpuFinalScalarSlot::MomentWeight,
+         }) {
+        check(
+            gpu_energy_increment_owner(enabled, observable) ==
+                GpuEnergyIncrementOwner::NotEnergy,
+            "GPU final observables must not participate in Armijo energy composition");
+    }
+
+    fullmag::fem::Context disabled;
+    disabled.exchange.enabled = false;
+    for (GpuFinalScalarSlot energy : {
+             GpuFinalScalarSlot::ExchangeEnergy,
+             GpuFinalScalarSlot::DemagEnergy,
+             GpuFinalScalarSlot::ExternalEnergy,
+             GpuFinalScalarSlot::DriveEnergy,
+             GpuFinalScalarSlot::DmiEnergy,
+             GpuFinalScalarSlot::BulkDmiEnergy,
+             GpuFinalScalarSlot::AnisotropyEnergy,
+             GpuFinalScalarSlot::CubicAnisotropyEnergy,
+             GpuFinalScalarSlot::MagnetoelasticEnergy,
+         }) {
+        check(
+            gpu_energy_increment_owner(disabled, energy) ==
+                GpuEnergyIncrementOwner::NotEnergy,
+            "disabled GPU energies must be excluded by Context state");
+    }
+    check(
+        gpu_energy_increment_owner(disabled, GpuFinalScalarSlot::Count) ==
+            GpuEnergyIncrementOwner::Unsupported,
+        "an unknown GPU scalar semantic must fail closed as unsupported");
+}
+
+void gpu_term_complete_composition_retains_direct_zeeman_failure_scale()
+{
+    using fullmag::fem::GpuDirectEnergySnapshot;
+    using fullmag::fem::GpuFinalScalarSlot;
+
+    fullmag::fem::Context ctx;
+    ctx.exchange.enabled = true;
+    ctx.zeeman.has_external_field = true;
+    GpuDirectEnergySnapshot base{};
+    GpuDirectEnergySnapshot trial{};
+    base.total_energy_j = -2.0e-17;
+    trial.total_energy_j = -2.0e-17;
+    base.terms_j[static_cast<size_t>(GpuFinalScalarSlot::DemagRobinBoundaryEnergy)] =
+        -7.0e-12;
+    trial.terms_j[static_cast<size_t>(GpuFinalScalarSlot::DemagRobinBoundaryEnergy)] =
+        9.0e-12;
+    base.terms_j[static_cast<size_t>(GpuFinalScalarSlot::DriveEnergy)] = -1.0e9;
+    trial.terms_j[static_cast<size_t>(GpuFinalScalarSlot::DriveEnergy)] = 1.0e9;
+
+    constexpr double exchange_delta = -2.1037518401e-39;
+    constexpr double zeeman_delta = 7.9035597018e-49;
+    fullmag::fem::relaxation::EnergyDifference difference{};
+    double endpoint_residual_delta = 0.0;
+    double endpoint_residual_operand_absolute_sum = 0.0;
+    std::string error;
+    check(
+        fullmag::fem::gpu_compose_term_complete_energy_difference(
+            ctx,
+            base,
+            trial,
+            exchange_delta + zeeman_delta,
+            std::abs(exchange_delta) + std::abs(zeeman_delta),
+            96u,
+            difference,
+            endpoint_residual_delta,
+            endpoint_residual_operand_absolute_sum,
+            error),
+        "GPU term-complete composition must accept classified direct inputs: " +
+            error);
+    check(
+        difference.delta_joules == exchange_delta + zeeman_delta &&
+            endpoint_residual_delta == 0.0 &&
+            endpoint_residual_operand_absolute_sum == 0.0,
+        "GPU Armijo composition must retain direct exchange plus Zeeman without endpoint-total reconstruction or disabled-scalar inference");
+    check(
+        fullmag::fem::relaxation::strict_armijo_difference_decision(
+            difference, -6.0314e-43) ==
+            fullmag::fem::relaxation::ArmijoDifferenceDecision::Accept,
+        "retained GPU exchange-plus-Zeeman increment must satisfy strict Armijo");
+
+    fullmag::fem::Context disabled_ctx;
+    disabled_ctx.exchange.enabled = false;
+    GpuDirectEnergySnapshot disabled_base{};
+    GpuDirectEnergySnapshot disabled_trial{};
+    for (GpuFinalScalarSlot disabled_slot : {
+             GpuFinalScalarSlot::ExchangeEnergy,
+             GpuFinalScalarSlot::DemagEnergy,
+             GpuFinalScalarSlot::DemagRobinBoundaryEnergy,
+             GpuFinalScalarSlot::ExternalEnergy,
+             GpuFinalScalarSlot::DriveEnergy,
+             GpuFinalScalarSlot::DmiEnergy,
+             GpuFinalScalarSlot::BulkDmiEnergy,
+             GpuFinalScalarSlot::AnisotropyEnergy,
+             GpuFinalScalarSlot::CubicAnisotropyEnergy,
+             GpuFinalScalarSlot::MagnetoelasticEnergy,
+         }) {
+        disabled_base.terms_j[static_cast<size_t>(disabled_slot)] = -1.0e9;
+        disabled_trial.terms_j[static_cast<size_t>(disabled_slot)] = 1.0e9;
+    }
+    check(
+        fullmag::fem::gpu_compose_term_complete_energy_difference(
+            disabled_ctx,
+            disabled_base,
+            disabled_trial,
+            0.0,
+            0.0,
+            96u,
+            difference,
+            endpoint_residual_delta,
+            endpoint_residual_operand_absolute_sum,
+            error) &&
+            difference.delta_joules == 0.0 &&
+            difference.absolute_term_sum_joules == 0.0,
+        "disabled energy slots must remain excluded even when their stored scalars are nonzero");
+
+    fullmag::fem::Context residual_ctx;
+    residual_ctx.exchange.enabled = false;
+    residual_ctx.zeeman.regional_drives.emplace_back();
+    residual_ctx.anisotropy.cubic_enabled = true;
+    residual_ctx.magnetoelastic.enabled = true;
+    GpuDirectEnergySnapshot residual_base{};
+    GpuDirectEnergySnapshot residual_trial{};
+    const auto set_pair = [&](GpuFinalScalarSlot slot, double base_value,
+                              double trial_value) {
+        residual_base.terms_j[static_cast<size_t>(slot)] = base_value;
+        residual_trial.terms_j[static_cast<size_t>(slot)] = trial_value;
+    };
+    set_pair(GpuFinalScalarSlot::DriveEnergy, -1.1e-17, -1.1e-17 + 7.0e-31);
+    set_pair(
+        GpuFinalScalarSlot::CubicAnisotropyEnergy,
+        3.0e-18,
+        3.0e-18 - 2.0e-31);
+    set_pair(
+        GpuFinalScalarSlot::MagnetoelasticEnergy,
+        -4.0e-18,
+        -4.0e-18 + 5.0e-31);
+    set_pair(GpuFinalScalarSlot::DemagRobinBoundaryEnergy, -1.0e3, 2.0e3);
+    const double direct_cubic_delta = -2.0e-31;
+    const double expected_residual =
+        (residual_trial.terms_j[static_cast<size_t>(GpuFinalScalarSlot::DriveEnergy)] -
+         residual_base.terms_j[static_cast<size_t>(GpuFinalScalarSlot::DriveEnergy)]) +
+        (residual_trial.terms_j[static_cast<size_t>(GpuFinalScalarSlot::MagnetoelasticEnergy)] -
+         residual_base.terms_j[static_cast<size_t>(GpuFinalScalarSlot::MagnetoelasticEnergy)]);
+    const double expected_operand_scale =
+        std::abs(residual_base.terms_j[static_cast<size_t>(GpuFinalScalarSlot::DriveEnergy)]) +
+        std::abs(residual_trial.terms_j[static_cast<size_t>(GpuFinalScalarSlot::DriveEnergy)]) +
+        std::abs(residual_base.terms_j[static_cast<size_t>(GpuFinalScalarSlot::MagnetoelasticEnergy)]) +
+        std::abs(residual_trial.terms_j[static_cast<size_t>(GpuFinalScalarSlot::MagnetoelasticEnergy)]);
+    check(
+        fullmag::fem::gpu_compose_term_complete_energy_difference(
+            residual_ctx,
+            residual_base,
+            residual_trial,
+            direct_cubic_delta,
+            std::abs(direct_cubic_delta),
+            96u,
+            difference,
+            endpoint_residual_delta,
+            endpoint_residual_operand_absolute_sum,
+            error) &&
+            endpoint_residual_delta == expected_residual &&
+            endpoint_residual_operand_absolute_sum == expected_operand_scale &&
+            difference.delta_joules == direct_cubic_delta + expected_residual,
+        "GPU residual composition must include drive and magnetoelastic endpoint operands exactly once while retaining direct cubic and excluding cubic endpoints and Robin diagnostics");
+}
+
+void gpu_multi_element_dmi_reduction_count_bounds_reference_increment()
+{
+    fullmag::fem::Context ctx;
+    ctx.exchange.enabled = false;
+    ctx.dmi.interfacial_enabled = true;
+    ctx.dmi.bulk_enabled = true;
+    constexpr size_t node_count = 52u;
+    constexpr size_t element_count = 149u;
+    fullmag::fem::GpuDirectEnergyReductionCounts counts{};
+    check(
+        fullmag::fem::gpu_direct_energy_reduction_counts(
+            ctx, node_count, element_count, 0u, counts),
+        "GPU direct reduction counts must be representable");
+    check(
+        counts.interfacial_dmi == 512u * element_count &&
+            counts.bulk_dmi == 512u * element_count &&
+            counts.interfacial_dmi > 3u * node_count,
+        "GPU DMI roundoff counts must follow the multi-element reduction graph, not 3N nodes");
+
+    long double reference = 0.0L;
+    double reduced = 0.0;
+    double absolute = 0.0;
+    for (size_t term = 0; term < counts.interfacial_dmi; ++term) {
+        const double value = term + 1u == counts.interfacial_dmi
+            ? 1.0e-12
+            : (term % 2u == 0u ? 1.0 : -1.0);
+        reference += static_cast<long double>(value);
+        reduced += value;
+        absolute += std::abs(value);
+    }
+    const double reported_bound =
+        fullmag::fem::relaxation::reduction_roundoff_bound(
+            counts.interfacial_dmi) * absolute;
+    check(
+        std::abs(static_cast<long double>(reduced) - reference) <=
+            static_cast<long double>(reported_bound),
+        "GPU multi-element DMI interval must contain the higher-precision reference increment");
+}
+
+void gpu_endpoint_residual_ambiguity_has_no_false_demag_refinement()
+{
+    fullmag::fem::Context ctx;
+    ctx.demag.enabled = true;
+    fullmag::fem::GpuDirectArmijoResult result{};
+    result.decision =
+        fullmag::fem::relaxation::ArmijoDifferenceDecision::Refine;
+    result.endpoint_residual_operand_absolute_sum_j = 1.0e-17;
+    fullmag::fem::FemGpuComponentField field{};
+    std::string error;
+    check(
+        fullmag::fem::gpu_direct_armijo_refine(
+            ctx,
+            nullptr,
+            0,
+            0,
+            field,
+            field,
+            field,
+            0.0,
+            result,
+            error) &&
+            !result.refinement_attempted &&
+            !result.refinement_accepted &&
+            result.refinement_rhs_evaluations == 0u,
+        "endpoint-residual ambiguity without a qualified residual refinement must fail closed without relabelling demag refinement");
+}
+
+void gpu_demag_refinement_requires_demag_owned_ambiguity()
+{
+    fullmag::fem::Context ctx;
+    ctx.demag.enabled = true;
+    constexpr double armijo_rhs_j = -5.0e-35;
+    fullmag::fem::GpuDirectArmijoResult result{};
+    result.decision =
+        fullmag::fem::relaxation::ArmijoDifferenceDecision::Refine;
+    result.difference = {-6.0e-35, 1.0, 4.0e-35};
+    result.demag_roundoff_bound_j = 3.0e-35;
+    check(
+        fullmag::fem::gpu_direct_armijo_demag_refinement_eligible(
+            ctx, result, armijo_rhs_j),
+        "demag refinement must remain eligible when removing the demag-owned bound resolves aggregate Armijo ambiguity");
+
+    result.demag_roundoff_bound_j = 1.0e-35;
+    check(
+        !fullmag::fem::gpu_direct_armijo_demag_refinement_eligible(
+            ctx, result, armijo_rhs_j),
+        "demag refinement must be ineligible when exchange/local uncertainty remains ambiguous without the demag-owned bound");
+
+    fullmag::fem::FemGpuComponentField field{};
+    std::string error;
+    check(
+        fullmag::fem::gpu_direct_armijo_refine(
+            ctx,
+            nullptr,
+            0,
+            0,
+            field,
+            field,
+            field,
+            armijo_rhs_j,
+            result,
+            error) &&
+            !result.refinement_attempted &&
+            result.refinement_rhs_evaluations == 0u,
+        "non-demag-owned Armijo ambiguity must fail closed without a demag solve");
+
+    result.difference = {-3.0e-35, 1.0, 4.0e-35};
+    result.demag_roundoff_bound_j = 3.0e-35;
+    check(
+        !fullmag::fem::gpu_direct_armijo_demag_refinement_eligible(
+            ctx, result, armijo_rhs_j),
+        "demag refinement must be ineligible when removing the demag-owned bound already resolves Armijo to Reject");
+    check(
+        fullmag::fem::gpu_direct_armijo_refine(
+            ctx,
+            nullptr,
+            0,
+            0,
+            field,
+            field,
+            field,
+            armijo_rhs_j,
+            result,
+            error) &&
+            !result.refinement_attempted &&
+            result.refinement_rhs_evaluations == 0u,
+        "a non-demag Reject decision must fail closed without a demag solve");
+}
+
 void check_cuda(cudaError_t status, const char *message)
 {
     check(status == cudaSuccess, std::string(message) + ": " + cudaGetErrorString(status));
@@ -840,6 +2164,627 @@ std::vector<double> copy_vector_from_device(const double *device, size_t size)
             value.data(), device, size * sizeof(double), cudaMemcpyDeviceToHost),
         "cudaMemcpy vector device-to-host");
     return value;
+}
+
+void cuda_direct_local_absolute_scale_survives_owner_cancellation()
+{
+    const std::vector<double> zero = {0.0};
+    const std::vector<double> one = {1.0};
+    const std::vector<double> minus_one = {-1.0};
+    double *d_zero = copy_to_device(zero);
+    double *d_one = copy_to_device(one);
+    double *d_minus_one = copy_to_device(minus_one);
+    uint8_t *d_mask = copy_to_device(std::vector<uint8_t>{1u});
+    double *d_delta = copy_to_device(zero);
+    double *d_absolute = copy_to_device(zero);
+    double *d_demag_delta = copy_to_device(zero);
+    double *d_demag_absolute = copy_to_device(zero);
+
+    fullmag::fem::fullmag_cuda_relax_direct_energy_difference_blocks(
+        d_zero, d_zero, d_zero,
+        d_one, d_one, d_zero,
+        d_one, d_minus_one, d_zero,
+        d_one, d_minus_one, d_zero,
+        d_one, d_minus_one, d_zero,
+        d_one, d_zero, d_zero,
+        d_zero, d_zero, d_zero,
+        d_one, d_zero, d_zero,
+        d_one, d_mask,
+        true, true, true, false,
+        1.0, -1.0, false, false,
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+        false, false, false,
+        d_delta, d_absolute, d_demag_delta, d_demag_absolute, 1, nullptr);
+    check_cuda(cudaGetLastError(), "CUDA direct local cancellation launch");
+    check_cuda(cudaDeviceSynchronize(), "CUDA direct local cancellation synchronize");
+
+    const double delta = copy_scalar_from_device(d_delta);
+    const double absolute = copy_scalar_from_device(d_absolute);
+    const double demag_delta = copy_scalar_from_device(d_demag_delta);
+    const double demag_absolute = copy_scalar_from_device(d_demag_absolute);
+    const double tolerance =
+        64.0 * std::numeric_limits<double>::epsilon();
+    check(
+        std::abs(delta) <= tolerance &&
+            absolute >= (2.0 + 4.0 * fullmag::fem::kMu0) &&
+            std::abs(demag_delta) <= tolerance &&
+            demag_absolute >= 2.0 * fullmag::fem::kMu0,
+        "within-owner demag components, Zeeman components, and Ku/Ku2 increments must cancel nominally while retaining every scalar subterm magnitude");
+
+    check_cuda(cudaMemset(d_delta, 0, sizeof(double)), "clear disabled-demag delta");
+    check_cuda(
+        cudaMemset(d_absolute, 0, sizeof(double)),
+        "clear disabled-demag absolute scale");
+    check_cuda(
+        cudaMemset(d_demag_delta, 0, sizeof(double)),
+        "clear disabled-demag owned delta");
+    check_cuda(
+        cudaMemset(d_demag_absolute, 0, sizeof(double)),
+        "clear disabled-demag owned absolute scale");
+    fullmag::fem::fullmag_cuda_relax_direct_energy_difference_blocks(
+        d_zero, d_zero, d_zero,
+        d_one, d_one, d_zero,
+        d_one, d_minus_one, d_zero,
+        d_one, d_minus_one, d_zero,
+        d_one, d_minus_one, d_zero,
+        d_one, d_zero, d_zero,
+        d_zero, d_zero, d_zero,
+        d_one, d_zero, d_zero,
+        d_one, d_mask,
+        false, false, false, false,
+        1.0, -1.0, false, false,
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+        false, false, false,
+        d_delta, d_absolute, d_demag_delta, d_demag_absolute, 1, nullptr);
+    check_cuda(cudaGetLastError(), "CUDA disabled-demag direct local launch");
+    check_cuda(
+        cudaDeviceSynchronize(),
+        "CUDA disabled-demag direct local synchronize");
+    check(
+        copy_scalar_from_device(d_delta) == 0.0 &&
+            copy_scalar_from_device(d_absolute) == 0.0 &&
+            copy_scalar_from_device(d_demag_delta) == 0.0 &&
+            copy_scalar_from_device(d_demag_absolute) == 0.0,
+        "disabled demag with nonzero endpoint fields must contribute zero signed and absolute energy increments");
+
+    cudaFree(d_zero);
+    cudaFree(d_one);
+    cudaFree(d_minus_one);
+    cudaFree(d_mask);
+    cudaFree(d_delta);
+    cudaFree(d_absolute);
+    cudaFree(d_demag_delta);
+    cudaFree(d_demag_absolute);
+}
+
+void cuda_exchange_absolute_scale_survives_component_cancellation()
+{
+    uint32_t *d_rows = copy_to_device(std::vector<uint32_t>{0u, 2u, 4u});
+    uint32_t *d_cols = copy_to_device(std::vector<uint32_t>{0u, 1u, 0u, 1u});
+    double *d_values = copy_to_device(std::vector<double>{1.0, -1.0, -1.0, 1.0});
+    double *d_zero = copy_to_device(std::vector<double>{0.0, 0.0});
+    double *d_edge = copy_to_device(std::vector<double>{1.0, 0.0});
+    double *d_delta = copy_to_device(std::vector<double>{0.0});
+    double *d_absolute = copy_to_device(std::vector<double>{0.0});
+
+    fullmag::fem::fullmag_cuda_legacy_sparse_exchange_difference_blocks(
+        d_rows,
+        d_cols,
+        d_values,
+        d_zero, d_edge, d_zero,
+        d_edge, d_zero, d_zero,
+        d_delta,
+        d_absolute,
+        2,
+        nullptr);
+    check_cuda(cudaGetLastError(), "CUDA exchange cancellation launch");
+    check_cuda(cudaDeviceSynchronize(), "CUDA exchange cancellation synchronize");
+    check(
+        copy_scalar_from_device(d_delta) == 0.0 &&
+            copy_scalar_from_device(d_absolute) >= 2.0,
+        "opposite x/y exchange increments must cancel nominally while retaining both component magnitudes");
+
+    cudaFree(d_rows);
+    cudaFree(d_cols);
+    cudaFree(d_values);
+    cudaFree(d_zero);
+    cudaFree(d_edge);
+    cudaFree(d_delta);
+    cudaFree(d_absolute);
+}
+
+void cuda_exchange_csr_cancellation_interval_contains_reference()
+{
+    constexpr double weight = 1.0e16;
+    constexpr double perturbation = 0x1p-40;
+    uint32_t *d_rows = copy_to_device(std::vector<uint32_t>{0u, 2u, 4u});
+    uint32_t *d_cols = copy_to_device(std::vector<uint32_t>{0u, 1u, 0u, 1u});
+    double *d_values = copy_to_device(
+        std::vector<double>{weight, -weight, -weight, weight});
+    double *d_zero = copy_to_device(std::vector<double>(2u, 0.0));
+    double *d_current = copy_to_device(std::vector<double>{1.0, 0.0});
+    double *d_trial =
+        copy_to_device(std::vector<double>{1.0 + perturbation, 0.0});
+    double *d_delta = copy_to_device(std::vector<double>{0.0});
+    double *d_scale = copy_to_device(std::vector<double>{0.0});
+    fullmag::fem::fullmag_cuda_legacy_sparse_exchange_difference_blocks(
+        d_rows, d_cols, d_values,
+        d_current, d_zero, d_zero,
+        d_trial, d_zero, d_zero,
+        d_delta, d_scale, 2, nullptr);
+    check_cuda(cudaGetLastError(), "CUDA exchange CSR cancellation launch");
+    check_cuda(cudaDeviceSynchronize(), "CUDA exchange CSR cancellation synchronize");
+    const double delta = copy_scalar_from_device(d_delta);
+    const double scale = copy_scalar_from_device(d_scale);
+    const double bound =
+        fullmag::fem::relaxation::reduction_roundoff_bound(80u) * scale;
+    const long double reference = static_cast<long double>(weight) *
+        static_cast<long double>(perturbation) *
+        (2.0L + static_cast<long double>(perturbation));
+    check(
+        scale >= std::abs(static_cast<double>(reference)) &&
+            std::abs(static_cast<long double>(delta) - reference) <=
+                static_cast<long double>(bound),
+        "CUDA exchange interval must contain the higher-precision CSR cancellation reference");
+    for (void *pointer : {
+             static_cast<void *>(d_rows), static_cast<void *>(d_cols),
+             static_cast<void *>(d_values), static_cast<void *>(d_zero),
+             static_cast<void *>(d_current), static_cast<void *>(d_trial),
+             static_cast<void *>(d_delta),
+             static_cast<void *>(d_scale)}) {
+        cudaFree(pointer);
+    }
+}
+
+void cuda_dmi_absolute_scale_survives_polarized_subterm_cancellation()
+{
+    constexpr int kElementCount = 149;
+    double *d_nodes = copy_to_device(std::vector<double>{
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+    });
+    std::vector<uint32_t> elements;
+    elements.reserve(4u * kElementCount);
+    for (int element = 0; element < kElementCount; ++element) {
+        elements.insert(elements.end(), {0u, 1u, 2u, 3u});
+    }
+    uint32_t *d_elements = copy_to_device(elements);
+    uint8_t *d_mask = copy_to_device(
+        std::vector<uint8_t>(static_cast<size_t>(kElementCount), 1u));
+    double *d_zero = copy_to_device(std::vector<double>(4u, 0.0));
+    double *d_delta = copy_to_device(std::vector<double>{0.0});
+    double *d_absolute = copy_to_device(std::vector<double>{0.0});
+    const auto run_fixture = [&] (
+        const std::vector<double> &m0x,
+        const std::vector<double> &m0y,
+        const std::vector<double> &m0z,
+        const std::vector<double> &m1x,
+        const std::vector<double> &m1y,
+        const std::vector<double> &m1z,
+        bool bulk_mode,
+        const char *label) {
+        double *d_m0x = copy_to_device(m0x);
+        double *d_m0y = copy_to_device(m0y);
+        double *d_m0z = copy_to_device(m0z);
+        double *d_m1x = copy_to_device(m1x);
+        double *d_m1y = copy_to_device(m1y);
+        double *d_m1z = copy_to_device(m1z);
+        check_cuda(cudaMemset(d_delta, 0, sizeof(double)), "clear CUDA DMI delta");
+        check_cuda(
+            cudaMemset(d_absolute, 0, sizeof(double)),
+            "clear CUDA DMI absolute scale");
+        fullmag::fem::fullmag_cuda_dmi_energy_difference(
+            d_nodes,
+            d_elements,
+            d_mask,
+            d_m0x, d_m0y, d_m0z,
+            d_m1x, d_m1y, d_m1z,
+            d_zero,
+            d_delta,
+            d_absolute,
+            1.0,
+            0.0, 0.0, 1.0,
+            false,
+            bulk_mode,
+            kElementCount,
+            nullptr);
+        check_cuda(cudaGetLastError(), "CUDA DMI cancellation launch");
+        check_cuda(cudaDeviceSynchronize(), "CUDA DMI cancellation synchronize");
+        const double delta = copy_scalar_from_device(d_delta);
+        const double arithmetic_scale = copy_scalar_from_device(d_absolute);
+        const double reported_bound =
+            fullmag::fem::relaxation::reduction_roundoff_bound(
+                512u * static_cast<size_t>(kElementCount)) *
+            arithmetic_scale;
+        check(
+            arithmetic_scale >= static_cast<double>(kElementCount) / 6.0 &&
+                std::abs(delta) <= reported_bound,
+            label);
+        cudaFree(d_m0x);
+        cudaFree(d_m0y);
+        cudaFree(d_m0z);
+        cudaFree(d_m1x);
+        cudaFree(d_m1y);
+        cudaFree(d_m1z);
+    };
+
+    run_fixture(
+        {0.625, 0.125, 0.625, 0.625},
+        {0.0, 0.0, 0.0, 0.0},
+        {0.625, 0.125, 0.625, 0.625},
+        {0.375, 0.875, 0.375, 0.375},
+        {0.0, 0.0, 0.0, 0.0},
+        {0.375, 0.875, 0.375, 0.375},
+        false,
+        "interfacial DMI polarized subterms must cancel nominally while retaining the 1/6 absolute oracle");
+    run_fixture(
+        {0.5, 0.5, 0.5, 0.5},
+        {0.5, 0.5, 0.5, 0.5},
+        {0.25, -0.25, -0.25, 0.25},
+        {0.5, 0.5, 0.5, 0.5},
+        {0.5, 0.5, 0.5, 0.5},
+        {-0.25, 0.25, 0.25, -0.25},
+        true,
+        "bulk DMI polarized subterms must cancel nominally while retaining the 1/6 absolute oracle");
+
+    cudaFree(d_nodes);
+    cudaFree(d_elements);
+    cudaFree(d_mask);
+    cudaFree(d_zero);
+    cudaFree(d_delta);
+    cudaFree(d_absolute);
+}
+
+void cuda_dmi_prefactor_paths_bound_cancellation()
+{
+    const std::vector<double> m0(4u, 0.0);
+    const std::vector<double> m1x = {1.0, 0.0, 0.0, 0.0};
+    const std::vector<double> m1y = {0.0, 1.0, 0.0, 0.0};
+    const std::vector<double> m1z = {0.0, 0.0, 1.0, 0.0};
+    const auto execute = [&](const std::vector<double> &nodes,
+                             const std::vector<double> &d_field,
+                             double uniform_d,
+                             bool use_d_field) {
+        double *d_nodes = copy_to_device(nodes);
+        uint32_t *d_elements =
+            copy_to_device(std::vector<uint32_t>{0u, 1u, 2u, 3u});
+        uint8_t *d_mask = copy_to_device(std::vector<uint8_t>{1u});
+        double *d_m0 = copy_to_device(m0);
+        double *d_m1x = copy_to_device(m1x);
+        double *d_m1y = copy_to_device(m1y);
+        double *d_m1z = copy_to_device(m1z);
+        double *d_d = copy_to_device(d_field);
+        double *d_delta = copy_to_device(std::vector<double>{0.0});
+        double *d_scale = copy_to_device(std::vector<double>{0.0});
+        fullmag::fem::fullmag_cuda_dmi_energy_difference(
+            d_nodes, d_elements, d_mask,
+            d_m0, d_m0, d_m0,
+            d_m1x, d_m1y, d_m1z,
+            d_d, d_delta, d_scale,
+            uniform_d, 0.0, 0.0, 1.0,
+            use_d_field, false, 1, nullptr);
+        check_cuda(cudaGetLastError(), "CUDA DMI prefactor-path launch");
+        check_cuda(cudaDeviceSynchronize(), "CUDA DMI prefactor-path synchronize");
+        const std::pair<double, double> result{
+            copy_scalar_from_device(d_delta),
+            copy_scalar_from_device(d_scale)};
+        for (void *pointer : {
+                 static_cast<void *>(d_nodes), static_cast<void *>(d_elements),
+                 static_cast<void *>(d_mask), static_cast<void *>(d_m0),
+                 static_cast<void *>(d_m1x), static_cast<void *>(d_m1y),
+                 static_cast<void *>(d_m1z), static_cast<void *>(d_d),
+                 static_cast<void *>(d_delta), static_cast<void *>(d_scale)}) {
+            cudaFree(pointer);
+        }
+        return result;
+    };
+
+    const std::vector<double> unit_tetra = {
+        0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+    const auto uniform = execute(unit_tetra, std::vector<double>(4u, 0.0), 1.0, false);
+    const auto cancelling_d = execute(
+        unit_tetra, {1.0e16, 1.0, -1.0e16, 0.0}, 0.0, true);
+    const long double d_reference = 0.25L;
+    const long double reference_delta =
+        d_reference * static_cast<long double>(uniform.first);
+    const double d_bound =
+        fullmag::fem::relaxation::reduction_roundoff_bound(512u) *
+        cancelling_d.second;
+    check(
+        uniform.first != 0.0 && cancelling_d.second > 0.0 &&
+            std::abs(static_cast<long double>(cancelling_d.first) - reference_delta) <=
+                static_cast<long double>(d_bound),
+        "CUDA DMI interval must retain cancellation-prone nodal-D interpolation uncertainty");
+
+    const std::vector<double> shifted_thin_tetra = {
+        1.0e6, 1.0e6, 1.0e6,
+        1.0e6 + 1.0, 1.0e6, 1.0e6,
+        1.0e6, 1.0e6 + 1.0, 1.0e6,
+        1.0e6, 1.0e6, 1.0e6 + 1.0e-6};
+    const auto conditioned = execute(
+        shifted_thin_tetra, std::vector<double>(4u, 0.0), 1.0, false);
+    check(
+        std::isfinite(conditioned.first) && std::isfinite(conditioned.second) &&
+            conditioned.second > uniform.second,
+        "CUDA DMI geometry scale must grow for a permitted shifted ill-conditioned tetrahedron");
+}
+
+void cuda_pgbb_current_metrics_finite_flags_cover_all_packed_inputs()
+{
+    double *d_energy_terms = copy_to_device(
+        std::vector<double>{1.0e-20, -2.0e-20, 3.0e-20});
+    double *d_gradient_norm_sq = copy_to_device(std::vector<double>{4.0});
+    double *d_projected_gradient_norm_sq =
+        copy_to_device(std::vector<double>{5.0});
+    double *d_finite_flags =
+        copy_to_device(std::vector<double>{0.0, 0.0, 0.0});
+
+    fullmag::fem::fullmag_cuda_relax_pgbb_current_metrics_finite_flags(
+        d_energy_terms,
+        3,
+        d_gradient_norm_sq,
+        d_projected_gradient_norm_sq,
+        d_finite_flags);
+    check_cuda(cudaGetLastError(), "CUDA PG-BB current metrics flags launch");
+    check_cuda(cudaDeviceSynchronize(), "CUDA PG-BB current metrics flags synchronize");
+    check(
+        copy_vector_from_device(d_finite_flags, 3) ==
+            std::vector<double>({1.0, 1.0, 1.0}),
+        "packed PG-BB current metrics must mark finite energy terms and nonnegative norms valid");
+
+    const std::vector<double> invalid_energy_terms = {
+        1.0, std::numeric_limits<double>::quiet_NaN(), 3.0};
+    const double invalid_gradient_norm_sq = -1.0;
+    const double invalid_projected_gradient_norm_sq =
+        std::numeric_limits<double>::infinity();
+    check_cuda(
+        cudaMemcpy(
+            d_energy_terms,
+            invalid_energy_terms.data(),
+            invalid_energy_terms.size() * sizeof(double),
+            cudaMemcpyHostToDevice),
+        "cudaMemcpy invalid PG-BB energy terms host-to-device");
+    check_cuda(
+        cudaMemcpy(
+            d_gradient_norm_sq,
+            &invalid_gradient_norm_sq,
+            sizeof(double),
+            cudaMemcpyHostToDevice),
+        "cudaMemcpy invalid PG-BB gradient norm host-to-device");
+    check_cuda(
+        cudaMemcpy(
+            d_projected_gradient_norm_sq,
+            &invalid_projected_gradient_norm_sq,
+            sizeof(double),
+            cudaMemcpyHostToDevice),
+        "cudaMemcpy invalid PG-BB projected-gradient norm host-to-device");
+    fullmag::fem::fullmag_cuda_relax_pgbb_current_metrics_finite_flags(
+        d_energy_terms,
+        3,
+        d_gradient_norm_sq,
+        d_projected_gradient_norm_sq,
+        d_finite_flags);
+    check_cuda(cudaGetLastError(), "CUDA PG-BB invalid current metrics flags launch");
+    check_cuda(cudaDeviceSynchronize(), "CUDA PG-BB invalid current metrics flags synchronize");
+    check(
+        copy_vector_from_device(d_finite_flags, 3) ==
+            std::vector<double>({0.0, 0.0, 0.0}),
+        "packed PG-BB current metrics must independently reject non-finite energy terms, negative norms, and non-finite projected-gradient norms");
+
+    cudaFree(d_energy_terms);
+    cudaFree(d_gradient_norm_sq);
+    cudaFree(d_projected_gradient_norm_sq);
+    cudaFree(d_finite_flags);
+}
+
+void cuda_pgbb_stationary_reduces_every_active_trial_without_trial_readback()
+{
+    constexpr int node_count = 3;
+    const std::vector<double> current_x = {0.6, 1.0, 0.0};
+    const std::vector<double> current_y = {0.8, 0.0, 0.0};
+    const std::vector<double> current_z = {0.0, 0.0, 1.0};
+    const std::vector<double> stationary_dx = {-0.8e-20, 0.0, 1.0e12};
+    const std::vector<double> stationary_dy = {
+        0.6e-20, std::numeric_limits<double>::denorm_min(), -2.0e12};
+    const std::vector<double> stationary_dz = {0.0, 0.0, 3.0e12};
+    const std::vector<uint8_t> mask = {1u, 1u, 0u};
+
+    double *d_current_x = copy_to_device(current_x);
+    double *d_current_y = copy_to_device(current_y);
+    double *d_current_z = copy_to_device(current_z);
+    double *d_dx = copy_to_device(stationary_dx);
+    double *d_dy = copy_to_device(stationary_dy);
+    double *d_dz = copy_to_device(stationary_dz);
+    uint8_t *d_mask = copy_to_device(mask);
+    double *d_trial_x = copy_to_device(current_x);
+    double *d_trial_y = copy_to_device(current_y);
+    double *d_trial_z = copy_to_device(current_z);
+    double *d_changed_blocks = copy_to_device(std::vector<double>{-1.0});
+
+    double trial_step = fullmag::fem::relaxation::kDefaultStepSize;
+    for (uint32_t backtracks = 0;
+         backtracks <= fullmag::fem::relaxation::kProjectedGradientMaxBacktracks;
+         ++backtracks) {
+        fullmag::fem::fullmag_cuda_relax_retract_field(
+            d_current_x, d_current_y, d_current_z,
+            d_dx, d_dy, d_dz, d_mask, trial_step,
+            d_trial_x, d_trial_y, d_trial_z, node_count);
+        fullmag::fem::fullmag_cuda_relax_active_state_change_blocks(
+            d_current_x, d_current_y, d_current_z,
+            d_trial_x, d_trial_y, d_trial_z,
+            d_mask, d_changed_blocks, node_count);
+        check_cuda(cudaGetLastError(), "CUDA PG-BB stationary active-state comparison launch");
+        check_cuda(cudaDeviceSynchronize(), "CUDA PG-BB stationary active-state comparison synchronize");
+        check(
+            copy_scalar_from_device(d_changed_blocks) == 0.0,
+            "CUDA PG-BB stationary fixture must reduce every permitted active trial as bitwise unchanged");
+        trial_step *= 0.5;
+    }
+
+    const std::vector<double> masked_trial_x = {0.6, 1.0, -1.0};
+    const std::vector<double> masked_trial_y = {0.8, 0.0, 2.0};
+    const std::vector<double> masked_trial_z = {0.0, 0.0, -3.0};
+    check_cuda(
+        cudaMemcpy(d_trial_x, masked_trial_x.data(), sizeof(double) * node_count, cudaMemcpyHostToDevice),
+        "copy CUDA masked-only trial x");
+    check_cuda(
+        cudaMemcpy(d_trial_y, masked_trial_y.data(), sizeof(double) * node_count, cudaMemcpyHostToDevice),
+        "copy CUDA masked-only trial y");
+    check_cuda(
+        cudaMemcpy(d_trial_z, masked_trial_z.data(), sizeof(double) * node_count, cudaMemcpyHostToDevice),
+        "copy CUDA masked-only trial z");
+    fullmag::fem::fullmag_cuda_relax_active_state_change_blocks(
+        d_current_x, d_current_y, d_current_z,
+        d_trial_x, d_trial_y, d_trial_z,
+        d_mask, d_changed_blocks, node_count);
+    check_cuda(cudaGetLastError(), "CUDA PG-BB masked active-state comparison launch");
+    check_cuda(cudaDeviceSynchronize(), "CUDA PG-BB masked active-state comparison synchronize");
+    check(
+        copy_scalar_from_device(d_changed_blocks) == 0.0,
+        "CUDA PG-BB stationary proof must ignore masked nonmagnetic differences");
+
+    const std::vector<double> changed_trial_y = {std::nextafter(0.8, 1.0), 0.0, 2.0};
+    check_cuda(
+        cudaMemcpy(d_trial_y, changed_trial_y.data(), sizeof(double) * node_count, cudaMemcpyHostToDevice),
+        "copy CUDA one-active-DOF changed trial y");
+    fullmag::fem::fullmag_cuda_relax_active_state_change_blocks(
+        d_current_x, d_current_y, d_current_z,
+        d_trial_x, d_trial_y, d_trial_z,
+        d_mask, d_changed_blocks, node_count);
+    check_cuda(cudaGetLastError(), "CUDA PG-BB changed active-state comparison launch");
+    check_cuda(cudaDeviceSynchronize(), "CUDA PG-BB changed active-state comparison synchronize");
+    check(
+        copy_scalar_from_device(d_changed_blocks) > 0.0,
+        "CUDA PG-BB stationary proof must reject one representably changed active DOF");
+
+    for (void *pointer : {
+             static_cast<void *>(d_current_x), static_cast<void *>(d_current_y),
+             static_cast<void *>(d_current_z), static_cast<void *>(d_dx),
+             static_cast<void *>(d_dy), static_cast<void *>(d_dz),
+             static_cast<void *>(d_mask), static_cast<void *>(d_trial_x),
+             static_cast<void *>(d_trial_y), static_cast<void *>(d_trial_z),
+             static_cast<void *>(d_changed_blocks)}) {
+        cudaFree(pointer);
+    }
+}
+
+void cuda_pgbb_reuses_accepted_h_eff_across_backtracks()
+{
+    constexpr int node_count = 1;
+    fullmag::fem::FemGpuRelaxationDeviceState relaxation{};
+    uint64_t device_bytes = 0;
+    std::string error;
+    check(
+        fullmag::fem::gpu_relaxation_state_allocate(
+            relaxation, node_count, device_bytes, error),
+        "CUDA PG-BB accepted-state H_eff workspace allocation failed: " + error);
+    check(
+        relaxation.projected_gradient_accepted_h_eff.x != nullptr &&
+            relaxation.projected_gradient_accepted_h_eff.y != nullptr &&
+            relaxation.projected_gradient_accepted_h_eff.z != nullptr &&
+            device_bytes >= 3u * sizeof(double),
+        "CUDA relaxation allocation must own and account for persistent PG-BB accepted-state H_eff storage");
+
+    double *d_current_x = copy_to_device(std::vector<double>{1.0});
+    double *d_current_y = copy_to_device(std::vector<double>{0.0});
+    double *d_current_z = copy_to_device(std::vector<double>{0.0});
+    double *d_first_trial_x = copy_to_device(std::vector<double>{0.75});
+    double *d_first_trial_y = copy_to_device(std::vector<double>{0.25});
+    double *d_first_trial_z = copy_to_device(std::vector<double>{0.0});
+    double *d_second_trial_x = copy_to_device(std::vector<double>{0.875});
+    double *d_second_trial_y = copy_to_device(std::vector<double>{0.125});
+    double *d_second_trial_z = copy_to_device(std::vector<double>{0.0});
+    double *d_live_hx = copy_to_device(std::vector<double>{2.0});
+    double *d_live_hy = copy_to_device(std::vector<double>{3.0});
+    double *d_live_hz = copy_to_device(std::vector<double>{0.0});
+    double *d_ms = copy_to_device(std::vector<double>{8.0e5});
+    double *d_mass = copy_to_device(std::vector<double>{4.0e-24});
+    uint8_t *d_mask = copy_to_device(std::vector<uint8_t>{1u});
+    double *d_increment = copy_to_device(std::vector<double>{0.0});
+
+    check_cuda(
+        cudaMemcpy(
+            relaxation.projected_gradient_accepted_h_eff.x,
+            d_live_hx,
+            sizeof(double),
+            cudaMemcpyDeviceToDevice),
+        "copy accepted PG-BB H_eff x into persistent workspace");
+    check_cuda(
+        cudaMemcpy(
+            relaxation.projected_gradient_accepted_h_eff.y,
+            d_live_hy,
+            sizeof(double),
+            cudaMemcpyDeviceToDevice),
+        "copy accepted PG-BB H_eff y into persistent workspace");
+    check_cuda(
+        cudaMemcpy(
+            relaxation.projected_gradient_accepted_h_eff.z,
+            d_live_hz,
+            sizeof(double),
+            cudaMemcpyDeviceToDevice),
+        "copy accepted PG-BB H_eff z into persistent workspace");
+
+    fullmag::fem::fullmag_cuda_relax_representable_chord_energy_linear_increment_blocks(
+        d_current_x, d_current_y, d_current_z,
+        d_first_trial_x, d_first_trial_y, d_first_trial_z,
+        relaxation.projected_gradient_accepted_h_eff.x,
+        relaxation.projected_gradient_accepted_h_eff.y,
+        relaxation.projected_gradient_accepted_h_eff.z,
+        d_ms, d_mass, d_mask, d_increment, node_count, nullptr);
+    check_cuda(cudaGetLastError(), "CUDA first-backtrack accepted H_eff chord launch");
+    check_cuda(cudaDeviceSynchronize(), "CUDA first-backtrack accepted H_eff chord synchronize");
+
+    const std::vector<double> rejected_trial_h = {-700.0, 1100.0, 13.0};
+    check_cuda(
+        cudaMemcpy(d_live_hx, &rejected_trial_h[0], sizeof(double), cudaMemcpyHostToDevice),
+        "overwrite live trial H_eff x");
+    check_cuda(
+        cudaMemcpy(d_live_hy, &rejected_trial_h[1], sizeof(double), cudaMemcpyHostToDevice),
+        "overwrite live trial H_eff y");
+    check_cuda(
+        cudaMemcpy(d_live_hz, &rejected_trial_h[2], sizeof(double), cudaMemcpyHostToDevice),
+        "overwrite live trial H_eff z");
+    fullmag::fem::fullmag_cuda_relax_representable_chord_energy_linear_increment_blocks(
+        d_current_x, d_current_y, d_current_z,
+        d_second_trial_x, d_second_trial_y, d_second_trial_z,
+        relaxation.projected_gradient_accepted_h_eff.x,
+        relaxation.projected_gradient_accepted_h_eff.y,
+        relaxation.projected_gradient_accepted_h_eff.z,
+        d_ms, d_mass, d_mask, d_increment, node_count, nullptr);
+    check_cuda(cudaGetLastError(), "CUDA second-backtrack accepted H_eff chord launch");
+    check_cuda(cudaDeviceSynchronize(), "CUDA second-backtrack accepted H_eff chord synchronize");
+    const double observed = copy_scalar_from_device(d_increment);
+    const double expected = -fullmag::fem::kMu0 * 8.0e5 * 4.0e-24 *
+        (2.0 * (0.875 - 1.0) + 3.0 * 0.125);
+    const double rejected_trial_field_result =
+        -fullmag::fem::kMu0 * 8.0e5 * 4.0e-24 *
+        (-700.0 * (0.875 - 1.0) + 1100.0 * 0.125);
+    check(
+        observed == expected && observed != rejected_trial_field_result,
+        "CUDA PG-BB second-backtrack chord must retain accepted-state H_eff after live trial H_eff changes");
+
+    fullmag::fem::gpu_relaxation_state_free(relaxation);
+    check(
+        relaxation.projected_gradient_accepted_h_eff.x == nullptr &&
+            relaxation.projected_gradient_accepted_h_eff.y == nullptr &&
+            relaxation.projected_gradient_accepted_h_eff.z == nullptr,
+        "CUDA PG-BB accepted-state H_eff workspace must be released with relaxation state");
+    for (void *pointer : {
+             static_cast<void *>(d_current_x), static_cast<void *>(d_current_y),
+             static_cast<void *>(d_current_z), static_cast<void *>(d_first_trial_x),
+             static_cast<void *>(d_first_trial_y), static_cast<void *>(d_first_trial_z),
+             static_cast<void *>(d_second_trial_x), static_cast<void *>(d_second_trial_y),
+             static_cast<void *>(d_second_trial_z), static_cast<void *>(d_live_hx),
+             static_cast<void *>(d_live_hy), static_cast<void *>(d_live_hz),
+             static_cast<void *>(d_ms), static_cast<void *>(d_mass),
+             static_cast<void *>(d_mask), static_cast<void *>(d_increment)}) {
+        cudaFree(pointer);
+    }
 }
 
 void cuda_heterogeneous_nodal_ms_pgbb_ncg_calibration()
@@ -1186,7 +3131,13 @@ void cuda_heterogeneous_nodal_ms_pgbb_ncg_calibration()
 
 int main()
 {
-    direct_increment_composition_does_not_subtract_replaced_terms_twice();
+    exchange_gpu_graph_canonicalization_removes_near_laplacian_residual();
+    term_complete_composition_preserves_endpoint_operand_uncertainty();
+    adverse_drive_endpoint_delta_controls_strict_armijo();
+    polarized_exchange_difference_matches_long_double_and_endpoint_oracles();
+#if FULLMAG_HAS_MFEM_STACK
+    production_exchange_energy_difference_uses_assembled_mfem_form();
+#endif
     analytic_absolute_term_sum_resolves_component_cancellation();
     cpu_energy_weight_uses_nodal_ms_and_uniform_fallback();
     dimension_aware_reduction_guards_are_scale_relative();
@@ -1196,6 +3147,14 @@ int main()
     polarized_robin_boundary_energy_difference_uses_endpoint_potentials();
     direct_zeeman_energy_difference_avoids_endpoint_total_subtraction();
     direct_uniaxial_energy_difference_uses_local_density_difference();
+    direct_uniaxial_roundoff_bound_contains_cancelling_axis_projection();
+    direct_uniaxial_roundoff_bound_contains_inexact_material_coefficient();
+    direct_uniaxial_roundoff_bound_retains_denormal_operation_floor();
+    representably_nonunit_tangent_projection_is_orthogonal();
+    representable_chord_armijo_matches_the_fp_retraction();
+    pgbb_stationary_requires_every_permitted_active_trial_to_be_bitwise_unchanged();
+    direct_minimizer_stationary_accepts_only_fp64_unrepresentable_energy_intervals();
+    near_aligned_uniaxial_increment_preserves_descent_and_strict_armijo();
     transported_bb_secant_lives_in_the_accepted_tangent_space();
     std::vector<std::string> failed_interactions;
     for (Interaction interaction : {
@@ -1212,6 +3171,19 @@ int main()
         }
     }
 #if FULLMAG_HAS_CUDA_RUNTIME
+    gpu_energy_increment_ownership_is_context_derived_and_exhaustive();
+    gpu_term_complete_composition_retains_direct_zeeman_failure_scale();
+    gpu_multi_element_dmi_reduction_count_bounds_reference_increment();
+    gpu_endpoint_residual_ambiguity_has_no_false_demag_refinement();
+    gpu_demag_refinement_requires_demag_owned_ambiguity();
+    cuda_direct_local_absolute_scale_survives_owner_cancellation();
+    cuda_exchange_absolute_scale_survives_component_cancellation();
+    cuda_exchange_csr_cancellation_interval_contains_reference();
+    cuda_dmi_absolute_scale_survives_polarized_subterm_cancellation();
+    cuda_dmi_prefactor_paths_bound_cancellation();
+    cuda_pgbb_current_metrics_finite_flags_cover_all_packed_inputs();
+    cuda_pgbb_stationary_reduces_every_active_trial_without_trial_readback();
+    cuda_pgbb_reuses_accepted_h_eff_across_backtracks();
     cuda_heterogeneous_nodal_ms_pgbb_ncg_calibration();
 #endif
     check(

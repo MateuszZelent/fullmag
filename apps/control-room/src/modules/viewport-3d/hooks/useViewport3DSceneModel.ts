@@ -1368,6 +1368,9 @@ export interface Viewport3DResourceFrameInput {
   dataAvailable: boolean;
   error?: string | null;
   id: string;
+  materializationState?:
+    | components["schemas"]["FieldMaterializationState"]
+    | null;
   payloadRevision: ResourceRevision | null;
   revision: ResourceRevision | null;
   status: ResourceStatus;
@@ -1554,6 +1557,7 @@ export function resolveViewport3DResourceFrameState({
   dataAvailable,
   error,
   id,
+  materializationState,
   payloadRevision,
   revision,
   status,
@@ -1564,7 +1568,12 @@ export function resolveViewport3DResourceFrameState({
     id,
     revision: visiblePayloadAvailable ? payloadRevision ?? revision : revision,
     status:
-      visiblePayloadAvailable && status === "stale" ? "ready" : status,
+      visiblePayloadAvailable &&
+      (status === "stale" ||
+        materializationState === "stale_complete" ||
+        materializationState === "pending")
+        ? "ready"
+        : status,
   };
 }
 
@@ -3930,6 +3939,7 @@ export function useViewport3DSceneModel({
       dataAvailable: Boolean(fieldVector.data),
       error: fieldVector.error?.message,
       id: "field-vector",
+      materializationState: primaryMagnitudeFieldMeta.data?.state ?? null,
       payloadRevision: fieldVector.payloadRevision ?? null,
       revision: fieldVector.revision,
       status: fieldVector.status,

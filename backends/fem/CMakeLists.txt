@@ -57,6 +57,7 @@ set(FEM_SOURCES
     gpu/cuda/state/runtime_coefficients_memory.cpp
     gpu/cuda/state/runtime_coefficients_upload.cpp
     gpu/cuda/transfer/component_transfer.cpp
+    gpu/cuda/transfer/snapshot_pool.cpp
     gpu/cuda/transfer/transfer_audit.cpp
     cpu/mfem/interactions/anisotropy.cpp
     cpu/mfem/interactions/anisotropy_cubic.cpp
@@ -92,6 +93,7 @@ set(FEM_SOURCES
     cpu/mfem/interactions/dmi_workspace.cpp
     cpu/mfem/interactions/effective_field.cpp
     cpu/mfem/interactions/exchange.cpp
+    cpu/mfem/interactions/exchange_energy_difference.cpp
     cpu/mfem/interactions/exchange_fallback.cpp
     cpu/mfem/interactions/exchange_field.cpp
     cpu/mfem/interactions/exchange_legacy_gpu_upload.cpp
@@ -486,8 +488,10 @@ add_fem_source_facade_contract(
 )
 if(FULLMAG_USE_MFEM_STACK)
     if(TARGET MFEM::mfem)
+        target_link_libraries(fem_relaxation_energy_derivative_contract PRIVATE MFEM::mfem)
         target_link_libraries(fem_relaxation_operator_contract PRIVATE MFEM::mfem)
     else()
+        target_link_libraries(fem_relaxation_energy_derivative_contract PRIVATE mfem)
         target_link_libraries(fem_relaxation_operator_contract PRIVATE mfem)
     endif()
 endif()
@@ -821,6 +825,14 @@ target_include_directories(fem_material_fields_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_material_fields_contract COMMAND fem_material_fields_contract)
+
+add_executable(fem_element_dg0_workflow_contract tests/element_dg0_workflow_contract.cpp)
+target_link_libraries(fem_element_dg0_workflow_contract PRIVATE fullmag_fem)
+target_include_directories(fem_element_dg0_workflow_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_element_dg0_workflow_contract COMMAND fem_element_dg0_workflow_contract)
 
 add_executable(
     fem_element_quadrature_material_contract

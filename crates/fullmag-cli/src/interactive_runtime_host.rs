@@ -217,9 +217,12 @@ impl CurrentLiveDisplaySelectionHandle {
     ///
     /// Pushes a synthetic display-sync command before the solver loop starts, so
     /// the control room opens with the requested quantity already selected.
-    pub(super) fn set_quantity_hint(&self, quantity: &str) {
+    pub(super) fn set_quantity_hint(&self, quantity: &str, every_n: Option<u32>) {
         let mut selection = CurrentDisplaySelection::default();
         selection.selection.quantity = quantity.to_string();
+        if let Some(every_n) = every_n {
+            selection.selection.every_n = every_n;
+        }
         selection.selection.canonicalize();
         let command = synthetic_display_sync_command(selection);
         self.push_command_front(command);
@@ -634,6 +637,7 @@ impl InteractiveRuntimeHost {
         &mut self,
         problem: &ProblemIR,
         plan: &ExecutionPlanIR,
+        stage_fem_mesh_asset: Option<&fullmag_runner::StageFemMeshAsset>,
         continuation_magnetization: Option<&[[f64; 3]]>,
         live_workspace: &LocalLiveWorkspace,
     ) -> Result<()> {
@@ -644,6 +648,7 @@ impl InteractiveRuntimeHost {
             &mut self.runtime,
             problem,
             plan,
+            stage_fem_mesh_asset,
             continuation_magnetization,
         )?;
         if let Some(runtime) = self.runtime.as_mut() {
@@ -847,11 +852,13 @@ fn refresh_interactive_preview_snapshot(
 fn create_interactive_preview_runtime(
     base_problem: &ProblemIR,
     plan: &ExecutionPlanIR,
+    stage_fem_mesh_asset: Option<&fullmag_runner::StageFemMeshAsset>,
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> Result<fullmag_runner::InteractiveRuntime> {
-    fullmag_runner::create_planned_interactive_runtime(
+    fullmag_runner::create_planned_interactive_runtime_with_stage_fem_mesh_asset(
         base_problem,
         plan,
+        stage_fem_mesh_asset,
         continuation_magnetization,
     )
     .map_err(|error| anyhow!(error.to_string()))
@@ -869,6 +876,7 @@ fn ensure_interactive_preview_runtime(
     runtime: &mut Option<fullmag_runner::InteractiveRuntime>,
     problem: &ProblemIR,
     plan: &ExecutionPlanIR,
+    stage_fem_mesh_asset: Option<&fullmag_runner::StageFemMeshAsset>,
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> Result<()> {
     let needs_rebuild = runtime
@@ -878,6 +886,7 @@ fn ensure_interactive_preview_runtime(
         *runtime = Some(create_interactive_preview_runtime(
             problem,
             plan,
+            stage_fem_mesh_asset,
             continuation_magnetization,
         )?);
     }
@@ -957,6 +966,7 @@ mod tests {
         live_state.latest_step.magnetization = Some(vec![1.0, 0.0, 0.0]);
 
         LocalLiveWorkspaceState {
+            fem_mesh: None,
             session: SessionManifest {
                 session_id: "session-test".to_string(),
                 run_id: "run-test".to_string(),
@@ -1009,7 +1019,9 @@ mod tests {
             latest_fields: CurrentLiveLatestFields::default(),
             preview_fields: CurrentLivePreviewFieldCache::default(),
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
+            superseded_pending_preview_fields: Vec::new(),
             clear_preview_cache: false,
+            preview_cache_revision: 0,
             engine_log: Vec::new(),
             solver_profile: fullmag_runner::SolverProfileState::default(),
             published_fem_mesh_generation_id: None,
