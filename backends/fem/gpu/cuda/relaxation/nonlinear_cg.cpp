@@ -864,6 +864,7 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
     bool &accepted_refined,
     uint32_t &logical_rhs_evaluations,
     uint32_t &refinement_rhs_evaluations,
+    bool &every_permitted_trial_unchanged,
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
@@ -889,7 +890,6 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
             kMinStepSize,
             kMaxStepSize);
         trial_step = restart_step;
-
         while (true) {
             fullmag_cuda_relax_retract_field(
                 gpu.rk.m_backup.x,
@@ -944,10 +944,15 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
                     base_h_demag,
                     current_snapshot,
                     armijo_rhs,
+                    true,
                     armijo_result,
                     reason)) {
                 return false;
             }
+            const bool trial_unchanged =
+                armijo_result.trial_active_state_unchanged;
+            every_permitted_trial_unchanged =
+                every_permitted_trial_unchanged && trial_unchanged;
             if (armijo_result.refinement_attempted &&
                 !gpu_direct_armijo_refine(
                     ctx,
@@ -974,9 +979,10 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
                 reason = "GPU nonlinear-CG produced non-finite total energy";
                 return false;
             }
-            if (armijo_result.decision ==
-                    relaxation::ArmijoDifferenceDecision::Accept ||
-                armijo_result.refinement_accepted) {
+            if (!trial_unchanged &&
+                (armijo_result.decision ==
+                     relaxation::ArmijoDifferenceDecision::Accept ||
+                 armijo_result.refinement_accepted)) {
                 accepted_snapshot = armijo_result.trial_snapshot;
                 accepted_refined = armijo_result.refinement_accepted;
                 return true;
@@ -1218,6 +1224,7 @@ int gpu_relax_nonlinear_cg_step(
     bool line_search_accepted = false;
     bool accepted_snapshot_valid = false;
     bool accepted_refined = false;
+    bool every_permitted_trial_unchanged = true;
     uint32_t refinement_rhs_evaluations = 0;
     GpuDirectEnergySnapshot accepted_snapshot{};
     while (true) {
@@ -1280,6 +1287,7 @@ int gpu_relax_nonlinear_cg_step(
                 gpu.rk.error,
                 current_snapshot,
                 armijo_rhs,
+                true,
                 armijo_result,
                 reason)) {
             return gpu_relax_restore_previous_state_after_failure(
@@ -1290,6 +1298,10 @@ int gpu_relax_nonlinear_cg_step(
                 reason,
                 error);
         }
+        const bool trial_unchanged =
+            armijo_result.trial_active_state_unchanged;
+        every_permitted_trial_unchanged =
+            every_permitted_trial_unchanged && trial_unchanged;
         if (armijo_result.refinement_attempted &&
             !gpu_direct_armijo_refine(
                 ctx,
@@ -1328,8 +1340,10 @@ int gpu_relax_nonlinear_cg_step(
                 error);
         }
         const bool armijo =
-            armijo_result.decision == relaxation::ArmijoDifferenceDecision::Accept ||
-            armijo_result.refinement_accepted;
+            !trial_unchanged &&
+            (armijo_result.decision ==
+                 relaxation::ArmijoDifferenceDecision::Accept ||
+             armijo_result.refinement_accepted);
         if (armijo) {
             line_search_accepted = true;
             accepted_snapshot = armijo_result.trial_snapshot;
@@ -1362,6 +1376,7 @@ int gpu_relax_nonlinear_cg_step(
                 accepted_refined,
                 logical_rhs_evaluations,
                 refinement_rhs_evaluations,
+                every_permitted_trial_unchanged,
                 reason)) {
             line_search_accepted = true;
             accepted_snapshot_valid = true;
@@ -1387,6 +1402,48 @@ int gpu_relax_nonlinear_cg_step(
             error);
     }
     if (!line_search_accepted) {
+        if (every_permitted_trial_unchanged) {
+            std::string restore_reason;
+            if (!gpu_rk_restore_step_transaction_device(ctx, restore_reason) ||
+                !gpu_relax_restore_previous_direction(
+                    ctx, stream, rollback, restore_reason)) {
+                error =
+                    "GPU nonlinear-CG failed to restore the representability-stationary state: " +
+                    restore_reason;
+                return FULLMAG_FEM_ERR_INTERNAL;
+            }
+            restore_gpu_relax_ncg_metadata(ctx, rollback);
+            mark_gpu_relax_ncg_device_source_of_truth(ctx);
+            if (!gpu_relax_compute_effective_field_and_energy_terms(
+                    ctx, stream, n, blocks, reason)) {
+                error =
+                    "GPU nonlinear-CG failed to refresh the representability-stationary state: " +
+                    reason;
+                return FULLMAG_FEM_ERR_INTERNAL;
+            }
+            logical_rhs_evaluations += 1u;
+            out_stats.step = ctx.state.step_count;
+            out_stats.time_seconds = 0.0;
+            out_stats.dt_seconds = 0.0;
+            out_stats.rejected_attempts = backtracks;
+            out_stats.rhs_evaluations =
+                logical_rhs_evaluations + refinement_rhs_evaluations;
+            if (!gpu_rk_finalize_step_stats_control_readback(
+                    ctx, out_stats, reason)) {
+                error = reason;
+                return FULLMAG_FEM_ERR_INTERNAL;
+            }
+            out_stats.step = ctx.state.step_count;
+            out_stats.time_seconds = 0.0;
+            out_stats.dt_seconds = 0.0;
+            out_stats.max_rhs_amplitude = 0.0;
+            out_stats.rejected_attempts = backtracks;
+            out_stats.rhs_evaluations =
+                logical_rhs_evaluations + refinement_rhs_evaluations;
+            gpu.relaxation.nonlinear_cg_direction_valid = false;
+            relaxation::publish_representability_stationary_completion(ctx);
+            return FULLMAG_FEM_OK;
+        }
         const double armijo_rhs =
             current_energy + kArmijoCoefficient * trial_step * p_dot_g;
         const std::string original_error =

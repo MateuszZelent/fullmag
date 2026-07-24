@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import importlib.util
@@ -361,6 +362,8 @@ def test_run_json_artifacts_supply_authoritative_benchmark_payload(tmp_path) -> 
             {
                 "status": "completed",
                 "scalar_rows": 2,
+                "execution_provenance": {"precision": "double"},
+                "requested_execution": {"precision": "single"},
                 "fem_gpu_relaxation_qualification": {
                     "executed_steps": 2,
                 },
@@ -387,6 +390,7 @@ def test_run_json_artifacts_supply_authoritative_benchmark_payload(tmp_path) -> 
         "status": "completed",
         "executed_steps": 2,
         "artifact_dir": str(tmp_path),
+        "precision": "double",
         "final_time_s": "2e-12",
         "final_solver_dt_s": "1e-12",
         "final_e_ex_j": "1",
@@ -405,6 +409,219 @@ def test_run_json_artifacts_supply_authoritative_benchmark_payload(tmp_path) -> 
         "demag_solves": 7,
         "rejected_attempts": 1,
     }
+
+
+def test_native_pgbb_accepted_armijo_proof_is_plumbed_to_solver_steps() -> None:
+    header = (REPO_ROOT / "native" / "include" / "fullmag_fem.h").read_text(
+        encoding="utf-8"
+    )
+    sys_bindings = (
+        REPO_ROOT / "crates" / "fullmag-fem-sys" / "src" / "lib.rs"
+    ).read_text(encoding="utf-8")
+    runner_types = (
+        REPO_ROOT / "crates" / "fullmag-runner" / "src" / "types.rs"
+    ).read_text(encoding="utf-8")
+    native_fem = (
+        REPO_ROOT / "crates" / "fullmag-runner" / "src" / "native_fem.rs"
+    ).read_text(encoding="utf-8")
+    artifacts = (
+        REPO_ROOT / "crates" / "fullmag-runner" / "src" / "artifacts.rs"
+    ).read_text(encoding="utf-8")
+    cpu_pgbb = (
+        REPO_ROOT
+        / "backends"
+        / "fem"
+        / "cpu"
+        / "mfem"
+        / "relaxation"
+        / "projected_gradient_bb.cpp"
+    ).read_text(encoding="utf-8")
+    gpu_pgbb = (
+        REPO_ROOT
+        / "backends"
+        / "fem"
+        / "gpu"
+        / "cuda"
+        / "relaxation"
+        / "pgbb.cpp"
+    ).read_text(encoding="utf-8")
+
+    fields = [
+        "accepted_energy_proof_available",
+        "accepted_energy_delta_j",
+        "accepted_energy_roundoff_bound_j",
+        "accepted_energy_delta_upper_j",
+        "armijo_increment_rhs_j",
+    ]
+    step_stats = header.split("} fullmag_fem_step_stats;", 1)[0].rsplit(
+        "typedef struct {", 1
+    )[1]
+    assert all(field not in step_stats for field in fields)
+    assert "FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION" in header
+    assert "fullmag_fem_accepted_energy_proof_v1" in header
+    assert "fullmag_fem_backend_take_accepted_energy_proof_v1" in header
+    assert "fullmag_fem_backend_accepted_energy_proof_v1" not in header
+    assert "abi_version" in header
+    assert "struct_size" in header
+    for field in fields:
+        assert field in header
+        assert field in sys_bindings
+        assert field in runner_types
+        assert field in native_fem
+        assert field in artifacts
+    for source in (cpu_pgbb, gpu_pgbb):
+        assert "accepted_energy_proof.available = true" in source
+        assert "accepted_energy_proof.delta_j" in source
+        assert "accepted_energy_proof.roundoff_bound_j" in source
+        assert "accepted_energy_proof.delta_upper_j" in source
+        assert "accepted_energy_proof.armijo_rhs_j" in source
+    assert native_fem.count("self.take_accepted_energy_proof()?") == 1
+
+    assert "accepted_energy_delta_upper_j <= armijo_increment_rhs_j" in cpu_pgbb
+    assert "accepted_energy_delta_upper_j <= armijo_increment_rhs_j" in gpu_pgbb
+    assert "accepted_energy_proof.available = true" in cpu_pgbb
+    assert "accepted_energy_proof.available = true" in gpu_pgbb
+
+
+def test_authoritative_payload_uses_requested_precision_only_as_fallback(
+    tmp_path: Path,
+) -> None:
+    benchmark = load_benchmark_module()
+    (tmp_path / "metadata.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "scalar_rows": 1,
+                "requested_execution": {"precision": "double"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "scalars.csv").write_text(
+        "step,E_total\n1,1e-20\n",
+        encoding="utf-8",
+    )
+
+    payload = benchmark.load_authoritative_benchmark_payload(tmp_path)
+
+    assert payload is not None
+    assert payload["precision"] == "double"
+
+
+def test_authoritative_payload_proves_zero_demag_solves_only_for_explicit_no_demag(
+    tmp_path: Path,
+) -> None:
+    benchmark = load_benchmark_module()
+    (tmp_path / "metadata.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "scalar_rows": 1,
+                "execution_provenance": {
+                    "precision": "double",
+                    "fem_demag_operator_mode": "none",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "scalars.csv").write_text(
+        "step,E_total\n1,1e-20\n",
+        encoding="utf-8",
+    )
+
+    payload = benchmark.load_authoritative_benchmark_payload(tmp_path)
+
+    assert payload is not None
+    assert payload["demag_solves"] == 0
+
+
+def test_authoritative_payload_does_not_fabricate_zero_for_cpu_demag_runtime(
+    tmp_path: Path,
+) -> None:
+    benchmark = load_benchmark_module()
+    (tmp_path / "metadata.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "scalar_rows": 1,
+                "execution_provenance": {"fem_demag_operator_mode": "none"},
+                "demag_runtime": {"model": "airbox"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "scalars.csv").write_text(
+        "step,E_total\n1,1e-20\n",
+        encoding="utf-8",
+    )
+
+    payload = benchmark.load_authoritative_benchmark_payload(tmp_path)
+
+    assert payload is not None
+    assert "demag_solves" not in payload
+
+
+def test_authoritative_payload_reads_latest_accepted_pgbb_proof(tmp_path: Path) -> None:
+    benchmark = load_benchmark_module()
+    (tmp_path / "metadata.json").write_text(
+        json.dumps({"status": "completed", "scalar_rows": 2}),
+        encoding="utf-8",
+    )
+    (tmp_path / "scalars.csv").write_text(
+        "step,E_total\n1,2e-20\n2,1e-20\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "solver_steps.csv").write_text(
+        "step,accepted_energy_proof_available,accepted_energy_delta_j,"
+        "accepted_energy_roundoff_bound_j,accepted_energy_delta_upper_j,"
+        "armijo_increment_rhs_j\n"
+        "1,true,-2e-20,1e-21,-1.9e-20,-1e-20\n"
+        "2,true,-3e-20,2e-21,-2.8e-20,-2e-20\n",
+        encoding="utf-8",
+    )
+
+    payload = benchmark.load_authoritative_benchmark_payload(tmp_path)
+
+    assert payload is not None
+    assert payload["accepted_energy_proof_available"] is True
+    assert payload["accepted_energy_delta_j"] == -3e-20
+    assert payload["accepted_energy_roundoff_bound_j"] == 2e-21
+    assert payload["accepted_energy_delta_upper_j"] == -2.8e-20
+    assert payload["armijo_increment_rhs_j"] == -2e-20
+    assert payload["accepted_energy_proof_count"] == 2
+    assert payload["accepted_energy_proof_invalid_count"] == 0
+    assert payload["accepted_energy_proof_invalid_details"] == []
+
+
+def test_authoritative_payload_rejects_invalid_middle_pgbb_proof(tmp_path: Path) -> None:
+    benchmark = load_benchmark_module()
+    (tmp_path / "metadata.json").write_text(
+        json.dumps({"status": "completed", "scalar_rows": 3}),
+        encoding="utf-8",
+    )
+    (tmp_path / "scalars.csv").write_text(
+        "step,E_total\n1,3e-20\n2,2e-20\n3,1e-20\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "solver_steps.csv").write_text(
+        "step,accepted_energy_proof_available,accepted_energy_delta_j,"
+        "accepted_energy_roundoff_bound_j,accepted_energy_delta_upper_j,"
+        "armijo_increment_rhs_j\n"
+        "1,true,-2e-20,1e-21,-1.9e-20,-1e-20\n"
+        "2,true,-3e-20,2e-21,-1e-20,-2e-20\n"
+        "3,true,-4e-20,1e-21,-3.9e-20,-3e-20\n",
+        encoding="utf-8",
+    )
+
+    payload = benchmark.load_authoritative_benchmark_payload(tmp_path)
+
+    assert payload is not None
+    assert payload["accepted_energy_proof_count"] == 3
+    assert payload["accepted_energy_proof_invalid_count"] == 1
+    assert payload["accepted_energy_proof_invalid_details"] == [
+        "step=2: upper exceeds Armijo RHS"
+    ]
 
 
 def test_run_json_summary_publishes_cumulative_rhs_telemetry() -> None:
@@ -439,6 +656,82 @@ def test_benchmark_parses_run_json_cumulative_rhs_telemetry() -> None:
     assert payload["executed_steps"] == 64
     assert payload["rhs_evals"] == 1
     assert payload["total_rhs_evals"] == 64
+
+
+def test_weak_workspace_payload_is_enriched_without_overriding_stronger_fields() -> None:
+    benchmark = load_benchmark_module()
+    output = (
+        json.dumps(
+            {
+                "workspace_dir": "/tmp/workspace",
+                "backend_create_wall_time_ns": 10,
+                "precision": "double",
+                "demag_solves": 0,
+                "rhs_evals": 4,
+            }
+        )
+        + "\nfullmag workspace summary\n"
+        + "- status: completed\n"
+        + "- total_steps: 64\n"
+        + "- artifact_dir: /tmp/artifacts\n"
+    )
+    weak_payload = benchmark.parse_benchmark_result(output)
+    script_summary = benchmark.parse_script_run_summary(output)
+
+    assert weak_payload == {
+        "status": "completed",
+        "executed_steps": 64,
+        "artifact_dir": "/tmp/artifacts",
+    }
+
+    payload = benchmark.merge_missing_payload_fields(
+        weak_payload,
+        script_summary,
+        {"executed_steps": 63, "demag_solves": 127},
+    )
+
+    assert payload == {
+        "status": "completed",
+        "executed_steps": 64,
+        "artifact_dir": "/tmp/artifacts",
+        "workspace_dir": "/tmp/workspace",
+        "backend_create_wall_time_ns": 10,
+        "precision": "double",
+        "demag_solves": 0,
+        "rhs_evals": 4,
+    }
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        (["3", "2", "2"], (True, 3, 0.0)),
+        (["3"], (True, 1, 0.0)),
+        (["2", "3"], (False, 2, 1.0)),
+        (["2", "nan"], (False, 2, None)),
+        ([], (False, 0, None)),
+    ],
+)
+def test_energy_monotonicity_evidence_uses_complete_scalar_trajectory(
+    tmp_path: Path,
+    values: list[str],
+    expected: tuple[bool, int, float | None],
+) -> None:
+    benchmark = load_benchmark_module()
+    if values:
+        (tmp_path / "scalars.csv").write_text(
+            "step,E_total\n"
+            + "".join(f"{index},{value}\n" for index, value in enumerate(values)),
+            encoding="utf-8",
+        )
+
+    evidence = benchmark.load_energy_monotonicity_evidence(tmp_path)
+
+    assert evidence == {
+        "energy_monotonicity_satisfied": expected[0],
+        "energy_trajectory_record_count": expected[1],
+        "energy_trajectory_max_increase_j": expected[2],
+    }
 
 
 def test_fixture_generation_uses_runtime_realized_mesh_signature() -> None:
@@ -1948,6 +2241,1547 @@ def test_benchmark_harness_can_pin_one_runner_to_a_selected_runtime_root(
     }
 
 
+def test_task8_identity_keeps_input_mesh_signature_separate_from_runtime_telemetry() -> None:
+    benchmark = load_benchmark_module()
+    mesh = {"nodes": [[0.0, 0.0, 0.0]], "elements": [[0]], "element_markers": [1]}
+    mesh_path = Path("/tmp/task8-input-mesh.json")
+    problem_ir = {
+        "magnets": [
+            {
+                "name": "magnet",
+                "region": "magnet",
+                "initial_magnetization": {"kind": "uniform", "value": [1, 0, 0]},
+            }
+        ]
+    }
+    expected = benchmark.mesh_signature(mesh)
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(Path, "read_text", lambda *_args, **_kwargs: json.dumps(mesh))
+        identity = benchmark.task8_qualification_row_identity(
+            case_manifest={"case_id": "case"},
+            solver_mesh_path=mesh_path,
+            problem_ir=problem_ir,
+        )
+    assert identity["qualification_input_mesh_signature"] == expected
+    assert identity["solver_mesh_signature"] == expected
+
+
+def task8_expected_qualification_identity() -> tuple[
+    dict[str, object], list[dict[str, object]]
+]:
+    runtime_identity = {
+        "source_manifest_sha256": "a" * 64,
+        "runtime_manifest_sha256": "b" * 64,
+        "libfullmag_fem_sha256": "c" * 64,
+        "device_name": "NVIDIA GeForce RTX 4080",
+        "compute_capability": "8.9",
+        "precision": "double",
+        "omp_thread_count": {
+            "fem_cpu": 8,
+            "fem_gpu": 1,
+        },
+    }
+    case_identities = [
+        {
+            "case_id": "box500_airbox_exchange_demag",
+            "relaxation_algorithm": "projected_gradient_bb",
+            "required_backends": ["fem_cpu", "fem_gpu"],
+            "fixture_sha256": "d" * 64,
+            "solver_mesh_signature": "e" * 64,
+            "magnetic_node_indices_sha256": "f" * 64,
+            "initial_m_sha256": "1" * 64,
+            "demag_enabled": True,
+            "resolved_demag_policy": {
+            "linear_solver": "CG",
+            "preconditioner": "AMG",
+            "relative_tolerance": 1e-12,
+            "absolute_tolerance": 0.0,
+            "max_iterations": 500,
+            "print_level": 0,
+            "amg_relax_type": 18,
+            "amg_coarsening": 8,
+            "amg_interpolation": 6,
+            "amg_aggressive_coarsening": 1,
+            "amg_strength_threshold": 0.25,
+            "amg_max_levels": 25,
+            "policy_source": "problem_ir",
+            },
+        },
+    ]
+    return runtime_identity, case_identities
+
+
+def task8_qualification_row(
+    backend: str,
+    repeat_index: int,
+    runtime_identity: dict[str, object],
+    case_identity: dict[str, object],
+) -> dict[str, object]:
+    demag_policy = case_identity["resolved_demag_policy"]
+    assert isinstance(demag_policy, dict)
+    omp_thread_count = runtime_identity["omp_thread_count"]
+    assert isinstance(omp_thread_count, dict)
+    row = {
+        "backend": backend,
+        "status": "ok",
+        "scenario": case_identity["case_id"],
+        "reported_relaxation_algorithm": case_identity["relaxation_algorithm"],
+        "repeat_index": repeat_index,
+        "source_manifest_sha256": runtime_identity["source_manifest_sha256"],
+        "runtime_manifest_sha256": runtime_identity["runtime_manifest_sha256"],
+        "libfullmag_fem_sha256": runtime_identity["libfullmag_fem_sha256"],
+        "fixture_sha256": case_identity["fixture_sha256"],
+        "solver_mesh_signature": case_identity["solver_mesh_signature"],
+        "qualification_input_mesh_signature": case_identity[
+            "solver_mesh_signature"
+        ],
+        "magnetic_node_indices_sha256": case_identity[
+            "magnetic_node_indices_sha256"
+        ],
+        "initial_m_sha256": case_identity["initial_m_sha256"],
+        "reported_precision": runtime_identity["precision"],
+        "effective_fem_omp_threads": omp_thread_count[backend],
+        "demag_linear_solver": demag_policy["linear_solver"],
+        "demag_preconditioner": demag_policy["preconditioner"],
+        "demag_relative_tolerance": demag_policy["relative_tolerance"],
+        "demag_absolute_tolerance": demag_policy["absolute_tolerance"],
+        "demag_max_iterations": demag_policy["max_iterations"],
+        "demag_print_level": demag_policy["print_level"],
+        "demag_amg_relax_type": demag_policy["amg_relax_type"],
+        "demag_amg_coarsening": demag_policy["amg_coarsening"],
+        "demag_amg_interpolation": demag_policy["amg_interpolation"],
+        "demag_amg_aggressive_coarsening": demag_policy[
+            "amg_aggressive_coarsening"
+        ],
+        "demag_amg_strength_threshold": demag_policy["amg_strength_threshold"],
+        "demag_amg_max_levels": demag_policy["amg_max_levels"],
+        "demag_policy_source": demag_policy["policy_source"],
+        "demag_model": "airbox",
+        "demag_solves": 1,
+        "energy_monotonicity_satisfied": True,
+        "energy_trajectory_record_count": 1,
+        "energy_trajectory_max_increase_j": 0.0,
+        "accepted_energy_proof_available": True,
+        "accepted_energy_delta_j": -2e-20,
+        "accepted_energy_roundoff_bound_j": 1e-21,
+        "accepted_energy_delta_upper_j": -1.9e-20,
+        "armijo_increment_rhs_j": -1e-20,
+        "accepted_energy_proof_count": 1,
+        "accepted_energy_proof_invalid_count": 0,
+        "accepted_energy_proof_invalid_details": [],
+        "executed_steps": 1,
+    }
+    if backend == "fem_gpu":
+        row.update(
+            {
+                "device_name": runtime_identity["device_name"],
+                "compute_capability": runtime_identity["compute_capability"],
+            }
+        )
+    return row
+
+
+def task8_complete_qualification_rows(
+    runtime_identity: dict[str, object],
+    case_identity: dict[str, object],
+    *,
+    repeat_count: int = 1,
+) -> list[dict[str, object]]:
+    return [
+        task8_qualification_row(backend, repeat_index, runtime_identity, case_identity)
+        for repeat_index in range(repeat_count)
+        for backend in ("fem_cpu", "fem_gpu")
+    ]
+
+
+def test_task8_qualification_accepts_exact_identity_complete_pairs_and_monotonicity() -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, case_identities = task8_expected_qualification_identity()
+    rows = task8_complete_qualification_rows(
+        runtime_identity,
+        case_identities[0],
+        repeat_count=2,
+    )
+
+    assert benchmark.task8_qualification_failures(
+        rows,
+        expected_runtime_identity=runtime_identity,
+        expected_case_identities=case_identities,
+        expected_repeat_count=2,
+    ) == []
+
+
+@pytest.mark.parametrize(
+    ("backend", "row_field", "tampered_value", "failure_label"),
+    [
+        ("fem_gpu", "source_manifest_sha256", "2" * 64, "source_manifest_sha256"),
+        ("fem_gpu", "runtime_manifest_sha256", "3" * 64, "runtime_manifest_sha256"),
+        ("fem_gpu", "libfullmag_fem_sha256", "4" * 64, "libfullmag_fem_sha256"),
+        ("fem_gpu", "fixture_sha256", "5" * 64, "fixture_sha256"),
+        (
+            "fem_gpu",
+            "solver_mesh_signature",
+            "9" * 64,
+            "solver_mesh_signature",
+        ),
+        (
+            "fem_gpu",
+            "qualification_input_mesh_signature",
+            "6" * 64,
+            "qualification_input_mesh_signature",
+        ),
+        (
+            "fem_gpu",
+            "magnetic_node_indices_sha256",
+            "7" * 64,
+            "magnetic_node_indices_sha256",
+        ),
+        ("fem_gpu", "initial_m_sha256", "8" * 64, "initial_m_sha256"),
+        ("fem_gpu", "device_name", "unexpected GPU", "device_name"),
+        ("fem_gpu", "compute_capability", "9.0", "compute_capability"),
+        ("fem_gpu", "reported_precision", "single", "precision"),
+        ("fem_cpu", "effective_fem_omp_threads", 4, "OpenMP thread count"),
+        ("fem_gpu", "effective_fem_omp_threads", 2, "OpenMP thread count"),
+        ("fem_gpu", "demag_linear_solver", "GMRES", "resolved demag policy"),
+        (
+            "fem_gpu",
+            "demag_preconditioner",
+            "JACOBI",
+            "resolved demag policy",
+        ),
+        (
+            "fem_gpu",
+            "demag_relative_tolerance",
+            1e-8,
+            "resolved demag policy",
+        ),
+        (
+            "fem_gpu",
+            "demag_absolute_tolerance",
+            1e-30,
+            "resolved demag policy",
+        ),
+        ("fem_gpu", "demag_max_iterations", 100, "resolved demag policy"),
+        ("fem_gpu", "demag_print_level", 1, "resolved demag policy"),
+        ("fem_gpu", "demag_amg_relax_type", 6, "resolved demag policy"),
+        ("fem_gpu", "demag_amg_coarsening", 10, "resolved demag policy"),
+        ("fem_gpu", "demag_amg_interpolation", 0, "resolved demag policy"),
+        (
+            "fem_gpu",
+            "demag_amg_aggressive_coarsening",
+            0,
+            "resolved demag policy",
+        ),
+        (
+            "fem_gpu",
+            "demag_amg_strength_threshold",
+            0.5,
+            "resolved demag policy",
+        ),
+        ("fem_gpu", "demag_amg_max_levels", 10, "resolved demag policy"),
+        ("fem_gpu", "demag_policy_source", "environment", "resolved demag policy"),
+    ],
+)
+def test_task8_qualification_rejects_identity_drift(
+    backend: str,
+    row_field: str,
+    tampered_value: object,
+    failure_label: str,
+) -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, case_identities = task8_expected_qualification_identity()
+    rows = task8_complete_qualification_rows(runtime_identity, case_identities[0])
+    row = next(row for row in rows if row["backend"] == backend)
+    row[row_field] = tampered_value
+
+    failures = benchmark.task8_qualification_failures(
+        rows,
+        expected_runtime_identity=runtime_identity,
+        expected_case_identities=case_identities,
+        expected_repeat_count=1,
+    )
+
+    assert any(failure_label in failure for failure in failures)
+
+
+def test_task8_qualification_rejects_incomplete_pair_for_each_repeat() -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, case_identities = task8_expected_qualification_identity()
+    rows = task8_complete_qualification_rows(
+        runtime_identity,
+        case_identities[0],
+        repeat_count=2,
+    )
+    rows = [
+        row
+        for row in rows
+        if not (row["backend"] == "fem_gpu" and row["repeat_index"] == 1)
+    ]
+
+    failures = benchmark.task8_qualification_failures(
+        rows,
+        expected_runtime_identity=runtime_identity,
+        expected_case_identities=case_identities,
+        expected_repeat_count=2,
+    )
+
+    assert any(
+        "repeat_index=1" in failure and "fem_gpu" in failure
+        for failure in failures
+    )
+
+
+@pytest.mark.parametrize("evidence", [None, False])
+def test_task8_qualification_keeps_recomputed_energy_monotonicity_as_diagnostic(
+    evidence: bool | None,
+) -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, case_identities = task8_expected_qualification_identity()
+    rows = task8_complete_qualification_rows(runtime_identity, case_identities[0])
+    gpu_row = next(row for row in rows if row["backend"] == "fem_gpu")
+    if evidence is None:
+        gpu_row.pop("energy_monotonicity_satisfied")
+    else:
+        gpu_row["energy_monotonicity_satisfied"] = evidence
+
+    failures = benchmark.task8_qualification_failures(
+        rows,
+        expected_runtime_identity=runtime_identity,
+        expected_case_identities=case_identities,
+        expected_repeat_count=1,
+    )
+
+    assert not any("energy_monotonicity_satisfied" in failure for failure in failures)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("accepted_energy_proof_count", 0),
+        ("accepted_energy_proof_invalid_count", 1),
+        ("accepted_energy_proof_invalid_details", ["step=1: invalid"]),
+    ],
+)
+def test_task8_pgbb_qualification_requires_native_accepted_armijo_proof(
+    field: str,
+    value: object,
+) -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, case_identities = task8_expected_qualification_identity()
+    rows = task8_complete_qualification_rows(runtime_identity, case_identities[0])
+    rows[0][field] = value
+
+    failures = benchmark.task8_qualification_failures(
+        rows,
+        expected_runtime_identity=runtime_identity,
+        expected_case_identities=case_identities,
+        expected_repeat_count=1,
+    )
+
+    assert any("accepted Armijo proof" in failure for failure in failures)
+
+
+def test_task8_qualification_rejects_old_98f832_native_library_identity() -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, case_identities = task8_expected_qualification_identity()
+    runtime_identity.update(
+        {
+            "source_manifest_sha256": "3bf69a81294a5d4ae8bcd0d19359ae610032e992098e2c04d65071cba9f3ca56",
+            "runtime_manifest_sha256": "7aec841222232a1bfcd87e9a0ba6fc2e9501ccb99b6ccacd21d521bc8f439b69",
+            "libfullmag_fem_sha256": "c34db964a116df422463a7dc2e96983e0589dd0cc9a50a4d82a9defe412be855",
+        }
+    )
+    rows = task8_complete_qualification_rows(runtime_identity, case_identities[0])
+    for row in rows:
+        row.update(
+            {
+                "source_manifest_sha256": "2587f0134abd89ec0a30cc7c576ff6d9166356d7ada9d00362519b149f4e3c8c",
+                "runtime_manifest_sha256": "98f832772d0d9a5c7c46b4823c5f5c5bf2e4ed823e0f143e53ffa9aa9843fff8",
+                "libfullmag_fem_sha256": "63547f779f2c88611382532c6bdfe827f2969f5634733794494247d00817c03e",
+            }
+        )
+
+    failures = benchmark.task8_qualification_failures(
+        rows,
+        expected_runtime_identity=runtime_identity,
+        expected_case_identities=case_identities,
+        expected_repeat_count=1,
+    )
+
+    assert any("libfullmag_fem_sha256" in failure for failure in failures)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "fixture_sha256",
+        "solver_mesh_signature",
+        "magnetic_node_indices_sha256",
+        "initial_m_sha256",
+    ],
+)
+def test_task8_qualification_rejects_missing_expected_case_identity_before_rows(
+    field: str,
+) -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, case_identities = task8_expected_qualification_identity()
+    case_identities[0].pop(field)
+
+    failures = benchmark.task8_qualification_failures(
+        [],
+        expected_runtime_identity=runtime_identity,
+        expected_case_identities=case_identities,
+        expected_repeat_count=1,
+    )
+
+    assert failures[0] == f"Task 8 expected case identity is missing {field}"
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "source_manifest_sha256",
+        "runtime_manifest_sha256",
+        "libfullmag_fem_sha256",
+    ],
+)
+@pytest.mark.parametrize("invalid_sha256", ["a", "g" * 64, "A" * 64])
+def test_task8_qualification_rejects_invalid_runtime_sha256_before_rows(
+    field: str,
+    invalid_sha256: str,
+) -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, case_identities = task8_expected_qualification_identity()
+    runtime_identity[field] = invalid_sha256
+
+    failures = benchmark.task8_qualification_failures(
+        [],
+        expected_runtime_identity=runtime_identity,
+        expected_case_identities=case_identities,
+        expected_repeat_count=1,
+    )
+
+    assert failures[0] == f"Task 8 expected runtime identity has invalid {field}"
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "fixture_sha256",
+        "solver_mesh_signature",
+        "magnetic_node_indices_sha256",
+        "initial_m_sha256",
+    ],
+)
+@pytest.mark.parametrize("invalid_identity", ["a", "g" * 64, "A" * 64])
+def test_task8_qualification_rejects_invalid_case_hash_identity_before_rows(
+    field: str,
+    invalid_identity: str,
+) -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, case_identities = task8_expected_qualification_identity()
+    case_identities[0][field] = invalid_identity
+
+    failures = benchmark.task8_qualification_failures(
+        [],
+        expected_runtime_identity=runtime_identity,
+        expected_case_identities=case_identities,
+        expected_repeat_count=1,
+    )
+
+    assert failures[0] == f"Task 8 expected case identity has invalid {field}"
+
+
+@pytest.mark.parametrize("backend", ["fem_cpu", "fem_gpu"])
+def test_task8_qualification_rejects_missing_backend_omp_identity_before_rows(
+    backend: str,
+) -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, case_identities = task8_expected_qualification_identity()
+    omp_threads = runtime_identity["omp_thread_count"]
+    assert isinstance(omp_threads, dict)
+    omp_threads.pop(backend)
+
+    failures = benchmark.task8_qualification_failures(
+        [],
+        expected_runtime_identity=runtime_identity,
+        expected_case_identities=case_identities,
+        expected_repeat_count=1,
+    )
+
+    assert failures[0] == (
+        f"Task 8 expected runtime identity has invalid OpenMP thread count for {backend}"
+    )
+
+
+@pytest.mark.parametrize("backend", ["fem_cpu", "fem_gpu"])
+@pytest.mark.parametrize("invalid_omp_threads", [True, 1.5, 0, -1])
+def test_task8_qualification_rejects_invalid_omp_identity_before_rows(
+    backend: str,
+    invalid_omp_threads: object,
+) -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, case_identities = task8_expected_qualification_identity()
+    omp_threads = runtime_identity["omp_thread_count"]
+    assert isinstance(omp_threads, dict)
+    omp_threads[backend] = invalid_omp_threads
+
+    failures = benchmark.task8_qualification_failures(
+        [],
+        expected_runtime_identity=runtime_identity,
+        expected_case_identities=case_identities,
+        expected_repeat_count=1,
+    )
+
+    assert failures[0] == (
+        f"Task 8 expected runtime identity has invalid OpenMP thread count for {backend}"
+    )
+
+
+@pytest.mark.parametrize("invalid_repeat_count", [True, 1.5, 0, -1])
+def test_task8_qualification_rejects_invalid_repeat_count_before_rows(
+    invalid_repeat_count: object,
+) -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, case_identities = task8_expected_qualification_identity()
+
+    failures = benchmark.task8_qualification_failures(
+        [],
+        expected_runtime_identity=runtime_identity,
+        expected_case_identities=case_identities,
+        expected_repeat_count=invalid_repeat_count,
+    )
+
+    assert failures == ["Task 8 expected_repeat_count must be a positive integer"]
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("linear_solver", None),
+        ("preconditioner", 1),
+        ("relative_tolerance", None),
+        ("absolute_tolerance", float("nan")),
+        ("amg_strength_threshold", float("inf")),
+        ("max_iterations", True),
+        ("print_level", 1.5),
+        ("amg_relax_type", "18"),
+        ("policy_source", []),
+    ],
+)
+def test_task8_qualification_rejects_invalid_demag_policy_before_rows(
+    field: str,
+    invalid_value: object,
+) -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, case_identities = task8_expected_qualification_identity()
+    demag_policy = case_identities[0]["resolved_demag_policy"]
+    assert isinstance(demag_policy, dict)
+    demag_policy[field] = invalid_value
+
+    failures = benchmark.task8_qualification_failures(
+        [],
+        expected_runtime_identity=runtime_identity,
+        expected_case_identities=case_identities,
+        expected_repeat_count=1,
+    )
+
+    assert failures[0] == (
+        "Task 8 expected case identity has invalid resolved demag policy "
+        f"{field}: case_id=box500_airbox_exchange_demag "
+        "relaxation_algorithm=projected_gradient_bb"
+    )
+
+
+def test_task8_qualification_rejects_extra_failed_duplicate_row() -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, case_identities = task8_expected_qualification_identity()
+    rows = task8_complete_qualification_rows(runtime_identity, case_identities[0])
+    rows.append({**rows[0], "status": "failed"})
+
+    failures = benchmark.task8_qualification_failures(
+        rows,
+        expected_runtime_identity=runtime_identity,
+        expected_case_identities=case_identities,
+        expected_repeat_count=1,
+    )
+
+    assert any(
+        "repeat_index=0 has 2 total fem_cpu rows; expected exactly one" in failure
+        for failure in failures
+    )
+
+
+def test_task8_qualification_rejects_empty_expected_case_matrix_before_rows() -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, _ = task8_expected_qualification_identity()
+
+    failures = benchmark.task8_qualification_failures(
+        [],
+        expected_runtime_identity=runtime_identity,
+        expected_case_identities=[],
+        expected_repeat_count=1,
+    )
+
+    assert failures == ["Task 8 expected_case_identities must not be empty"]
+
+
+@pytest.mark.parametrize(
+    "required_backends",
+    [
+        ["fem_cpu"],
+        ["fem_gpu"],
+        ["fem_cpu", "fem_cpu"],
+        ["fem_cpu", "fem_gpu", "fem_gpu"],
+        ["fem_cpu", "fem_gpu", "unexpected"],
+    ],
+)
+def test_task8_qualification_requires_exact_cpu_gpu_backend_set_before_rows(
+    required_backends: list[str],
+) -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, case_identities = task8_expected_qualification_identity()
+    case_identities[0]["required_backends"] = required_backends
+
+    failures = benchmark.task8_qualification_failures(
+        [],
+        expected_runtime_identity=runtime_identity,
+        expected_case_identities=case_identities,
+        expected_repeat_count=1,
+    )
+
+    assert failures[0] == (
+        "Task 8 expected case identity required_backends must be exactly "
+        "['fem_cpu', 'fem_gpu']: case_id=box500_airbox_exchange_demag "
+        "relaxation_algorithm=projected_gradient_bb"
+    )
+
+
+def test_task8_mixed_demag_case_matrix_accepts_case_scoped_policy_and_empty_nondemag() -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, case_identities = task8_expected_qualification_identity()
+    demag_rows = task8_complete_qualification_rows(
+        runtime_identity,
+        case_identities[0],
+    )
+    nondemag_case = {
+        **case_identities[0],
+        "case_id": "box500_airbox_exchange_only",
+        "fixture_sha256": "2" * 64,
+        "solver_mesh_signature": "3" * 64,
+        "magnetic_node_indices_sha256": "4" * 64,
+        "initial_m_sha256": "5" * 64,
+        "demag_enabled": False,
+    }
+    nondemag_case.pop("resolved_demag_policy")
+    case_identities.append(nondemag_case)
+    policy_row_fields = {
+        "demag_linear_solver",
+        "demag_preconditioner",
+        "demag_relative_tolerance",
+        "demag_absolute_tolerance",
+        "demag_max_iterations",
+        "demag_print_level",
+        "demag_amg_relax_type",
+        "demag_amg_coarsening",
+        "demag_amg_interpolation",
+        "demag_amg_aggressive_coarsening",
+        "demag_amg_strength_threshold",
+        "demag_amg_max_levels",
+        "demag_policy_source",
+    }
+    nondemag_rows = []
+    for row in demag_rows:
+        nondemag_row = {
+            key: value for key, value in row.items() if key not in policy_row_fields
+        }
+        nondemag_row.update(
+            {
+                "scenario": nondemag_case["case_id"],
+                "fixture_sha256": nondemag_case["fixture_sha256"],
+                "solver_mesh_signature": nondemag_case["solver_mesh_signature"],
+                "qualification_input_mesh_signature": nondemag_case[
+                    "solver_mesh_signature"
+                ],
+                "magnetic_node_indices_sha256": nondemag_case[
+                    "magnetic_node_indices_sha256"
+                ],
+                "initial_m_sha256": nondemag_case["initial_m_sha256"],
+                "demag_model": None,
+                "demag_solves": 0,
+            }
+        )
+        nondemag_rows.append(nondemag_row)
+
+    assert benchmark.task8_qualification_failures(
+        [*demag_rows, *nondemag_rows],
+        expected_runtime_identity=runtime_identity,
+        expected_case_identities=case_identities,
+        expected_repeat_count=1,
+    ) == []
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing_demag_enabled",
+        "demag_without_policy",
+        "nondemag_with_policy",
+    ],
+)
+def test_task8_mixed_demag_case_matrix_rejects_fail_open_case_schema(
+    mutation: str,
+) -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, case_identities = task8_expected_qualification_identity()
+    case = case_identities[0]
+    if mutation == "missing_demag_enabled":
+        case.pop("demag_enabled")
+    elif mutation == "demag_without_policy":
+        case.pop("resolved_demag_policy")
+    else:
+        case["demag_enabled"] = False
+
+    failures = benchmark.task8_qualification_failures(
+        [],
+        expected_runtime_identity=runtime_identity,
+        expected_case_identities=case_identities,
+        expected_repeat_count=1,
+    )
+
+    assert any("demag" in failure.lower() for failure in failures)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("demag_model", "airbox"),
+        ("demag_linear_solver", "CG"),
+        ("demag_preconditioner", "AMG"),
+        ("demag_policy_source", "problem_ir"),
+        ("demag_policy_source", ["problem_ir"]),
+        ("demag_solves", 1),
+    ],
+)
+def test_task8_mixed_demag_case_matrix_rejects_nondemag_runtime_contamination(
+    field: str,
+    value: object,
+) -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, case_identities = task8_expected_qualification_identity()
+    row = task8_complete_qualification_rows(runtime_identity, case_identities[0])[0]
+    case = case_identities[0]
+    case["demag_enabled"] = False
+    case.pop("resolved_demag_policy")
+    policy_fields = [key for key in row if key.startswith("demag_")]
+    for policy_field in policy_fields:
+        row.pop(policy_field)
+    row["demag_model"] = None
+    row["demag_solves"] = 0
+    row[field] = value
+
+    failures = benchmark.task8_qualification_failures(
+        [row],
+        expected_runtime_identity=runtime_identity,
+        expected_case_identities=case_identities,
+        expected_repeat_count=1,
+    )
+
+    assert any(field in failure for failure in failures)
+
+
+def task8_two_policy_matrix():
+    runtime_identity, case_identities = task8_expected_qualification_identity()
+    amg_case = case_identities[0]
+    jacobi_case = json.loads(json.dumps(amg_case))
+    jacobi_policy = jacobi_case["resolved_demag_policy"]
+    jacobi_policy["preconditioner"] = "JACOBI"
+    for field in (
+        "absolute_tolerance",
+        "amg_relax_type",
+        "amg_coarsening",
+        "amg_interpolation",
+        "amg_aggressive_coarsening",
+        "amg_strength_threshold",
+        "amg_max_levels",
+    ):
+        jacobi_policy.pop(field)
+    case_identities.append(jacobi_case)
+    amg_rows = task8_complete_qualification_rows(runtime_identity, amg_case)
+    jacobi_rows = []
+    for amg_row in amg_rows:
+        jacobi_row = dict(amg_row)
+        jacobi_row["demag_preconditioner"] = "JACOBI"
+        for row_field in (
+            "demag_absolute_tolerance",
+            "demag_amg_relax_type",
+            "demag_amg_coarsening",
+            "demag_amg_interpolation",
+            "demag_amg_aggressive_coarsening",
+            "demag_amg_strength_threshold",
+            "demag_amg_max_levels",
+        ):
+            jacobi_row[row_field] = ""
+        jacobi_rows.append(jacobi_row)
+    rows = [*amg_rows, *jacobi_rows]
+    return runtime_identity, case_identities, rows
+
+
+def test_task8_policy_variant_cardinality_accepts_two_exact_policies_with_shared_fixture() -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, case_identities, rows = task8_two_policy_matrix()
+
+    assert case_identities[0]["fixture_sha256"] == case_identities[1][
+        "fixture_sha256"
+    ]
+    assert benchmark.task8_qualification_failures(
+        rows,
+        expected_runtime_identity=runtime_identity,
+        expected_case_identities=case_identities,
+        expected_repeat_count=1,
+    ) == []
+
+
+def test_task8_policy_variant_cardinality_rejects_missing_backend_in_one_policy() -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, case_identities, rows = task8_two_policy_matrix()
+    rows = [
+        row
+        for row in rows
+        if not (
+            row["backend"] == "fem_gpu"
+            and row["demag_preconditioner"] == "JACOBI"
+        )
+    ]
+
+    failures = benchmark.task8_qualification_failures(
+        rows,
+        expected_runtime_identity=runtime_identity,
+        expected_case_identities=case_identities,
+        expected_repeat_count=1,
+    )
+
+    assert any(
+        "preconditioner=JACOBI" in failure and "missing a total fem_gpu row" in failure
+        for failure in failures
+    )
+
+
+def test_task8_policy_variant_cardinality_rejects_duplicate_backend_in_one_policy() -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, case_identities, rows = task8_two_policy_matrix()
+    duplicate = next(
+        row
+        for row in rows
+        if row["backend"] == "fem_cpu" and row["demag_preconditioner"] == "AMG"
+    )
+    rows.append(dict(duplicate))
+
+    failures = benchmark.task8_qualification_failures(
+        rows,
+        expected_runtime_identity=runtime_identity,
+        expected_case_identities=case_identities,
+        expected_repeat_count=1,
+    )
+
+    assert any(
+        "preconditioner=AMG" in failure and "has 2 total fem_cpu rows" in failure
+        for failure in failures
+    )
+
+
+def test_task8_identity_capture_cli_and_recipes_keep_candidate_separate_from_qualification_input(
+    tmp_path: Path,
+) -> None:
+    benchmark = load_benchmark_module()
+    output = tmp_path / "expected-identity.json"
+
+    args = benchmark.parse_args(
+        ["--write-task8-qualification-identity", str(output)]
+    )
+    assert args.write_task8_qualification_identity == output
+
+    capture = just_recipe_source(
+        JUSTFILE.read_text(encoding="utf-8"),
+        "capture-fem-task8-qualification-identity",
+    )
+    production = just_recipe_source(
+        JUSTFILE.read_text(encoding="utf-8"),
+        "verify-fem-relaxation-production-benchmark",
+    )
+    assert "candidate-identity.json" in capture
+    assert "expected-identity.json" not in capture
+    assert "FULLMAG_BENCH_TASK8_QUALIFICATION_IDENTITY" in production
+    assert "--task8-qualification-identity" in production
+    assert "candidate-identity.json" not in production
+    for recipe in (capture, production):
+        assert 'FULLMAG_BENCH_THREAD_COUNTS="${FULLMAG_BENCH_THREAD_COUNTS:-1}"' in recipe
+        assert recipe.count('--thread-counts "$FULLMAG_BENCH_THREAD_COUNTS"') == 1
+        assert recipe.count(
+        '--cpu-gpu-energy-rtol "$FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL"'
+        ) == 1
+        assert recipe.count(
+        '--cpu-gpu-energy-atol "$FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J"'
+        ) == 1
+        assert recipe.count(
+        '--cpu-gpu-torque-rtol "$FULLMAG_BENCH_CPU_GPU_TORQUE_RTOL"'
+        ) == 1
+
+
+def test_task8_identity_capture_standalone_managed_recipe_is_forwarded_before_run() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+    capture = just_recipe_source(
+        justfile,
+        "capture-fem-task8-qualification-identity",
+    )
+    production = just_recipe_source(
+        justfile,
+        "verify-fem-relaxation-production-benchmark",
+    )
+
+    assert "just ensure-managed-fem-runtime" in capture
+    assert "docker compose --profile fem-gpu run --rm" in capture
+    assert "--write-task8-qualification-identity" in capture
+    assert "--task8-qualification-identity" not in capture
+    assert "just capture-fem-task8-qualification-identity" not in production
+    assert "--write-task8-qualification-identity" not in production
+    shared_env = (
+        "FULLMAG_BENCH_DOMAIN_HMAX",
+        "FULLMAG_BENCH_AIRBOX_HMAX",
+        "FULLMAG_BENCH_INTEGRATORS",
+        "FULLMAG_BENCH_RELAX_ALGORITHMS",
+        "FULLMAG_BENCH_DEMAG_SOLVERS",
+        "FULLMAG_BENCH_DEMAG_PRECONDITIONERS",
+        "FULLMAG_BENCH_DEMAG_AMG_RELAX_TYPES",
+        "FULLMAG_BENCH_DEMAG_AMG_COARSENINGS",
+        "FULLMAG_BENCH_DEMAG_AMG_INTERPOLATIONS",
+        "FULLMAG_BENCH_DEMAG_AMG_AGGRESSIVE_COARSENINGS",
+        "FULLMAG_BENCH_DEMAG_AMG_STRENGTH_THRESHOLDS",
+        "FULLMAG_BENCH_DEMAG_AMG_MAX_LEVELS",
+        "FULLMAG_BENCH_STEPS",
+        "FULLMAG_BENCH_REPEAT",
+        "FULLMAG_BENCH_THREAD_COUNTS",
+        "FULLMAG_BENCH_CASE_TIMEOUT_S",
+        "FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL",
+        "FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J",
+        "FULLMAG_BENCH_CPU_GPU_TORQUE_RTOL",
+        "FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR",
+    )
+    for variable in shared_env:
+        assert variable in capture
+        assert variable in production
+    assert "FULLMAG_BENCH_TASK8_QUALIFICATION_CANDIDATE" in capture
+    assert "FULLMAG_BENCH_TASK8_QUALIFICATION_IDENTITY" in production
+    assert "sha256sum" not in capture
+    assert "jq " not in capture
+
+
+def test_task8_identity_capture_entrypoints_cannot_execute_or_read_results() -> None:
+    tree = ast.parse(BENCHMARK.read_text(encoding="utf-8"))
+    capture_functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name
+        in {
+            "build_task8_qualification_case_identities",
+            "write_task8_qualification_identity",
+        }
+    }
+    assert set(capture_functions) == {
+        "build_task8_qualification_case_identities",
+        "write_task8_qualification_identity",
+    }
+    forbidden = {
+        "run_backend",
+        "write_csv",
+        "load_csv",
+        "cpu_gpu_consistency_summary",
+        "write_cpu_gpu_consistency_summary",
+    }
+    for function in capture_functions.values():
+        called = {
+            node.func.id
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        assert called.isdisjoint(forbidden)
+        assert not any(
+            isinstance(node, ast.Name) and node.id == "results"
+            for node in ast.walk(function)
+        )
+
+
+def test_task8_identity_capture_jacobi_policy_uses_real_applicable_shape() -> None:
+    benchmark = load_benchmark_module()
+    problem_ir = {
+        "backend_policy": {
+            "discretization_hints": {
+                "fem": {
+                    "demag_solver_policy": {
+                        "solver": "CG",
+                        "preconditioner": "JACOBI",
+                        "rtol": 1e-12,
+                        "max_iterations": 500,
+                        "print_level": 1,
+                    }
+                }
+            }
+        }
+    }
+
+    policy = benchmark.task8_expected_resolved_demag_policy(
+        problem_ir=problem_ir,
+        demag_amg_profile=(18, 8, 6, 1, None, None),
+    )
+
+    assert policy == {
+        "linear_solver": "CG",
+        "preconditioner": "JACOBI",
+        "relative_tolerance": 1e-12,
+        "max_iterations": 500,
+        "print_level": 1,
+        "policy_source": "explicit",
+    }
+
+
+def test_task8_identity_capture_uses_materialized_policy_when_requested_print_level_diverges(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    benchmark = load_benchmark_module()
+    monkeypatch.syspath_prepend(str(REPO_ROOT / "packages" / "fullmag-py" / "src"))
+    args = benchmark.parse_args(["--demag-print-level", "0"])
+    problem_ir = benchmark.canonical_problem_ir(
+        mesh_path=tmp_path / "input.mesh.json",
+        domain_mesh_path=tmp_path / "domain.mesh.json",
+        scenario="box500_airbox_exchange_demag",
+        integrator="heun",
+        relaxation_algorithm="projected_gradient_bb",
+        steps=2,
+        dt=1e-13,
+        timestep_policy="fixed",
+        extra_env=benchmark.demag_policy_env(
+            "CG",
+            "AMG",
+            1e-8,
+            (18, 8, 6, 1, None, None),
+            args,
+        ),
+    )
+
+    policy = benchmark.task8_expected_resolved_demag_policy(
+        problem_ir=problem_ir,
+        demag_amg_profile=(18, 8, 6, 1, None, None),
+    )
+
+    assert args.demag_print_level == 0
+    assert policy["print_level"] == 1
+
+
+def test_task8_identity_capture_schema_cardinality_includes_default_policy_variants() -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, case_identities = task8_expected_qualification_identity()
+    jacobi_case = json.loads(json.dumps(case_identities[0]))
+    jacobi_case["resolved_demag_policy"] = {
+        "linear_solver": "CG",
+        "preconditioner": "JACOBI",
+        "relative_tolerance": 1e-12,
+        "max_iterations": 500,
+        "print_level": 0,
+        "policy_source": "explicit",
+    }
+    case_identities[0]["resolved_demag_policy"]["policy_source"] = "explicit"
+
+    payload = benchmark.task8_qualification_identity_payload(
+        runtime_identity=runtime_identity,
+        case_identities=[*case_identities, jacobi_case],
+        expected_repeat_count=5,
+    )
+
+    assert payload["schema"] == "fullmag.fem.task8_qualification_identity.v1"
+    assert payload["expected_repeat_count"] == 5
+    policies = [
+        case["resolved_demag_policy"]["preconditioner"]
+        for case in payload["case_identities"]
+    ]
+    assert policies == ["AMG", "JACOBI"]
+
+
+def test_task8_identity_capture_manifest_expected_device_rejects_observed_drift(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    benchmark = load_benchmark_module()
+    runtime_root = tmp_path / "runtime"
+    library = runtime_root / "lib" / "libfullmag_fem.so"
+    library.parent.mkdir(parents=True)
+    library.write_bytes(b"native")
+    (runtime_root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "source_manifest_sha256": "a" * 64,
+                "native_libraries": {
+                    "fullmag_fem": {"path": "lib/libfullmag_fem.so"}
+                },
+                "runtime_diagnostics": {
+                    "device_name": "NVIDIA GeForce RTX 4080 SUPER",
+                    "compute_capability": "8.9",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    _, cases = task8_expected_qualification_identity()
+    monkeypatch.setattr(benchmark, "MANAGED_FEM_RUNTIME_ROOT", runtime_root)
+    monkeypatch.setattr(
+        benchmark,
+        "build_task8_qualification_case_identities",
+        lambda args: (cases, 1),
+    )
+    output = tmp_path / "identity.json"
+
+    payload = benchmark.write_task8_qualification_identity(
+        SimpleNamespace(repeat=1), output
+    )
+    rows = task8_complete_qualification_rows(
+        payload["runtime_identity"], payload["case_identities"][0]
+    )
+    gpu_row = next(row for row in rows if row["backend"] == "fem_gpu")
+    benchmark.attach_observed_gpu_identity(
+        gpu_row,
+        {
+            "device_name": "NVIDIA GeForce RTX 4090",
+            "compute_capability": "8.9",
+            "gpu_index": 0,
+        },
+    )
+
+    assert payload["runtime_identity"]["device_name"] == (
+        "NVIDIA GeForce RTX 4080 SUPER"
+    )
+    failures = benchmark.task8_qualification_failures(
+        rows,
+        expected_runtime_identity=payload["runtime_identity"],
+        expected_case_identities=payload["case_identities"],
+        expected_repeat_count=1,
+    )
+    assert any("device_name differs" in failure for failure in failures)
+
+
+def test_task8_qualification_integration_cli_delegates_actual_rows_to_single_owner(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, case_identities = task8_expected_qualification_identity()
+    rows = task8_complete_qualification_rows(runtime_identity, case_identities[0])
+    identity_artifact = tmp_path / "task8-qualification-identity.json"
+    identity_artifact.write_text(
+        json.dumps(
+            {
+                "schema": "fullmag.fem.task8_qualification_identity.v1",
+                "runtime_identity": runtime_identity,
+                "case_identities": case_identities,
+                "expected_repeat_count": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    owner_calls: list[dict[str, object]] = []
+
+    def qualification_owner(
+        actual_rows,
+        *,
+        expected_runtime_identity,
+        expected_case_identities,
+        expected_repeat_count,
+    ):
+        owner_calls.append(
+            {
+                "rows": actual_rows,
+                "runtime_identity": expected_runtime_identity,
+                "case_identities": expected_case_identities,
+                "repeat_count": expected_repeat_count,
+            }
+        )
+        return ["Task 8 integration sentinel mismatch"]
+
+    monkeypatch.setattr(
+        benchmark,
+        "task8_qualification_failures",
+        qualification_owner,
+    )
+
+    args = benchmark.parse_args(
+        ["--task8-qualification-identity", str(identity_artifact)]
+    )
+    gate = benchmark.task8_qualification_gate(
+        rows,
+        args.task8_qualification_identity,
+    )
+
+    assert owner_calls == [
+        {
+            "rows": rows,
+            "runtime_identity": runtime_identity,
+            "case_identities": case_identities,
+            "repeat_count": 1,
+        }
+    ]
+    assert gate == {
+        "schema": "fullmag.fem.task8_qualification_gate.v1",
+        "status": "fail",
+        "identity_artifact": str(identity_artifact),
+        "identity_artifact_sha256": benchmark.hashlib.sha256(
+            identity_artifact.read_bytes()
+        ).hexdigest(),
+        "failure_count": 1,
+        "failures": ["Task 8 integration sentinel mismatch"],
+    }
+
+
+def test_task8_qualification_integration_failure_marks_machine_summary_failed() -> None:
+    benchmark = load_benchmark_module()
+    summary = {
+        "status": "pass",
+        "failure_count": 0,
+        "failures": [],
+    }
+    gate = {
+        "schema": "fullmag.fem.task8_qualification_gate.v1",
+        "status": "fail",
+        "identity_artifact": "/workspace/expected-task8-identity.json",
+        "identity_artifact_sha256": "a" * 64,
+        "failure_count": 1,
+        "failures": ["Task 8 integration sentinel mismatch"],
+    }
+
+    benchmark.attach_task8_qualification_summary(summary, gate)
+
+    assert summary["status"] == "fail"
+    assert summary["failure_count"] == 1
+    assert summary["failures"] == ["Task 8 integration sentinel mismatch"]
+    assert summary["task8_qualification"] == gate
+
+
+def test_task8_qualification_integration_production_recipe_only_forwards_artifact() -> None:
+    recipe = just_recipe_source(
+        JUSTFILE.read_text(encoding="utf-8"),
+        "verify-fem-relaxation-production-benchmark",
+    )
+
+    assert '-e FULLMAG_BENCH_TASK8_QUALIFICATION_IDENTITY="${FULLMAG_BENCH_TASK8_QUALIFICATION_IDENTITY:-}"' in recipe
+    assert (
+        'if [ -n "$FULLMAG_BENCH_TASK8_QUALIFICATION_IDENTITY" ]; then '
+        'identity_args+=(--task8-qualification-identity '
+        '"$FULLMAG_BENCH_TASK8_QUALIFICATION_IDENTITY"); fi;'
+        in recipe
+    )
+    assert (
+        '"${identity_args[@]}"'
+        in recipe
+    )
+    assert "sha256sum" not in recipe
+    assert "jq " not in recipe
+
+
+def test_task8_qualification_row_identity_integration_is_computed_from_runtime_and_case_inputs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    benchmark = load_benchmark_module()
+    runtime_root = tmp_path / "runtime"
+    runtime_library = runtime_root / "lib" / "libfullmag_fem.so.0.1.0"
+    runtime_library.parent.mkdir(parents=True)
+    runtime_library.write_bytes(b"actual-native-library")
+    runtime_manifest = {
+        "schema": 2,
+        "source_manifest_sha256": "a" * 64,
+        "native_libraries": {
+            "fullmag_fem": {
+                "path": "lib/libfullmag_fem.so.0.1.0",
+                "sha256": "0" * 64,
+            }
+        },
+        "runtime_diagnostics": {
+            "device_name": "NVIDIA GeForce RTX 4080 SUPER",
+            "compute_capability": "8.9",
+        },
+    }
+    runtime_manifest_path = runtime_root / "manifest.json"
+    runtime_manifest_path.write_text(
+        json.dumps(runtime_manifest),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(benchmark, "MANAGED_FEM_RUNTIME_ROOT", runtime_root)
+
+    solver_mesh = tmp_path / "shared-domain.mesh.json"
+    solver_mesh.write_text(
+        json.dumps(
+            {
+                "mesh_name": "shared-domain",
+                "nodes": [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 1.0, 1.0],
+                ],
+                "elements": [[0, 1, 2, 3], [1, 2, 3, 4]],
+                "element_markers": [1, 0],
+            }
+        ),
+        encoding="utf-8",
+    )
+    input_mesh = tmp_path / "input.mesh.json"
+    input_mesh.write_text(
+        json.dumps({"mesh_name": "input", "nodes": [], "elements": []}),
+        encoding="utf-8",
+    )
+    case_manifest = {
+        "case_id": "box500_airbox_exchange_demag",
+        "relaxation_algorithm": "projected_gradient_bb",
+        "required_backends": ["fem_cpu", "fem_gpu"],
+        "relaxation": {"max_steps": 2, "dt_s": 1e-13},
+    }
+    problem_ir = {
+        "ir_version": "1",
+        "study": {
+            "stop": {
+                "max_steps": 2,
+                "torque_tolerance_apm": 1e-4,
+            }
+        },
+        "magnets": [
+            {
+                "name": "body",
+                "region": "body",
+                "initial_magnetization": {
+                    "kind": "preset_texture",
+                    "preset_kind": "helical",
+                    "preset_params": {
+                        "wavevector": [1.0, 0.0, 0.0],
+                        "e1": [1.0, 0.0, 0.0],
+                        "e2": [0.0, 1.0, 0.0],
+                        "phase_rad": 0.0,
+                    },
+                },
+            }
+        ],
+    }
+    common = {
+        "binary": tmp_path / "missing-binary",
+        "mesh_path": input_mesh,
+        "scenario": "box500_airbox_exchange_demag",
+        "integrator": "heun",
+        "relaxation_algorithm": "projected_gradient_bb",
+        "steps": 2,
+        "dt": 1e-13,
+        "extra_env": {"FULLMAG_BENCH_DOMAIN_MESH": str(solver_mesh)},
+        "problem_ir": problem_ir,
+        "qualification_case_manifest": case_manifest,
+    }
+
+    cpu_row = benchmark.run_backend(backend_label="fem_cpu", **common)
+    gpu_row = benchmark.run_backend(
+        backend_label="fem_gpu",
+        observed_gpu_identity={
+            "device_name": "NVIDIA GeForce RTX 4090",
+            "compute_capability": "8.9",
+            "gpu_index": 0,
+        },
+        **common,
+    )
+
+    canonical = lambda value: json.dumps(
+        value, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    expected_fixture_sha256 = benchmark.hashlib.sha256(
+        canonical(case_manifest)
+    ).hexdigest()
+    magnetic_node_indices = [0, 1, 2, 3]
+    expected_indices_sha256 = benchmark.hashlib.sha256(
+        canonical(magnetic_node_indices)
+    ).hexdigest()
+    expected_initial_m_sha256 = benchmark.hashlib.sha256(
+        canonical(
+            {
+                "magnetic_node_indices": magnetic_node_indices,
+                "magnets": [
+                    {
+                        "name": "body",
+                        "region": "body",
+                        "initial_magnetization": problem_ir["magnets"][0][
+                            "initial_magnetization"
+                        ],
+                    }
+                ],
+            }
+        )
+    ).hexdigest()
+    expected_shared = {
+        "source_manifest_sha256": "a" * 64,
+        "runtime_manifest_sha256": benchmark.hashlib.sha256(
+            runtime_manifest_path.read_bytes()
+        ).hexdigest(),
+        "libfullmag_fem_sha256": benchmark.hashlib.sha256(
+            runtime_library.read_bytes()
+        ).hexdigest(),
+        "fixture_sha256": expected_fixture_sha256,
+        "magnetic_node_indices_sha256": expected_indices_sha256,
+        "initial_m_sha256": expected_initial_m_sha256,
+    }
+    for field, expected in expected_shared.items():
+        assert cpu_row[field] == expected
+        assert gpu_row[field] == expected
+    assert "device_name" not in cpu_row
+    assert "compute_capability" not in cpu_row
+    assert gpu_row["device_name"] == "NVIDIA GeForce RTX 4090"
+    assert gpu_row["compute_capability"] == "8.9"
+    assert gpu_row["observed_gpu_index"] == 0
+    assert cpu_row["solver_mesh_signature"] == gpu_row["solver_mesh_signature"]
+
+
+def test_task8_current_device_identity_rejects_unavailable_nvidia_smi(
+    monkeypatch,
+) -> None:
+    benchmark = load_benchmark_module()
+
+    def unavailable(*args, **kwargs):
+        raise FileNotFoundError("nvidia-smi")
+
+    monkeypatch.setattr(benchmark.subprocess, "run", unavailable)
+
+    with pytest.raises(ValueError, match="nvidia-smi.*unavailable"):
+        benchmark.observe_current_gpu_identity(gpu_index=0)
+
+
+def test_task8_current_device_identity_selects_configured_multi_gpu_index(
+    monkeypatch,
+) -> None:
+    benchmark = load_benchmark_module()
+    calls = []
+
+    def completed(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=(
+                "NVIDIA GeForce RTX 3090, 8.6\n"
+                "NVIDIA GeForce RTX 4080 SUPER, 8.9\n"
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(benchmark.subprocess, "run", completed)
+
+    assert benchmark.observe_current_gpu_identity(gpu_index=1) == {
+        "device_name": "NVIDIA GeForce RTX 4080 SUPER",
+        "compute_capability": "8.9",
+        "gpu_index": 1,
+    }
+    assert len(calls) == 1
+    assert calls[0][0] == [
+        "nvidia-smi",
+        "--query-gpu=name,compute_cap",
+        "--format=csv,noheader",
+    ]
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        "",
+        "NVIDIA GeForce RTX 4080 SUPER\n",
+        "NVIDIA GeForce RTX 4080 SUPER, unknown\n",
+        "NVIDIA GeForce RTX 4080 SUPER, 8.9, extra\n",
+    ],
+)
+def test_task8_current_device_identity_rejects_missing_or_malformed_observation(
+    stdout: str,
+    monkeypatch,
+) -> None:
+    benchmark = load_benchmark_module()
+    monkeypatch.setattr(
+        benchmark.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=stdout,
+            stderr="",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="GPU identity"):
+        benchmark.observe_current_gpu_identity(gpu_index=0)
+
+
+def test_task8_current_device_identity_mismatch_is_authored_on_gpu_row_and_rejected(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    benchmark = load_benchmark_module()
+    runtime_identity, case_identities = task8_expected_qualification_identity()
+    rows = task8_complete_qualification_rows(runtime_identity, case_identities[0])
+    observed = {
+        "device_name": "NVIDIA GeForce RTX 4090",
+        "compute_capability": "8.9",
+        "gpu_index": 0,
+    }
+    gpu_row = next(row for row in rows if row["backend"] == "fem_gpu")
+    benchmark.attach_observed_gpu_identity(gpu_row, observed)
+
+    failures = benchmark.task8_qualification_failures(
+        rows,
+        expected_runtime_identity=runtime_identity,
+        expected_case_identities=case_identities,
+        expected_repeat_count=1,
+    )
+
+    assert gpu_row["device_name"] == "NVIDIA GeForce RTX 4090"
+    assert any("device_name differs" in failure for failure in failures)
+
+
+def test_task8_current_device_identity_is_wired_only_to_qualified_gpu_branch() -> None:
+    tree = ast.parse(BENCHMARK.read_text(encoding="utf-8"))
+    main = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "main"
+    )
+    qualified_calls = []
+    for node in ast.walk(main):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        if node.func.id != "run_backend":
+            continue
+        keywords = {keyword.arg: keyword.value for keyword in node.keywords}
+        if "qualification_case_manifest" not in keywords:
+            continue
+        backend = keywords.get("backend_label")
+        assert isinstance(backend, ast.Constant)
+        qualified_calls.append((backend.value, keywords))
+
+    assert [backend for backend, _ in qualified_calls] == ["fem_cpu", "fem_gpu"]
+    cpu_keywords = qualified_calls[0][1]
+    gpu_keywords = qualified_calls[1][1]
+    assert "observed_gpu_identity" not in cpu_keywords
+    assert ast.unparse(gpu_keywords["observed_gpu_identity"]) == "observed_gpu_identity"
+    gpu_extra_env = gpu_keywords["extra_env"]
+    assert isinstance(gpu_extra_env, ast.Dict)
+    gpu_index_value = next(
+        value
+        for key, value in zip(gpu_extra_env.keys, gpu_extra_env.values, strict=True)
+        if isinstance(key, ast.Constant) and key.value == "FULLMAG_FEM_GPU_INDEX"
+    )
+    gpu_index_source = ast.unparse(gpu_index_value)
+    assert "observed_gpu_identity" in gpu_index_source
+    assert "gpu_index" in gpu_index_source
+
+
 def test_gpu_zero_global_sync_gate_uses_strict_compute_sync_audit() -> None:
     benchmark = load_benchmark_module()
     good = {
@@ -2103,6 +3937,21 @@ def test_demag_rtol_sweep_does_not_install_global_default_residual_gate() -> Non
         1e-8,
         1e-6,
     ]
+
+
+def test_task8_capture_interaction_preset_preserves_explicit_thread_count() -> None:
+    benchmark = load_benchmark_module()
+    args = benchmark.parse_args(
+        [
+            "--box500-airbox-interaction-consistency-preset",
+            "--thread-counts",
+            "1",
+        ]
+    )
+
+    benchmark.apply_box500_airbox_interaction_consistency_preset(args)
+
+    assert args.thread_counts == "1"
 
 
 def test_best_demag_policy_uses_row_requested_rtol_by_default() -> None:

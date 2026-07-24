@@ -8,6 +8,7 @@
 
 #include "cpu/mfem/relaxation/relaxation_step.hpp"
 
+#include "context.hpp"
 #include "cpu/mfem/relaxation/nonlinear_cg.hpp"
 #include "cpu/mfem/relaxation/projected_gradient_bb.hpp"
 #include "cpu/mfem/relaxation/tangent_plane_implicit.hpp"
@@ -20,6 +21,7 @@ int run_native_relaxation_step(
     fullmag_fem_step_stats &out_stats,
     std::string &error)
 {
+    ctx.relaxation.accepted_energy_proof = {};
     switch (algorithm) {
         case FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB:
             return run_projected_gradient_bb_step(ctx, out_stats, error);

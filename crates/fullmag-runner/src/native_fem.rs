@@ -51,8 +51,8 @@ pub(crate) use plan::{
 };
 #[cfg(feature = "fem-gpu")]
 pub(crate) use runtime_info::{
-    stage_completion_from_ffi, DeviceInfo, NativeFemDataResidency, NativeFemGpuRkPlanInfo,
-    NativeFemGpuStateInfo,
+    stage_completion_from_ffi, stage_completion_is_representability_stationary, DeviceInfo,
+    NativeFemDataResidency, NativeFemGpuRkPlanInfo, NativeFemGpuStateInfo,
 };
 
 #[cfg(feature = "fem-gpu")]
@@ -2491,6 +2491,7 @@ impl NativeFemBackend {
 
         let solver_attempts = self.solver_attempts()?;
         let controller_diagnostics = self.stage_completion_snapshot_ffi()?;
+        let accepted_energy_proof: Option<(f64, f64, f64, f64)> = None;
 
         let relaxation_subphase_wall_time_ns = relaxation_driver_subphase_wall_time_ns(&stats);
         let torque_apm = validate_native_step_stats(&stats)?;
@@ -2513,6 +2514,11 @@ impl NativeFemBackend {
             max_h_demag: stats.max_demag_field_amplitude,
             max_torque_Apm: torque_apm,
             max_torque_T: torque_apm * crate::MU0,
+            accepted_energy_proof_available: accepted_energy_proof.is_some(),
+            accepted_energy_delta_j: accepted_energy_proof.map(|proof| proof.0),
+            accepted_energy_roundoff_bound_j: accepted_energy_proof.map(|proof| proof.1),
+            accepted_energy_delta_upper_j: accepted_energy_proof.map(|proof| proof.2),
+            armijo_increment_rhs_j: accepted_energy_proof.map(|proof| proof.3),
             wall_time_ns: stats.wall_time_ns.max(ffi_wall_time_ns),
             exchange_wall_time_ns: stats.exchange_wall_time_ns,
             demag_wall_time_ns: stats.demag_wall_time_ns,
@@ -2577,6 +2583,50 @@ impl NativeFemBackend {
             };
         self.attach_native_object_average_m(&mut step_stats)?;
         Ok(Some(step_stats))
+    }
+
+    fn take_accepted_energy_proof(&self) -> Result<Option<(f64, f64, f64, f64)>, RunError> {
+        let mut proof = ffi::fullmag_fem_accepted_energy_proof_v1 {
+            abi_version: ffi::FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_accepted_energy_proof_v1>() as u32,
+            ..Default::default()
+        };
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_take_accepted_energy_proof_v1(self.handle, &mut proof)
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM accepted-energy proof query failed"));
+        }
+        if proof.abi_version != ffi::FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION
+            || proof.struct_size as usize
+                != std::mem::size_of::<ffi::fullmag_fem_accepted_energy_proof_v1>()
+        {
+            return Err(RunError {
+                message: "native FEM returned an incompatible accepted-energy proof ABI record"
+                    .to_string(),
+            });
+        }
+        if proof.accepted_energy_proof_available == 0 {
+            return Ok(None);
+        }
+        let delta =
+            checked_native_finite("accepted_energy_delta_j", proof.accepted_energy_delta_j)?;
+        let bound = checked_native_nonnegative(
+            "accepted_energy_roundoff_bound_j",
+            proof.accepted_energy_roundoff_bound_j,
+        )?;
+        let upper = checked_native_finite(
+            "accepted_energy_delta_upper_j",
+            proof.accepted_energy_delta_upper_j,
+        )?;
+        let rhs = checked_native_finite("armijo_increment_rhs_j", proof.armijo_increment_rhs_j)?;
+        if upper != delta + bound || upper > rhs || rhs > 0.0 {
+            return Err(RunError {
+                message: "native FEM accepted-energy proof violates upper <= Armijo RHS <= 0"
+                    .to_string(),
+            });
+        }
+        Ok(Some((delta, bound, upper, rhs)))
     }
 
     fn solver_attempts(&self) -> Result<Vec<SolverAttemptRecord>, RunError> {
@@ -2766,6 +2816,17 @@ impl NativeFemBackend {
             return Err(self.last_error_or("FEM native relaxation step failed"));
         }
 
+        let controller_diagnostics = self.stage_completion_snapshot_ffi()?;
+        let accepted_energy_proof = self.take_accepted_energy_proof()?;
+        if stage_completion_is_representability_stationary(&controller_diagnostics) {
+            if accepted_energy_proof.is_some() {
+                return Err(RunError {
+                    message: "native FEM representability-stationary completion published an accepted-energy proof"
+                        .to_string(),
+                });
+            }
+            return Ok(None);
+        }
         let relaxation_subphase_wall_time_ns = relaxation_driver_subphase_wall_time_ns(&stats);
         let torque_apm = validate_native_step_stats(&stats)?;
         let mut step_stats = StepStats {
@@ -2787,6 +2848,11 @@ impl NativeFemBackend {
             max_h_demag: stats.max_demag_field_amplitude,
             max_torque_Apm: torque_apm,
             max_torque_T: torque_apm * crate::MU0,
+            accepted_energy_proof_available: accepted_energy_proof.is_some(),
+            accepted_energy_delta_j: accepted_energy_proof.map(|proof| proof.0),
+            accepted_energy_roundoff_bound_j: accepted_energy_proof.map(|proof| proof.1),
+            accepted_energy_delta_upper_j: accepted_energy_proof.map(|proof| proof.2),
+            armijo_increment_rhs_j: accepted_energy_proof.map(|proof| proof.3),
             wall_time_ns: stats.wall_time_ns.max(ffi_wall_time_ns),
             exchange_wall_time_ns: stats.exchange_wall_time_ns,
             demag_wall_time_ns: stats.demag_wall_time_ns,
@@ -3041,6 +3107,7 @@ impl NativeFemBackend {
             return Err(self.last_error_or("FEM GPU snapshot_step_stats failed"));
         }
 
+        let accepted_energy_proof: Option<(f64, f64, f64, f64)> = None;
         let torque_apm = validate_native_step_stats(&stats)?;
         let mut step_stats = StepStats {
             step: stats.step,
@@ -3061,6 +3128,11 @@ impl NativeFemBackend {
             max_h_demag: stats.max_demag_field_amplitude,
             max_torque_Apm: torque_apm,
             max_torque_T: torque_apm * crate::MU0,
+            accepted_energy_proof_available: accepted_energy_proof.is_some(),
+            accepted_energy_delta_j: accepted_energy_proof.map(|proof| proof.0),
+            accepted_energy_roundoff_bound_j: accepted_energy_proof.map(|proof| proof.1),
+            accepted_energy_delta_upper_j: accepted_energy_proof.map(|proof| proof.2),
+            armijo_increment_rhs_j: accepted_energy_proof.map(|proof| proof.3),
             wall_time_ns: stats.wall_time_ns,
             exchange_wall_time_ns: stats.exchange_wall_time_ns,
             demag_wall_time_ns: stats.demag_wall_time_ns,

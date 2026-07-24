@@ -156,24 +156,33 @@ void cuda_term_complete_energy_difference_migration_is_atomic() {
         "endpoint-residual ambiguity must not be misrepresented as refinable demag uncertainty");
     check(
         direct_kernel.find(
-            "fabs(demag_x) + fabs(demag_y) + fabs(demag_z)") !=
+            "gpu_relax_dd::magnitude(demag_x_dd)") !=
                 std::string::npos &&
             direct_kernel.find(
-                "fabs(zeeman_x) + fabs(zeeman_y) + fabs(zeeman_z)") !=
+                "gpu_relax_dd::magnitude(zeeman_x_dd)") !=
                 std::string::npos &&
             direct_kernel.find(
-                "fabs(anisotropy_ku) + fabs(anisotropy_ku2)") !=
+                "gpu_relax_dd::magnitude(anisotropy_ku_dd)") !=
+                std::string::npos &&
+            direct_kernel.find("gpu_relax_dd::magnitude(cubic_delta_dd)") !=
+                std::string::npos &&
+            direct_kernel.find(
+                "DBL_EPSILON * (zeeman_scale + anisotropy_scale + cubic_scale)") !=
                 std::string::npos &&
             direct_kernel.find("block_demag_delta") != std::string::npos &&
             direct_kernel.find("block_demag_absolute") != std::string::npos,
-        "CUDA local direct-energy uncertainty must retain every within-owner scalar subterm and demag-owned reduction before cancellation");
+        "CUDA local direct-energy uncertainty must retain double-double scalar terms, residual scales, and demag-owned reduction before cancellation");
     check(
         exchange_header.find("double *block_absolute_terms") !=
                 std::string::npos &&
             exchange_source.find(
-                "fabs(term_x) + fabs(term_y) + fabs(term_z)") !=
+                "exchange_polarized_edge_term") != std::string::npos &&
+            exchange_source.find(
+                "fabs(term_x_dd.hi) + fabs(term_x_dd.lo)") !=
+                std::string::npos &&
+            exchange_source.find("DBL_EPSILON * fabs(edge_weight)") !=
                 std::string::npos,
-        "CUDA exchange direct-energy uncertainty must reduce per-component absolute terms before cancellation");
+        "CUDA exchange direct-energy uncertainty must use error-free polarized edge terms and retain their residual scale before cancellation");
     check(
         dmi_header.find("double *element_absolute_terms") !=
                 std::string::npos &&
@@ -189,7 +198,7 @@ void cuda_term_complete_energy_difference_migration_is_atomic() {
                 std::string::npos,
         "CUDA DMI direct-energy uncertainty must accumulate every polarized scalar-product magnitude before cancellation");
     check(
-        direct_energy_source.find("kDirectEnergyTailSlots = 10") !=
+        direct_energy_source.find("kDirectEnergyTailSlots = 12") !=
                 std::string::npos &&
             reduction_workspace_header.find(
                 "FEM_GPU_SCALAR_RESULT_SLOTS = 32") !=
@@ -202,6 +211,10 @@ void cuda_term_complete_energy_difference_migration_is_atomic() {
                 "kDirectInterfacialDmiAbsoluteTailSlot") !=
                 std::string::npos &&
             direct_energy_source.find("kDirectBulkDmiAbsoluteTailSlot") !=
+                std::string::npos &&
+            direct_energy_source.find("kDirectActiveStateChangeTailSlot") !=
+                std::string::npos &&
+            direct_energy_source.find("kDirectRepresentableChordTailSlot") !=
                 std::string::npos &&
             direct_energy_source.find("std::abs(exchange_delta)") ==
                 std::string::npos &&
@@ -515,6 +528,14 @@ void c_abi_exposes_native_relaxation_step() {
         gpu_nonlinear_cg.find("Routing remains disabled") == std::string::npos &&
             gpu_nonlinear_cg.find("unavailable stub") == std::string::npos,
         "native GPU nonlinear CG source contract must not describe the production CUDA lane as disabled or stubbed");
+    check(
+        gpu_nonlinear_cg.find("trial_active_state_unchanged") != std::string::npos &&
+            gpu_nonlinear_cg.find("every_permitted_trial_unchanged") !=
+                std::string::npos &&
+            gpu_nonlinear_cg.find(
+                "every_exhausted_search_terminal_interval_unrepresentable") ==
+                std::string::npos,
+        "native GPU nonlinear CG representability completion must require every active trial state to be bitwise unchanged");
     check(
         relaxation_step.find("run_projected_gradient_bb_step(") != std::string::npos,
         "relaxation_step.cpp must route projected-gradient BB to the native algorithm module");
@@ -1043,6 +1064,14 @@ void c_abi_exposes_native_relaxation_step() {
                 std::string::npos,
         "native FEM nonlinear CG must reject exhausted Armijo searches and restore the previous state");
     check(
+        nonlinear_cg.find("every_permitted_trial_unchanged") !=
+                std::string::npos &&
+            nonlinear_cg.find("all_active_magnetic_dofs_bitwise_unchanged(") !=
+                std::string::npos &&
+            nonlinear_cg.find("publish_representability_stationary_completion(ctx)") !=
+                std::string::npos,
+        "native FEM nonlinear CG must classify an all-bitwise-unchanged Armijo sequence as representability stationary instead of exhausting backtracks");
+    check(
         nonlinear_cg.find("retry_nonlinear_cg_line_search_with_restart(") !=
                 std::string::npos &&
             nonlinear_cg.find("retry_nonlinear_cg_line_search_with_raw_gradient_restart(") !=
@@ -1278,6 +1307,8 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
         read_text_file(relaxation_root / "direct_energy_increment.cpp");
     const std::string relaxation_state =
         read_text_file(relaxation_root / "relaxation_state.hpp");
+    const std::string relaxation_memory_source =
+        read_text_file(relaxation_root / "relaxation_memory.cpp");
     const std::string gpu_rk_demag_dispatch =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" /
                        "rk_demag_dispatch.cu");
@@ -1387,7 +1418,7 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
                 std::string::npos &&
             direct_energy_source.find("gpu_direct_armijo_evaluate(") !=
                 std::string::npos &&
-            pgbb_source.find("gpu_direct_armijo_evaluate(") !=
+            pgbb_source.find("gpu_direct_pgbb_armijo_evaluate(") !=
                 std::string::npos &&
             nonlinear_cg_source.find("gpu_direct_armijo_evaluate(") !=
                 std::string::npos,
@@ -1407,7 +1438,15 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
                 std::string::npos,
         "native FEM GPU projected-gradient BB must generate current energy/gradient finite flags on device for the packed current-state readback");
     check(
-        direct_energy_source.find("kDirectEnergyTailSlots = 10") !=
+        direct_energy_source.find("kDirectEnergyTailSlots = 12") !=
+                std::string::npos &&
+            direct_energy_source.find(
+                "kDirectActiveStateChangeTailSlot") != std::string::npos &&
+            direct_energy_source.find(
+                "result.trial_active_state_unchanged =") !=
+                std::string::npos &&
+            direct_energy_source.find(
+                "track_active_state_change && changed_active_nodes == 0.0") !=
                 std::string::npos &&
             direct_energy_source.find(
                 "GPU direct minimizer energy batch device->host") !=
@@ -1418,7 +1457,7 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
             direct_energy_source.find(
                 "GPU direct minimizer exchange delta device->host") ==
                 std::string::npos,
-        "native FEM GPU direct Armijo evaluation must batch endpoint and direct-increment scalars into one control readback");
+        "native FEM GPU direct Armijo evaluation must batch endpoint, direct-increment, and active-state scalars into one control readback");
     check(
         kernels_header.find("bool demag_enabled") != std::string::npos &&
             direct_energy_source.find("ctx.demag.enabled") != std::string::npos &&
@@ -1430,9 +1469,12 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
                 std::string::npos &&
             direct_kernel.find("block_demag_delta") != std::string::npos &&
             direct_kernel.find("block_demag_absolute") != std::string::npos &&
-            direct_kernel.find("fabs(demag_x)") != std::string::npos &&
-            direct_kernel.find("fabs(demag_y)") != std::string::npos &&
-            direct_kernel.find("fabs(demag_z)") != std::string::npos,
+            direct_kernel.find("gpu_relax_dd::magnitude(demag_x_dd)") !=
+                std::string::npos &&
+            direct_kernel.find("gpu_relax_dd::magnitude(demag_y_dd)") !=
+                std::string::npos &&
+            direct_kernel.find("gpu_relax_dd::magnitude(demag_z_dd)") !=
+                std::string::npos,
         "native FEM GPU direct Armijo evaluation must contribute zero signed and absolute demag energy when demag is disabled");
     check(
         relaxation_state.find("struct FemGpuAcceptedEvaluationToken") !=
@@ -1528,6 +1570,32 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
                 std::string::npos,
         "native FEM GPU projected-gradient BB preflight must require rollback backup scratch before line-search trials");
     check(
+        relaxation_state.find(
+            "FemGpuComponentField projected_gradient_accepted_h_eff") !=
+                std::string::npos &&
+            relaxation_memory_source.find(
+                "relaxation.projected_gradient_accepted_h_eff") !=
+                std::string::npos &&
+            relaxation_memory_source.find(
+                "gpu_device_allocate_component(") != std::string::npos &&
+            relaxation_memory_source.find(
+                "gpu_device_free_component(relaxation.projected_gradient_accepted_h_eff)") !=
+                std::string::npos &&
+            pgbb_source.find(
+                "gpu.relaxation.projected_gradient_accepted_h_eff.x == nullptr") !=
+                std::string::npos,
+        "native FEM GPU PG-BB must own, account for, preflight, and free persistent accepted-state H_eff storage");
+    check(
+        pgbb_step.find(
+            "gpu.fields.h_eff, gpu.relaxation.projected_gradient_accepted_h_eff") !=
+                std::string::npos &&
+            pgbb_step.find(
+                "gpu.relaxation.projected_gradient_accepted_h_eff,\n                reason") !=
+                std::string::npos &&
+            pgbb_step.find("cudaMalloc") == std::string::npos &&
+            pgbb_step.find("cudaFree") == std::string::npos,
+        "native FEM GPU PG-BB must copy accepted H_eff once into persistent device storage and reuse it across all backtracks without hot-loop allocation");
+    check(
         pgbb_current_metrics.find(
             "gpu_rk_compute_effective_field_for_magnetization_fresh_demag(") !=
                 std::string::npos &&
@@ -1554,8 +1622,13 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
             pgbb_source.find("fullmag_cuda_relax_retract_field(") !=
                 std::string::npos &&
             pgbb_source.find("kArmijoCoefficient") != std::string::npos &&
+            pgbb_source.find("last_trial_energy_j =") != std::string::npos &&
+            pgbb_source.find("armijo_result.trial_snapshot.total_energy_j;") !=
+                std::string::npos &&
             pgbb_source.find(
-                "last_trial_energy_j =\n            armijo_result.trial_snapshot.total_energy_j;") !=
+                "GPU projected-gradient BB active-state change scalar device->host") ==
+                std::string::npos &&
+            pgbb_source.find("armijo_result.trial_active_state_unchanged") !=
                 std::string::npos,
         "native FEM GPU projected-gradient BB must batch its current snapshot/gradient metrics into one readback and reuse the direct Armijo trial snapshot without a standalone trial-total readback");
     check(
@@ -1707,7 +1780,7 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
     check(
             pgbb_first_armijo != std::string::npos &&
             pgbb_source.find(
-                "gpu_direct_armijo_evaluate(",
+                "gpu_direct_pgbb_armijo_evaluate(",
                 pgbb_first_armijo) <
                 pgbb_refinement &&
             pgbb_refinement < pgbb_backtrack_limit &&
@@ -1896,15 +1969,15 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
                 kernels_source.find("__global__ void bb_curvature_kernel(")) !=
                 std::string::npos &&
             kernels_source.find(
-                "const double m_dot_raw_s =",
+                "project_node_tangent(",
                 kernels_source.find("__global__ void bb_curvature_kernel(")) !=
                 std::string::npos &&
             kernels_source.find(
-                "const double m_dot_previous_g =",
+                "double transported_previous_gx = 0.0;",
                 kernels_source.find("__global__ void bb_curvature_kernel(")) !=
                 std::string::npos &&
             kernels_source.find(
-                "const double transported_previous_gx =",
+                "transported_previous_gx,",
                 kernels_source.find("__global__ void bb_curvature_kernel(")) !=
                 std::string::npos &&
             kernels_source.find("block_s_dot_s[blockIdx.x]") !=
@@ -2444,6 +2517,59 @@ void fem_relaxation_benchmark_recipes_prepare_required_binaries() {
         "fullmag-fem-sys build script must rerun native CMake when backends/fem/gpu changes");
 }
 
+void pgbb_accepted_armijo_proof_crosses_native_abi_only_after_acceptance() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string abi = read_text_file(
+        repo_root() / "native" / "include" / "fullmag_fem.h");
+    const std::string api = read_text_file(root / "src" / "api.cpp");
+    const std::string cpu_pgbb = read_text_file(
+        root / "cpu" / "mfem" / "relaxation" / "projected_gradient_bb.cpp");
+    const std::string gpu_pgbb = read_text_file(
+        root / "gpu" / "cuda" / "relaxation" / "pgbb.cpp");
+    const std::string cpu_ncg = read_text_file(
+        root / "cpu" / "mfem" / "relaxation" / "nonlinear_cg.cpp");
+    const std::string gpu_ncg = read_text_file(
+        root / "gpu" / "cuda" / "relaxation" / "nonlinear_cg.cpp");
+
+    for (const std::string field : {
+             "accepted_energy_proof_available",
+             "accepted_energy_delta_j",
+             "accepted_energy_roundoff_bound_j",
+             "accepted_energy_delta_upper_j",
+             "armijo_increment_rhs_j"}) {
+        check(
+            abi.find(field) != std::string::npos &&
+                api.find(field) != std::string::npos,
+            "PG-BB accepted Armijo proof fields must cross the versioned native query ABI");
+    }
+    check(
+        abi.find("FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION 1u") !=
+                std::string::npos &&
+            abi.find("fullmag_fem_backend_take_accepted_energy_proof_v1") !=
+                std::string::npos &&
+            api.find("out_proof->struct_size != sizeof(fullmag_fem_accepted_energy_proof_v1)") !=
+                std::string::npos &&
+            api.find("handle->context.relaxation.accepted_energy_proof = {};") !=
+                std::string::npos &&
+            cpu_pgbb.find("accepted_energy_proof.available = true") !=
+                std::string::npos &&
+            gpu_pgbb.find("accepted_energy_proof.available = true") !=
+                std::string::npos &&
+            cpu_pgbb.find(
+                "accepted_energy_delta_upper_j <= armijo_increment_rhs_j") !=
+                std::string::npos &&
+            gpu_pgbb.find(
+                "accepted_energy_delta_upper_j <= armijo_increment_rhs_j") !=
+                std::string::npos,
+        "CPU/GPU PG-BB must validate and publish the exact accepted Armijo proof");
+    check(
+        cpu_ncg.find("accepted_energy_proof.available = true") ==
+                std::string::npos &&
+            gpu_ncg.find("accepted_energy_proof.available = true") ==
+                std::string::npos,
+        "NCG must remain explicitly unavailable until every acceptance path owns a direct proof");
+}
+
 } // namespace
 
 int main() {
@@ -2454,6 +2580,7 @@ int main() {
     runner_does_not_claim_production_fem_minimizer_ownership();
     gpu_relaxation_pgbb_building_blocks_live_under_native_cuda();
     gpu_relaxation_ncg_direction_state_is_device_persistent();
+    pgbb_accepted_armijo_proof_crosses_native_abi_only_after_acceptance();
     fem_relaxation_benchmark_recipes_prepare_required_binaries();
     return 0;
 }

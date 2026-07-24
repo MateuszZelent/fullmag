@@ -409,6 +409,16 @@ pub struct StepStats {
     /// Comparable to mumax MaxTorque.
     #[serde(default)]
     pub max_torque_T: f64,
+    #[serde(default)]
+    pub accepted_energy_proof_available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_energy_delta_j: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_energy_roundoff_bound_j: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_energy_delta_upper_j: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub armijo_increment_rhs_j: Option<f64>,
     pub wall_time_ns: u64,
     /// One-time wall time spent constructing the native backend/context.
     ///
@@ -707,6 +717,11 @@ impl Default for StepStats {
             max_h_demag: 0.0,
             max_torque_Apm: 0.0,
             max_torque_T: 0.0,
+            accepted_energy_proof_available: false,
+            accepted_energy_delta_j: None,
+            accepted_energy_roundoff_bound_j: None,
+            accepted_energy_delta_upper_j: None,
+            armijo_increment_rhs_j: None,
             wall_time_ns: 0,
             backend_create_wall_time_ns: 0,
             exchange_wall_time_ns: 0,

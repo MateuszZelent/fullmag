@@ -2690,6 +2690,7 @@ int fullmag_fem_backend_step(
     }
 
     handle->last_error.clear();
+    handle->context.relaxation.accepted_energy_proof = {};
     const int status =
         fullmag::fem::run_backend_step(
             handle->context,
@@ -2715,6 +2716,7 @@ int fullmag_fem_backend_relax_step(
     }
 
     handle->last_error.clear();
+    handle->context.relaxation.accepted_energy_proof = {};
     const int status =
         fullmag::fem::run_backend_relaxation_step(
             handle->context,
@@ -3171,6 +3173,38 @@ int fullmag_fem_backend_copy_solver_attempts_v1(
         target.rhs_evaluations = source.rhs_evaluations;
         target.estimator_order = source.estimator_order;
     }
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_take_accepted_energy_proof_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_accepted_energy_proof_v1 *out_proof)
+{
+    if (handle == nullptr || out_proof == nullptr) {
+        fullmag_fem_set_handle_error(
+            handle, "accepted-energy proof query requires non-null handle and output");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (out_proof->abi_version !=
+            FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION ||
+        out_proof->struct_size != sizeof(fullmag_fem_accepted_energy_proof_v1)) {
+        fullmag_fem_set_handle_error(
+            handle, "accepted-energy proof query received incompatible ABI version or size");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    const auto source = handle->context.relaxation.accepted_energy_proof;
+    fullmag_fem_accepted_energy_proof_v1 result{};
+    result.abi_version = FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION;
+    result.struct_size = sizeof(result);
+    result.accepted_energy_proof_available = source.available ? 1 : 0;
+    if (source.available) {
+        result.accepted_energy_delta_j = source.delta_j;
+        result.accepted_energy_roundoff_bound_j = source.roundoff_bound_j;
+        result.accepted_energy_delta_upper_j = source.delta_upper_j;
+        result.armijo_increment_rhs_j = source.armijo_rhs_j;
+    }
+    *out_proof = result;
+    handle->context.relaxation.accepted_energy_proof = {};
     return FULLMAG_FEM_OK;
 }
 

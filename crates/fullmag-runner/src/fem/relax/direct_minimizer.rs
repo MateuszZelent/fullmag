@@ -191,7 +191,8 @@ pub(crate) fn execute_direct_minimizer(
         }
 
         let Some(mut accepted_stats) = backend.relax_step(control.algorithm, node_count)? else {
-            cancelled = true;
+            backend_completion = backend.stage_completion()?;
+            cancelled = backend_completion.is_none();
             break;
         };
         accepted_stats.preview_schedule_fence_wall_time_ns = preview_schedule_fence_wall_time_ns;
@@ -414,5 +415,26 @@ mod tests {
         assert!(source.contains("RelaxationCompletionMetrics"));
         assert!(source.contains("resolve_stage_completion"));
         assert!(source.contains("..RelaxationCompletionMetrics::default()"));
+    }
+
+    #[test]
+    fn direct_minimizer_does_not_record_a_stationary_non_step_as_accepted() {
+        let source = include_str!("direct_minimizer.rs");
+        let no_step_branch = source
+            .find("let Some(mut accepted_stats) = backend.relax_step")
+            .expect("direct minimizer must branch on whether the native step was accepted");
+        let accepted_step_increment = source
+            .find("accepted_steps += 1;")
+            .expect("direct minimizer must count accepted steps");
+
+        assert!(no_step_branch < accepted_step_increment);
+        assert!(source[no_step_branch..accepted_step_increment]
+            .contains("backend_completion = backend.stage_completion()?;"));
+        assert!(source[no_step_branch..accepted_step_increment]
+            .contains("cancelled = backend_completion.is_none();"));
+        assert!(
+            !source[no_step_branch..accepted_step_increment].contains("artifacts.record_scalar")
+        );
+        assert!(!source[no_step_branch..accepted_step_increment].contains("steps.push"));
     }
 }

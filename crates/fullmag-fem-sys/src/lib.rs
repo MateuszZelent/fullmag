@@ -565,6 +565,20 @@ pub struct fullmag_fem_step_stats {
     pub cpu_thread_cap_reason: i32,
 }
 
+pub const FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION: u32 = 1;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct fullmag_fem_accepted_energy_proof_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub accepted_energy_proof_available: i32,
+    pub accepted_energy_delta_j: f64,
+    pub accepted_energy_roundoff_bound_j: f64,
+    pub accepted_energy_delta_upper_j: f64,
+    pub armijo_increment_rhs_j: f64,
+}
+
 pub const FULLMAG_FEM_SOLVER_ATTEMPT_RECORD_V1_ABI_VERSION: u32 = 1;
 
 #[repr(C)]
@@ -1459,6 +1473,11 @@ extern "C" {
         out_records: *mut fullmag_fem_solver_attempt_record_v1,
         capacity: u64,
         out_count: *mut u64,
+    ) -> i32;
+
+    pub fn fullmag_fem_backend_take_accepted_energy_proof_v1(
+        handle: *mut fullmag_fem_backend,
+        out_proof: *mut fullmag_fem_accepted_energy_proof_v1,
     ) -> i32;
 
     pub fn fullmag_fem_backend_stage_completion(
@@ -2479,6 +2498,40 @@ mod tests {
         assert_eq!(stats.relaxation_preconditioner_cache_hits, 0);
         assert_eq!(stats.relaxation_preconditioner_cache_misses, 0);
         assert_eq!(stats.cpu_thread_cap_reason, 0);
+    }
+
+    #[test]
+    fn accepted_energy_proof_v1_has_stable_sized_layout() {
+        assert_eq!(FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION, 1);
+        assert_eq!(
+            std::mem::size_of::<fullmag_fem_accepted_energy_proof_v1>(),
+            48
+        );
+        let proof = std::mem::MaybeUninit::<fullmag_fem_accepted_energy_proof_v1>::uninit();
+        let base = proof.as_ptr() as usize;
+        unsafe {
+            assert_eq!(
+                std::ptr::addr_of!((*proof.as_ptr()).abi_version) as usize - base,
+                0
+            );
+            assert_eq!(
+                std::ptr::addr_of!((*proof.as_ptr()).struct_size) as usize - base,
+                4
+            );
+            assert_eq!(
+                std::ptr::addr_of!((*proof.as_ptr()).accepted_energy_proof_available) as usize
+                    - base,
+                8
+            );
+            assert_eq!(
+                std::ptr::addr_of!((*proof.as_ptr()).armijo_increment_rhs_j) as usize - base,
+                40
+            );
+        }
+        let _take_symbol: unsafe extern "C" fn(
+            *mut fullmag_fem_backend,
+            *mut fullmag_fem_accepted_energy_proof_v1,
+        ) -> i32 = fullmag_fem_backend_take_accepted_energy_proof_v1;
     }
 
     /// Verify Phase 1 exposes GPU state residency metadata through C ABI.

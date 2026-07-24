@@ -1100,11 +1100,11 @@ pub(crate) fn write_artifacts(
         write_scalars_csv(&output_dir.join("scalars.csv"), &executed.result.steps)?;
     }
     write_table_autosave_artifacts(output_dir, problem, &executed.result.steps)?;
-    if let Some(timestep_policy) = execution_provenance.timestep_policy.as_ref() {
+    if should_write_solver_diagnostics(plan, execution_provenance.timestep_policy.as_ref()) {
         write_solver_diagnostics_artifacts(
             output_dir,
             plan,
-            Some(timestep_policy),
+            execution_provenance.timestep_policy.as_ref(),
             &executed.result.steps,
         )?;
     }
@@ -1199,6 +1199,23 @@ pub(crate) fn write_artifacts(
     Ok(())
 }
 
+fn should_write_solver_diagnostics(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    timestep_policy: Option<&crate::types::TimestepPolicyProvenance>,
+) -> bool {
+    timestep_policy.is_some()
+        || matches!(
+            &plan.backend_plan,
+            BackendPlanIR::Fem(fem)
+                if fem.relaxation.as_ref().is_some_and(|control| matches!(
+                    control.algorithm,
+                    fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+                        | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
+                        | fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit
+                ))
+        )
+}
+
 fn write_solver_diagnostics_artifacts(
     output_dir: &Path,
     plan: &fullmag_ir::ExecutionPlanIR,
@@ -1276,11 +1293,11 @@ fn write_solver_diagnostics_artifacts(
     }
 
     let mut accepted = fs::File::create(output_dir.join("solver_steps.csv"))?;
-    writeln!(accepted, "step,t_s,dt_s,error_estimate,max_error,dt_suggested_s,rejected_attempts,rhs_evals,demag_solves,demag_iterations,demag_residual,e_exchange_j,e_demag_j,e_zeeman_j,e_drive_j,e_anisotropy_j,e_dmi_j,e_total_j,max_rhs_per_s,max_torque_apm")?;
+    writeln!(accepted, "step,t_s,dt_s,error_estimate,max_error,dt_suggested_s,rejected_attempts,rhs_evals,demag_solves,demag_iterations,demag_residual,e_exchange_j,e_demag_j,e_zeeman_j,e_drive_j,e_anisotropy_j,e_dmi_j,e_total_j,max_rhs_per_s,max_torque_apm,accepted_energy_proof_available,accepted_energy_delta_j,accepted_energy_roundoff_bound_j,accepted_energy_delta_upper_j,armijo_increment_rhs_j")?;
     for step in steps {
         writeln!(
             accepted,
-            "{},{:.17e},{:.17e},{},{},{},{},{},{},{},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e}",
+            "{},{:.17e},{:.17e},{},{},{},{},{},{},{},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{},{},{},{},{}",
             step.step,
             step.time,
             step.dt,
@@ -1301,6 +1318,11 @@ fn write_solver_diagnostics_artifacts(
             step.e_total,
             step.max_rhs_norm_per_s.max(step.max_dm_dt),
             step.max_torque_Apm,
+            step.accepted_energy_proof_available,
+            step.accepted_energy_delta_j.map(|value| format!("{value:.17e}")).unwrap_or_default(),
+            step.accepted_energy_roundoff_bound_j.map(|value| format!("{value:.17e}")).unwrap_or_default(),
+            step.accepted_energy_delta_upper_j.map(|value| format!("{value:.17e}")).unwrap_or_default(),
+            step.armijo_increment_rhs_j.map(|value| format!("{value:.17e}")).unwrap_or_default(),
         )?;
     }
 
@@ -3894,6 +3916,30 @@ mod tests {
     }
 
     #[test]
+    fn direct_fem_minimizers_require_solver_diagnostics_without_a_timestep_policy() {
+        for algorithm in [
+            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            fullmag_ir::RelaxationAlgorithmIR::NonlinearCg,
+            fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit,
+        ] {
+            let mut plan = test_fem_execution_plan();
+            let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+                panic!("test plan must use FEM");
+            };
+            fem.relaxation = Some(fullmag_ir::RelaxationControlIR {
+                algorithm,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: None,
+                    energy_tolerance_j: None,
+                    max_steps: Some(1),
+                    max_relaxation_time_s: None,
+                },
+            });
+            assert!(should_write_solver_diagnostics(&plan, None));
+        }
+    }
+
+    #[test]
     fn solver_diagnostics_keep_attempts_separate_from_accepted_steps() {
         let root = std::env::temp_dir().join(format!(
             "fullmag-solver-diagnostics-{}",
@@ -3909,6 +3955,11 @@ mod tests {
             step: 1,
             time: 2.0e-15,
             dt: 1.0e-15,
+            accepted_energy_proof_available: true,
+            accepted_energy_delta_j: Some(-2.0e-20),
+            accepted_energy_roundoff_bound_j: Some(1.0e-21),
+            accepted_energy_delta_upper_j: Some(-1.9e-20),
+            armijo_increment_rhs_j: Some(-1.0e-20),
             error_estimate: Some(0.25),
             max_error: Some(1.0e-6),
             dt_suggested: Some(2.0e-15),
@@ -3944,7 +3995,13 @@ mod tests {
                 ..rejected_attempt
             },
         ];
-        let steps = vec![step];
+        let steps = vec![
+            step,
+            StepStats {
+                step: 2,
+                ..StepStats::default()
+            },
+        ];
         write_solver_diagnostics_artifacts(&root, &test_fem_execution_plan(), None, &steps)
             .unwrap();
         write_solver_diagnostics_artifacts(&replay_root, &test_fem_execution_plan(), None, &steps)
@@ -3958,10 +4015,22 @@ mod tests {
         );
         assert_eq!(
             accepted.lines().count(),
-            2,
-            "header plus one accepted-step row"
+            3,
+            "header plus one row per accepted step"
         );
         assert!(attempts.contains("error_above_tolerance"));
+        let accepted_rows = accepted.lines().collect::<Vec<_>>();
+        let proof = accepted_rows[1].split(',').collect::<Vec<_>>();
+        assert_eq!(proof[20], "true");
+        let delta: f64 = proof[21].parse().unwrap();
+        let bound: f64 = proof[22].parse().unwrap();
+        let upper: f64 = proof[23].parse().unwrap();
+        let rhs: f64 = proof[24].parse().unwrap();
+        assert_eq!(upper, delta + bound);
+        assert!(upper <= rhs && rhs <= 0.0);
+        let unavailable = accepted_rows[2].split(',').collect::<Vec<_>>();
+        assert_eq!(unavailable[20], "false");
+        assert!(unavailable[21..=24].iter().all(|value| value.is_empty()));
         let max_error: f64 = accepted
             .lines()
             .nth(1)

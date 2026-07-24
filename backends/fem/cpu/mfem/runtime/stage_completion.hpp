@@ -115,6 +115,12 @@ void set_stage_completion(
     double metric_value,
     double threshold);
 
+namespace relaxation {
+
+void publish_representability_stationary_completion(Context &ctx);
+
+} // namespace relaxation
+
 /*
  * Return the current native FEM stage-completion snapshot.
  *

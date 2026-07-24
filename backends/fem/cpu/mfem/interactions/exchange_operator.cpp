@@ -7,6 +7,7 @@
 #include "cpu/mfem/interactions/exchange_operator.hpp"
 
 #include "context.hpp"
+#include "cpu/mfem/interactions/exchange_legacy_gpu_upload.hpp"
 #include "cpu/mfem/interactions/exchange_mass_projection.hpp"
 #include "cpu/mfem/runtime/mfem_device.hpp"
 
@@ -15,8 +16,10 @@
 #endif
 
 #include <algorithm>
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace fullmag::fem {
 
@@ -80,7 +83,48 @@ bool initialize_exchange_operator_mfem(
     exchange_form->Assemble();
     exchange_form->Finalize();
 
-    const auto &exchange_spmat = exchange_form->SpMat();
+    auto &exchange_spmat = exchange_form->SpMat();
+    const int exchange_rows = exchange_spmat.Height();
+    const int exchange_nnz = exchange_spmat.NumNonZeroElems();
+    const int *exchange_row_offsets_raw = exchange_spmat.GetI();
+    const int *exchange_columns_raw = exchange_spmat.GetJ();
+    double *exchange_values_raw = exchange_spmat.GetData();
+    if (exchange_rows <= 0 || exchange_nnz < 0 ||
+        exchange_row_offsets_raw == nullptr || exchange_columns_raw == nullptr ||
+        exchange_values_raw == nullptr) {
+        error = "assembled MFEM exchange CSR is unavailable for graph canonicalization";
+        return false;
+    }
+    std::vector<uint32_t> exchange_row_offsets(
+        static_cast<std::size_t>(exchange_rows) + 1u);
+    std::vector<uint32_t> exchange_columns(static_cast<std::size_t>(exchange_nnz));
+    std::vector<double> exchange_values(
+        exchange_values_raw, exchange_values_raw + exchange_nnz);
+    for (int i = 0; i <= exchange_rows; ++i) {
+        if (exchange_row_offsets_raw[i] < 0) {
+            error = "assembled MFEM exchange CSR has a negative row offset";
+            return false;
+        }
+        exchange_row_offsets[static_cast<std::size_t>(i)] =
+            static_cast<uint32_t>(exchange_row_offsets_raw[i]);
+    }
+    for (int p = 0; p < exchange_nnz; ++p) {
+        if (exchange_columns_raw[p] < 0 || exchange_columns_raw[p] >= exchange_rows) {
+            error = "assembled MFEM exchange CSR has an out-of-range column";
+            return false;
+        }
+        exchange_columns[static_cast<std::size_t>(p)] =
+            static_cast<uint32_t>(exchange_columns_raw[p]);
+    }
+    if (!canonicalize_legacy_exchange_graph_laplacian(
+            exchange_row_offsets,
+            exchange_columns,
+            exchange_values,
+            true,
+            error)) {
+        return false;
+    }
+    std::copy(exchange_values.begin(), exchange_values.end(), exchange_values_raw);
     ctx.gpu_state.legacy_exchange.legacy_sparse_metadata_ready = true;
     ctx.gpu_state.legacy_exchange.legacy_sparse_rows =
         static_cast<uint64_t>(std::max(0, exchange_spmat.Height()));

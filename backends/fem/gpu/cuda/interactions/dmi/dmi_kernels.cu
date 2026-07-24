@@ -37,7 +37,9 @@ static __device__ bool dmi_tetra_gradients_device(
     uint32_t n2,
     uint32_t n3,
     double grads[4][3],
-    double &volume)
+    double &volume,
+    double *condition_scale = nullptr,
+    double gradient_scales[4][3] = nullptr)
 {
     constexpr double kGeomEpsDevice = 1.0e-30;
     const double p0x = nodes_xyz[static_cast<size_t>(n0) * 3u + 0u];
@@ -62,6 +64,22 @@ static __device__ bool dmi_tetra_gradients_device(
         return false;
     }
     volume = fabs(det) / 6.0;
+    const double a1x = fabs(nodes_xyz[static_cast<size_t>(n1) * 3u + 0u]) + fabs(p0x);
+    const double a1y = fabs(nodes_xyz[static_cast<size_t>(n1) * 3u + 1u]) + fabs(p0y);
+    const double a1z = fabs(nodes_xyz[static_cast<size_t>(n1) * 3u + 2u]) + fabs(p0z);
+    const double a2x = fabs(nodes_xyz[static_cast<size_t>(n2) * 3u + 0u]) + fabs(p0x);
+    const double a2y = fabs(nodes_xyz[static_cast<size_t>(n2) * 3u + 1u]) + fabs(p0y);
+    const double a2z = fabs(nodes_xyz[static_cast<size_t>(n2) * 3u + 2u]) + fabs(p0z);
+    const double a3x = fabs(nodes_xyz[static_cast<size_t>(n3) * 3u + 0u]) + fabs(p0x);
+    const double a3y = fabs(nodes_xyz[static_cast<size_t>(n3) * 3u + 1u]) + fabs(p0y);
+    const double a3z = fabs(nodes_xyz[static_cast<size_t>(n3) * 3u + 2u]) + fabs(p0z);
+    if (condition_scale != nullptr) {
+        const double det_scale =
+            a1x * (a2y * a3z + a2z * a3y) +
+            a1y * (a2z * a3x + a2x * a3z) +
+            a1z * (a2x * a3y + a2y * a3x);
+        *condition_scale = fmax(1.0, det_scale / fabs(det));
+    }
     const double inv_det = 1.0 / det;
     grads[1][0] =  (d2y * d3z - d2z * d3y) * inv_det;
     grads[1][1] = -(d2x * d3z - d2z * d3x) * inv_det;
@@ -74,6 +92,23 @@ static __device__ bool dmi_tetra_gradients_device(
     grads[3][2] =  (d1x * d2y - d1y * d2x) * inv_det;
     for (int dir = 0; dir < 3; ++dir) {
         grads[0][dir] = -(grads[1][dir] + grads[2][dir] + grads[3][dir]);
+    }
+    if (gradient_scales != nullptr) {
+        const double inv_det_abs = fabs(inv_det);
+        gradient_scales[1][0] = (a2y*a3z + a2z*a3y) * inv_det_abs;
+        gradient_scales[1][1] = (a2x*a3z + a2z*a3x) * inv_det_abs;
+        gradient_scales[1][2] = (a2x*a3y + a2y*a3x) * inv_det_abs;
+        gradient_scales[2][0] = (a1y*a3z + a1z*a3y) * inv_det_abs;
+        gradient_scales[2][1] = (a1x*a3z + a1z*a3x) * inv_det_abs;
+        gradient_scales[2][2] = (a1x*a3y + a1y*a3x) * inv_det_abs;
+        gradient_scales[3][0] = (a1y*a2z + a1z*a2y) * inv_det_abs;
+        gradient_scales[3][1] = (a1x*a2z + a1z*a2x) * inv_det_abs;
+        gradient_scales[3][2] = (a1x*a2y + a1y*a2x) * inv_det_abs;
+        for (int dir = 0; dir < 3; ++dir) {
+            gradient_scales[0][dir] =
+                gradient_scales[1][dir] + gradient_scales[2][dir] +
+                gradient_scales[3][dir];
+        }
     }
     return true;
 }
@@ -217,17 +252,36 @@ __global__ void dmi_energy_difference_kernel(
     if (magnetic_mask != nullptr && magnetic_mask[e] == 0u) return;
     const size_t base = static_cast<size_t>(e) * 4u;
     const uint32_t nodes[4] = {elements[base], elements[base + 1u], elements[base + 2u], elements[base + 3u]};
-    double grads[4][3], volume = 0.0;
-    if (!dmi_tetra_gradients_device(nodes_xyz, nodes[0], nodes[1], nodes[2], nodes[3], grads, volume)) return;
+    double grads[4][3], gradient_scales[4][3];
+    double volume = 0.0, geometry_condition_scale = 1.0;
+    if (!dmi_tetra_gradients_device(
+            nodes_xyz, nodes[0], nodes[1], nodes[2], nodes[3], grads, volume,
+            &geometry_condition_scale, gradient_scales)) return;
     double d = uniform_d;
-    if (use_d_field && d_field != nullptr) { d = 0.25 * (d_field[nodes[0]] + d_field[nodes[1]] + d_field[nodes[2]] + d_field[nodes[3]]); }
+    double abs_d = fabs(uniform_d);
+    if (use_d_field && d_field != nullptr) {
+        d = 0.25 * (d_field[nodes[0]] + d_field[nodes[1]] + d_field[nodes[2]] + d_field[nodes[3]]);
+        abs_d = 0.25 * (fabs(d_field[nodes[0]]) + fabs(d_field[nodes[1]]) + fabs(d_field[nodes[2]]) + fabs(d_field[nodes[3]]));
+    }
     double s[3] = {}, q[3] = {}, gs[3][3] = {}, gq[3][3] = {};
+    double abs_s[3] = {}, abs_q[3] = {}, abs_gs[3][3] = {}, abs_gq[3][3] = {};
     for (int local = 0; local < 4; ++local) {
         const uint32_t node = nodes[local];
         const double a[3] = {m1x[node] + m0x[node], m1y[node] + m0y[node], m1z[node] + m0z[node]};
         const double b[3] = {m1x[node] - m0x[node], m1y[node] - m0y[node], m1z[node] - m0z[node]};
-        for (int c = 0; c < 3; ++c) for (int dir = 0; dir < 3; ++dir) { gs[c][dir] += a[c] * grads[local][dir]; gq[c][dir] += b[c] * grads[local][dir]; }
-        for (int c = 0; c < 3; ++c) { s[c] += 0.25 * a[c]; q[c] += 0.25 * b[c]; }
+        for (int c = 0; c < 3; ++c) for (int dir = 0; dir < 3; ++dir) {
+            gs[c][dir] += a[c] * grads[local][dir];
+            gq[c][dir] += b[c] * grads[local][dir];
+            abs_gs[c][dir] += fabs(a[c]) *
+                (fabs(grads[local][dir]) + gradient_scales[local][dir]);
+            abs_gq[c][dir] += fabs(b[c]) *
+                (fabs(grads[local][dir]) + gradient_scales[local][dir]);
+        }
+        for (int c = 0; c < 3; ++c) {
+            s[c] += 0.25 * a[c]; q[c] += 0.25 * b[c];
+            abs_s[c] += 0.25 * fabs(a[c]);
+            abs_q[c] += 0.25 * fabs(b[c]);
+        }
     }
     const double divs = gs[0][0] + gs[1][1] + gs[2][2];
     const double divq = gq[0][0] + gq[1][1] + gq[2][2];
@@ -236,6 +290,8 @@ __global__ void dmi_energy_difference_kernel(
     const double gs_n[3] = {nx*gs[0][0]+ny*gs[1][0]+nz*gs[2][0], nx*gs[0][1]+ny*gs[1][1]+nz*gs[2][1], nx*gs[0][2]+ny*gs[1][2]+nz*gs[2][2]};
     const double gq_n[3] = {nx*gq[0][0]+ny*gq[1][0]+nz*gq[2][0], nx*gq[0][1]+ny*gq[1][1]+nz*gq[2][1], nx*gq[0][2]+ny*gq[1][2]+nz*gq[2][2]};
     const double prefactor = 0.5 * d * volume;
+    const double prefactor_scale =
+        0.5 * abs_d * fabs(volume) * geometry_condition_scale;
     double delta = 0.0;
     double absolute_delta = 0.0;
     if (bulk_mode) {
@@ -252,10 +308,17 @@ __global__ void dmi_energy_difference_kernel(
         delta = prefactor *
             (bulk_terms[0] + bulk_terms[1] + bulk_terms[2] +
              bulk_terms[3] + bulk_terms[4] + bulk_terms[5]);
-        absolute_delta = fabs(prefactor) *
+        const double arithmetic_scale =
+            abs_s[0] * (abs_gq[2][1] + abs_gq[1][2]) +
+            abs_s[1] * (abs_gq[0][2] + abs_gq[2][0]) +
+            abs_s[2] * (abs_gq[1][0] + abs_gq[0][1]) +
+            abs_q[0] * (abs_gs[2][1] + abs_gs[1][2]) +
+            abs_q[1] * (abs_gs[0][2] + abs_gs[2][0]) +
+            abs_q[2] * (abs_gs[1][0] + abs_gs[0][1]);
+        absolute_delta = prefactor_scale * (arithmetic_scale +
             (fabs(bulk_terms[0]) + fabs(bulk_terms[1]) +
              fabs(bulk_terms[2]) + fabs(bulk_terms[3]) +
-             fabs(bulk_terms[4]) + fabs(bulk_terms[5]));
+             fabs(bulk_terms[4]) + fabs(bulk_terms[5])));
     } else {
         const double interfacial_terms[8] = {
             snd * divq,
@@ -272,11 +335,22 @@ __global__ void dmi_energy_difference_kernel(
              interfacial_terms[2] + interfacial_terms[3] +
              interfacial_terms[4] + interfacial_terms[5] +
              interfacial_terms[6] + interfacial_terms[7]);
-        absolute_delta = fabs(prefactor) *
+        const double abs_n[3] = {fabs(nx), fabs(ny), fabs(nz)};
+        const double abs_snd = abs_s[0]*abs_n[0] + abs_s[1]*abs_n[1] + abs_s[2]*abs_n[2];
+        const double abs_qnd = abs_q[0]*abs_n[0] + abs_q[1]*abs_n[1] + abs_q[2]*abs_n[2];
+        const double abs_divs = abs_gs[0][0] + abs_gs[1][1] + abs_gs[2][2];
+        const double abs_divq = abs_gq[0][0] + abs_gq[1][1] + abs_gq[2][2];
+        double arithmetic_scale = abs_snd * abs_divq + abs_qnd * abs_divs;
+        for (int c = 0; c < 3; ++c) for (int dir = 0; dir < 3; ++dir) {
+            arithmetic_scale +=
+                abs_s[dir] * abs_n[c] * abs_gq[c][dir] +
+                abs_q[dir] * abs_n[c] * abs_gs[c][dir];
+        }
+        absolute_delta = prefactor_scale * (arithmetic_scale +
             (fabs(interfacial_terms[0]) + fabs(interfacial_terms[1]) +
              fabs(interfacial_terms[2]) + fabs(interfacial_terms[3]) +
              fabs(interfacial_terms[4]) + fabs(interfacial_terms[5]) +
-             fabs(interfacial_terms[6]) + fabs(interfacial_terms[7]));
+             fabs(interfacial_terms[6]) + fabs(interfacial_terms[7])));
     }
     dmi_atomic_add_double(delta_out, delta);
     dmi_atomic_add_double(absolute_out, absolute_delta);

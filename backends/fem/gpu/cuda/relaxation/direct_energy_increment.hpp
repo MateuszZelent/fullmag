@@ -34,6 +34,20 @@ GpuEnergyIncrementOwner gpu_energy_increment_owner(
     const Context &ctx,
     GpuFinalScalarSlot slot);
 
+struct GpuDirectEnergyReductionCounts {
+    size_t local = 0;
+    size_t exchange = 0;
+    size_t interfacial_dmi = 0;
+    size_t bulk_dmi = 0;
+};
+
+bool gpu_direct_energy_reduction_counts(
+    const Context &ctx,
+    size_t node_count,
+    size_t element_count,
+    size_t exchange_nnz,
+    GpuDirectEnergyReductionCounts &counts);
+
 bool gpu_compose_term_complete_energy_difference(
     const Context &ctx,
     const GpuDirectEnergySnapshot &base,
@@ -79,6 +93,9 @@ struct GpuDirectArmijoResult {
     double bulk_dmi_delta_j = 0.0;
     double endpoint_residual_delta_j = 0.0;
     double endpoint_residual_operand_absolute_sum_j = 0.0;
+    double representable_chord_energy_linear_increment_j = 0.0;
+    double armijo_rhs_j = 0.0;
+    bool trial_active_state_unchanged = false;
     relaxation::ArmijoDifferenceDecision decision =
         relaxation::ArmijoDifferenceDecision::Reject;
     bool refinement_attempted = false;
@@ -119,6 +136,30 @@ bool gpu_direct_armijo_evaluate(
     const FemGpuComponentField &base_h_demag,
     const GpuDirectEnergySnapshot &base,
     double armijo_rhs_j,
+    bool track_active_state_change,
+    GpuDirectArmijoResult &result,
+    std::string &reason);
+
+bool gpu_pgbb_precompute_representable_chord_increment(
+    Context &ctx,
+    cudaStream_t stream,
+    int node_count,
+    int block_count,
+    const FemGpuComponentField &base_m,
+    const FemGpuComponentField &trial_m,
+    const FemGpuComponentField &accepted_h_eff,
+    std::string &reason);
+
+bool gpu_direct_pgbb_armijo_evaluate(
+    Context &ctx,
+    cudaStream_t stream,
+    int node_count,
+    int block_count,
+    const FemGpuComponentField &base_m,
+    const FemGpuComponentField &base_h_demag,
+    const GpuDirectEnergySnapshot &base,
+    double armijo_coefficient,
+    bool track_active_state_change,
     GpuDirectArmijoResult &result,
     std::string &reason);
 

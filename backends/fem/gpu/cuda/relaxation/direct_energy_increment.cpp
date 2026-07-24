@@ -24,6 +24,15 @@
 namespace fullmag::fem {
 namespace {
 
+bool checked_add_scaled(size_t &value, size_t count, size_t scale)
+{
+    if (count != 0u && scale > (std::numeric_limits<size_t>::max() - value) / count) {
+        return false;
+    }
+    value += count * scale;
+    return true;
+}
+
 constexpr size_t kDirectLocalDeltaTailSlot = 0;
 constexpr size_t kDirectLocalAbsoluteTailSlot = 1;
 constexpr size_t kDirectDemagDeltaTailSlot = 2;
@@ -34,7 +43,9 @@ constexpr size_t kDirectInterfacialDmiDeltaTailSlot = 6;
 constexpr size_t kDirectInterfacialDmiAbsoluteTailSlot = 7;
 constexpr size_t kDirectBulkDmiDeltaTailSlot = 8;
 constexpr size_t kDirectBulkDmiAbsoluteTailSlot = 9;
-constexpr size_t kDirectEnergyTailSlots = 10;
+constexpr size_t kDirectActiveStateChangeTailSlot = 10;
+constexpr size_t kDirectRepresentableChordTailSlot = 11;
+constexpr size_t kDirectEnergyTailSlots = 12;
 static_assert(
     kGpuFinalScalarSlots + kDirectEnergyTailSlots <= FEM_GPU_SCALAR_RESULT_SLOTS,
     "GPU direct energy batch must fit in the shared scalar result buffer");
@@ -158,6 +169,8 @@ bool direct_difference(
     const FemGpuComponentField &base_m,
     const FemGpuComponentField &base_h_demag,
     const GpuDirectEnergySnapshot &base,
+    bool use_precomputed_representable_chord,
+    bool track_active_state_change,
     GpuDirectArmijoResult &result,
     std::string &reason)
 {
@@ -167,7 +180,12 @@ bool direct_difference(
     double *const tail = gpu.reductions.scalar_result + kGpuFinalScalarSlots;
     if (!cuda_ok(
             cudaMemsetAsync(
-                tail, 0, kDirectEnergyTailSlots * sizeof(double), stream),
+                tail, 0,
+                (use_precomputed_representable_chord
+                     ? kDirectRepresentableChordTailSlot
+                     : kDirectEnergyTailSlots) *
+                    sizeof(double),
+                stream),
             "cudaMemsetAsync GPU direct minimizer scalar tail",
             reason)) {
         return false;
@@ -179,13 +197,22 @@ bool direct_difference(
         gpu.fields.h_demag.x, gpu.fields.h_demag.y, gpu.fields.h_demag.z,
         gpu.fields.h_ext.x, gpu.fields.h_ext.y, gpu.fields.h_ext.z,
         gpu.materials.ms, gpu.materials.ku, gpu.materials.ku2,
+        gpu.materials.kc1, gpu.materials.kc2, gpu.materials.kc3,
         gpu.materials.anisotropy_axis_x, gpu.materials.anisotropy_axis_y,
         gpu.materials.anisotropy_axis_z, gpu.mesh_metrics.lumped_mass,
         gpu.mesh_regions.magnetic_node_mask,
         ctx.demag.enabled, ctx.zeeman.has_external_field,
-        ctx.anisotropy.uniaxial_enabled,
+        ctx.anisotropy.uniaxial_enabled, ctx.anisotropy.cubic_enabled,
         ctx.anisotropy.uniaxial_Ku, ctx.anisotropy.uniaxial_Ku2,
         !ctx.material_fields.Ku_field.empty(), !ctx.material_fields.Ku2_field.empty(),
+        ctx.anisotropy.cubic_Kc1, ctx.anisotropy.cubic_Kc2,
+        ctx.anisotropy.cubic_Kc3,
+        ctx.anisotropy.cubic_axis1[0], ctx.anisotropy.cubic_axis1[1],
+        ctx.anisotropy.cubic_axis1[2], ctx.anisotropy.cubic_axis2[0],
+        ctx.anisotropy.cubic_axis2[1], ctx.anisotropy.cubic_axis2[2],
+        !ctx.material_fields.Kc1_field.empty(),
+        !ctx.material_fields.Kc2_field.empty(),
+        !ctx.material_fields.Kc3_field.empty(),
         gpu.reductions.scalar_workspace,
         gpu.rk.k[1].x,
         gpu.rk.k[1].y,
@@ -271,6 +298,23 @@ bool direct_difference(
         return false;
     }
 
+    if (track_active_state_change) {
+        fullmag_cuda_relax_active_state_change_blocks(
+            base_m.x, base_m.y, base_m.z,
+            gpu.magnetization.m.x, gpu.magnetization.m.y, gpu.magnetization.m.z,
+            gpu.mesh_regions.magnetic_node_mask,
+            gpu.reductions.scalar_workspace,
+            node_count,
+            stream);
+        if (!cuda_launch_ok("launch GPU direct minimizer active-state comparison", reason) ||
+            !reduce_scalar_sum(
+                ctx, stream, gpu.reductions.scalar_workspace, block_count,
+                tail + kDirectActiveStateChangeTailSlot,
+                "launch GPU direct minimizer active-state change reduction", reason)) {
+            return false;
+        }
+    }
+
     std::array<double, FEM_GPU_SCALAR_RESULT_SLOTS> scalars{};
     const size_t read_count = kGpuFinalScalarSlots + kDirectEnergyTailSlots;
     if (!gpu_rk_read_control_scalar_results(
@@ -299,12 +343,29 @@ bool direct_difference(
         scalars[kGpuFinalScalarSlots + kDirectBulkDmiDeltaTailSlot];
     const double bulk_dmi_absolute =
         scalars[kGpuFinalScalarSlots + kDirectBulkDmiAbsoluteTailSlot];
+    const double changed_active_nodes =
+        scalars[kGpuFinalScalarSlots + kDirectActiveStateChangeTailSlot];
+    if (!std::isfinite(changed_active_nodes) || changed_active_nodes < 0.0) {
+        reason = "GPU direct minimizer active-state change reduction is invalid";
+        return false;
+    }
+    result.trial_active_state_unchanged =
+        track_active_state_change && changed_active_nodes == 0.0;
+    result.representable_chord_energy_linear_increment_j =
+        scalars[kGpuFinalScalarSlots + kDirectRepresentableChordTailSlot];
+    if (use_precomputed_representable_chord &&
+        !std::isfinite(result.representable_chord_energy_linear_increment_j)) {
+        reason = "GPU direct minimizer representable-chord increment is non-finite";
+        return false;
+    }
+    const double local_delta =
+        scalars[kGpuFinalScalarSlots + kDirectLocalDeltaTailSlot];
+    const double local_absolute =
+        scalars[kGpuFinalScalarSlots + kDirectLocalAbsoluteTailSlot];
     const double direct_delta =
-        scalars[kGpuFinalScalarSlots + kDirectLocalDeltaTailSlot] +
-        exchange_delta + interfacial_dmi_delta + bulk_dmi_delta;
+        local_delta + exchange_delta + interfacial_dmi_delta + bulk_dmi_delta;
     const double direct_absolute =
-        scalars[kGpuFinalScalarSlots + kDirectLocalAbsoluteTailSlot] +
-        exchange_absolute + interfacial_dmi_absolute + bulk_dmi_absolute;
+        local_absolute + exchange_absolute + interfacial_dmi_absolute + bulk_dmi_absolute;
     result.local_delta_j =
         scalars[kGpuFinalScalarSlots + kDirectLocalDeltaTailSlot];
     result.demag_delta_j =
@@ -313,23 +374,55 @@ bool direct_difference(
         scalars[kGpuFinalScalarSlots + kDirectDemagAbsoluteTailSlot];
     result.demag_roundoff_bound_j =
         relaxation::reduction_roundoff_bound(
-            static_cast<size_t>(node_count) * 3u) *
+            static_cast<size_t>(node_count) * 128u) *
         result.demag_absolute_term_sum_j;
     result.exchange_delta_j = exchange_delta;
     result.interfacial_dmi_delta_j = interfacial_dmi_delta;
     result.bulk_dmi_delta_j = bulk_dmi_delta;
 
-    return gpu_compose_term_complete_energy_difference(
+    GpuDirectEnergyReductionCounts reduction_counts{};
+    if (!gpu_direct_energy_reduction_counts(
+            ctx,
+            static_cast<size_t>(node_count),
+            ctx.mesh.n_elements,
+            static_cast<size_t>(gpu.legacy_exchange.nnz),
+            reduction_counts)) {
+        reason = "GPU direct minimizer energy reduction term count overflow";
+        return false;
+    }
+    if (!gpu_compose_term_complete_energy_difference(
         ctx,
         base,
         trial,
         direct_delta,
         direct_absolute,
-        static_cast<size_t>(node_count) * 3u,
+        0u,
         difference,
         result.endpoint_residual_delta_j,
         result.endpoint_residual_operand_absolute_sum_j,
-        reason);
+        reason)) {
+        return false;
+    }
+    const double owner_roundoff_bound =
+        relaxation::reduction_roundoff_bound(reduction_counts.local) * local_absolute +
+        relaxation::reduction_roundoff_bound(reduction_counts.exchange) * exchange_absolute +
+        relaxation::reduction_roundoff_bound(reduction_counts.interfacial_dmi) * interfacial_dmi_absolute +
+        relaxation::reduction_roundoff_bound(reduction_counts.bulk_dmi) * bulk_dmi_absolute +
+        relaxation::reduction_roundoff_bound(4u) * direct_absolute;
+    const double endpoint_roundoff_bound =
+        relaxation::reduction_roundoff_bound(2u) *
+            result.endpoint_residual_operand_absolute_sum_j +
+        relaxation::reduction_roundoff_bound(4u) *
+            result.endpoint_residual_operand_absolute_sum_j;
+    result.difference.roundoff_bound_joules =
+        owner_roundoff_bound + endpoint_roundoff_bound +
+        relaxation::reduction_roundoff_bound(2u) *
+            result.difference.absolute_term_sum_joules;
+    if (!std::isfinite(result.difference.roundoff_bound_joules)) {
+        reason = "GPU direct minimizer owner-specific roundoff bound is non-finite";
+        return false;
+    }
+    return true;
 }
 
 bool compute_fresh_snapshot(
@@ -381,7 +474,7 @@ GpuEnergyIncrementOwner gpu_energy_increment_owner(
                                                : GpuEnergyIncrementOwner::NotEnergy;
     case GpuFinalScalarSlot::CubicAnisotropyEnergy:
         return ctx.anisotropy.cubic_enabled
-            ? GpuEnergyIncrementOwner::EndpointResidual
+            ? GpuEnergyIncrementOwner::Direct
             : GpuEnergyIncrementOwner::NotEnergy;
     case GpuFinalScalarSlot::MagnetoelasticEnergy:
         return ctx.magnetoelastic.enabled
@@ -400,6 +493,30 @@ GpuEnergyIncrementOwner gpu_energy_increment_owner(
         return GpuEnergyIncrementOwner::Unsupported;
     }
     return GpuEnergyIncrementOwner::Unsupported;
+}
+
+bool gpu_direct_energy_reduction_counts(
+    const Context &ctx,
+    size_t node_count,
+    size_t element_count,
+    size_t exchange_nnz,
+    GpuDirectEnergyReductionCounts &counts)
+{
+    counts = {};
+    if (((ctx.demag.enabled || ctx.zeeman.has_external_field ||
+          ctx.anisotropy.uniaxial_enabled || ctx.anisotropy.cubic_enabled) &&
+         !checked_add_scaled(counts.local, node_count, 512u)) ||
+        (ctx.exchange.enabled &&
+         (!checked_add_scaled(counts.exchange, exchange_nnz, 16u) ||
+          !checked_add_scaled(counts.exchange, node_count, 32u))) ||
+        (ctx.dmi.interfacial_enabled &&
+         !checked_add_scaled(counts.interfacial_dmi, element_count, 512u)) ||
+        (ctx.dmi.bulk_enabled &&
+         !checked_add_scaled(counts.bulk_dmi, element_count, 512u))) {
+        counts = {};
+        return false;
+    }
+    return true;
 }
 
 bool gpu_compose_term_complete_energy_difference(
@@ -591,12 +708,13 @@ bool gpu_direct_armijo_evaluate(
     const FemGpuComponentField &base_h_demag,
     const GpuDirectEnergySnapshot &base,
     double armijo_rhs_j,
+    bool track_active_state_change,
     GpuDirectArmijoResult &result,
     std::string &reason)
 {
     if (!direct_difference(
             ctx, stream, node_count, block_count, base_m, base_h_demag,
-            base, result, reason)) {
+            base, false, track_active_state_change, result, reason)) {
         return false;
     }
     result.decision = relaxation::strict_armijo_difference_decision(
@@ -604,6 +722,67 @@ bool gpu_direct_armijo_evaluate(
     result.refinement_attempted =
         gpu_direct_armijo_demag_refinement_eligible(
             ctx, result, armijo_rhs_j);
+    result.refinement_accepted = false;
+    return true;
+}
+
+bool gpu_pgbb_precompute_representable_chord_increment(
+    Context &ctx,
+    cudaStream_t stream,
+    int node_count,
+    int block_count,
+    const FemGpuComponentField &base_m,
+    const FemGpuComponentField &trial_m,
+    const FemGpuComponentField &accepted_h_eff,
+    std::string &reason)
+{
+    auto &gpu = ctx.gpu_state.device;
+    fullmag_cuda_relax_representable_chord_energy_linear_increment_blocks(
+        base_m.x, base_m.y, base_m.z,
+        trial_m.x, trial_m.y, trial_m.z,
+        accepted_h_eff.x, accepted_h_eff.y, accepted_h_eff.z,
+        gpu.materials.ms, gpu.mesh_metrics.lumped_mass,
+        gpu.mesh_regions.magnetic_node_mask,
+        gpu.reductions.scalar_workspace, node_count, stream);
+    return cuda_launch_ok(
+               "launch GPU PG-BB representable-chord increment", reason) &&
+        reduce_scalar_sum(
+            ctx, stream, gpu.reductions.scalar_workspace, block_count,
+            gpu.reductions.scalar_result + kGpuFinalScalarSlots +
+                kDirectRepresentableChordTailSlot,
+            "launch GPU PG-BB representable-chord reduction", reason);
+}
+
+bool gpu_direct_pgbb_armijo_evaluate(
+    Context &ctx,
+    cudaStream_t stream,
+    int node_count,
+    int block_count,
+    const FemGpuComponentField &base_m,
+    const FemGpuComponentField &base_h_demag,
+    const GpuDirectEnergySnapshot &base,
+    double armijo_coefficient,
+    bool track_active_state_change,
+    GpuDirectArmijoResult &result,
+    std::string &reason)
+{
+    if (!direct_difference(
+            ctx, stream, node_count, block_count, base_m, base_h_demag,
+            base, true, track_active_state_change, result, reason)) {
+        return false;
+    }
+    const double chord =
+        result.representable_chord_energy_linear_increment_j;
+    result.armijo_rhs_j = armijo_coefficient * chord;
+    result.decision =
+        std::isfinite(chord) && chord < 0.0 &&
+            std::isfinite(result.armijo_rhs_j)
+        ? relaxation::strict_armijo_difference_decision(
+              result.difference, result.armijo_rhs_j)
+        : relaxation::ArmijoDifferenceDecision::Reject;
+    result.refinement_attempted =
+        gpu_direct_armijo_demag_refinement_eligible(
+            ctx, result, result.armijo_rhs_j);
     result.refinement_accepted = false;
     return true;
 }
@@ -698,6 +877,8 @@ bool gpu_direct_armijo_refine(
             base_m,
             base_h_demag_scratch,
             refined_base,
+            false,
+            false,
             result,
             reason)) {
         return false;

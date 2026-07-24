@@ -5,14 +5,112 @@
 // entrypoints.
 
 #include "gpu/cuda/exchange/exchange_kernels.hpp"
+#include "gpu/cuda/relaxation/double_double.cuh"
 
 #include <cub/cub.cuh>
 
+#include <cfloat>
 #include <cmath>
 
 namespace fullmag::fem {
 
 static constexpr int kBlockSize = 256;
+
+struct ExchangeDoubleDouble {
+    double hi;
+    double lo;
+};
+
+__device__ __forceinline__ ExchangeDoubleDouble exchange_two_sum(double a, double b)
+{
+    const double hi = a + b;
+    const double b_virtual = hi - a;
+    const double lo = (a - (hi - b_virtual)) + (b - b_virtual);
+    return {hi, lo};
+}
+
+__device__ __forceinline__ ExchangeDoubleDouble exchange_two_diff(double a, double b)
+{
+    const double hi = a - b;
+    const double b_virtual = a - hi;
+    const double lo = (a - (hi + b_virtual)) + (b_virtual - b);
+    return {hi, lo};
+}
+
+__device__ __forceinline__ ExchangeDoubleDouble exchange_dd_add(
+    ExchangeDoubleDouble a,
+    ExchangeDoubleDouble b)
+{
+    const ExchangeDoubleDouble sum = exchange_two_sum(a.hi, b.hi);
+    const ExchangeDoubleDouble correction =
+        exchange_two_sum(sum.lo, a.lo + b.lo);
+    const ExchangeDoubleDouble normalized =
+        exchange_two_sum(sum.hi, correction.hi);
+    return {normalized.hi, normalized.lo + correction.lo};
+}
+
+__device__ __forceinline__ ExchangeDoubleDouble exchange_dd_sub(
+    ExchangeDoubleDouble a,
+    ExchangeDoubleDouble b)
+{
+    return exchange_dd_add(a, {-b.hi, -b.lo});
+}
+
+__device__ __forceinline__ ExchangeDoubleDouble exchange_dd_mul(
+    ExchangeDoubleDouble a,
+    ExchangeDoubleDouble b)
+{
+    const double product = a.hi * b.hi;
+    const double product_error = fma(a.hi, b.hi, -product);
+    const double correction =
+        product_error + a.hi * b.lo + a.lo * b.hi + a.lo * b.lo;
+    return exchange_two_sum(product, correction);
+}
+
+__device__ __forceinline__ ExchangeDoubleDouble exchange_dd_scale(
+    ExchangeDoubleDouble value,
+    double scale)
+{
+    const double product = value.hi * scale;
+    const double correction =
+        fma(value.hi, scale, -product) + value.lo * scale;
+    return exchange_two_sum(product, correction);
+}
+
+__device__ __forceinline__ ExchangeDoubleDouble exchange_polarized_edge_term(
+    double m0_row,
+    double m1_row,
+    double m0_col,
+    double m1_col,
+    double edge_weight)
+{
+    const ExchangeDoubleDouble row_difference = exchange_two_diff(m1_row, m0_row);
+    const ExchangeDoubleDouble col_difference = exchange_two_diff(m1_col, m0_col);
+    const ExchangeDoubleDouble row_sum = exchange_two_sum(m1_row, m0_row);
+    const ExchangeDoubleDouble col_sum = exchange_two_sum(m1_col, m0_col);
+    return exchange_dd_scale(
+        exchange_dd_mul(
+            exchange_dd_sub(row_difference, col_difference),
+            exchange_dd_sub(row_sum, col_sum)),
+        edge_weight);
+}
+
+__device__ __forceinline__ double exchange_polarized_operand_scale(
+    double m0_row,
+    double m1_row,
+    double m0_col,
+    double m1_col)
+{
+    const ExchangeDoubleDouble change_difference = exchange_dd_sub(
+        exchange_two_diff(m1_row, m0_row),
+        exchange_two_diff(m1_col, m0_col));
+    const ExchangeDoubleDouble endpoint_sum_difference = exchange_dd_sub(
+        exchange_two_sum(m1_row, m0_row),
+        exchange_two_sum(m1_col, m0_col));
+    return (fabs(change_difference.hi) + fabs(change_difference.lo)) *
+        (fabs(endpoint_sum_difference.hi) +
+         fabs(endpoint_sum_difference.lo));
+}
 
 __global__ void legacy_sparse_exchange_kernel(
     const uint32_t *__restrict__ csr_row_offsets,
@@ -43,13 +141,22 @@ __global__ void legacy_sparse_exchange_kernel(
         return;
     }
 
-    double km = 0.0;
+    gpu_relax_dd::Value km{0.0, 0.0};
     const uint32_t begin = csr_row_offsets[row];
     const uint32_t end = csr_row_offsets[row + 1];
     for (uint32_t cursor = begin; cursor < end; ++cursor) {
-        km += csr_values[cursor] * m_component[csr_col_indices[cursor]];
+        const uint32_t col = csr_col_indices[cursor];
+        if (col != static_cast<uint32_t>(row)) {
+            km = gpu_relax_dd::add(
+                km,
+                gpu_relax_dd::scale(
+                    gpu_relax_dd::two_diff(
+                        m_component[col], m_component[row]),
+                    csr_values[cursor]));
+        }
     }
-    h_component[row] = -(2.0 / (kMu0 * ms_i)) * km * inv_mass;
+    h_component[row] =
+        -(2.0 / (kMu0 * ms_i)) * gpu_relax_dd::rounded(km) * inv_mass;
 }
 
 __global__ void legacy_sparse_exchange_energy_blocks_kernel(
@@ -65,19 +172,20 @@ __global__ void legacy_sparse_exchange_energy_blocks_kernel(
     const int row = blockIdx.x * blockDim.x + threadIdx.x;
     double local = 0.0;
     if (row < rows) {
-        double kmx = 0.0;
-        double kmy = 0.0;
-        double kmz = 0.0;
         const uint32_t begin = csr_row_offsets[row];
         const uint32_t end = csr_row_offsets[row + 1];
         for (uint32_t cursor = begin; cursor < end; ++cursor) {
             const uint32_t col = csr_col_indices[cursor];
+            if (col == static_cast<uint32_t>(row)) {
+                continue;
+            }
             const double value = csr_values[cursor];
-            kmx += value * mx[col];
-            kmy += value * my[col];
-            kmz += value * mz[col];
+            const double dx = mx[row] - mx[col];
+            const double dy = my[row] - my[col];
+            const double dz = mz[row] - mz[col];
+            local += -0.5 * value *
+                (dx * dx + dy * dy + dz * dz);
         }
-        local = mx[row] * kmx + my[row] * kmy + mz[row] * kmz;
     }
 
     typedef cub::BlockReduce<double, 256> BlockReduce;
@@ -98,19 +206,36 @@ __global__ void legacy_sparse_exchange_difference_blocks_kernel(
     double local = 0.0;
     double local_absolute = 0.0;
     if (row < n) {
-        double ksumx = 0.0, ksumy = 0.0, ksumz = 0.0;
         for (uint32_t p = rows[row]; p < rows[row + 1]; ++p) {
             const uint32_t col = cols[p];
+            if (col == static_cast<uint32_t>(row)) {
+                continue;
+            }
             const double a = values[p];
-            ksumx += a * (m0x[col] + m1x[col]);
-            ksumy += a * (m0y[col] + m1y[col]);
-            ksumz += a * (m0z[col] + m1z[col]);
+            const double edge_weight = -0.5 * a;
+            const ExchangeDoubleDouble term_x_dd = exchange_polarized_edge_term(
+                m0x[row], m1x[row], m0x[col], m1x[col], edge_weight);
+            const ExchangeDoubleDouble term_y_dd = exchange_polarized_edge_term(
+                m0y[row], m1y[row], m0y[col], m1y[col], edge_weight);
+            const ExchangeDoubleDouble term_z_dd = exchange_polarized_edge_term(
+                m0z[row], m1z[row], m0z[col], m1z[col], edge_weight);
+            const double term_x = term_x_dd.hi + term_x_dd.lo;
+            const double term_y = term_y_dd.hi + term_y_dd.lo;
+            const double term_z = term_z_dd.hi + term_z_dd.lo;
+            local += term_x + term_y + term_z;
+            const double input_scale_x = exchange_polarized_operand_scale(
+                m0x[row], m1x[row], m0x[col], m1x[col]);
+            const double input_scale_y = exchange_polarized_operand_scale(
+                m0y[row], m1y[row], m0y[col], m1y[col]);
+            const double input_scale_z = exchange_polarized_operand_scale(
+                m0z[row], m1z[row], m0z[col], m1z[col]);
+            local_absolute +=
+                fabs(term_x_dd.hi) + fabs(term_x_dd.lo) +
+                fabs(term_y_dd.hi) + fabs(term_y_dd.lo) +
+                fabs(term_z_dd.hi) + fabs(term_z_dd.lo) +
+                DBL_EPSILON * fabs(edge_weight) *
+                    (input_scale_x + input_scale_y + input_scale_z);
         }
-        const double term_x = (m1x[row] - m0x[row]) * ksumx;
-        const double term_y = (m1y[row] - m0y[row]) * ksumy;
-        const double term_z = (m1z[row] - m0z[row]) * ksumz;
-        local = term_x + term_y + term_z;
-        local_absolute = fabs(term_x) + fabs(term_y) + fabs(term_z);
     }
     typedef cub::BlockReduce<double, 256> BlockReduce;
     __shared__ typename BlockReduce::TempStorage delta_storage;
@@ -166,7 +291,11 @@ __global__ void periodic_legacy_sparse_exchange_kernel(
         const uint32_t begin = csr_row_offsets[source_row];
         const uint32_t end = csr_row_offsets[source_row + 1];
         for (uint32_t cursor = begin; cursor < end; ++cursor) {
-            km += csr_values[cursor] * m_component[csr_col_indices[cursor]];
+            const uint32_t col = csr_col_indices[cursor];
+            if (col != static_cast<uint32_t>(source_row)) {
+                km += csr_values[cursor] *
+                    (m_component[col] - m_component[source_row]);
+            }
         }
         reduced_km += km;
     }

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 
 namespace fullmag::fem::relaxation {
@@ -17,6 +18,30 @@ inline double reduction_roundoff_bound(std::size_t scalar_term_count)
         return std::numeric_limits<double>::infinity();
     }
     return n_epsilon / (1.0 - n_epsilon);
+}
+
+inline bool all_active_magnetic_dofs_bitwise_unchanged(
+    const double *current_xyz,
+    const double *trial_xyz,
+    const uint8_t *magnetic_node_mask,
+    std::size_t node_count)
+{
+    if (current_xyz == nullptr || trial_xyz == nullptr) {
+        return false;
+    }
+    for (std::size_t node = 0; node < node_count; ++node) {
+        if (magnetic_node_mask != nullptr && magnetic_node_mask[node] == 0u) {
+            continue;
+        }
+        const std::size_t base = 3u * node;
+        if (std::memcmp(
+                current_xyz + base,
+                trial_xyz + base,
+                3u * sizeof(double)) != 0) {
+            return false;
+        }
+    }
+    return true;
 }
 
 inline bool positive_bb_curvature_resolved(
@@ -71,6 +96,25 @@ struct EnergyDifference {
     double absolute_term_sum_joules = 0.0;
     double roundoff_bound_joules = 0.0;
 };
+
+inline bool energy_difference_unrepresentable_at_baseline(
+    double baseline_energy_joules,
+    const EnergyDifference &difference)
+{
+    if (!std::isfinite(baseline_energy_joules) ||
+        !std::isfinite(difference.delta_joules) ||
+        !std::isfinite(difference.roundoff_bound_joules) ||
+        difference.roundoff_bound_joules < 0.0) {
+        return false;
+    }
+    const double lower =
+        difference.delta_joules - difference.roundoff_bound_joules;
+    const double upper =
+        difference.delta_joules + difference.roundoff_bound_joules;
+    return std::isfinite(lower) && std::isfinite(upper) &&
+        baseline_energy_joules + lower == baseline_energy_joules &&
+        baseline_energy_joules + upper == baseline_energy_joules;
+}
 
 inline EnergyDifference compose_term_complete_energy_difference(
     double endpoint_residual_delta_joules,

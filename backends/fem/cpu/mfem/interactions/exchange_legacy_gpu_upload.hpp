@@ -1,6 +1,8 @@
 #pragma once
 
 #include <string>
+#include <cstdint>
+#include <vector>
 
 namespace mfem {
 class SparseMatrix;
@@ -9,6 +11,13 @@ class SparseMatrix;
 namespace fullmag::fem {
 
 struct Context;
+
+bool canonicalize_legacy_exchange_graph_laplacian(
+    const std::vector<uint32_t> &row_offsets,
+    const std::vector<uint32_t> &col_indices,
+    std::vector<double> &values,
+    bool materialize_diagonal,
+    std::string &error);
 
 /*
  * Legacy sparse GPU upload bridge for the native FEM exchange interaction.

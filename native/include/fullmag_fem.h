@@ -510,6 +510,18 @@ typedef struct {
     int32_t cpu_thread_cap_reason;
 } fullmag_fem_step_stats;
 
+#define FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION 1u
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    int32_t accepted_energy_proof_available;
+    double accepted_energy_delta_j;
+    double accepted_energy_roundoff_bound_j;
+    double accepted_energy_delta_upper_j;
+    double armijo_increment_rhs_j;
+} fullmag_fem_accepted_energy_proof_v1;
+
 #define FULLMAG_FEM_SOLVER_ATTEMPT_RECORD_V1_ABI_VERSION 1u
 
 typedef enum {
@@ -1361,6 +1373,11 @@ int fullmag_fem_backend_copy_solver_attempts_v1(
     fullmag_fem_solver_attempt_record_v1 *out_records,
     uint64_t capacity,
     uint64_t *out_count
+);
+
+int fullmag_fem_backend_take_accepted_energy_proof_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_accepted_energy_proof_v1 *out_proof
 );
 
 int fullmag_fem_backend_stage_completion(

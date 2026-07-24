@@ -34,6 +34,7 @@ struct FemGpuAcceptedEvaluationToken {
 };
 
 struct FemGpuRelaxationDeviceState {
+    FemGpuComponentField projected_gradient_accepted_h_eff;
     FemGpuComponentField nonlinear_cg_direction;
     FemGpuComponentField nonlinear_cg_direction_backup;
     uint64_t node_count = 0;

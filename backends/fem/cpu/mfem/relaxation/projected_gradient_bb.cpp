@@ -120,6 +120,7 @@ bool pgbb_refined_armijo_accepts(
     const std::vector<double> &trial_m,
     const relaxation::EnergyDifference &ordinary_difference,
     double armijo_rhs_joules,
+    relaxation::EnergyDifference &accepted_difference,
     fullmag_fem_step_stats &profile_stats,
     std::string &error)
 {
@@ -175,10 +176,12 @@ bool pgbb_refined_armijo_accepts(
     if (!error.empty() || ctx.interrupt.step_interrupted) {
         return false;
     }
-    return relaxation::strict_armijo_difference_refinement_accepts(
-        ordinary_difference,
-        refined_difference,
-        armijo_rhs_joules);
+    const bool accepted = relaxation::strict_armijo_difference_refinement_accepts(
+        ordinary_difference, refined_difference, armijo_rhs_joules);
+    if (accepted) {
+        accepted_difference = refined_difference;
+    }
+    return accepted;
 }
 
 std::string format_projected_gradient_bb_scalar(double value)
@@ -318,10 +321,12 @@ int run_projected_gradient_bb_step(
 
     std::vector<double> previous_m;
     std::vector<double> previous_h_demag;
+    std::vector<double> previous_h_eff;
     {
         ScopedPhaseTimer timer(&profile_stats.relaxation_state_copy_wall_time_ns);
         previous_m = ctx.state.m_xyz;
         previous_h_demag = ctx.demag.h_xyz;
+        previous_h_eff = ctx.effective_field.h_xyz;
     }
     std::vector<double> previous_gradient;
     double g_norm_sq = 0.0;
@@ -395,6 +400,10 @@ int run_projected_gradient_bb_step(
     uint32_t backtracks = 0;
     bool line_search_accepted = false;
     relaxation::EnergyDifference last_direct_difference;
+    relaxation::EnergyDifference accepted_direct_difference;
+    double accepted_armijo_increment_rhs_j = 0.0;
+    double last_armijo_increment_rhs_j = 0.0;
+    bool every_permitted_trial_unchanged = true;
     while (true) {
         {
             ScopedPhaseTimer timer(&profile_stats.relaxation_retraction_wall_time_ns);
@@ -405,79 +414,109 @@ int run_projected_gradient_bb_step(
                 trial_step,
                 trial_m);
         }
-        status = relaxation::upload_and_snapshot(
-            ctx,
-            trial_m,
-            trial_stats,
-            "projected-gradient BB",
-            "trial",
-            error);
-        if (status != FULLMAG_FEM_OK) {
-            const std::string trial_error = error;
-            return relaxation::restore_previous_relaxation_state(
-                ctx,
-                previous_m,
-                "projected-gradient BB",
-                "failed trial snapshot",
-                status,
-                trial_error,
-                error);
-        }
-        relaxation::accumulate_relaxation_profile_sample(profile_stats, trial_stats);
-        const auto direct_difference = pgbb_direct_energy_difference(
-            ctx,
-            previous_m,
-            trial_m,
-            previous_h_demag,
-            current_stats,
-            trial_stats,
-            error);
-        last_direct_difference = direct_difference;
-        if (!error.empty() || ctx.interrupt.step_interrupted) {
-            const bool interrupted = ctx.interrupt.step_interrupted;
-            const std::string difference_error = error.empty()
-                ? "projected-gradient BB direct energy difference interrupted"
-                : error;
-            return relaxation::restore_previous_relaxation_state(
-                ctx,
-                previous_m,
-                "projected-gradient BB",
-                "direct trial energy-difference failure",
-                interrupted ? FULLMAG_FEM_ERR_INTERRUPTED : FULLMAG_FEM_ERR_INTERNAL,
-                difference_error,
-                error);
-        }
-        const double armijo_rhs =
-            relaxation::kArmijoCoefficient * trial_step * direction_dot_gradient;
+        const uint8_t *magnetic_node_mask =
+            ctx.mesh.magnetic_node_mask.empty()
+                ? nullptr
+                : ctx.mesh.magnetic_node_mask.data();
+        const bool trial_unchanged =
+            relaxation::all_active_magnetic_dofs_bitwise_unchanged(
+                previous_m.data(),
+                trial_m.data(),
+                magnetic_node_mask,
+                previous_m.size() / 3u);
+        every_permitted_trial_unchanged =
+            every_permitted_trial_unchanged && trial_unchanged;
         bool armijo = false;
-        {
-            ScopedPhaseTimer timer(&profile_stats.relaxation_line_search_wall_time_ns);
-            const auto decision = relaxation::strict_armijo_difference_decision(
-                direct_difference, armijo_rhs);
-            armijo = decision == relaxation::ArmijoDifferenceDecision::Accept ||
-                (decision == relaxation::ArmijoDifferenceDecision::Refine &&
-                    pgbb_refined_armijo_accepts(
-                        ctx,
-                        previous_m,
-                        trial_m,
-                        direct_difference,
-                        armijo_rhs,
-                        profile_stats,
-                        error));
-        }
-        if (!error.empty() || ctx.interrupt.step_interrupted) {
-            const bool interrupted = ctx.interrupt.step_interrupted;
-            const std::string refinement_error = error.empty()
-                ? "projected-gradient BB refined energy difference interrupted"
-                : error;
-            return relaxation::restore_previous_relaxation_state(
+        if (!trial_unchanged) {
+            status = relaxation::upload_and_snapshot(
+                ctx,
+                trial_m,
+                trial_stats,
+                "projected-gradient BB",
+                "trial",
+                error);
+            if (status != FULLMAG_FEM_OK) {
+                const std::string trial_error = error;
+                return relaxation::restore_previous_relaxation_state(
+                    ctx,
+                    previous_m,
+                    "projected-gradient BB",
+                    "failed trial snapshot",
+                    status,
+                    trial_error,
+                    error);
+            }
+            relaxation::accumulate_relaxation_profile_sample(profile_stats, trial_stats);
+            const auto direct_difference = pgbb_direct_energy_difference(
                 ctx,
                 previous_m,
-                "projected-gradient BB",
-                "refined trial energy-difference failure",
-                interrupted ? FULLMAG_FEM_ERR_INTERRUPTED : FULLMAG_FEM_ERR_INTERNAL,
-                refinement_error,
+                trial_m,
+                previous_h_demag,
+                current_stats,
+                trial_stats,
                 error);
+            last_direct_difference = direct_difference;
+            if (!error.empty() || ctx.interrupt.step_interrupted) {
+                const bool interrupted = ctx.interrupt.step_interrupted;
+                const std::string difference_error = error.empty()
+                    ? "projected-gradient BB direct energy difference interrupted"
+                    : error;
+                return relaxation::restore_previous_relaxation_state(
+                    ctx,
+                    previous_m,
+                    "projected-gradient BB",
+                    "direct trial energy-difference failure",
+                    interrupted ? FULLMAG_FEM_ERR_INTERRUPTED : FULLMAG_FEM_ERR_INTERNAL,
+                    difference_error,
+                    error);
+            }
+            const auto chord_increment =
+                relaxation::representable_chord_energy_linear_increment(
+                    ctx, previous_m, trial_m, previous_h_eff);
+            const double armijo_rhs =
+                relaxation::kArmijoCoefficient * chord_increment.value;
+            last_armijo_increment_rhs_j = armijo_rhs;
+            {
+                ScopedPhaseTimer timer(&profile_stats.relaxation_line_search_wall_time_ns);
+                const auto decision =
+                    std::isfinite(chord_increment.value) &&
+                        chord_increment.value < 0.0
+                    ? relaxation::strict_armijo_difference_decision(
+                          direct_difference, armijo_rhs)
+                    : relaxation::ArmijoDifferenceDecision::Reject;
+                if (decision == relaxation::ArmijoDifferenceDecision::Accept) {
+                    accepted_direct_difference = direct_difference;
+                    armijo = true;
+                } else if (decision == relaxation::ArmijoDifferenceDecision::Refine) {
+                    armijo =
+                        pgbb_refined_armijo_accepts(
+                            ctx,
+                            previous_m,
+                            trial_m,
+                            direct_difference,
+                            armijo_rhs,
+                            accepted_direct_difference,
+                            profile_stats,
+                            error);
+                }
+                if (armijo) {
+                    accepted_armijo_increment_rhs_j = armijo_rhs;
+                }
+            }
+            if (!error.empty() || ctx.interrupt.step_interrupted) {
+                const bool interrupted = ctx.interrupt.step_interrupted;
+                const std::string refinement_error = error.empty()
+                    ? "projected-gradient BB refined energy difference interrupted"
+                    : error;
+                return relaxation::restore_previous_relaxation_state(
+                    ctx,
+                    previous_m,
+                    "projected-gradient BB",
+                    "refined trial energy-difference failure",
+                    interrupted ? FULLMAG_FEM_ERR_INTERRUPTED : FULLMAG_FEM_ERR_INTERNAL,
+                    refinement_error,
+                    error);
+            }
         }
         if (armijo) {
             line_search_accepted = true;
@@ -493,9 +532,17 @@ int run_projected_gradient_bb_step(
         return status;
     }
     if (!line_search_accepted) {
+        if (every_permitted_trial_unchanged) {
+            out_stats = current_stats;
+            out_stats.dt_seconds = 0.0;
+            out_stats.max_rhs_amplitude = 0.0;
+            out_stats.rejected_attempts = backtracks;
+            out_stats.rhs_evaluations = profile_stats.rhs_evaluations;
+            relaxation::publish_representability_stationary_completion(ctx);
+            return FULLMAG_FEM_OK;
+        }
         const double armijo_rhs =
-            current_stats.total_energy_joules +
-            relaxation::kArmijoCoefficient * trial_step * direction_dot_gradient;
+            current_stats.total_energy_joules + last_armijo_increment_rhs_j;
         const std::string diagnostics =
             "current_energy_j=" +
             format_projected_gradient_bb_scalar(current_stats.total_energy_joules) +
@@ -511,7 +558,7 @@ int run_projected_gradient_bb_step(
                 last_direct_difference.delta_joules +
                 last_direct_difference.roundoff_bound_joules) +
             " armijo_increment_rhs_j=" + format_projected_gradient_bb_scalar(
-                relaxation::kArmijoCoefficient * trial_step * direction_dot_gradient) +
+                last_armijo_increment_rhs_j) +
             " last_trial_step=" + format_projected_gradient_bb_scalar(trial_step) +
             " direction_dot_gradient=" +
             format_projected_gradient_bb_scalar(direction_dot_gradient) +
@@ -565,12 +612,39 @@ int run_projected_gradient_bb_step(
             trial_gradient);
     }
 
+    const double accepted_energy_delta_upper_j =
+        accepted_direct_difference.delta_joules +
+        accepted_direct_difference.roundoff_bound_joules;
+    const double armijo_increment_rhs_j = accepted_armijo_increment_rhs_j;
+    if (!std::isfinite(accepted_energy_delta_upper_j) ||
+        !std::isfinite(armijo_increment_rhs_j) ||
+        !(accepted_energy_delta_upper_j <= armijo_increment_rhs_j &&
+          armijo_increment_rhs_j <= 0.0)) {
+        const std::string proof_error =
+            "projected-gradient BB accepted Armijo proof is invalid";
+        return relaxation::restore_previous_relaxation_state(
+            ctx,
+            previous_m,
+            "projected-gradient BB",
+            "accepted Armijo proof validation failure",
+            FULLMAG_FEM_ERR_INTERNAL,
+            proof_error,
+            error);
+    }
     relaxation::finish_accepted_relaxation_step(
         ctx,
         trial_stats,
         profile_stats,
         out_stats,
         trial_step);
+    ctx.relaxation.accepted_energy_proof.available = true;
+    ctx.relaxation.accepted_energy_proof.delta_j =
+        accepted_direct_difference.delta_joules;
+    ctx.relaxation.accepted_energy_proof.roundoff_bound_j =
+        accepted_direct_difference.roundoff_bound_joules;
+    ctx.relaxation.accepted_energy_proof.delta_upper_j =
+        accepted_energy_delta_upper_j;
+    ctx.relaxation.accepted_energy_proof.armijo_rhs_j = armijo_increment_rhs_j;
     relaxation::publish_accepted_gradient_completion(ctx, trial_g_norm_sq);
     return FULLMAG_FEM_OK;
 #else

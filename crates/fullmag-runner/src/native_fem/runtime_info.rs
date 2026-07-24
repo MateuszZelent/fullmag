@@ -193,6 +193,7 @@ pub(crate) fn stage_completion_from_ffi(
         _ => StageStopReason::BackendError,
     };
 
+    let representability_stationary = stage_completion_is_representability_stationary(&completion);
     let (status, converged, metric) = match reason {
         StageStopReason::Torque => ("completed", true, Some(StageMetricKind::MaxTorqueApm)),
         StageStopReason::Energy => (
@@ -204,6 +205,11 @@ pub(crate) fn stage_completion_from_ffi(
         StageStopReason::MaxPseudotime | StageStopReason::MaxPhysicalTime => {
             ("completed", false, Some(StageMetricKind::RelaxationTimeS))
         }
+        StageStopReason::Gradient if representability_stationary => (
+            "completed",
+            false,
+            Some(StageMetricKind::NumericalStagnation),
+        ),
         StageStopReason::Gradient => ("failed", false, Some(StageMetricKind::NumericalStagnation)),
         StageStopReason::UserCancelled => ("cancelled", false, None),
         StageStopReason::BackendError => ("failed", false, None),
@@ -214,6 +220,9 @@ pub(crate) fn stage_completion_from_ffi(
         StageMetricKind::TotalEnergyPlateauRangeJ => "total_energy_plateau_range_J",
         StageMetricKind::RelaxationTimeS => "relaxation_time_s",
         StageMetricKind::Steps => "steps",
+        StageMetricKind::NumericalStagnation if representability_stationary => {
+            "representability_stationary"
+        }
         StageMetricKind::NumericalStagnation => "numerical_stagnation",
     });
 
@@ -234,6 +243,26 @@ pub(crate) fn stage_completion_from_ffi(
             None
         },
     })
+}
+
+pub(crate) fn stage_completion_is_representability_stationary(
+    completion: &ffi::fullmag_fem_stage_completion,
+) -> bool {
+    if completion.has_reason == 0
+        || completion.reason
+            != ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT as i32
+        || completion.has_metric_name == 0
+    {
+        return false;
+    }
+
+    let expected = b"representability_stationary";
+    completion
+        .metric_name
+        .iter()
+        .map(|byte| *byte as u8)
+        .take_while(|byte| *byte != 0)
+        .eq(expected.iter().copied())
 }
 
 #[cfg(test)]
@@ -365,6 +394,35 @@ mod tests {
         );
         assert_eq!(completion.metric_value, Some(0.0));
         assert_eq!(completion.threshold, Some(1.0e-30));
+    }
+
+    #[test]
+    fn stage_completion_from_ffi_maps_representability_stationary_without_convergence() {
+        let completion = stage_completion_from_ffi(ffi::fullmag_fem_stage_completion {
+            has_reason: 1,
+            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT
+                as i32,
+            has_metric_name: 1,
+            metric_name: metric_name("representability_stationary"),
+            metric_value: 1.0,
+            threshold: 1.0,
+            ..Default::default()
+        })
+        .expect("representability-stationary completion should map");
+
+        assert_eq!(completion.status, "completed");
+        assert!(!completion.converged);
+        assert_eq!(completion.reason, Some(StageStopReason::Gradient));
+        assert_eq!(
+            completion.metric,
+            Some(fullmag_ir::StageMetricKind::NumericalStagnation)
+        );
+        assert_eq!(
+            completion.metric_name.as_deref(),
+            Some("representability_stationary")
+        );
+        assert_eq!(completion.metric_value, Some(1.0));
+        assert_eq!(completion.threshold, Some(1.0));
     }
 
     #[test]

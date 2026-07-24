@@ -36,6 +36,26 @@ bool accept_monotone_recovery_step(
         trial.total_energy_joules);
 }
 
+bool track_representable_trial(
+    const Context &ctx,
+    const std::vector<double> &previous_m,
+    const std::vector<double> &trial_m,
+    bool &every_permitted_trial_unchanged)
+{
+    const uint8_t *magnetic_node_mask = ctx.mesh.magnetic_node_mask.empty()
+        ? nullptr
+        : ctx.mesh.magnetic_node_mask.data();
+    const bool trial_unchanged =
+        relaxation::all_active_magnetic_dofs_bitwise_unchanged(
+            previous_m.data(),
+            trial_m.data(),
+            magnetic_node_mask,
+            previous_m.size() / 3u);
+    every_permitted_trial_unchanged =
+        every_permitted_trial_unchanged && trial_unchanged;
+    return trial_unchanged;
+}
+
 double initial_step_size(
     const Context &ctx,
     const std::vector<double> &direction)
@@ -89,6 +109,7 @@ bool retry_nonlinear_cg_line_search_with_restart(
     fullmag_fem_step_stats &trial_stats,
     std::vector<double> &trial_m,
     uint32_t &backtracks,
+    bool &every_permitted_trial_unchanged,
     int &failure_status,
     std::string &error)
 {
@@ -119,6 +140,18 @@ bool retry_nonlinear_cg_line_search_with_restart(
             {
                 ScopedPhaseTimer timer(&profile_stats.relaxation_retraction_wall_time_ns);
                 trial_m = relaxation::retracted_step(ctx, previous_m, direction, trial_step);
+            }
+            if (track_representable_trial(
+                    ctx,
+                    previous_m,
+                    trial_m,
+                    every_permitted_trial_unchanged)) {
+                if (backtracks >= 2u * relaxation::kNonlinearCgMaxBacktracks) {
+                    break;
+                }
+                trial_step *= 0.5;
+                backtracks += 1;
+                continue;
             }
             const int status = relaxation::upload_and_snapshot(
                 ctx,
@@ -176,6 +209,7 @@ bool retry_nonlinear_cg_line_search_with_raw_gradient_restart(
     fullmag_fem_step_stats &trial_stats,
     std::vector<double> &trial_m,
     uint32_t &backtracks,
+    bool &every_permitted_trial_unchanged,
     int &failure_status,
     std::string &error)
 {
@@ -207,6 +241,18 @@ bool retry_nonlinear_cg_line_search_with_raw_gradient_restart(
         {
             ScopedPhaseTimer timer(&profile_stats.relaxation_retraction_wall_time_ns);
             trial_m = relaxation::retracted_step(ctx, previous_m, direction, trial_step);
+        }
+        if (track_representable_trial(
+                ctx,
+                previous_m,
+                trial_m,
+                every_permitted_trial_unchanged)) {
+            if (backtracks >= 3u * relaxation::kNonlinearCgMaxBacktracks) {
+                break;
+            }
+            trial_step *= 0.5;
+            backtracks += 1;
+            continue;
         }
         const int status = relaxation::upload_and_snapshot(
             ctx,
@@ -431,10 +477,23 @@ int run_nonlinear_cg_step(
     int status = FULLMAG_FEM_OK;
     uint32_t backtracks = 0;
     bool line_search_accepted = false;
+    bool every_permitted_trial_unchanged = true;
     while (true) {
         {
             ScopedPhaseTimer timer(&profile_stats.relaxation_retraction_wall_time_ns);
             trial_m = relaxation::retracted_step(ctx, previous_m, direction, trial_step);
+        }
+        if (track_representable_trial(
+                ctx,
+                previous_m,
+                trial_m,
+                every_permitted_trial_unchanged)) {
+            if (backtracks >= relaxation::kNonlinearCgMaxBacktracks) {
+                break;
+            }
+            trial_step *= 0.5;
+            backtracks += 1;
+            continue;
         }
         status = relaxation::upload_and_snapshot(
             ctx,
@@ -487,6 +546,7 @@ int run_nonlinear_cg_step(
                 trial_stats,
                 trial_m,
                 backtracks,
+                every_permitted_trial_unchanged,
                 status,
                 error)) {
             line_search_accepted = true;
@@ -505,6 +565,7 @@ int run_nonlinear_cg_step(
                 trial_stats,
                 trial_m,
                 backtracks,
+                every_permitted_trial_unchanged,
                 status,
                 error)) {
             line_search_accepted = true;
@@ -514,6 +575,15 @@ int run_nonlinear_cg_step(
         return status;
     }
     if (!line_search_accepted) {
+        if (every_permitted_trial_unchanged) {
+            out_stats = current_stats;
+            out_stats.dt_seconds = 0.0;
+            out_stats.max_rhs_amplitude = 0.0;
+            out_stats.rejected_attempts = backtracks;
+            out_stats.rhs_evaluations = profile_stats.rhs_evaluations;
+            relaxation::publish_representability_stationary_completion(ctx);
+            return FULLMAG_FEM_OK;
+        }
         const double armijo_rhs =
             current_stats.total_energy_joules +
             relaxation::kArmijoCoefficient * trial_step * p_dot_g;

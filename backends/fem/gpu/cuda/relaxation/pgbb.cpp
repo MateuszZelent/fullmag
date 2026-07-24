@@ -20,6 +20,7 @@
 #include "gpu/cuda/integrators/rk/rk_scalar_readback.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
+#include "cpu/mfem/relaxation/relaxation_math.hpp"
 #include "gpu/cuda/relaxation/direct_energy_increment.hpp"
 #include "gpu/cuda/relaxation/pgbb_kernels.hpp"
 #include "gpu/cuda/reductions/reduction_kernels.hpp"
@@ -175,6 +176,13 @@ bool gpu_relax_pgbb_preflight(
         gpu.rk.k[1].y == nullptr ||
         gpu.rk.k[1].z == nullptr) {
         reason = "GPU projected-gradient BB requires a second RK scratch field for accepted-step BB curvature";
+        return false;
+    }
+    if (gpu.relaxation.projected_gradient_accepted_h_eff.x == nullptr ||
+        gpu.relaxation.projected_gradient_accepted_h_eff.y == nullptr ||
+        gpu.relaxation.projected_gradient_accepted_h_eff.z == nullptr) {
+        reason =
+            "GPU projected-gradient BB requires persistent accepted-state H_eff storage";
         return false;
     }
     return true;
@@ -535,6 +543,13 @@ int gpu_relax_projected_gradient_bb_step(
         return gpu_relax_restore_previous_magnetization_after_failure(
             ctx, stream, "current direct-energy snapshot failure", reason, error);
     }
+    if (!gpu_rk_copy_component_device(
+            gpu.fields.h_eff, gpu.relaxation.projected_gradient_accepted_h_eff,
+            gpu.lifecycle.node_count, stream,
+            "cudaMemcpyAsync GPU projected-gradient BB backup accepted H_eff", reason)) {
+        return gpu_relax_restore_previous_magnetization_after_failure(
+            ctx, stream, "current accepted H_eff snapshot failure", reason, error);
+    }
     if (gradient_norm_sq == 0.0) {
         out_stats.step = ctx.state.step_count;
         out_stats.time_seconds = 0.0;
@@ -566,6 +581,8 @@ int gpu_relax_projected_gradient_bb_step(
     uint32_t refinement_rhs_evaluations = 0u;
     bool line_search_accepted = false;
     relaxation::EnergyDifference last_direct_difference{};
+    double accepted_armijo_increment_rhs_j = 0.0;
+    double last_armijo_increment_rhs_j = 0.0;
     relaxation::ArmijoDifferenceDecision last_armijo_decision =
         relaxation::ArmijoDifferenceDecision::Reject;
     bool last_refinement_attempted = false;
@@ -577,6 +594,7 @@ int gpu_relax_projected_gradient_bb_step(
     double last_direct_exchange_component = 0.0;
     double last_direct_interfacial_dmi_component = 0.0;
     double last_direct_bulk_dmi_component = 0.0;
+    bool every_permitted_trial_unchanged = true;
     while (true) {
         fullmag_cuda_relax_retract_field(
             gpu.rk.m_backup.x,
@@ -601,8 +619,32 @@ int gpu_relax_projected_gradient_bb_step(
                 n,
                 stream);
         }
-        if (!cuda_launch_ok("launch GPU projected-gradient BB trial retraction", reason) ||
-            !gpu_rk_copy_component_device(
+        if (!cuda_launch_ok("launch GPU projected-gradient BB trial retraction", reason)) {
+            return gpu_relax_restore_previous_magnetization_after_failure(
+                ctx,
+                stream,
+                "trial retraction failure",
+                reason,
+                error);
+        }
+        if (!gpu_pgbb_precompute_representable_chord_increment(
+                ctx,
+                stream,
+                n,
+                blocks,
+                gpu.rk.m_backup,
+                gpu.rk.m_stage,
+                gpu.relaxation.projected_gradient_accepted_h_eff,
+                reason)) {
+            return gpu_relax_restore_previous_magnetization_after_failure(
+                ctx,
+                stream,
+                "trial representable-chord reduction failure",
+                reason,
+                error);
+        }
+        bool armijo = false;
+        if (!gpu_rk_copy_component_device(
                 gpu.rk.m_stage,
                 gpu.magnetization.m,
                 gpu.lifecycle.node_count,
@@ -615,40 +657,41 @@ int gpu_relax_projected_gradient_bb_step(
                 n,
                 blocks,
                 reason)) {
-            return gpu_relax_restore_previous_magnetization_after_failure(
-                ctx,
-                stream,
-                "trial effective-field/energy evaluation failure",
-                reason,
-                error);
-        }
+                return gpu_relax_restore_previous_magnetization_after_failure(
+                    ctx,
+                    stream,
+                    "trial effective-field/energy evaluation failure",
+                    reason,
+                    error);
+            }
         logical_rhs_evaluations += 1u;
 
-        const double armijo_rhs =
-            -kArmijoCoefficient * trial_step * energy_gradient_norm_sq;
         GpuDirectArmijoResult armijo_result{};
-        if (!gpu_direct_armijo_evaluate(
+        if (!gpu_direct_pgbb_armijo_evaluate(
                 ctx, stream, n, blocks, gpu.rk.m_backup, gpu.rk.error,
-                current_snapshot, armijo_rhs, armijo_result, reason)) {
-            return gpu_relax_restore_previous_magnetization_after_failure(
-                ctx, stream, "trial direct-energy evaluation failure", reason, error);
-        }
-        last_direct_difference = armijo_result.difference;
-        last_local_direct_delta = armijo_result.local_delta_j;
-        last_endpoint_residual_delta =
-            armijo_result.endpoint_residual_delta_j;
-        last_endpoint_residual_operand_absolute_sum =
-            armijo_result.endpoint_residual_operand_absolute_sum_j;
-        last_direct_local_component = armijo_result.local_delta_j;
-        last_direct_exchange_component = armijo_result.exchange_delta_j;
-        last_direct_interfacial_dmi_component =
-            armijo_result.interfacial_dmi_delta_j;
-        last_direct_bulk_dmi_component = armijo_result.bulk_dmi_delta_j;
-        last_armijo_decision = armijo_result.decision;
-        last_refinement_attempted = armijo_result.refinement_attempted;
-        last_refinement_accepted = false;
-        if (last_refinement_attempted &&
-            !gpu_direct_armijo_refine(
+                current_snapshot, kArmijoCoefficient, true, armijo_result,
+                reason)) {
+                return gpu_relax_restore_previous_magnetization_after_failure(
+                    ctx, stream, "trial direct-energy evaluation failure", reason, error);
+            }
+            last_direct_difference = armijo_result.difference;
+            const double armijo_rhs = armijo_result.armijo_rhs_j;
+            last_armijo_increment_rhs_j = armijo_rhs;
+            last_local_direct_delta = armijo_result.local_delta_j;
+            last_endpoint_residual_delta =
+                armijo_result.endpoint_residual_delta_j;
+            last_endpoint_residual_operand_absolute_sum =
+                armijo_result.endpoint_residual_operand_absolute_sum_j;
+            last_direct_local_component = armijo_result.local_delta_j;
+            last_direct_exchange_component = armijo_result.exchange_delta_j;
+            last_direct_interfacial_dmi_component =
+                armijo_result.interfacial_dmi_delta_j;
+            last_direct_bulk_dmi_component = armijo_result.bulk_dmi_delta_j;
+            last_armijo_decision = armijo_result.decision;
+            last_refinement_attempted = armijo_result.refinement_attempted;
+            last_refinement_accepted = false;
+            if (last_refinement_attempted &&
+                !gpu_direct_armijo_refine(
                 ctx,
                 stream,
                 n,
@@ -659,25 +702,32 @@ int gpu_relax_projected_gradient_bb_step(
                 armijo_rhs,
                 armijo_result,
                 reason)) {
-            return gpu_relax_restore_previous_magnetization_after_failure(
-                ctx, stream, "trial direct-energy refinement failure", reason, error);
-        }
-        last_refinement_accepted = armijo_result.refinement_accepted;
-        refinement_rhs_evaluations +=
-            armijo_result.refinement_rhs_evaluations;
-        last_trial_energy_j =
-            armijo_result.trial_snapshot.total_energy_j;
-        if (!std::isfinite(last_trial_energy_j)) {
-            return gpu_relax_restore_previous_magnetization_after_failure(
-                ctx,
-                stream,
-                "trial direct-energy validation failure",
-                "GPU projected-gradient BB produced non-finite total energy",
-                error);
-        }
-        const bool armijo =
-            armijo_result.decision == relaxation::ArmijoDifferenceDecision::Accept ||
-            last_refinement_accepted;
+                return gpu_relax_restore_previous_magnetization_after_failure(
+                    ctx, stream, "trial direct-energy refinement failure", reason, error);
+            }
+            last_refinement_accepted = armijo_result.refinement_accepted;
+            refinement_rhs_evaluations +=
+                armijo_result.refinement_rhs_evaluations;
+            last_trial_energy_j = armijo_result.trial_snapshot.total_energy_j;
+            if (!std::isfinite(last_trial_energy_j)) {
+                return gpu_relax_restore_previous_magnetization_after_failure(
+                    ctx,
+                    stream,
+                    "trial direct-energy validation failure",
+                    "GPU projected-gradient BB produced non-finite total energy",
+                    error);
+            }
+            const bool trial_unchanged =
+                armijo_result.trial_active_state_unchanged;
+            every_permitted_trial_unchanged =
+                every_permitted_trial_unchanged && trial_unchanged;
+            armijo = !trial_unchanged &&
+                (armijo_result.decision == relaxation::ArmijoDifferenceDecision::Accept ||
+                 last_refinement_accepted);
+            if (armijo) {
+                last_direct_difference = armijo_result.difference;
+                accepted_armijo_increment_rhs_j = armijo_rhs;
+            }
         if (armijo) {
             line_search_accepted = true;
             break;
@@ -689,9 +739,28 @@ int gpu_relax_projected_gradient_bb_step(
         backtracks += 1;
     }
     if (!line_search_accepted) {
+        if (every_permitted_trial_unchanged) {
+            mark_gpu_relax_pgbb_device_source_of_truth(ctx);
+            out_stats.step = ctx.state.step_count;
+            out_stats.time_seconds = 0.0;
+            out_stats.dt_seconds = 0.0;
+            out_stats.rejected_attempts = backtracks;
+            out_stats.rhs_evaluations = logical_rhs_evaluations;
+            if (!gpu_rk_finalize_step_stats_control_readback(ctx, out_stats, reason)) {
+                error = reason;
+                return FULLMAG_FEM_ERR_INTERNAL;
+            }
+            out_stats.step = ctx.state.step_count;
+            out_stats.time_seconds = 0.0;
+            out_stats.dt_seconds = 0.0;
+            out_stats.max_rhs_amplitude = 0.0;
+            out_stats.rejected_attempts = backtracks;
+            out_stats.rhs_evaluations = logical_rhs_evaluations;
+            relaxation::publish_representability_stationary_completion(ctx);
+            return FULLMAG_FEM_OK;
+        }
         const double armijo_rhs =
-            current_energy -
-                kArmijoCoefficient * trial_step * energy_gradient_norm_sq;
+            current_energy + last_armijo_increment_rhs_j;
         const std::string original_error =
             "GPU projected-gradient BB failed Armijo line search after " +
             std::to_string(backtracks) +
@@ -795,6 +864,29 @@ int gpu_relax_projected_gradient_bb_step(
     out_stats.rejected_attempts = backtracks;
     out_stats.rhs_evaluations =
         logical_rhs_evaluations + refinement_rhs_evaluations;
+    const double accepted_energy_delta_upper_j =
+        last_direct_difference.delta_joules +
+        last_direct_difference.roundoff_bound_joules;
+    const double armijo_increment_rhs_j = accepted_armijo_increment_rhs_j;
+    if (!std::isfinite(accepted_energy_delta_upper_j) ||
+        !std::isfinite(armijo_increment_rhs_j) ||
+        !(accepted_energy_delta_upper_j <= armijo_increment_rhs_j &&
+          armijo_increment_rhs_j <= 0.0)) {
+        return gpu_relax_restore_accepted_step_after_finalize_failure(
+            ctx,
+            stream,
+            rollback,
+            "GPU projected-gradient BB accepted Armijo proof is invalid",
+            error);
+    }
+    ctx.relaxation.accepted_energy_proof.available = true;
+    ctx.relaxation.accepted_energy_proof.delta_j =
+        last_direct_difference.delta_joules;
+    ctx.relaxation.accepted_energy_proof.roundoff_bound_j =
+        last_direct_difference.roundoff_bound_joules;
+    ctx.relaxation.accepted_energy_proof.delta_upper_j =
+        accepted_energy_delta_upper_j;
+    ctx.relaxation.accepted_energy_proof.armijo_rhs_j = armijo_increment_rhs_j;
     update_stage_completion_from_stats(ctx, out_stats);
     return FULLMAG_FEM_OK;
 #else

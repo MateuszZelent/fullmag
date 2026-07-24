@@ -73,12 +73,42 @@ endpoint-total residual. Any remaining endpoint term contributes its explicit
 `trial_q - base_q` and an error bound derived from
 `abs(trial_q) + abs(base_q)`.
 
-The composed interval is compared with the unchanged Armijo right-hand side:
+For a production binary64 retraction, define the representable chord
 
 ```text
-upper_bound <= lambda * c1 * phi_prime_0  -> accept
-lower_bound >  lambda * c1 * phi_prime_0 -> reject
-otherwise                                 -> refine or fail closed
+s = R_m(lambda p)_fp - m.
+```
+
+The right-hand side uses the current ambient energy gradient and the chord
+that the implementation actually produced:
+
+```text
+armijo_rhs = c1 * < -H_eff(m), s >_E
+           = -c1 * mu0 * sum_i Ms_i V_i H_eff_i(m) . s_i.
+```
+
+This is not an energy tolerance. A zero or non-descent chord is rejected, and
+an unchanged chord remains ineligible for acceptance. In exact arithmetic,
+`s = lambda p + O(lambda^2)` for a tangent direction at a unit state, so this
+rule converges to the classical `lambda * c1 * phi_prime_0` contract. In
+binary64 it excludes derivative contributions from components that the
+normalization retraction did not representably change.
+
+CUDA PG-BB snapshots `H_eff(m)` once into persistent algorithm-owned device
+storage before entering the backtracking loop. Every trial chord uses that
+accepted-state snapshot even after trial evaluation overwrites the live field.
+The workspace participates in ordinary device-byte accounting and backend
+teardown; the line-search hot loop adds no allocation, vector readback,
+synchronization, or demag solve.
+
+The composed interval is compared with this strict representable-chord
+right-hand side:
+
+```text
+armijo_rhs < 0 and upper_bound <= armijo_rhs -> accept
+armijo_rhs >= 0                              -> reject
+lower_bound > armijo_rhs                     -> reject
+otherwise                                    -> refine or fail closed
 ```
 
 Resolved uphill increments remain rejected. Ambiguity is never converted into
@@ -93,10 +123,17 @@ remains non-converged.
 - GPU term classification and composition remain in the CUDA relaxation/direct
   increment subsystem.
 - Workflow decisions remain in CPU/GPU PG-BB owners.
-- No physics or cross-cutting state is added to `Context`, `mfem_bridge.cpp`,
-  Rust orchestration, or public ABI.
-- Existing packed PG-BB metrics and Armijo result buffers are reused; the GPU
-  fix adds no baseline host synchronization.
+- `Context::relaxation` owns one bounded `AcceptedEnergyProof` record for the
+  most recently accepted direct-minimizer step. It is algorithm telemetry, not
+  a second physics owner, and is cleared when no accepted proof exists.
+- The versioned native ABI exposes that record through
+  `fullmag_fem_backend_take_accepted_energy_proof_v1`; Rust consumes it once
+  and persists the exact accepted increment, uncertainty bound and Armijo
+  right-hand side.
+- Existing packed PG-BB metrics and Armijo result buffers are reused. CUDA
+  reduces the ambient-gradient chord product on device and includes its scalar
+  in an existing trial decision batch; no trial vector is copied to the host
+  and no baseline host synchronization is added.
 
 ## 5. Public-contract impact
 
@@ -104,7 +141,10 @@ remains non-converged.
 - ProblemIR and normalization: none.
 - Planner and capability language: none.
 - OpenAPI, resources, UI, and script round-trip: none.
-- Runtime ABI and artifacts: no schema change is required.
+- Runtime ABI and artifacts: the additive, versioned accepted-energy-proof ABI
+  and solver-step columns are required so validation uses the decision made by
+  the native solver rather than reconstructing it from rounded endpoint
+  energies.
 - Provenance: benchmark reports pin source manifest, runtime manifest, loaded
   `libfullmag_fem` hash, fixture/mesh identity, device, precision, and policy.
 
@@ -132,6 +172,13 @@ remains non-converged.
 5. Every enabled final energy slot must be classified exactly once.
 6. Rollback, finite checks, direct refinement, BB/restart, and four-sync
    accounting remain covered.
+7. A representably non-unit pinned state must prove that exact tangent
+   projection removes the longitudinal residual while the representable chord
+   omits an unchanged Zeeman component; CPU and real CUDA must produce the
+   same negative chord RHS and strict decision.
+8. At an ordinary scale where every retraction component is representable,
+   the chord RHS must converge to the classical
+   `lambda * c1 * phi_prime_0` value with the expected first-order error.
 
 ### 7.2 Identity-pinned focused A/B
 
@@ -178,4 +225,4 @@ and baseline, but may not replace the Task 8 comparison in place.
 - [x] Failure and rollback semantics documented.
 - [x] Identity-pinned and managed validation defined.
 - [x] Four-sync performance invariant preserved.
-- [ ] Implementation and managed qualification completed.
+- [x] Implementation and managed qualification completed.
