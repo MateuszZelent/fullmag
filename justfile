@@ -2835,7 +2835,7 @@ bench-fem-gpu-demag-amg-profile-sweep:
         trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" "$report_dir" 2>/dev/null || true'\'' EXIT; \
         rm -rf "$report_dir"; mkdir -p "$report_dir"; \
         input_csvs=(); \
-        while IFS=$'\''\t'\'' read -r resolution solver_mesh domain_hmax airbox_hmax solver_mesh_signature; do \
+        while IFS=$'\''\t'\'' read -r resolution solver_mesh domain_hmax airbox_hmax solver_mesh_signature problem_ir_sha256; do \
           for profiler in off on; do \
             if [ "$profiler" = on ]; then export FULLMAG_FEM_STEP_PROFILE=1; profile_args=(--require-gpu-phase-timings); else export FULLMAG_FEM_STEP_PROFILE=0; profile_args=(); fi; \
             export FULLMAG_BENCH_DOMAIN_MESH="$solver_mesh" FULLMAG_BENCH_DOMAIN_HMAX="$domain_hmax" FULLMAG_BENCH_AIRBOX_HMAX="$airbox_hmax"; \
@@ -2858,6 +2858,7 @@ bench-fem-gpu-demag-amg-profile-sweep:
               --relax-torque-tolerance-t 1e-4 \
               --case-timeout-s "$FULLMAG_BENCH_CASE_TIMEOUT_S" \
               --expected-solver-mesh-signature "$solver_mesh_signature" \
+              --qualification-fixture-problem-ir-sha256 "$problem_ir_sha256" \
               --quiet-json-summary ); \
             python3 scripts/analysis/fem_gpu_benchmark.py "${benchmark_args[@]}" --repeat 1 --output "$stem-warmup.csv" --cpu-gpu-summary-output "$stem-warmup-summary.json"; \
             python3 scripts/analysis/fem_gpu_benchmark.py "${benchmark_args[@]}" \
@@ -2880,6 +2881,7 @@ bench-fem-gpu-demag-amg-profile-sweep:
         joined_inputs="$(IFS=,; echo "${input_csvs[*]}")"; \
         python3 scripts/analysis/fem_gpu_benchmark.py \
           --amg-relax-qualification-inputs "$joined_inputs" \
+          --amg-relax-qualification-fixture-suite examples/assets/fem_performance/amg_qualification_suite_v1.json \
           --amg-relax-qualification-output "$report_dir/qualification-summary.json" \
           --amg-relax-cpu-gpu-parity-passed \
           --amg-relax-pcg-symmetry-passed'

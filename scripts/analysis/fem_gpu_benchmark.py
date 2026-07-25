@@ -368,6 +368,15 @@ def amg_policy_physics_pair_failures(
     failures: list[str] = []
     pair_label = f"case={case_label},repeat_index={repeat_index}"
 
+    baseline_problem_ir = baseline.get("executed_problem_ir_sha256")
+    candidate_problem_ir = candidate.get("executed_problem_ir_sha256")
+    if baseline_problem_ir != candidate_problem_ir:
+        failures.append(
+            f"{pair_label} executed_problem_ir_sha256 mismatch: "
+            f"relax_type=18 {baseline_problem_ir!r}, "
+            f"relax_type=6 {candidate_problem_ir!r}"
+        )
+
     baseline_stop = baseline.get("stop_reason")
     candidate_stop = candidate.get("stop_reason")
     if (
@@ -525,6 +534,7 @@ def amg_relax_policy_qualification_summary(
     *,
     cpu_gpu_parity_gate_passed: bool,
     pcg_symmetry_contract_passed: bool,
+    expected_problem_ir_by_solver_mesh_signature: Mapping[str, str],
     expected_repeats: int = 5,
     expected_case_count: int | None = None,
 ) -> dict[str, object]:
@@ -540,10 +550,60 @@ def amg_relax_policy_qualification_summary(
         tuple[object, ...], dict[int, list[Mapping[str, object]]]
     ] = {}
     failures: list[str] = []
+    exact_matrix_identity_ok = True
+    expected_policy = {
+        "demag_linear_solver": "CG",
+        "demag_preconditioner": "AMG",
+        "demag_amg_coarsening": 8,
+        "demag_amg_interpolation": 6,
+        "demag_amg_aggressive_coarsening": 1,
+        "demag_amg_strength_threshold": None,
+        "demag_amg_max_levels": None,
+        "demag_relative_tolerance": 1.0e-12,
+    }
     for row in rows:
         relax_type = as_int(row.get("demag_amg_relax_type"))
         if relax_type not in (18, 6):
             continue
+        signature = str(row.get("solver_mesh_signature") or "")
+        expected_fixture_problem_ir = expected_problem_ir_by_solver_mesh_signature.get(signature)
+        if expected_fixture_problem_ir is None:
+            failures.append(
+                f"solver_mesh_signature={signature!r} is not in the qualification fixture suite"
+            )
+            exact_matrix_identity_ok = False
+        elif (
+            row.get("qualification_fixture_problem_ir_sha256")
+            != expected_fixture_problem_ir
+        ):
+            failures.append(
+                f"solver_mesh_signature={signature},relax_type={relax_type} "
+                "qualification_fixture_problem_ir_sha256 differs from the fixture suite"
+            )
+            exact_matrix_identity_ok = False
+        executed_problem_ir = row.get("executed_problem_ir_sha256")
+        if (
+            not isinstance(executed_problem_ir, str)
+            or len(executed_problem_ir) != 64
+            or any(character not in "0123456789abcdef" for character in executed_problem_ir)
+        ):
+            failures.append(
+                f"solver_mesh_signature={signature},relax_type={relax_type} "
+                "has invalid executed_problem_ir_sha256"
+            )
+            exact_matrix_identity_ok = False
+        for field, expected in expected_policy.items():
+            actual = row.get(field)
+            if field == "demag_relative_tolerance":
+                actual = as_float(actual)
+            elif field.startswith("demag_amg_") and expected is not None:
+                actual = as_int(actual)
+            if actual != expected:
+                failures.append(
+                    f"solver_mesh_signature={signature},relax_type={relax_type} "
+                    f"{field}={actual!r}; expected {expected!r}"
+                )
+                exact_matrix_identity_ok = False
         key = tuple(
             as_bool(row.get(field))
             if field == "step_profiler_enabled"
@@ -757,6 +817,7 @@ def amg_relax_policy_qualification_summary(
             convergence_ok,
             trajectory_ok,
             physics_equivalence_ok,
+            exact_matrix_identity_ok,
             cpu_gpu_parity_gate_passed,
             pcg_symmetry_contract_passed,
             p50_apply_ok,
@@ -775,6 +836,7 @@ def amg_relax_policy_qualification_summary(
         "convergence_gate_passed": convergence_ok,
         "trajectory_gate_passed": trajectory_ok,
         "physics_equivalence_gate_passed": physics_equivalence_ok,
+        "exact_matrix_identity_gate_passed": exact_matrix_identity_ok,
         "cpu_gpu_parity_gate_passed": cpu_gpu_parity_gate_passed,
         "pcg_symmetry_contract_passed": pcg_symmetry_contract_passed,
         "p50_apply_no_regression": p50_apply_ok,
@@ -798,6 +860,7 @@ def write_amg_relax_policy_qualification(
     *,
     cpu_gpu_parity_gate_passed: bool,
     pcg_symmetry_contract_passed: bool,
+    fixture_suite_path: Path,
     expected_case_count: int = 24,
 ) -> dict[str, object]:
     rows = [
@@ -805,10 +868,15 @@ def write_amg_relax_policy_qualification(
         for input_path in input_paths
         for row in load_csv_results(input_path)
     ]
+    fixtures = load_amg_qualification_fixture_suite(fixture_suite_path)
     summary = amg_relax_policy_qualification_summary(
         rows,
         cpu_gpu_parity_gate_passed=cpu_gpu_parity_gate_passed,
         pcg_symmetry_contract_passed=pcg_symmetry_contract_passed,
+        expected_problem_ir_by_solver_mesh_signature={
+            str(fixture["solver_mesh_signature"]): str(fixture["problem_ir_sha256"])
+            for fixture in fixtures
+        },
         expected_case_count=expected_case_count,
     )
     summary["input_paths"] = [str(path) for path in input_paths]
@@ -916,6 +984,7 @@ def print_amg_qualification_fixture_suite(path: Path) -> None:
                     "domain_hmax_m",
                     "airbox_hmax_m",
                     "solver_mesh_signature",
+                    "problem_ir_sha256",
                 )
             )
         )
@@ -2372,6 +2441,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Output JSON for --amg-relax-qualification-inputs",
     )
     parser.add_argument(
+        "--amg-relax-qualification-fixture-suite",
+        type=Path,
+        default=None,
+        help="Fixture suite that defines exact mesh and ProblemIR identity for AMG qualification",
+    )
+    parser.add_argument(
         "--amg-relax-cpu-gpu-parity-passed",
         action="store_true",
         help="Record that every input sweep passed its CPU/GPU parity gate",
@@ -2580,6 +2655,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=str,
         default=None,
         help="Fail if any completed row differs from this fixture solver mesh signature",
+    )
+    parser.add_argument(
+        "--qualification-fixture-problem-ir-sha256",
+        type=str,
+        default=None,
+        help="Record the immutable fixture ProblemIR SHA-256 beside each qualification row",
     )
     parser.add_argument(
         "--gpu-warmup",
@@ -7912,6 +7993,11 @@ def main() -> None:
                 "--amg-relax-qualification-inputs needs "
                 "--amg-relax-qualification-output"
             )
+        if args.amg_relax_qualification_fixture_suite is None:
+            raise SystemExit(
+                "--amg-relax-qualification-inputs needs "
+                "--amg-relax-qualification-fixture-suite"
+            )
         input_paths = [
             Path(value.strip())
             for value in args.amg_relax_qualification_inputs.split(",")
@@ -7924,6 +8010,7 @@ def main() -> None:
             args.amg_relax_qualification_output,
             cpu_gpu_parity_gate_passed=args.amg_relax_cpu_gpu_parity_passed,
             pcg_symmetry_contract_passed=args.amg_relax_pcg_symmetry_passed,
+            fixture_suite_path=args.amg_relax_qualification_fixture_suite,
         )
         return
     if args.write_task8_qualification_identity is not None:
@@ -7983,6 +8070,16 @@ def main() -> None:
         raise SystemExit("--require-fixture-identity needs --fixture-manifest")
     if args.require_fixture_identity and args.fixture_environment is None:
         raise SystemExit("--require-fixture-identity needs --fixture-environment")
+    if args.qualification_fixture_problem_ir_sha256 is not None and (
+        len(args.qualification_fixture_problem_ir_sha256) != 64
+        or any(
+            character not in "0123456789abcdef"
+            for character in args.qualification_fixture_problem_ir_sha256
+        )
+    ):
+        raise SystemExit(
+            "--qualification-fixture-problem-ir-sha256 must contain 64 lowercase hexadecimal characters"
+        )
     repeat_count = max(1, args.repeat)
 
     meshes = resolve_meshes(args.meshes, args.sizes)
@@ -8241,6 +8338,8 @@ def main() -> None:
                                         if (
                                             fixture is not None
                                             or args.task8_qualification_identity is not None
+                                            or args.qualification_fixture_problem_ir_sha256
+                                            is not None
                                         ):
                                             executed_problem_ir = canonical_problem_ir(
                                                 mesh_path=mesh_path,
@@ -8363,6 +8462,13 @@ def main() -> None:
                                                 else:
                                                     continue
                                                 row["repeat_index"] = repeat_index
+                                                if (
+                                                    args.qualification_fixture_problem_ir_sha256
+                                                    is not None
+                                                ):
+                                                    row[
+                                                        "qualification_fixture_problem_ir_sha256"
+                                                    ] = args.qualification_fixture_problem_ir_sha256
                                                 results.append(row)
 
     write_csv(results, args.output)

@@ -62,14 +62,16 @@ Promotion is fail-closed. Type 6 is eligible only if all of the following hold:
 1. every measured row is successful and satisfies its recorded demag residual tolerance;
 2. every projected-gradient BB row has a complete, valid native accepted-Armijo proof and every nonlinear-CG accepted-energy trajectory is monotone;
 3. every exact type-18/type-6 pair for the same case and `repeat_index` has identical configured step budget, benchmark torque target, stop reason, and executed-step completion semantics, each norm defect is at most `1e-9`, and all final scenario energies and torque observables agree within the canonical CPU/GPU consistency tolerances (`energy rtol=1e-6`, `energy atol=1e-30 J`, `torque rtol=1e-6`, `torque atol=1e-9 A/m` and `1e-15 T`);
-4. every paired CPU/GPU parity gate passes on one stable, expected solver mesh;
-5. the managed demag Poisson/PCG symmetry contract passes;
-6. type 6 p50 demag-apply time is no more than 5% slower than type 18 in every case;
-7. type 6 p50 end-to-end time is no more than 5% slower in every case;
-8. type 6 p95 end-to-end time is no more than 5% slower in every case;
-9. the geometric mean of case-level end-to-end p50 ratios improves by at least 5%.
+4. every measured row records the suite's immutable fixture ProblemIR SHA-256 and a valid executed ProblemIR SHA-256; the type-18/type-6 rows in each exact algorithm/backend/mesh/profiler/repeat pair must have the same executed ProblemIR identity;
+5. every row's effective solver is `CG`, preconditioner is `AMG`, rtol is exactly `1e-12`, and coarsening/interpolation/aggressive/strength/max-level values equal the declared matrix; only effective relax type may differ inside a policy pair;
+6. every paired CPU/GPU parity gate passes on one stable, expected solver mesh;
+7. the managed demag Poisson/PCG symmetry contract passes;
+8. type 6 p50 demag-apply time is no more than 5% slower than type 18 in every case;
+9. type 6 p50 end-to-end time is no more than 5% slower in every case;
+10. type 6 p95 end-to-end time is no more than 5% slower in every case;
+11. the geometric mean of case-level end-to-end p50 ratios improves by at least 5%.
 
-The evaluator requires exactly 24 case groups and five measured rows per policy in each group. It also requires exactly one row for each policy and `repeat_index` in `0..4`; aggregate distributions cannot hide a duplicate, missing, or physically divergent repeat. Requested environment values are retained for diagnostics, but policy grouping and promotion use only effective ABI values. For projected-gradient BB, endpoint energy recomputation is diagnostic only: accepted-state subtraction noise reached `8.321139371409497e-22 J`, while all 120 projected-gradient BB rows had native proof available, proof count equal to executed steps, zero invalid proofs, and no invalid-proof details.
+The evaluator requires exactly 24 case groups and five measured rows per policy in each group. It also requires exactly one row for each policy and `repeat_index` in `0..4`; aggregate distributions cannot hide a duplicate, missing, or physically divergent repeat. The suite's `problem_ir_sha256` is the immutable base-fixture identity, while `executed_problem_ir_sha256` is the exact algorithm-specific runtime identity. Both are persisted; the latter must be identical inside each type-18/type-6 pair. Requested environment values are retained for diagnostics, but policy grouping and promotion use only effective ABI values. For projected-gradient BB, endpoint energy recomputation is diagnostic only: accepted-state subtraction noise reached `8.321139371409497e-22 J`, while all 120 projected-gradient BB rows had native proof available, proof count equal to executed steps, zero invalid proofs, and no invalid-proof details.
 
 ## Runtime identity
 
@@ -95,7 +97,7 @@ Focused tests completed before the managed matrix:
 - projected-gradient BB proof fail-closed RED: missing, incomplete, or invalid native proof was not rejected before the algorithm-aware gate was added;
 - paired-policy physics RED: the evaluator exposed no `physics_equivalence_gate_passed` result and accepted type-18/type-6 rows without exact repeat pairing or final-observable comparison;
 - focused paired-policy tests cover pass-at-tolerance, configured-budget and torque-target drift, stop-reason drift, unsupported stopping semantics, executed-step drift, norm-defect violation, missing and mismatched energies, torque drift, and duplicate repeat indices;
-- `just verify-fem-demag-amg-benchmark-contract`: 21 passed, 251 deselected after the paired-policy review correction;
+- `just verify-fem-demag-amg-benchmark-contract`: 32 passed, 251 deselected after the exact matrix-identity review correction;
 - full `scripts/test_validate_fem_relaxation_runtime_log.py`: 272 passed after the paired-policy correction.
 
 Managed native and runtime evidence is recorded after command completion:

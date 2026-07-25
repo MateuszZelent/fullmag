@@ -20,7 +20,7 @@
   "schema": "fullmag.fem_gpu.performance_fixture.v1",
   "solver_mesh_path": "box500_airbox_exchange_demag_v1.mesh.json",
   "solver_mesh_sha256": "9c410c3b02cc86d3a832b923f13b5f9b0ec18c4be2babda148697c6dbc9c105a",
-  "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+  "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
   "stop_condition": {
     "benchmark_only_torque_target_apm": 1e-06,
     "kind": "torque_or_max_steps",

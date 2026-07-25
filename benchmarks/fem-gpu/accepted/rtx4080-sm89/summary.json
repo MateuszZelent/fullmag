@@ -112,7 +112,7 @@
   "pairs": [
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -182,7 +182,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -190,7 +190,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -260,7 +260,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -268,7 +268,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -338,7 +338,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -346,7 +346,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -416,7 +416,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -424,7 +424,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -494,7 +494,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -502,7 +502,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -572,7 +572,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -580,7 +580,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -650,7 +650,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -658,7 +658,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -728,7 +728,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -736,7 +736,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -806,7 +806,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -814,7 +814,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -884,7 +884,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -892,7 +892,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -962,7 +962,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -970,7 +970,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -1040,7 +1040,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -1048,7 +1048,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -1118,7 +1118,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -1126,7 +1126,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -1196,7 +1196,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -1204,7 +1204,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -1274,7 +1274,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -1282,7 +1282,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -1352,7 +1352,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -1360,7 +1360,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -1430,7 +1430,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -1438,7 +1438,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -1508,7 +1508,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -1516,7 +1516,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -1586,7 +1586,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -1594,7 +1594,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -1664,7 +1664,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -1672,7 +1672,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -1742,7 +1742,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -1750,7 +1750,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -1820,7 +1820,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -1828,7 +1828,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -1898,7 +1898,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -1906,7 +1906,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -1976,7 +1976,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -1984,7 +1984,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "box500_airbox_exchange_demag",
         "heun",
         "nonlinear_cg",
@@ -2054,7 +2054,7 @@
       "relaxation_algorithm": "nonlinear_cg",
       "rhs_wall_time_speedup_cpu_over_gpu": null,
       "scenario": "box500_airbox_exchange_demag",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
       "step_wall_time_speedup_cpu_over_gpu": null,
       "steps": 64,
       "timestep_policy": "fixed",
@@ -2064,7 +2064,7 @@
   "performance_distributions": [
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "fem_cpu",
         "/workspace/examples/assets/box_40x20x10_coarse.mesh.json",
         "box500_airbox_exchange_demag",
@@ -2126,7 +2126,7 @@
     },
     {
       "case_key": [
-        "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+        "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
         "fem_gpu",
         "/workspace/examples/assets/box_40x20x10_coarse.mesh.json",
         "box500_airbox_exchange_demag",

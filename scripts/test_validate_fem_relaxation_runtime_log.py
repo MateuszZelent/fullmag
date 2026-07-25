@@ -3936,7 +3936,16 @@ def amg_relax_qualification_rows(
                     "step_profiler_enabled": True,
                     "repeat_index": repeat_index,
                     "status": "ok",
+                    "executed_problem_ir_sha256": "b" * 64,
+                    "qualification_fixture_problem_ir_sha256": "a" * 64,
+                    "demag_linear_solver": "CG",
+                    "demag_preconditioner": "AMG",
                     "demag_amg_relax_type": relax_type,
+                    "demag_amg_coarsening": 8,
+                    "demag_amg_interpolation": 6,
+                    "demag_amg_aggressive_coarsening": 1,
+                    "demag_amg_strength_threshold": None,
+                    "demag_amg_max_levels": None,
                     "demag_solver_apply_wall_time_ms": timing_ms,
                     "wall_time_ms": timing_ms,
                     "demag_final_residual_norm": 1.0e-13,
@@ -3958,6 +3967,72 @@ def amg_relax_qualification_rows(
     return rows
 
 
+def amg_relax_qualification_summary(benchmark, rows):
+    return benchmark.amg_relax_policy_qualification_summary(
+        rows,
+        cpu_gpu_parity_gate_passed=True,
+        pcg_symmetry_contract_passed=True,
+        expected_problem_ir_by_solver_mesh_signature={
+            "mesh-fine": "a" * 64
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "failure_fragment"),
+    [
+        ("demag_linear_solver", "GMRES", "demag_linear_solver"),
+        ("demag_preconditioner", "JACOBI", "demag_preconditioner"),
+        ("demag_amg_coarsening", 10, "demag_amg_coarsening"),
+        ("demag_amg_interpolation", 8, "demag_amg_interpolation"),
+        ("demag_amg_aggressive_coarsening", 0, "demag_amg_aggressive_coarsening"),
+        ("demag_amg_strength_threshold", 0.25, "demag_amg_strength_threshold"),
+        ("demag_amg_max_levels", 25, "demag_amg_max_levels"),
+        ("demag_relative_tolerance", 1.0e-8, "demag_relative_tolerance"),
+        (
+            "qualification_fixture_problem_ir_sha256",
+            "c" * 64,
+            "qualification_fixture_problem_ir_sha256",
+        ),
+        ("executed_problem_ir_sha256", "drifted-ir", "executed_problem_ir_sha256"),
+    ],
+)
+def test_amg_relax_qualification_rejects_exact_matrix_identity_drift(
+    field: str,
+    value: object,
+    failure_fragment: str,
+) -> None:
+    benchmark = load_benchmark_module()
+    rows = amg_relax_qualification_rows()
+    rows[0][field] = value
+
+    summary = amg_relax_qualification_summary(benchmark, rows)
+
+    assert summary["promotion_eligible"] is False
+    assert summary["exact_matrix_identity_gate_passed"] is False
+    assert any(failure_fragment in failure for failure in summary["failures"])
+
+
+def test_amg_relax_qualification_rejects_problem_ir_pair_drift() -> None:
+    benchmark = load_benchmark_module()
+    rows = amg_relax_qualification_rows()
+    candidate = next(
+        row
+        for row in rows
+        if row["demag_amg_relax_type"] == 6 and row["repeat_index"] == 0
+    )
+    candidate["executed_problem_ir_sha256"] = "c" * 64
+
+    summary = amg_relax_qualification_summary(benchmark, rows)
+
+    assert summary["promotion_eligible"] is False
+    assert summary["physics_equivalence_gate_passed"] is False
+    assert any(
+        "executed_problem_ir_sha256 mismatch" in failure
+        for failure in summary["failures"]
+    )
+
+
 def test_amg_relax_qualification_summary_enforces_p50_p95_and_geomean_gates() -> None:
     benchmark = load_benchmark_module()
 
@@ -3967,6 +4042,7 @@ def test_amg_relax_qualification_summary_enforces_p50_p95_and_geomean_gates() ->
         rows,
         cpu_gpu_parity_gate_passed=True,
         pcg_symmetry_contract_passed=True,
+        expected_problem_ir_by_solver_mesh_signature={"mesh-fine": "a" * 64},
     )
     assert summary["promotion_eligible"] is True
     assert summary["geometric_mean_end_to_end_improvement_percent"] == pytest.approx(6.0)
@@ -3979,6 +4055,7 @@ def test_amg_relax_qualification_summary_enforces_p50_p95_and_geomean_gates() ->
         regressed,
         cpu_gpu_parity_gate_passed=True,
         pcg_symmetry_contract_passed=True,
+        expected_problem_ir_by_solver_mesh_signature={"mesh-fine": "a" * 64},
     )
     assert summary["promotion_eligible"] is False
     assert summary["p50_end_to_end_no_regression"] is False
@@ -4007,6 +4084,7 @@ def test_amg_relax_qualification_uses_native_armijo_proof_for_pgbb() -> None:
         rows,
         cpu_gpu_parity_gate_passed=True,
         pcg_symmetry_contract_passed=True,
+        expected_problem_ir_by_solver_mesh_signature={"mesh-fine": "a" * 64},
     )
 
     assert summary["trajectory_gate_passed"] is True
@@ -4044,6 +4122,7 @@ def test_amg_relax_qualification_fails_closed_on_invalid_pgbb_proof(
         rows,
         cpu_gpu_parity_gate_passed=True,
         pcg_symmetry_contract_passed=True,
+        expected_problem_ir_by_solver_mesh_signature={"mesh-fine": "a" * 64},
     )
 
     assert summary["trajectory_gate_passed"] is False
@@ -4067,6 +4146,7 @@ def test_amg_relax_qualification_accepts_paired_physics_with_canonical_tolerance
         rows,
         cpu_gpu_parity_gate_passed=True,
         pcg_symmetry_contract_passed=True,
+        expected_problem_ir_by_solver_mesh_signature={"mesh-fine": "a" * 64},
     )
 
     assert summary["physics_equivalence_gate_passed"] is True
@@ -4109,6 +4189,7 @@ def test_amg_relax_qualification_fails_closed_on_paired_physics_drift(
         rows,
         cpu_gpu_parity_gate_passed=True,
         pcg_symmetry_contract_passed=True,
+        expected_problem_ir_by_solver_mesh_signature={"mesh-fine": "a" * 64},
     )
 
     assert summary["physics_equivalence_gate_passed"] is False
@@ -4126,6 +4207,7 @@ def test_amg_relax_qualification_fails_closed_on_duplicate_repeat_pairing() -> N
         rows,
         cpu_gpu_parity_gate_passed=True,
         pcg_symmetry_contract_passed=True,
+        expected_problem_ir_by_solver_mesh_signature={"mesh-fine": "a" * 64},
     )
 
     assert summary["physics_equivalence_gate_passed"] is False
@@ -4144,6 +4226,7 @@ def test_amg_relax_qualification_fails_closed_on_unknown_completion_semantics() 
         rows,
         cpu_gpu_parity_gate_passed=True,
         pcg_symmetry_contract_passed=True,
+        expected_problem_ir_by_solver_mesh_signature={"mesh-fine": "a" * 64},
     )
 
     assert summary["physics_equivalence_gate_passed"] is False
@@ -4206,10 +4289,13 @@ def test_demag_amg_qualification_suite_and_recipe_cover_the_exact_matrix() -> No
         "--require-cpu-gpu-consistency",
         "--require-stable-solver-mesh",
         "--expected-solver-mesh-signature",
+        "--qualification-fixture-problem-ir-sha256",
         "--amg-relax-qualification-output",
+        "--amg-relax-qualification-fixture-suite",
         "--amg-relax-pcg-symmetry-passed",
     ):
         assert required in recipe
+    assert 'problem_ir_sha256' in recipe
 
 
 def test_demag_convergence_gate_uses_row_requested_rtol_by_default() -> None:
