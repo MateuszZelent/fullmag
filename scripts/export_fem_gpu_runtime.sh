@@ -28,10 +28,12 @@ cd "${REPO_ROOT}"
 : "${FULLMAG_FEM_RUNTIME_CARGO_JOBS:=1}"
 : "${FULLMAG_CUDA_ARCHITECTURES:=80-real;89-real;90-real;90-virtual}"
 : "${FULLMAG_HYPRE_GPU_ARCHITECTURES:=60 70 80 89 90}"
-: "${FULLMAG_FEM_RUNTIME_VARIANT:=candidate-sm89}"
+: "${FULLMAG_HYPRE_MEMORY_VARIANT:=baseline}"
+: "${FULLMAG_FEM_RUNTIME_VARIANT:=hypre-${FULLMAG_HYPRE_MEMORY_VARIANT}}"
 : "${FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY:=8.9}"
 export FULLMAG_CUDA_ARCHITECTURES
 export FULLMAG_HYPRE_GPU_ARCHITECTURES
+export FULLMAG_HYPRE_MEMORY_VARIANT
 FULLMAG_HOST_UID="$(id -u)"
 FULLMAG_HOST_GID="$(id -g)"
 
@@ -600,6 +602,7 @@ docker run --rm --network none \
     --runtime-root "/workspace/${STAGING_RELATIVE}" \
     --variant "${FULLMAG_FEM_RUNTIME_VARIANT}" \
     --requested-cuda-architectures "${FULLMAG_CUDA_ARCHITECTURES}" \
+    --hypre-build-metadata "/opt/fullmag-deps/share/fullmag/hypre-build-metadata.json" \
     --runtime-diagnostics-json "/workspace/${STAGING_RELATIVE}/runtime-diagnostics.json" \
     --docker-image-id "${docker_image_id}" \
     --created-at "${created_at}"

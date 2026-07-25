@@ -1,5 +1,7 @@
 FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS deps
 
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 ARG FULLMAG_CUDA_ARCHITECTURES="80-real;89-real;90-real;90-virtual"
 ARG FULLMAG_HYPRE_GPU_ARCHITECTURES="60 70 80 89 90"
 ENV DEBIAN_FRONTEND=noninteractive
@@ -52,18 +54,71 @@ RUN make -C /tmp/build/libCEED CUDA_DIR=${CUDA_HOME} -j"$(nproc)" && \
     make -C /tmp/build/libCEED CUDA_DIR=${CUDA_HOME} install prefix=${INSTALL_PREFIX}
 
 # S10: Build hypre (serial + CUDA) — required for CG+AMG Poisson solver
+ENV UMPIRE_REF=v2024.07.0
+ARG FULLMAG_HYPRE_MEMORY_VARIANT="baseline"
+ENV FULLMAG_HYPRE_MEMORY_VARIANT=${FULLMAG_HYPRE_MEMORY_VARIANT}
+RUN if [ "${FULLMAG_HYPRE_MEMORY_VARIANT}" = "umpire" ]; then \
+      umpire_cuda_archs="${FULLMAG_HYPRE_GPU_ARCHITECTURES// /;}"; \
+      git clone --depth 1 --branch "${UMPIRE_REF}" --recursive \
+        https://github.com/LLNL/Umpire.git /tmp/build/umpire; \
+      cmake -S /tmp/build/umpire -B /tmp/build/umpire/build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} \
+        -DCMAKE_INSTALL_LIBDIR=lib \
+        -DBUILD_SHARED_LIBS=ON \
+        -DUMPIRE_ENABLE_C=ON \
+        -DUMPIRE_ENABLE_TOOLS=OFF \
+        -DENABLE_CUDA=ON \
+        -DENABLE_HIP=OFF \
+        -DENABLE_BENCHMARKS=OFF \
+        -DENABLE_EXAMPLES=OFF \
+        -DENABLE_DOCS=OFF \
+        -DENABLE_TESTS=OFF \
+        -DCMAKE_CUDA_ARCHITECTURES="${umpire_cuda_archs}"; \
+      cmake --build /tmp/build/umpire/build -j"$(nproc)"; \
+      cmake --install /tmp/build/umpire/build; \
+    fi
+
 RUN git clone --depth 1 --branch ${HYPRE_REF} https://github.com/hypre-space/hypre.git /tmp/build/hypre && \
     cd /tmp/build/hypre/src && \
-    CC=mpicc CXX=mpicxx FC=mpifort \
-    ./configure \
+    base_flags=( \
       --prefix=${INSTALL_PREFIX} \
       --enable-shared \
       --with-openmp \
       --with-cuda \
       --with-gpu-arch="${FULLMAG_HYPRE_GPU_ARCHITECTURES}" \
-      --without-umpire && \
+    ) && \
+    case "${FULLMAG_HYPRE_MEMORY_VARIANT}" in \
+      baseline) variant_flags=(--without-umpire) ;; \
+      umpire) variant_flags=( \
+        --with-umpire \
+        --with-umpire-device \
+        --with-umpire-include=${INSTALL_PREFIX}/include \
+        --with-umpire-lib-dirs=${INSTALL_PREFIX}/lib \
+        --with-umpire-libs="umpire camp" \
+      ) ;; \
+      cuda_async) variant_flags=(--without-umpire --enable-device-malloc-async) ;; \
+      thrust_async) variant_flags=(--without-umpire --enable-thrust-async) ;; \
+      *) echo "unsupported FULLMAG_HYPRE_MEMORY_VARIANT=${FULLMAG_HYPRE_MEMORY_VARIANT}" >&2; exit 2 ;; \
+    esac && \
+    configure_help="$(./configure --help)" && \
+    for flag in "${variant_flags[@]}"; do \
+      option="${flag%%=*}"; \
+      if [[ "${option}" == --with-* || "${option}" == --enable-* ]] && \
+         ! grep -Fq -- "${option}" <<<"${configure_help}"; then \
+        echo "required HYPRE configure flag is unavailable: ${option}" >&2; \
+        exit 2; \
+      fi; \
+    done && \
+    configure_flags=("${base_flags[@]}" "${variant_flags[@]}") && \
+    CC=mpicc CXX=mpicxx FC=mpifort ./configure "${configure_flags[@]}" && \
     make -j"$(nproc)" && \
-    make install
+    make install && \
+    mkdir -p ${INSTALL_PREFIX}/share/fullmag && \
+    HYPRE_MEMORY_VARIANT="${FULLMAG_HYPRE_MEMORY_VARIANT}" \
+    HYPRE_GPU_ARCHITECTURES="${FULLMAG_HYPRE_GPU_ARCHITECTURES}" \
+    HYPRE_CONFIGURE_FLAGS="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${configure_flags[@]}")" \
+    python3 -c 'import hashlib,json,os,re; from pathlib import Path; p=Path(os.environ["INSTALL_PREFIX"])/"include/HYPRE_config.h"; s=p.read_text(); names=("HYPRE_USING_UMPIRE","HYPRE_USING_UMPIRE_DEVICE","HYPRE_USING_DEVICE_MALLOC_ASYNC","HYPRE_USING_THRUST_ASYNC"); macros={n: bool(re.search(r"^#define\s+"+re.escape(n)+r"\s+1(?:\s|$)",s,re.M)) for n in names}; out={"hypre_gpu_architectures":os.environ["HYPRE_GPU_ARCHITECTURES"],"hypre_memory_variant":os.environ["HYPRE_MEMORY_VARIANT"],"hypre_configure_flags":json.loads(os.environ["HYPRE_CONFIGURE_FLAGS"]),"hypre_config_macros":macros,"hypre_config_header_sha256":hashlib.sha256(p.read_bytes()).hexdigest()}; q=Path(os.environ["INSTALL_PREFIX"])/"share/fullmag/hypre-build-metadata.json"; q.write_text(json.dumps(out,indent=2,sort_keys=True)+chr(10))'
 
 RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build \
       -G Ninja \
@@ -152,6 +207,9 @@ RUN curl https://sh.rustup.rs -sSf | bash -s -- -y --default-toolchain nightly
 RUN corepack enable && corepack prepare pnpm@10.8.1 --activate
 
 COPY --from=deps /opt/fullmag-deps /opt/fullmag-deps
+
+ARG FULLMAG_HYPRE_MEMORY_VARIANT="baseline"
+ENV FULLMAG_HYPRE_MEMORY_VARIANT=${FULLMAG_HYPRE_MEMORY_VARIANT}
 
 WORKDIR /workspace
 RUN git config --global --add safe.directory /workspace

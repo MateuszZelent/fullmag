@@ -3936,6 +3936,27 @@ fem-gpu-py-layer-hole-headless:
 rebuild-fem-runtime:
     ./scripts/export_fem_gpu_runtime.sh
 
+# Build and export one immutable, hash-addressed HYPRE memory-strategy bundle.
+# The exporter atomically selects the resulting bundle as fem-gpu-host only
+# after its manifest and CUDA architecture contract have validated.
+build-fem-hypre-memory-variant variant:
+    variant="{{variant}}"; \
+      case "$variant" in baseline|umpire|cuda_async|thrust_async) ;; \
+        *) echo "unsupported HYPRE memory variant: $variant" >&2; exit 2 ;; \
+      esac; \
+      FULLMAG_HYPRE_MEMORY_VARIANT="$variant" \
+      FULLMAG_FEM_RUNTIME_VARIANT="hypre-${variant//_/-}" \
+      ./scripts/export_fem_gpu_runtime.sh
+
+# Build the three variants supported by the pinned HYPRE release. The fourth
+# requested candidate is invoked last and must fail closed if HYPRE 3.1.0 does
+# not expose --enable-thrust-async; it is never silently mapped to baseline.
+build-all-fem-hypre-memory-variants:
+    just build-fem-hypre-memory-variant baseline
+    just build-fem-hypre-memory-variant umpire
+    just build-fem-hypre-memory-variant cuda_async
+    just build-fem-hypre-memory-variant thrust_async
+
 # Backward-compatible alias.
 rebuild-gpu-runtime:
     just rebuild-fem-runtime

@@ -127,6 +127,17 @@ def build_manifest(args: argparse.Namespace) -> Mapping[str, object]:
         }
 
     cuda_toolkit, cuda_compiler = nvcc_metadata(args.nvcc)
+    hypre_build_metadata = json.loads(
+        args.hypre_build_metadata.read_text(encoding="utf-8")
+    )
+    for key in (
+        "hypre_gpu_architectures",
+        "hypre_memory_variant",
+        "hypre_configure_flags",
+        "hypre_config_macros",
+    ):
+        if key not in hypre_build_metadata:
+            raise ValueError(f"HYPRE build metadata is missing {key}")
     loader_contract = {
         "worker": {
             fullmag_loaded_soname: relative_to_runtime(fullmag_path, runtime_root),
@@ -175,6 +186,7 @@ def build_manifest(args: argparse.Namespace) -> Mapping[str, object]:
             "cuda_compiler": cuda_compiler,
             "requested_cuda_architectures": args.requested_cuda_architectures,
             "effective_cuda_architectures": sorted(effective_architectures),
+            **hypre_build_metadata,
         },
         "runtime_diagnostics": {
             "device_name": device_name,
@@ -197,6 +209,7 @@ def main() -> None:
     parser.add_argument("--runtime-root", type=Path, required=True)
     parser.add_argument("--variant", required=True)
     parser.add_argument("--requested-cuda-architectures", required=True)
+    parser.add_argument("--hypre-build-metadata", type=Path, required=True)
     parser.add_argument("--device-name")
     parser.add_argument("--compute-capability")
     parser.add_argument("--driver-version")
