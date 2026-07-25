@@ -226,6 +226,9 @@ DEFAULT_CPU_GPU_TORQUE_RTOL = 1e-6
 DEFAULT_CPU_GPU_TORQUE_ATOL_APM = 1e-9
 DEFAULT_CPU_GPU_TORQUE_ATOL_T = 1e-15
 DEFAULT_CPU_GPU_MAX_STEP_DELTA = 0
+# Shared with validate_fem_relaxation_runtime_log.py's canonical relaxation
+# qualification contract.
+MAX_MAGNETIZATION_NORM_DEFECT = 1.0e-9
 MIN_CONVERGED_DEMAG_POLICIES_FOR_BEST = 2
 DEFAULT_GPU_CONTROL_READBACK_BASE = 3
 DEFAULT_GPU_CONTROL_READBACK_PER_STEP = 4
@@ -320,6 +323,504 @@ def summarize_distribution(values: Sequence[float]) -> dict[str, float | int]:
     }
 
 
+def accepted_energy_trajectory_gate(
+    row: Mapping[str, object],
+) -> tuple[bool, str]:
+    algorithm = first_present(
+        row.get("reported_relaxation_algorithm"),
+        row.get("relaxation_algorithm"),
+    )
+    if algorithm == "projected_gradient_bb":
+        executed_steps = as_int(row.get("executed_steps"))
+        proof_count = as_int(row.get("accepted_energy_proof_count"))
+        invalid_count = as_int(row.get("accepted_energy_proof_invalid_count"))
+        invalid_details = row.get("accepted_energy_proof_invalid_details")
+        if isinstance(invalid_details, str):
+            try:
+                invalid_details = json.loads(invalid_details)
+            except json.JSONDecodeError:
+                invalid_details = None
+        valid = (
+            as_bool(row.get("accepted_energy_proof_available"))
+            and executed_steps is not None
+            and executed_steps > 0
+            and proof_count == executed_steps
+            and invalid_count == 0
+            and isinstance(invalid_details, Sequence)
+            and not isinstance(invalid_details, (str, bytes))
+            and len(invalid_details) == 0
+        )
+        return valid, "accepted Armijo proof is missing or invalid"
+    return (
+        as_bool(row.get("energy_monotonicity_satisfied")),
+        "lacks a monotone accepted-energy trajectory",
+    )
+
+
+def amg_policy_physics_pair_failures(
+    baseline: Mapping[str, object],
+    candidate: Mapping[str, object],
+    *,
+    case_label: str,
+    repeat_index: int,
+) -> list[str]:
+    """Compare one effective type-18/type-6 repeat under canonical physics gates."""
+    failures: list[str] = []
+    pair_label = f"case={case_label},repeat_index={repeat_index}"
+
+    baseline_stop = baseline.get("stop_reason")
+    candidate_stop = candidate.get("stop_reason")
+    if (
+        not isinstance(baseline_stop, str)
+        or not baseline_stop
+        or not isinstance(candidate_stop, str)
+        or not candidate_stop
+    ):
+        failures.append(
+            f"{pair_label} is missing stop_reason: "
+            f"relax_type=18 {baseline_stop!r}, relax_type=6 {candidate_stop!r}"
+        )
+    elif baseline_stop != candidate_stop:
+        failures.append(
+            f"{pair_label} stop_reason mismatch: "
+            f"relax_type=18 {baseline_stop!r}, relax_type=6 {candidate_stop!r}"
+        )
+    elif baseline_stop not in {"torque", "max_steps"}:
+        failures.append(
+            f"{pair_label} has unsupported qualification stop_reason "
+            f"{baseline_stop!r}"
+        )
+
+    baseline_steps = as_int(baseline.get("executed_steps"))
+    candidate_steps = as_int(candidate.get("executed_steps"))
+    if baseline_steps is None or candidate_steps is None:
+        failures.append(
+            f"{pair_label} is missing executed_steps: "
+            f"relax_type=18 {baseline.get('executed_steps')!r}, "
+            f"relax_type=6 {candidate.get('executed_steps')!r}"
+        )
+    elif baseline_steps != candidate_steps:
+        failures.append(
+            f"{pair_label} executed_steps mismatch: "
+            f"relax_type=18 {baseline_steps}, relax_type=6 {candidate_steps}"
+        )
+
+    baseline_max_steps = as_int(baseline.get("steps"))
+    candidate_max_steps = as_int(candidate.get("steps"))
+    if baseline_max_steps is None or candidate_max_steps is None:
+        failures.append(
+            f"{pair_label} is missing configured steps: "
+            f"relax_type=18 {baseline.get('steps')!r}, "
+            f"relax_type=6 {candidate.get('steps')!r}"
+        )
+    elif baseline_max_steps != candidate_max_steps:
+        failures.append(
+            f"{pair_label} configured steps mismatch: "
+            f"relax_type=18 {baseline_max_steps}, relax_type=6 {candidate_max_steps}"
+        )
+
+    baseline_torque_target = as_float(
+        baseline.get("requested_relax_torque_tolerance_apm")
+    )
+    candidate_torque_target = as_float(
+        candidate.get("requested_relax_torque_tolerance_apm")
+    )
+    if (
+        baseline_torque_target is None
+        or candidate_torque_target is None
+        or not math.isfinite(baseline_torque_target)
+        or not math.isfinite(candidate_torque_target)
+        or baseline_torque_target < 0.0
+        or candidate_torque_target < 0.0
+    ):
+        failures.append(f"{pair_label} has invalid requested torque target")
+    elif baseline_torque_target != candidate_torque_target:
+        failures.append(
+            f"{pair_label} requested torque target mismatch: "
+            f"relax_type=18 {baseline_torque_target:.16g}, "
+            f"relax_type=6 {candidate_torque_target:.16g}"
+        )
+
+    for relax_type, row in ((18, baseline), (6, candidate)):
+        executed_steps = as_int(row.get("executed_steps"))
+        max_steps = as_int(row.get("steps"))
+        stop_reason = row.get("stop_reason")
+        if (
+            executed_steps is None
+            or max_steps is None
+            or executed_steps < 1
+            or executed_steps > max_steps
+            or (stop_reason == "max_steps" and executed_steps != max_steps)
+        ):
+            failures.append(
+                f"{pair_label},relax_type={relax_type} has invalid completion "
+                f"semantics: stop_reason={stop_reason!r}, "
+                f"executed_steps={executed_steps!r}, steps={max_steps!r}"
+            )
+        if stop_reason == "torque":
+            final_torque = as_float(row.get("final_torque_apm"))
+            torque_target = as_float(row.get("requested_relax_torque_tolerance_apm"))
+            if (
+                final_torque is None
+                or torque_target is None
+                or not math.isfinite(final_torque)
+                or not math.isfinite(torque_target)
+                or torque_target < 0.0
+                or final_torque > torque_target
+            ):
+                failures.append(
+                    f"{pair_label},relax_type={relax_type} torque stop does not "
+                    "satisfy requested_relax_torque_tolerance_apm"
+                )
+
+        norm_defect = as_float(row.get("norm_defect"))
+        if (
+            norm_defect is None
+            or not math.isfinite(norm_defect)
+            or norm_defect < 0.0
+            or norm_defect > MAX_MAGNETIZATION_NORM_DEFECT
+        ):
+            failures.append(
+                f"{pair_label},relax_type={relax_type} norm_defect exceeds "
+                f"{MAX_MAGNETIZATION_NORM_DEFECT:.1e}: {row.get('norm_defect')!r}"
+            )
+
+    scenario = str(baseline.get("scenario") or "")
+    for field in scenario_energy_fields(scenario):
+        compare_cpu_gpu_numeric_field(
+            baseline,
+            candidate,
+            field,
+            rtol=DEFAULT_CPU_GPU_ENERGY_RTOL,
+            atol=cpu_gpu_energy_atol_for_scenario(
+                scenario,
+                DEFAULT_CPU_GPU_ENERGY_ATOL_J,
+            ),
+            failures=failures,
+            case=(case_label, f"repeat_index={repeat_index}", "relax_type=18/6"),
+        )
+    compare_cpu_gpu_numeric_field(
+        baseline,
+        candidate,
+        "final_torque_apm",
+        rtol=DEFAULT_CPU_GPU_TORQUE_RTOL,
+        atol=DEFAULT_CPU_GPU_TORQUE_ATOL_APM,
+        failures=failures,
+        case=(case_label, f"repeat_index={repeat_index}", "relax_type=18/6"),
+    )
+    compare_cpu_gpu_numeric_field(
+        baseline,
+        candidate,
+        "final_torque_t",
+        rtol=DEFAULT_CPU_GPU_TORQUE_RTOL,
+        atol=DEFAULT_CPU_GPU_TORQUE_ATOL_T,
+        failures=failures,
+        case=(case_label, f"repeat_index={repeat_index}", "relax_type=18/6"),
+    )
+    return failures
+
+
+def amg_relax_policy_qualification_summary(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    cpu_gpu_parity_gate_passed: bool,
+    pcg_symmetry_contract_passed: bool,
+    expected_repeats: int = 5,
+    expected_case_count: int | None = None,
+) -> dict[str, object]:
+    """Evaluate AMG relax type 6 against the retained type 18 baseline."""
+    case_fields = (
+        "backend",
+        "solver_mesh_signature",
+        "scenario",
+        "relaxation_algorithm",
+        "step_profiler_enabled",
+    )
+    grouped: dict[
+        tuple[object, ...], dict[int, list[Mapping[str, object]]]
+    ] = {}
+    failures: list[str] = []
+    for row in rows:
+        relax_type = as_int(row.get("demag_amg_relax_type"))
+        if relax_type not in (18, 6):
+            continue
+        key = tuple(
+            as_bool(row.get(field))
+            if field == "step_profiler_enabled"
+            else row.get(field)
+            for field in case_fields
+        )
+        grouped.setdefault(key, {}).setdefault(relax_type, []).append(row)
+
+    if not grouped:
+        failures.append("qualification contains no effective AMG relax type 18/6 rows")
+    if expected_case_count is not None and len(grouped) != expected_case_count:
+        failures.append(
+            f"qualification has {len(grouped)} cases; expected {expected_case_count}"
+        )
+
+    case_summaries: list[dict[str, object]] = []
+    end_to_end_p50_ratios: list[float] = []
+    p50_apply_ok = True
+    p50_end_to_end_ok = True
+    p95_end_to_end_ok = True
+    convergence_ok = True
+    trajectory_ok = True
+    physics_equivalence_ok = True
+    for key, policy_rows in sorted(grouped.items(), key=lambda item: repr(item[0])):
+        case = dict(zip(case_fields, key))
+        case_label = ",".join(f"{field}={value}" for field, value in case.items())
+        distributions: dict[int, dict[str, dict[str, float | int]]] = {}
+        rows_by_policy_and_repeat: dict[
+            int, dict[int, list[Mapping[str, object]]]
+        ] = {}
+        for relax_type in (18, 6):
+            selected = policy_rows.get(relax_type, [])
+            if len(selected) != expected_repeats:
+                failures.append(
+                    f"case={case_label},relax_type={relax_type} has {len(selected)} "
+                    f"measured repeats; expected {expected_repeats}"
+                )
+                convergence_ok = False
+                continue
+            indexed_rows: dict[int, list[Mapping[str, object]]] = {}
+            for row in selected:
+                repeat_index = as_int(row.get("repeat_index"))
+                if repeat_index is None or not 0 <= repeat_index < expected_repeats:
+                    failures.append(
+                        f"case={case_label},relax_type={relax_type} has invalid "
+                        f"repeat_index={row.get('repeat_index')!r}"
+                    )
+                    physics_equivalence_ok = False
+                    continue
+                indexed_rows.setdefault(repeat_index, []).append(row)
+            rows_by_policy_and_repeat[relax_type] = indexed_rows
+            for repeat_index in range(expected_repeats):
+                repeat_rows = indexed_rows.get(repeat_index, [])
+                if len(repeat_rows) != 1:
+                    failures.append(
+                        f"case={case_label},relax_type={relax_type},"
+                        f"repeat_index={repeat_index} has {len(repeat_rows)} rows; expected 1"
+                    )
+                    physics_equivalence_ok = False
+            apply_values: list[float] = []
+            wall_values: list[float] = []
+            for row in selected:
+                if row.get("status") != "ok":
+                    failures.append(
+                        f"case={case_label},relax_type={relax_type} has non-ok row"
+                    )
+                    convergence_ok = False
+                residual = as_float(row.get("demag_final_residual_norm"))
+                tolerance = as_float(
+                    first_present(
+                        row.get("demag_relative_tolerance"),
+                        row.get("requested_demag_relative_tolerance"),
+                    )
+                )
+                if (
+                    residual is None
+                    or tolerance is None
+                    or not math.isfinite(residual)
+                    or not math.isfinite(tolerance)
+                    or tolerance < 0.0
+                    or residual > tolerance
+                ):
+                    failures.append(
+                        f"case={case_label},relax_type={relax_type} does not satisfy "
+                        "the recorded demag residual tolerance"
+                    )
+                    convergence_ok = False
+                trajectory_valid, trajectory_failure = accepted_energy_trajectory_gate(
+                    row
+                )
+                if not trajectory_valid:
+                    failures.append(
+                        f"case={case_label},relax_type={relax_type} "
+                        f"{trajectory_failure}"
+                    )
+                    trajectory_ok = False
+                apply_ms = as_float(row.get("demag_solver_apply_wall_time_ms"))
+                wall_ms = as_float(row.get("wall_time_ms"))
+                if (
+                    apply_ms is None
+                    or wall_ms is None
+                    or not math.isfinite(apply_ms)
+                    or not math.isfinite(wall_ms)
+                    or apply_ms <= 0.0
+                    or wall_ms <= 0.0
+                ):
+                    failures.append(
+                        f"case={case_label},relax_type={relax_type} has invalid timing"
+                    )
+                    convergence_ok = False
+                    continue
+                apply_values.append(apply_ms)
+                wall_values.append(wall_ms)
+            if len(apply_values) == expected_repeats:
+                distributions[relax_type] = {
+                    "demag_solver_apply_wall_time_ms": summarize_distribution(
+                        apply_values
+                    ),
+                    "wall_time_ms": summarize_distribution(wall_values),
+                }
+
+        paired_repeat_count = 0
+        case_physics_equivalence_ok = True
+        for repeat_index in range(expected_repeats):
+            baseline_rows = rows_by_policy_and_repeat.get(18, {}).get(
+                repeat_index, []
+            )
+            candidate_rows = rows_by_policy_and_repeat.get(6, {}).get(
+                repeat_index, []
+            )
+            if len(baseline_rows) != 1 or len(candidate_rows) != 1:
+                case_physics_equivalence_ok = False
+                continue
+            pair_failures = amg_policy_physics_pair_failures(
+                baseline_rows[0],
+                candidate_rows[0],
+                case_label=case_label,
+                repeat_index=repeat_index,
+            )
+            if pair_failures:
+                failures.extend(pair_failures)
+                case_physics_equivalence_ok = False
+            else:
+                paired_repeat_count += 1
+        physics_equivalence_ok = (
+            physics_equivalence_ok and case_physics_equivalence_ok
+        )
+
+        case_summary: dict[str, object] = {
+            **case,
+            "policies": distributions,
+            "paired_repeat_count": paired_repeat_count,
+            "physics_equivalence_gate_passed": case_physics_equivalence_ok,
+        }
+        if 18 in distributions and 6 in distributions:
+            base_apply = float(
+                distributions[18]["demag_solver_apply_wall_time_ms"]["p50"]
+            )
+            candidate_apply = float(
+                distributions[6]["demag_solver_apply_wall_time_ms"]["p50"]
+            )
+            base_wall_p50 = float(distributions[18]["wall_time_ms"]["p50"])
+            candidate_wall_p50 = float(distributions[6]["wall_time_ms"]["p50"])
+            base_wall_p95 = float(distributions[18]["wall_time_ms"]["p95"])
+            candidate_wall_p95 = float(distributions[6]["wall_time_ms"]["p95"])
+            apply_ratio = candidate_apply / base_apply
+            wall_p50_ratio = candidate_wall_p50 / base_wall_p50
+            wall_p95_ratio = candidate_wall_p95 / base_wall_p95
+            case_summary.update(
+                {
+                    "p50_apply_ratio_6_over_18": apply_ratio,
+                    "p50_end_to_end_ratio_6_over_18": wall_p50_ratio,
+                    "p95_end_to_end_ratio_6_over_18": wall_p95_ratio,
+                }
+            )
+            end_to_end_p50_ratios.append(wall_p50_ratio)
+            p50_apply_ok = p50_apply_ok and apply_ratio <= 1.05
+            p50_end_to_end_ok = p50_end_to_end_ok and wall_p50_ratio <= 1.05
+            p95_end_to_end_ok = p95_end_to_end_ok and wall_p95_ratio <= 1.05
+        case_summaries.append(case_summary)
+
+    geometric_mean_ratio = (
+        math.exp(
+            sum(math.log(ratio) for ratio in end_to_end_p50_ratios)
+            / len(end_to_end_p50_ratios)
+        )
+        if end_to_end_p50_ratios
+        else None
+    )
+    geomean_improvement_ok = (
+        geometric_mean_ratio is not None and geometric_mean_ratio <= 0.95
+    )
+    if not cpu_gpu_parity_gate_passed:
+        failures.append("CPU/GPU parity gate did not pass")
+    if not pcg_symmetry_contract_passed:
+        failures.append("PCG symmetry contract did not pass")
+    if not p50_apply_ok:
+        failures.append("AMG apply p50 regressed by more than 5%")
+    if not p50_end_to_end_ok:
+        failures.append("end-to-end p50 regressed by more than 5%")
+    if not p95_end_to_end_ok:
+        failures.append("end-to-end p95 regressed by more than 5%")
+    if not geomean_improvement_ok:
+        failures.append("end-to-end p50 geometric-mean improvement is below 5%")
+
+    complete_distributions = len(end_to_end_p50_ratios) == len(grouped) and bool(grouped)
+    promotion_eligible = all(
+        (
+            not failures,
+            complete_distributions,
+            convergence_ok,
+            trajectory_ok,
+            physics_equivalence_ok,
+            cpu_gpu_parity_gate_passed,
+            pcg_symmetry_contract_passed,
+            p50_apply_ok,
+            p50_end_to_end_ok,
+            p95_end_to_end_ok,
+            geomean_improvement_ok,
+        )
+    )
+    return {
+        "schema": "fullmag.fem.demag_amg_relax_qualification.v1",
+        "baseline_relax_type": 18,
+        "candidate_relax_type": 6,
+        "case_count": len(grouped),
+        "expected_repeats": expected_repeats,
+        "complete_distributions": complete_distributions,
+        "convergence_gate_passed": convergence_ok,
+        "trajectory_gate_passed": trajectory_ok,
+        "physics_equivalence_gate_passed": physics_equivalence_ok,
+        "cpu_gpu_parity_gate_passed": cpu_gpu_parity_gate_passed,
+        "pcg_symmetry_contract_passed": pcg_symmetry_contract_passed,
+        "p50_apply_no_regression": p50_apply_ok,
+        "p50_end_to_end_no_regression": p50_end_to_end_ok,
+        "p95_end_to_end_no_regression": p95_end_to_end_ok,
+        "geometric_mean_end_to_end_improvement_percent": (
+            None
+            if geometric_mean_ratio is None
+            else (1.0 - geometric_mean_ratio) * 100.0
+        ),
+        "geometric_mean_improvement_gate_passed": geomean_improvement_ok,
+        "promotion_eligible": promotion_eligible,
+        "failures": failures,
+        "cases": case_summaries,
+    }
+
+
+def write_amg_relax_policy_qualification(
+    input_paths: Sequence[Path],
+    output_path: Path,
+    *,
+    cpu_gpu_parity_gate_passed: bool,
+    pcg_symmetry_contract_passed: bool,
+    expected_case_count: int = 24,
+) -> dict[str, object]:
+    rows = [
+        row
+        for input_path in input_paths
+        for row in load_csv_results(input_path)
+    ]
+    summary = amg_relax_policy_qualification_summary(
+        rows,
+        cpu_gpu_parity_gate_passed=cpu_gpu_parity_gate_passed,
+        pcg_symmetry_contract_passed=pcg_symmetry_contract_passed,
+        expected_case_count=expected_case_count,
+    )
+    summary["input_paths"] = [str(path) for path in input_paths]
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    print(f"AMG_RELAX_QUALIFICATION={json.dumps(summary, sort_keys=True)}", flush=True)
+    return summary
+
+
 def load_fixture_manifest(
     path: Path,
     *,
@@ -360,6 +861,64 @@ def load_fixture_manifest(
         demag_policy=dict(payload["demag_policy"]),
         stop_condition=dict(payload["stop_condition"]),
     )
+
+
+def load_amg_qualification_fixture_suite(path: Path) -> list[dict[str, object]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("schema") != PERFORMANCE_FIXTURE_SUITE_SCHEMA:
+        raise ValueError("unsupported FEM AMG qualification fixture suite schema")
+    fixtures = payload.get("fixtures")
+    if not isinstance(fixtures, list) or len(fixtures) != 3:
+        raise ValueError("FEM AMG qualification fixture suite requires three fixtures")
+    if [fixture.get("resolution") for fixture in fixtures] != [
+        "coarse",
+        "medium",
+        "fine",
+    ]:
+        raise ValueError("FEM AMG qualification fixture suite resolutions must be exact")
+    resolved: list[dict[str, object]] = []
+    for fixture in fixtures:
+        runtime_signature = fixture.get("solver_mesh_signature")
+        if (
+            not isinstance(runtime_signature, str)
+            or len(runtime_signature) != 64
+            or any(character not in "0123456789abcdef" for character in runtime_signature)
+        ):
+            raise ValueError(
+                "FEM AMG qualification runtime solver mesh signature must contain "
+                "64 lowercase hexadecimal characters"
+            )
+        mesh_path = path.parent / str(fixture.get("solver_mesh_path"))
+        mesh_bytes = mesh_path.read_bytes()
+        if hashlib.sha256(mesh_bytes).hexdigest() != fixture.get("solver_mesh_sha256"):
+            raise ValueError(
+                f"FEM AMG qualification mesh sha256 mismatch: {mesh_path}"
+            )
+        mesh = json.loads(mesh_bytes)
+        if len(mesh.get("nodes", [])) != fixture.get("node_count") or len(
+            mesh.get("elements", [])
+        ) != fixture.get("element_count"):
+            raise ValueError(
+                f"FEM AMG qualification mesh size mismatch: {mesh_path}"
+            )
+        resolved.append({**fixture, "solver_mesh_path": str(mesh_path)})
+    return resolved
+
+
+def print_amg_qualification_fixture_suite(path: Path) -> None:
+    for fixture in load_amg_qualification_fixture_suite(path):
+        print(
+            "\t".join(
+                str(fixture[field])
+                for field in (
+                    "resolution",
+                    "solver_mesh_path",
+                    "domain_hmax_m",
+                    "airbox_hmax_m",
+                    "solver_mesh_signature",
+                )
+            )
+        )
 
 
 def verify_fixture_row(
@@ -1795,6 +2354,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Optional JSON output path for paired FEM CPU/GPU consistency and timing summary",
     )
     parser.add_argument(
+        "--amg-relax-qualification-inputs",
+        type=str,
+        default=None,
+        help="Comma-separated benchmark CSVs to evaluate for AMG relax 6 promotion",
+    )
+    parser.add_argument(
+        "--list-amg-qualification-fixture-suite",
+        type=Path,
+        default=None,
+        help="Validate an AMG qualification fixture suite, print TSV rows, and exit",
+    )
+    parser.add_argument(
+        "--amg-relax-qualification-output",
+        type=Path,
+        default=None,
+        help="Output JSON for --amg-relax-qualification-inputs",
+    )
+    parser.add_argument(
+        "--amg-relax-cpu-gpu-parity-passed",
+        action="store_true",
+        help="Record that every input sweep passed its CPU/GPU parity gate",
+    )
+    parser.add_argument(
+        "--amg-relax-pcg-symmetry-passed",
+        action="store_true",
+        help="Record that the managed PCG symmetry contract passed",
+    )
+    parser.add_argument(
         "--task8-qualification-identity",
         type=Path,
         default=None,
@@ -1987,6 +2574,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--require-stable-solver-mesh",
         action="store_true",
         help="Fail if repeated rows for the same logical case produce different solver mesh signatures",
+    )
+    parser.add_argument(
+        "--expected-solver-mesh-signature",
+        type=str,
+        default=None,
+        help="Fail if any completed row differs from this fixture solver mesh signature",
     )
     parser.add_argument(
         "--gpu-warmup",
@@ -2310,7 +2903,11 @@ def cpu_gpu_case_manifests(
 def benchmark_mesh_env(args: argparse.Namespace) -> dict[str, str]:
     env = {
         key: value
-        for key in ("FULLMAG_BENCH_DOMAIN_HMAX", "FULLMAG_BENCH_AIRBOX_HMAX")
+        for key in (
+            "FULLMAG_BENCH_DOMAIN_HMAX",
+            "FULLMAG_BENCH_AIRBOX_HMAX",
+            "FULLMAG_BENCH_DOMAIN_MESH",
+        )
         if (value := os.environ.get(key))
     }
     if args.gmsh_threads is not None:
@@ -3843,6 +4440,9 @@ def run_backend(
         )
     env = os.environ.copy()
     env.update(extra_env)
+    row["step_profiler_enabled"] = env_flag_enabled(
+        env_text(env, "FULLMAG_FEM_STEP_PROFILE")
+    )
     if backend_label != "fem_gpu":
         env.pop("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC", None)
         env.pop("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_HOST_SYNC", None)
@@ -5833,34 +6433,34 @@ def single_backend_case_key(row: Mapping[str, object]) -> tuple[object, ...]:
         row.get("integrator"),
         row.get("timestep_policy"),
         row.get("requested_cpu_thread_spec"),
-        first_present(row.get("requested_demag_solver"), row.get("demag_linear_solver")),
+        first_present(row.get("demag_linear_solver"), row.get("requested_demag_solver")),
         first_present(
-            row.get("requested_demag_preconditioner"),
             row.get("demag_preconditioner"),
+            row.get("requested_demag_preconditioner"),
         ),
         first_present(
-            row.get("requested_demag_amg_relax_type"),
             row.get("demag_amg_relax_type"),
+            row.get("requested_demag_amg_relax_type"),
         ),
         first_present(
-            row.get("requested_demag_amg_coarsening"),
             row.get("demag_amg_coarsening"),
+            row.get("requested_demag_amg_coarsening"),
         ),
         first_present(
-            row.get("requested_demag_amg_interpolation"),
             row.get("demag_amg_interpolation"),
+            row.get("requested_demag_amg_interpolation"),
         ),
         first_present(
-            row.get("requested_demag_amg_aggressive_coarsening"),
             row.get("demag_amg_aggressive_coarsening"),
+            row.get("requested_demag_amg_aggressive_coarsening"),
         ),
         first_present(
-            row.get("requested_demag_amg_strength_threshold"),
             row.get("demag_amg_strength_threshold"),
+            row.get("requested_demag_amg_strength_threshold"),
         ),
         first_present(
-            row.get("requested_demag_amg_max_levels"),
             row.get("demag_amg_max_levels"),
+            row.get("requested_demag_amg_max_levels"),
         ),
     )
 
@@ -5869,22 +6469,22 @@ def single_backend_case_label(row: Mapping[str, object]) -> str:
     scenario = str(row.get("scenario") or "-")
     relaxation_algorithm = row_relaxation_algorithm(row)
     parts = [summary_case_key(scenario, relaxation_algorithm), str(row.get("backend") or "-")]
-    solver = first_present(row.get("requested_demag_solver"), row.get("demag_linear_solver"))
+    solver = first_present(row.get("demag_linear_solver"), row.get("requested_demag_solver"))
     preconditioner = first_present(
-        row.get("requested_demag_preconditioner"),
         row.get("demag_preconditioner"),
+        row.get("requested_demag_preconditioner"),
     )
     if solver or preconditioner:
         parts.append(f"{solver or '-'}/{preconditioner or '-'}")
     if preconditioner in {"AMG", "OMIT"}:
         parts.append(
             "amg="
-            f"{first_present(row.get('requested_demag_amg_relax_type'), row.get('demag_amg_relax_type')) or '-'}/"
-            f"{first_present(row.get('requested_demag_amg_coarsening'), row.get('demag_amg_coarsening')) or '-'}/"
-            f"{first_present(row.get('requested_demag_amg_interpolation'), row.get('demag_amg_interpolation')) or '-'}/"
-            f"{first_present(row.get('requested_demag_amg_aggressive_coarsening'), row.get('demag_amg_aggressive_coarsening')) or '-'}/"
-            f"{first_present(row.get('requested_demag_amg_strength_threshold'), row.get('demag_amg_strength_threshold')) or '-'}/"
-            f"{first_present(row.get('requested_demag_amg_max_levels'), row.get('demag_amg_max_levels')) or '-'}"
+            f"{first_present(row.get('demag_amg_relax_type'), row.get('requested_demag_amg_relax_type')) or '-'}/"
+            f"{first_present(row.get('demag_amg_coarsening'), row.get('requested_demag_amg_coarsening')) or '-'}/"
+            f"{first_present(row.get('demag_amg_interpolation'), row.get('requested_demag_amg_interpolation')) or '-'}/"
+            f"{first_present(row.get('demag_amg_aggressive_coarsening'), row.get('requested_demag_amg_aggressive_coarsening')) or '-'}/"
+            f"{first_present(row.get('demag_amg_strength_threshold'), row.get('requested_demag_amg_strength_threshold')) or '-'}/"
+            f"{first_present(row.get('demag_amg_max_levels'), row.get('requested_demag_amg_max_levels')) or '-'}"
         )
     return " ".join(parts)
 
@@ -7051,35 +7651,14 @@ def demag_policy_selection_case_key(row: Mapping[str, object]) -> tuple[object, 
 
 def demag_policy_identity(row: Mapping[str, object]) -> tuple[object, ...]:
     return (
-        first_present(row.get("requested_demag_solver"), row.get("demag_linear_solver")),
-        first_present(
-            row.get("requested_demag_preconditioner"),
-            row.get("demag_preconditioner"),
-        ),
-        first_present(
-            row.get("requested_demag_amg_relax_type"),
-            row.get("demag_amg_relax_type"),
-        ),
-        first_present(
-            row.get("requested_demag_amg_coarsening"),
-            row.get("demag_amg_coarsening"),
-        ),
-        first_present(
-            row.get("requested_demag_amg_interpolation"),
-            row.get("demag_amg_interpolation"),
-        ),
-        first_present(
-            row.get("requested_demag_amg_aggressive_coarsening"),
-            row.get("demag_amg_aggressive_coarsening"),
-        ),
-        first_present(
-            row.get("requested_demag_amg_strength_threshold"),
-            row.get("demag_amg_strength_threshold"),
-        ),
-        first_present(
-            row.get("requested_demag_amg_max_levels"),
-            row.get("demag_amg_max_levels"),
-        ),
+        row.get("demag_linear_solver"),
+        row.get("demag_preconditioner"),
+        row.get("demag_amg_relax_type"),
+        row.get("demag_amg_coarsening"),
+        row.get("demag_amg_interpolation"),
+        row.get("demag_amg_aggressive_coarsening"),
+        row.get("demag_amg_strength_threshold"),
+        row.get("demag_amg_max_levels"),
     )
 
 
@@ -7322,6 +7901,31 @@ def main() -> None:
     apply_fem_cpu_no_pbc_adaptive_ready_preset(args)
     apply_box500_airbox_exchange_only_preset(args)
     apply_box500_airbox_interaction_consistency_preset(args)
+    if args.list_amg_qualification_fixture_suite is not None:
+        print_amg_qualification_fixture_suite(
+            args.list_amg_qualification_fixture_suite
+        )
+        return
+    if args.amg_relax_qualification_inputs is not None:
+        if args.amg_relax_qualification_output is None:
+            raise SystemExit(
+                "--amg-relax-qualification-inputs needs "
+                "--amg-relax-qualification-output"
+            )
+        input_paths = [
+            Path(value.strip())
+            for value in args.amg_relax_qualification_inputs.split(",")
+            if value.strip()
+        ]
+        if not input_paths:
+            raise SystemExit("--amg-relax-qualification-inputs cannot be empty")
+        write_amg_relax_policy_qualification(
+            input_paths,
+            args.amg_relax_qualification_output,
+            cpu_gpu_parity_gate_passed=args.amg_relax_cpu_gpu_parity_passed,
+            pcg_symmetry_contract_passed=args.amg_relax_pcg_symmetry_passed,
+        )
+        return
     if args.write_task8_qualification_identity is not None:
         write_task8_qualification_identity(
             args,
@@ -7829,6 +8433,19 @@ def main() -> None:
             gate_exit_code = gate_exit_code or 18
     if args.require_stable_solver_mesh:
         failures = unstable_solver_mesh_groups(results)
+        if failures:
+            gate_failures.extend(failures)
+            gate_exit_code = gate_exit_code or 3
+    if args.expected_solver_mesh_signature is not None:
+        failures = [
+            f"case={repeated_case_key(row)} solver_mesh_signature="
+            f"{row.get('solver_mesh_signature')} differs from expected "
+            f"{args.expected_solver_mesh_signature}"
+            for row in results
+            if row.get("status") == "ok"
+            and row.get("solver_mesh_signature")
+            != args.expected_solver_mesh_signature
+        ]
         if failures:
             gate_failures.extend(failures)
             gate_exit_code = gate_exit_code or 3

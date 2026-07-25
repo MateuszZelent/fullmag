@@ -563,6 +563,15 @@ pub struct fullmag_fem_step_stats {
     pub effective_omp_threads: i32,
     /// Native FEM CPU thread cap reason enum.
     pub cpu_thread_cap_reason: i32,
+    /// Effective native BoomerAMG relaxation type; zero when AMG is inactive.
+    pub demag_amg_relax_type: i32,
+    pub demag_amg_coarsening: i32,
+    pub demag_amg_interpolation: i32,
+    pub demag_amg_aggressive_coarsening: i32,
+    pub demag_amg_strength_threshold: f64,
+    pub demag_amg_strength_threshold_is_set: i32,
+    pub demag_amg_max_levels: i32,
+    pub demag_amg_max_levels_is_set: i32,
 }
 
 pub const FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION: u32 = 1;
@@ -2498,6 +2507,10 @@ mod tests {
         assert_eq!(stats.relaxation_preconditioner_cache_hits, 0);
         assert_eq!(stats.relaxation_preconditioner_cache_misses, 0);
         assert_eq!(stats.cpu_thread_cap_reason, 0);
+        assert_eq!(stats.demag_amg_strength_threshold, 0.0);
+        assert_eq!(stats.demag_amg_strength_threshold_is_set, 0);
+        assert_eq!(stats.demag_amg_max_levels, 0);
+        assert_eq!(stats.demag_amg_max_levels_is_set, 0);
     }
 
     #[test]

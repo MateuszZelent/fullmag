@@ -68,6 +68,33 @@ struct DrivenResponseCAbiDemagTangentContext {
 constexpr const char *kUnavailableMessage =
     "fullmag_fem native backend was built without the MFEM stack; rebuild with FULLMAG_USE_MFEM_STACK=ON and an installed MFEM toolchain";
 
+void apply_demag_solver_policy_to_step_stats(
+    const fullmag::fem::Context &ctx,
+    fullmag_fem_step_stats &stats)
+{
+    if (!ctx.demag.enabled ||
+        ctx.demag.solver.preconditioner != FULLMAG_FEM_PRECONDITIONER_AMG) {
+        stats.demag_amg_relax_type = 0;
+        stats.demag_amg_coarsening = 0;
+        stats.demag_amg_interpolation = 0;
+        stats.demag_amg_aggressive_coarsening = 0;
+        stats.demag_amg_strength_threshold = 0.0;
+        stats.demag_amg_strength_threshold_is_set = 0;
+        stats.demag_amg_max_levels = 0;
+        stats.demag_amg_max_levels_is_set = 0;
+        return;
+    }
+    const auto &policy = ctx.demag.amg_policy;
+    stats.demag_amg_relax_type = policy.relax_type;
+    stats.demag_amg_coarsening = policy.coarsening;
+    stats.demag_amg_interpolation = policy.interpolation;
+    stats.demag_amg_aggressive_coarsening = policy.aggressive_coarsening;
+    stats.demag_amg_strength_threshold = policy.strength_threshold;
+    stats.demag_amg_strength_threshold_is_set = policy.strength_threshold_is_set ? 1 : 0;
+    stats.demag_amg_max_levels = policy.max_levels;
+    stats.demag_amg_max_levels_is_set = policy.max_levels_is_set ? 1 : 0;
+}
+
 bool apply_device_demag_tangent_with_potential_f64(
     fullmag::fem::Context &ctx,
     const double *delta_m_xyz,
@@ -2697,6 +2724,9 @@ int fullmag_fem_backend_step(
             dt_seconds,
             *out_stats,
             handle->last_error);
+    if (status == FULLMAG_FEM_OK) {
+        apply_demag_solver_policy_to_step_stats(handle->context, *out_stats);
+    }
     if (status != FULLMAG_FEM_OK && !handle->last_error.empty()) {
         fullmag_fem_set_handle_error(handle, handle->last_error);
     }
@@ -2723,6 +2753,9 @@ int fullmag_fem_backend_relax_step(
             algorithm,
             *out_stats,
             handle->last_error);
+    if (status == FULLMAG_FEM_OK) {
+        apply_demag_solver_policy_to_step_stats(handle->context, *out_stats);
+    }
     if (status != FULLMAG_FEM_OK && !handle->last_error.empty()) {
         fullmag_fem_set_handle_error(handle, handle->last_error);
     }
@@ -3116,6 +3149,7 @@ int fullmag_fem_backend_snapshot_stats(
             handle->context, *out_stats, handle->last_error)) {
         return FULLMAG_FEM_ERR_UNAVAILABLE;
     }
+    apply_demag_solver_policy_to_step_stats(handle->context, *out_stats);
     return FULLMAG_FEM_OK;
 #else
     fullmag_fem_set_handle_error(handle, kUnavailableMessage);

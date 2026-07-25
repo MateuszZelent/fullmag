@@ -24,6 +24,7 @@ set(FEM_SOURCES
     core/fem_field_buffers.cpp
     core/fem_context_builder.cpp
     core/demag_linear_solve_validation.cpp
+    core/demag_solver_policy.cpp
     core/fem_element_quadrature_material.cpp
     core/fem_material_fields.cpp
     core/fem_material_runtime.cpp

@@ -1840,34 +1840,37 @@ def test_runtime_gate_and_physics_note_promote_cpu_tpi_without_gpu_claim() -> No
         assert env_name in demag_performance_recipe
         assert cli_flag in production_recipe
         assert cli_flag in demag_performance_recipe
-        assert env_name in amg_profile_sweep_recipe
-        assert cli_flag in amg_profile_sweep_recipe
+        if env_name == "FULLMAG_BENCH_DEMAG_AMG_RELAX_TYPES":
+            assert env_name in amg_profile_sweep_recipe
+            assert cli_flag in amg_profile_sweep_recipe
     assert "docker compose --profile fem-gpu run --rm" in amg_profile_sweep_recipe
     assert "python3 scripts/analysis/fem_gpu_benchmark.py" in amg_profile_sweep_recipe
     assert "FULLMAG_BENCH_DEMAG_AMG_RELAX_TYPES:-18,6" in amg_profile_sweep_recipe
     assert "--emit-best-demag-policy" in amg_profile_sweep_recipe
     assert "--best-demag-policy-metric" in amg_profile_sweep_recipe
     assert "--human-report-output" in amg_profile_sweep_recipe
-    assert "--require-best-demag-policy" not in amg_profile_sweep_recipe
-    assert "--require-demag-converged" not in amg_profile_sweep_recipe
-    assert "--require-demag-setup-reused" not in amg_profile_sweep_recipe
-    assert "--require-cpu-gpu-consistency" not in amg_profile_sweep_recipe
+    assert "--require-best-demag-policy" in amg_profile_sweep_recipe
+    assert "--require-demag-converged" in amg_profile_sweep_recipe
+    assert "--require-cpu-gpu-consistency" in amg_profile_sweep_recipe
     assert "--max-demag-solver-apply-ms" not in amg_profile_sweep_recipe
+    assert "amg_qualification_suite_v1.json" in amg_profile_sweep_recipe
+    assert "for profiler in off on" in amg_profile_sweep_recipe
+    assert "--backends fem_cpu,fem_gpu" in amg_profile_sweep_recipe
+    assert "--demag-rtols 1e-12" in amg_profile_sweep_recipe
+    assert "--relax-torque-tolerance-t 1e-4" in amg_profile_sweep_recipe
+    assert "--repeat 1" in amg_profile_sweep_recipe
+    assert 'FULLMAG_BENCH_REPEAT:-5' in amg_profile_sweep_recipe
+    assert "--amg-relax-qualification-output" in amg_profile_sweep_recipe
     assert "FULLMAG_BENCH_DEMAG_RTOLS" in demag_performance_recipe
     assert "--demag-rtols" in demag_performance_recipe
     assert "FULLMAG_BENCH_MESHES" in demag_performance_recipe
-    assert "FULLMAG_BENCH_MESHES" in amg_profile_sweep_recipe
     assert '--meshes "$FULLMAG_BENCH_MESHES"' in demag_performance_recipe
-    assert '--meshes "$FULLMAG_BENCH_MESHES"' in amg_profile_sweep_recipe
     assert "--reuse-generated-domain-mesh" in production_recipe
     assert "--reuse-generated-domain-mesh" in demag_performance_recipe
-    assert "--reuse-generated-domain-mesh" in amg_profile_sweep_recipe
     assert "FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR" in production_recipe
     assert "FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR" in demag_performance_recipe
-    assert "FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR" in amg_profile_sweep_recipe
     assert "--generated-domain-mesh-cache-dir" in production_recipe
     assert "--generated-domain-mesh-cache-dir" in demag_performance_recipe
-    assert "--generated-domain-mesh-cache-dir" in amg_profile_sweep_recipe
     assert (
         'FULLMAG_BENCH_RELAX_ALGORITHMS:-llg_overdamped,projected_gradient_bb,nonlinear_cg'
         in demag_performance_recipe
@@ -3578,7 +3581,10 @@ def test_task8_qualification_row_identity_integration_is_computed_from_runtime_a
         "relaxation_algorithm": "projected_gradient_bb",
         "steps": 2,
         "dt": 1e-13,
-        "extra_env": {"FULLMAG_BENCH_DOMAIN_MESH": str(solver_mesh)},
+        "extra_env": {
+            "FULLMAG_BENCH_DOMAIN_MESH": str(solver_mesh),
+            "FULLMAG_FEM_STEP_PROFILE": "1",
+        },
         "problem_ir": problem_ir,
         "qualification_case_manifest": case_manifest,
     }
@@ -3593,6 +3599,8 @@ def test_task8_qualification_row_identity_integration_is_computed_from_runtime_a
         },
         **common,
     )
+    assert cpu_row["step_profiler_enabled"] is True
+    assert gpu_row["step_profiler_enabled"] is True
 
     canonical = lambda value: json.dumps(
         value, sort_keys=True, separators=(",", ":")
@@ -3877,12 +3885,28 @@ def test_demag_amg_profile_sweep_parser_and_policy_identity() -> None:
         "requested_demag_amg_aggressive_coarsening": "1",
         "requested_demag_amg_strength_threshold": "",
         "requested_demag_amg_max_levels": "",
+        "demag_linear_solver": "CG",
+        "demag_preconditioner": "AMG",
+        "demag_amg_relax_type": 18,
+        "demag_amg_coarsening": 8,
+        "demag_amg_interpolation": 6,
+        "demag_amg_aggressive_coarsening": 1,
+        "demag_amg_strength_threshold": None,
+        "demag_amg_max_levels": None,
     }
-    second = {**first, "requested_demag_amg_relax_type": "6"}
-    third = {**first, "requested_demag_amg_strength_threshold": "0.25"}
+    requested_only_drift = {**first, "requested_demag_amg_relax_type": "6"}
+    effective_relax_change = {**first, "demag_amg_relax_type": 6}
+    effective_strength_change = {**first, "demag_amg_strength_threshold": 0.25}
 
-    assert benchmark.demag_policy_identity(first) != benchmark.demag_policy_identity(second)
-    assert benchmark.demag_policy_identity(first) != benchmark.demag_policy_identity(third)
+    assert benchmark.demag_policy_identity(first) == benchmark.demag_policy_identity(
+        requested_only_drift
+    )
+    assert benchmark.demag_policy_identity(first) != benchmark.demag_policy_identity(
+        effective_relax_change
+    )
+    assert benchmark.demag_policy_identity(first) != benchmark.demag_policy_identity(
+        effective_strength_change
+    )
 
 
 def test_optional_demag_amg_profile_parser_preserves_defaults_and_overrides() -> None:
@@ -3895,6 +3919,297 @@ def test_optional_demag_amg_profile_parser_preserves_defaults_and_overrides() ->
     ]
     assert benchmark.resolve_optional_nonnegative_ints(None) == [None]
     assert benchmark.resolve_optional_nonnegative_ints("none,25") == [None, 25]
+
+
+def amg_relax_qualification_rows(
+    algorithm: str = "nonlinear_cg",
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for relax_type, timing_ms in [(18, 100.0), (6, 94.0)]:
+        for repeat_index in range(5):
+            rows.append(
+                {
+                    "backend": "fem_gpu",
+                    "solver_mesh_signature": "mesh-fine",
+                    "scenario": "box500_airbox_exchange_demag",
+                    "relaxation_algorithm": algorithm,
+                    "step_profiler_enabled": True,
+                    "repeat_index": repeat_index,
+                    "status": "ok",
+                    "demag_amg_relax_type": relax_type,
+                    "demag_solver_apply_wall_time_ms": timing_ms,
+                    "wall_time_ms": timing_ms,
+                    "demag_final_residual_norm": 1.0e-13,
+                    "demag_relative_tolerance": 1.0e-12,
+                    "energy_monotonicity_satisfied": True,
+                    "executed_steps": 3,
+                    "steps": 3,
+                    "stop_reason": "max_steps",
+                    "requested_relax_torque_tolerance_apm": 100.0,
+                    "norm_defect": 2.0e-16,
+                    "final_e_total_j": -1.0e-17,
+                    "final_e_ex_j": 1.0e-20,
+                    "final_e_demag_j": 2.0e-18,
+                    "final_e_ext_j": -1.201e-17,
+                    "final_torque_apm": 64.0,
+                    "final_torque_t": 8.042477193189871e-5,
+                }
+            )
+    return rows
+
+
+def test_amg_relax_qualification_summary_enforces_p50_p95_and_geomean_gates() -> None:
+    benchmark = load_benchmark_module()
+
+    rows = amg_relax_qualification_rows()
+
+    summary = benchmark.amg_relax_policy_qualification_summary(
+        rows,
+        cpu_gpu_parity_gate_passed=True,
+        pcg_symmetry_contract_passed=True,
+    )
+    assert summary["promotion_eligible"] is True
+    assert summary["geometric_mean_end_to_end_improvement_percent"] == pytest.approx(6.0)
+
+    regressed = [dict(row) for row in rows]
+    for row in regressed:
+        if row["demag_amg_relax_type"] == 6:
+            row["wall_time_ms"] = 106.0
+    summary = benchmark.amg_relax_policy_qualification_summary(
+        regressed,
+        cpu_gpu_parity_gate_passed=True,
+        pcg_symmetry_contract_passed=True,
+    )
+    assert summary["promotion_eligible"] is False
+    assert summary["p50_end_to_end_no_regression"] is False
+    assert summary["p95_end_to_end_no_regression"] is False
+
+
+def test_amg_relax_qualification_uses_native_armijo_proof_for_pgbb() -> None:
+    benchmark = load_benchmark_module()
+
+    rows = amg_relax_qualification_rows("projected_gradient_bb")
+    for row in rows:
+        repeat_index = int(row["repeat_index"])
+        row.update(
+            {
+                "energy_monotonicity_satisfied": False,
+                "accepted_energy_proof_available": True,
+                "accepted_energy_proof_count": 3,
+                "accepted_energy_proof_invalid_count": 0,
+                "accepted_energy_proof_invalid_details": (
+                    "[]" if repeat_index % 2 else []
+                ),
+            }
+        )
+
+    summary = benchmark.amg_relax_policy_qualification_summary(
+        rows,
+        cpu_gpu_parity_gate_passed=True,
+        pcg_symmetry_contract_passed=True,
+    )
+
+    assert summary["trajectory_gate_passed"] is True
+    assert summary["promotion_eligible"] is True
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("accepted_energy_proof_available", False),
+        ("accepted_energy_proof_count", 2),
+        ("accepted_energy_proof_invalid_count", 1),
+        ("accepted_energy_proof_invalid_details", ["step=2: invalid"]),
+    ],
+)
+def test_amg_relax_qualification_fails_closed_on_invalid_pgbb_proof(
+    field: str,
+    value: object,
+) -> None:
+    benchmark = load_benchmark_module()
+    rows = amg_relax_qualification_rows("projected_gradient_bb")
+    for row in rows:
+        row.update(
+            {
+                "energy_monotonicity_satisfied": False,
+                "accepted_energy_proof_available": True,
+                "accepted_energy_proof_count": 3,
+                "accepted_energy_proof_invalid_count": 0,
+                "accepted_energy_proof_invalid_details": [],
+            }
+        )
+    rows[0][field] = value
+
+    summary = benchmark.amg_relax_policy_qualification_summary(
+        rows,
+        cpu_gpu_parity_gate_passed=True,
+        pcg_symmetry_contract_passed=True,
+    )
+
+    assert summary["trajectory_gate_passed"] is False
+    assert summary["promotion_eligible"] is False
+    assert any("accepted Armijo proof" in failure for failure in summary["failures"])
+
+
+def test_amg_relax_qualification_accepts_paired_physics_with_canonical_tolerances() -> None:
+    benchmark = load_benchmark_module()
+    rows = amg_relax_qualification_rows()
+    candidate = next(
+        row
+        for row in rows
+        if row["demag_amg_relax_type"] == 6 and row["repeat_index"] == 0
+    )
+    candidate["norm_defect"] = 9.0e-10
+    candidate["final_e_total_j"] = -1.0000005e-17
+    candidate["final_torque_apm"] = 64.000032
+
+    summary = benchmark.amg_relax_policy_qualification_summary(
+        rows,
+        cpu_gpu_parity_gate_passed=True,
+        pcg_symmetry_contract_passed=True,
+    )
+
+    assert summary["physics_equivalence_gate_passed"] is True
+    assert summary["promotion_eligible"] is True
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "failure_fragment"),
+    [
+        ("stop_reason", "torque", "stop_reason mismatch"),
+        ("executed_steps", 2, "executed_steps mismatch"),
+        ("steps", 4, "configured steps mismatch"),
+        (
+            "requested_relax_torque_tolerance_apm",
+            101.0,
+            "requested torque target mismatch",
+        ),
+        ("norm_defect", 1.1e-9, "norm_defect exceeds"),
+        ("final_e_total_j", -1.01e-17, "final_e_total_j mismatch"),
+        ("final_e_demag_j", None, "missing numeric final_e_demag_j"),
+        ("final_torque_apm", 65.0, "final_torque_apm mismatch"),
+        ("final_torque_t", 9.0e-5, "final_torque_t mismatch"),
+    ],
+)
+def test_amg_relax_qualification_fails_closed_on_paired_physics_drift(
+    field: str,
+    value: object,
+    failure_fragment: str,
+) -> None:
+    benchmark = load_benchmark_module()
+    rows = amg_relax_qualification_rows()
+    candidate = next(
+        row
+        for row in rows
+        if row["demag_amg_relax_type"] == 6 and row["repeat_index"] == 0
+    )
+    candidate[field] = value
+
+    summary = benchmark.amg_relax_policy_qualification_summary(
+        rows,
+        cpu_gpu_parity_gate_passed=True,
+        pcg_symmetry_contract_passed=True,
+    )
+
+    assert summary["physics_equivalence_gate_passed"] is False
+    assert summary["promotion_eligible"] is False
+    assert any(failure_fragment in failure for failure in summary["failures"])
+
+
+def test_amg_relax_qualification_fails_closed_on_duplicate_repeat_pairing() -> None:
+    benchmark = load_benchmark_module()
+    rows = amg_relax_qualification_rows()
+    candidate_rows = [row for row in rows if row["demag_amg_relax_type"] == 6]
+    candidate_rows[-1]["repeat_index"] = 3
+
+    summary = benchmark.amg_relax_policy_qualification_summary(
+        rows,
+        cpu_gpu_parity_gate_passed=True,
+        pcg_symmetry_contract_passed=True,
+    )
+
+    assert summary["physics_equivalence_gate_passed"] is False
+    assert summary["promotion_eligible"] is False
+    assert any("repeat_index=3 has 2 rows" in failure for failure in summary["failures"])
+
+
+def test_amg_relax_qualification_fails_closed_on_unknown_completion_semantics() -> None:
+    benchmark = load_benchmark_module()
+    rows = amg_relax_qualification_rows()
+    for row in rows:
+        if row["repeat_index"] == 0:
+            row["stop_reason"] = "unknown"
+
+    summary = benchmark.amg_relax_policy_qualification_summary(
+        rows,
+        cpu_gpu_parity_gate_passed=True,
+        pcg_symmetry_contract_passed=True,
+    )
+
+    assert summary["physics_equivalence_gate_passed"] is False
+    assert summary["promotion_eligible"] is False
+    assert any(
+        "unsupported qualification stop_reason" in failure
+        for failure in summary["failures"]
+    )
+
+
+def test_demag_amg_qualification_suite_rejects_malformed_runtime_signature(
+    tmp_path: Path,
+) -> None:
+    benchmark = load_benchmark_module()
+    source_path = (
+        REPO_ROOT / "examples/assets/fem_performance/amg_qualification_suite_v1.json"
+    )
+    payload = json.loads(source_path.read_text(encoding="utf-8"))
+    for fixture in payload["fixtures"]:
+        fixture["solver_mesh_path"] = str(
+            source_path.parent / fixture["solver_mesh_path"]
+        )
+    payload["fixtures"][0]["solver_mesh_signature"] = "not-a-runtime-signature"
+    corrupted_path = tmp_path / "corrupted-suite.json"
+    corrupted_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="64 lowercase hexadecimal characters"):
+        benchmark.load_amg_qualification_fixture_suite(corrupted_path)
+
+
+def test_demag_amg_qualification_suite_and_recipe_cover_the_exact_matrix() -> None:
+    benchmark = load_benchmark_module()
+    fixtures = benchmark.load_amg_qualification_fixture_suite(
+        REPO_ROOT / "examples/assets/fem_performance/amg_qualification_suite_v1.json"
+    )
+    assert [fixture["resolution"] for fixture in fixtures] == [
+        "coarse",
+        "medium",
+        "fine",
+    ]
+    assert all(
+        len(str(fixture["solver_mesh_signature"])) == 64
+        and set(str(fixture["solver_mesh_signature"])) <= set("0123456789abcdef")
+        for fixture in fixtures
+    )
+    recipe = just_recipe_source(
+        JUSTFILE.read_text(encoding="utf-8"),
+        "bench-fem-gpu-demag-amg-profile-sweep",
+    )
+    for required in (
+        "for profiler in off on",
+        "--backends fem_cpu,fem_gpu",
+        "--relax-algorithms \"$FULLMAG_BENCH_RELAX_ALGORITHMS\"",
+        "--demag-rtols 1e-12",
+        "--steps 64",
+        "--relax-torque-tolerance-t 1e-4",
+        "--repeat 1",
+        'FULLMAG_BENCH_REPEAT:-5',
+        "--require-demag-converged",
+        "--require-cpu-gpu-consistency",
+        "--require-stable-solver-mesh",
+        "--expected-solver-mesh-signature",
+        "--amg-relax-qualification-output",
+        "--amg-relax-pcg-symmetry-passed",
+    ):
+        assert required in recipe
 
 
 def test_demag_convergence_gate_uses_row_requested_rtol_by_default() -> None:
@@ -3976,16 +4291,20 @@ def test_best_demag_policy_uses_row_requested_rtol_by_default() -> None:
     }
     rows = [
         {
-            **base_row,
-            "requested_demag_solver": "CG",
-            "requested_demag_preconditioner": "AMG",
-            "demag_wall_time_ms": 20.0,
+                **base_row,
+                "requested_demag_solver": "CG",
+                "requested_demag_preconditioner": "AMG",
+                "demag_linear_solver": "CG",
+                "demag_preconditioner": "AMG",
+                "demag_wall_time_ms": 20.0,
         },
         {
-            **base_row,
-            "requested_demag_solver": "CG",
-            "requested_demag_preconditioner": "JACOBI",
-            "demag_wall_time_ms": 10.0,
+                **base_row,
+                "requested_demag_solver": "CG",
+                "requested_demag_preconditioner": "JACOBI",
+                "demag_linear_solver": "CG",
+                "demag_preconditioner": "JACOBI",
+                "demag_wall_time_ms": 10.0,
         },
     ]
 
@@ -4022,17 +4341,21 @@ def test_best_demag_policy_can_select_by_solver_apply_time() -> None:
     }
     rows = [
         {
-            **base_row,
-            "requested_demag_solver": "CG",
-            "requested_demag_preconditioner": "AMG",
-            "demag_wall_time_ms": 100.0,
+                **base_row,
+                "requested_demag_solver": "CG",
+                "requested_demag_preconditioner": "AMG",
+                "demag_linear_solver": "CG",
+                "demag_preconditioner": "AMG",
+                "demag_wall_time_ms": 100.0,
             "demag_solver_apply_wall_time_ms": 20.0,
         },
         {
-            **base_row,
-            "requested_demag_solver": "CG",
-            "requested_demag_preconditioner": "JACOBI",
-            "demag_wall_time_ms": 50.0,
+                **base_row,
+                "requested_demag_solver": "CG",
+                "requested_demag_preconditioner": "JACOBI",
+                "demag_linear_solver": "CG",
+                "demag_preconditioner": "JACOBI",
+                "demag_wall_time_ms": 50.0,
             "demag_solver_apply_wall_time_ms": 30.0,
         },
     ]
@@ -4226,6 +4549,7 @@ def test_benchmark_mesh_env_forwards_requested_generated_mesh_sizes(monkeypatch)
     benchmark = load_benchmark_module()
     monkeypatch.setenv("FULLMAG_BENCH_DOMAIN_HMAX", "20e-9")
     monkeypatch.setenv("FULLMAG_BENCH_AIRBOX_HMAX", "100e-9")
+    monkeypatch.setenv("FULLMAG_BENCH_DOMAIN_MESH", "/workspace/exact.mesh.json")
 
     env = benchmark.benchmark_mesh_env(
         SimpleNamespace(
@@ -4237,6 +4561,7 @@ def test_benchmark_mesh_env_forwards_requested_generated_mesh_sizes(monkeypatch)
 
     assert env["FULLMAG_BENCH_DOMAIN_HMAX"] == "20e-9"
     assert env["FULLMAG_BENCH_AIRBOX_HMAX"] == "100e-9"
+    assert env["FULLMAG_BENCH_DOMAIN_MESH"] == "/workspace/exact.mesh.json"
     assert env["FULLMAG_GMSH_THREADS"] == "1"
 
 

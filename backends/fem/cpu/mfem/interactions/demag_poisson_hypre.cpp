@@ -13,9 +13,7 @@
 #include "cpu/mfem/runtime/mpi_init.hpp"
 #include "fem_common.hpp"
 
-#include <climits>
 #include <cmath>
-#include <cstdlib>
 #include <cstdint>
 #include <string>
 
@@ -49,66 +47,16 @@ struct PoissonHypreWorkspace {
 namespace {
 
 #ifdef MFEM_USE_MPI
-int demag_amg_int_env(const char *name, int default_value)
-{
-    const char *raw = std::getenv(name);
-    if (raw == nullptr || raw[0] == '\0') {
-        return default_value;
-    }
-    char *end = nullptr;
-    const long parsed = std::strtol(raw, &end, 10);
-    if (end == raw || *end != '\0' || parsed < 0 || parsed > INT_MAX) {
-        return default_value;
-    }
-    return static_cast<int>(parsed);
-}
-
-bool demag_amg_optional_int_env(const char *name, int &value)
-{
-    const char *raw = std::getenv(name);
-    if (raw == nullptr || raw[0] == '\0') {
-        return false;
-    }
-    char *end = nullptr;
-    const long parsed = std::strtol(raw, &end, 10);
-    if (end == raw || *end != '\0' || parsed < 0 || parsed > INT_MAX) {
-        return false;
-    }
-    value = static_cast<int>(parsed);
-    return true;
-}
-
-bool demag_amg_real_env(const char *name, mfem::real_t &value)
-{
-    const char *raw = std::getenv(name);
-    if (raw == nullptr || raw[0] == '\0') {
-        return false;
-    }
-    char *end = nullptr;
-    const double parsed = std::strtod(raw, &end);
-    if (end == raw || *end != '\0' || parsed < 0.0) {
-        return false;
-    }
-    value = static_cast<mfem::real_t>(parsed);
-    return true;
-}
-
 void configure_demag_amg(mfem::HypreBoomerAMG &amg, const Context &ctx)
 {
+    const auto &policy = ctx.demag.amg_policy;
     amg.SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
-    amg.SetRelaxType(demag_amg_int_env("FULLMAG_FEM_DEMAG_AMG_RELAX_TYPE", 18));
-    amg.SetCoarsening(demag_amg_int_env("FULLMAG_FEM_DEMAG_AMG_COARSENING", 8));
-    amg.SetInterpolation(demag_amg_int_env("FULLMAG_FEM_DEMAG_AMG_INTERPOLATION", 6));
-    amg.SetAggressiveCoarsening(
-        demag_amg_int_env("FULLMAG_FEM_DEMAG_AMG_AGGRESSIVE_COARSENING", 1));
-    mfem::real_t strength_threshold = 0.0;
-    if (demag_amg_real_env("FULLMAG_FEM_DEMAG_AMG_STRENGTH_THRESHOLD", strength_threshold)) {
-        amg.SetStrengthThresh(strength_threshold);
-    }
-    int max_levels = 0;
-    if (demag_amg_optional_int_env("FULLMAG_FEM_DEMAG_AMG_MAX_LEVELS", max_levels)) {
-        amg.SetMaxLevels(max_levels);
-    }
+    amg.SetRelaxType(policy.relax_type);
+    amg.SetCoarsening(policy.coarsening);
+    amg.SetInterpolation(policy.interpolation);
+    amg.SetAggressiveCoarsening(policy.aggressive_coarsening);
+    if (policy.strength_threshold_is_set) amg.SetStrengthThresh(policy.strength_threshold);
+    if (policy.max_levels_is_set) amg.SetMaxLevels(policy.max_levels);
 }
 #endif
 

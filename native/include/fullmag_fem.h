@@ -508,6 +508,15 @@ typedef struct {
     int32_t requested_omp_threads;
     int32_t effective_omp_threads;
     int32_t cpu_thread_cap_reason;
+    /* Effective native BoomerAMG policy, including optional override presence. */
+    int32_t demag_amg_relax_type;
+    int32_t demag_amg_coarsening;
+    int32_t demag_amg_interpolation;
+    int32_t demag_amg_aggressive_coarsening;
+    double demag_amg_strength_threshold;
+    int32_t demag_amg_strength_threshold_is_set;
+    int32_t demag_amg_max_levels;
+    int32_t demag_amg_max_levels_is_set;
 } fullmag_fem_step_stats;
 
 #define FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION 1u
