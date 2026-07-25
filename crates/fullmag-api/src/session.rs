@@ -4,7 +4,9 @@ use crate::artifacts::collect_artifacts;
 use crate::error::ApiError;
 use crate::quantities::{build_quantities, extract_fem_mesh_from_metadata};
 use crate::router_v2::handlers::data::field_resolution::{
-    field_values_match_current_domain, flatten_json_field_values, live_magnetization_values,
+    field_value_count_matches_current_domain, field_values_hash, field_values_match_current_domain,
+    flatten_json_field_values, json_field_grid, json_field_payload_signature,
+    json_field_value_count, live_magnetization_values_ref,
 };
 use crate::types::*;
 use fullmag_runner::{LivePreviewField, RuntimeStatus};
@@ -616,27 +618,86 @@ fn bump_field_sample_revision(
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-enum EffectiveFieldSource {
-    Latest(Value),
-    Preview(LivePreviewField),
-    LiveMagnetization { len: usize, hash: u64 },
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ResolvedCurrentFieldSource<'a> {
+    Latest(&'a Value),
+    Preview(&'a LivePreviewField),
+    LegacyLiveMagnetization { values: &'a [f64], grid: [u32; 3] },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EffectiveFieldSourceKind {
+    Latest,
+    Preview,
+    LegacyLiveMagnetization,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EffectiveFieldSource {
+    kind: EffectiveFieldSourceKind,
+    source_step: Option<u64>,
+    source_revision: Option<u64>,
+    materialized_at_unix_ms: Option<u64>,
+    baseline_revision: Option<u64>,
+    config_revision: Option<u64>,
+    value_count: usize,
+    grid: [u32; 3],
+    payload_hash: u64,
 }
 
 impl EffectiveFieldSource {
     fn baseline_revision(&self) -> Option<u64> {
-        match self {
-            Self::Latest(value) => field_payload_revision(value),
-            Self::Preview(_) | Self::LiveMagnetization { .. } => None,
-        }
+        self.baseline_revision
     }
 }
 
-fn live_magnetization_hash(values: &[f64]) -> u64 {
-    values.iter().fold(1469598103934665603_u64, |hash, value| {
-        hash.wrapping_mul(1099511628211)
-            .wrapping_add(value.to_bits())
-    })
+fn latest_field_has_explicit_provenance(value: &Value) -> bool {
+    [
+        "source_step",
+        "source_revision",
+        "materialized_at_unix_ms",
+        "field_revision",
+        "revision",
+    ]
+    .iter()
+    .any(|key| value.get(*key).and_then(Value::as_u64).is_some())
+}
+
+pub(crate) fn resolved_current_field_source<'a>(
+    snapshot: &'a SessionStateResponse,
+    quantity: &str,
+    n_comp: usize,
+) -> Option<ResolvedCurrentFieldSource<'a>> {
+    let latest = snapshot.latest_fields.get(quantity).filter(|value| {
+        let value_count = json_field_value_count(value);
+        field_value_count_matches_current_domain(snapshot, quantity, n_comp, value_count)
+    });
+    let preview = snapshot.preview_cache.get(quantity).filter(|field| {
+        field_values_match_current_domain(snapshot, quantity, n_comp, &field.vector_field_values)
+    });
+    let cached_source = match (latest, preview) {
+        (Some(_), Some(field)) if preview_cache_precedes_latest(snapshot, quantity) => {
+            Some(ResolvedCurrentFieldSource::Preview(field))
+        }
+        (Some(value), _) => Some(ResolvedCurrentFieldSource::Latest(value)),
+        (None, Some(field)) => Some(ResolvedCurrentFieldSource::Preview(field)),
+        (None, None) => None,
+    };
+
+    let cached_source_is_authoritative = match cached_source {
+        Some(ResolvedCurrentFieldSource::Preview(_)) => true,
+        Some(ResolvedCurrentFieldSource::Latest(value)) => {
+            latest_field_has_explicit_provenance(value)
+        }
+        Some(ResolvedCurrentFieldSource::LegacyLiveMagnetization { .. }) | None => false,
+    };
+    if quantity != "m" || cached_source_is_authoritative {
+        return cached_source;
+    }
+
+    live_magnetization_values_ref(snapshot)
+        .map(|(values, grid)| ResolvedCurrentFieldSource::LegacyLiveMagnetization { values, grid })
+        .or(cached_source)
 }
 
 fn effective_field_source(
@@ -646,28 +707,48 @@ fn effective_field_source(
     let n_comp = fullmag_quantities::quantity_spec(quantity)
         .map(|spec| spec.n_comp as usize)
         .unwrap_or(3);
-    if quantity == "m" {
-        if let Some((values, _grid)) = live_magnetization_values(snapshot) {
-            return Some(EffectiveFieldSource::LiveMagnetization {
-                len: values.len(),
-                hash: live_magnetization_hash(&values),
-            });
+    match resolved_current_field_source(snapshot, quantity, n_comp)? {
+        ResolvedCurrentFieldSource::Latest(value) => {
+            let (value_count, payload_hash) = json_field_payload_signature(value);
+            let point_count = value_count / n_comp;
+            Some(EffectiveFieldSource {
+                kind: EffectiveFieldSourceKind::Latest,
+                source_step: value.get("source_step").and_then(Value::as_u64),
+                source_revision: value.get("source_revision").and_then(Value::as_u64),
+                materialized_at_unix_ms: value
+                    .get("materialized_at_unix_ms")
+                    .and_then(Value::as_u64),
+                baseline_revision: field_payload_revision(value),
+                config_revision: None,
+                value_count,
+                grid: json_field_grid(value).unwrap_or([point_count as u32, 1, 1]),
+                payload_hash,
+            })
         }
-    }
-    let latest = snapshot.latest_fields.get(quantity).filter(|value| {
-        let values = flatten_json_field_values(value);
-        field_values_match_current_domain(snapshot, quantity, n_comp, &values)
-    });
-    let preview = snapshot.preview_cache.get(quantity).filter(|field| {
-        field_values_match_current_domain(snapshot, quantity, n_comp, &field.vector_field_values)
-    });
-    match (latest, preview) {
-        (Some(_), Some(field)) if preview_cache_precedes_latest(snapshot, quantity) => {
-            Some(EffectiveFieldSource::Preview(field.clone()))
+        ResolvedCurrentFieldSource::Preview(field) => Some(EffectiveFieldSource {
+            kind: EffectiveFieldSourceKind::Preview,
+            source_step: Some(field.source_step),
+            source_revision: Some(field.source_revision),
+            materialized_at_unix_ms: Some(field.materialized_at_unix_ms),
+            baseline_revision: None,
+            config_revision: Some(field.config_revision),
+            value_count: field.vector_field_values.len(),
+            grid: field.preview_grid,
+            payload_hash: field_values_hash(&field.vector_field_values),
+        }),
+        ResolvedCurrentFieldSource::LegacyLiveMagnetization { values, grid } => {
+            Some(EffectiveFieldSource {
+                kind: EffectiveFieldSourceKind::LegacyLiveMagnetization,
+                source_step: None,
+                source_revision: None,
+                materialized_at_unix_ms: None,
+                baseline_revision: None,
+                config_revision: None,
+                value_count: values.len(),
+                grid,
+                payload_hash: field_values_hash(values),
+            })
         }
-        (Some(value), _) => Some(EffectiveFieldSource::Latest(value.clone())),
-        (None, Some(field)) => Some(EffectiveFieldSource::Preview(field.clone())),
-        (None, None) => None,
     }
 }
 
@@ -3669,8 +3750,8 @@ mod tests {
         .expect("terminal field frame should apply");
 
         assert_eq!(
-            effective_field_source(&current, "H_demag"),
-            Some(EffectiveFieldSource::Preview(terminal.clone())),
+            effective_field_source(&current, "H_demag").map(|source| source.kind),
+            Some(EffectiveFieldSourceKind::Preview),
             "newer terminal preview must supersede stale latest_fields at the same source generation"
         );
         let terminal_revision = current.field_quantity_revisions["H_demag"];
@@ -3712,11 +3793,61 @@ mod tests {
         )
         .expect("newer latest field frame should apply");
 
-        assert!(matches!(
-            effective_field_source(&current, "H_demag"),
-            Some(EffectiveFieldSource::Latest(_))
-        ));
+        assert_eq!(
+            effective_field_source(&current, "H_demag").map(|source| source.kind),
+            Some(EffectiveFieldSourceKind::Latest)
+        );
         assert!(current.field_quantity_revisions["H_demag"] > terminal_revision);
+    }
+
+    #[test]
+    fn latest_field_same_provenance_changed_payload_bumps_once_without_duplicate_churn() {
+        let mut current = test_current_snapshot();
+        let field = |values: Vec<Vec<f64>>| -> LatestFields {
+            serde_json::from_value(json!({
+                "H_demag": {
+                    "values": values,
+                    "field_revision": 7,
+                    "source_step": 52,
+                    "source_revision": 7,
+                    "materialized_at_unix_ms": 1_700_000_000_100_u64,
+                    "layout": { "grid_cells": [2, 1, 1] }
+                }
+            }))
+            .expect("latest H_demag field")
+        };
+        let apply = |current: &mut SessionStateResponse, latest_fields: LatestFields| {
+            apply_current_live_field_frame(
+                current,
+                CurrentLiveFieldFrameRequest {
+                    session_id: "test-session".to_string(),
+                    latest_fields: Some(latest_fields),
+                    preview_fields: None,
+                    clear_preview_cache: false,
+                },
+            )
+            .expect("latest field frame should apply");
+        };
+
+        apply(
+            &mut current,
+            field(vec![vec![1.0, 0.0, 0.0], vec![1.0, 0.0, 0.0]]),
+        );
+        let first_revision = current.field_quantity_revisions["H_demag"];
+
+        let changed = vec![vec![0.0, 1.0, 0.0], vec![0.0, -1.0, 0.0]];
+        apply(&mut current, field(changed.clone()));
+        let changed_revision = current.field_quantity_revisions["H_demag"];
+        assert!(
+            changed_revision > first_revision,
+            "changed values must advance the field revision even when provenance is duplicated"
+        );
+
+        apply(&mut current, field(changed));
+        assert_eq!(
+            current.field_quantity_revisions["H_demag"], changed_revision,
+            "an exact duplicate payload and provenance must not create revision churn"
+        );
     }
 
     #[test]

@@ -4,7 +4,7 @@ use crate::types::SessionStateResponse;
 use fullmag_runner::FemMeshPayload;
 
 pub(crate) fn live_magnetization_available(snapshot: &SessionStateResponse) -> bool {
-    live_magnetization_values(snapshot).is_some()
+    live_magnetization_values_ref(snapshot).is_some()
 }
 
 pub(crate) fn field_values_match_current_domain(
@@ -13,10 +13,19 @@ pub(crate) fn field_values_match_current_domain(
     n_comp: usize,
     values: &[f64],
 ) -> bool {
-    if n_comp == 0 || values.is_empty() || values.len() % n_comp != 0 {
+    field_value_count_matches_current_domain(snapshot, quantity_id, n_comp, values.len())
+}
+
+pub(crate) fn field_value_count_matches_current_domain(
+    snapshot: &SessionStateResponse,
+    quantity_id: &str,
+    n_comp: usize,
+    value_count: usize,
+) -> bool {
+    if n_comp == 0 || value_count == 0 || value_count % n_comp != 0 {
         return false;
     }
-    let point_count = values.len() / n_comp;
+    let point_count = value_count / n_comp;
     field_point_count_matches_current_domain(snapshot, quantity_id, point_count)
 }
 
@@ -38,23 +47,52 @@ pub(super) fn field_point_count_matches_current_domain(
         && fem_magnetic_node_count(mesh).is_some_and(|count| point_count == count)
 }
 
+fn visit_json_field_values(raw: &serde_json::Value, mut visit: impl FnMut(f64)) -> usize {
+    let Some(values) = raw.get("values").and_then(serde_json::Value::as_array) else {
+        return 0;
+    };
+    let mut count = 0;
+    for value in values {
+        if let Some(components) = value.as_array() {
+            for component in components {
+                if let Some(component) = component.as_f64() {
+                    count += 1;
+                    visit(component);
+                }
+            }
+        } else if let Some(value) = value.as_f64() {
+            count += 1;
+            visit(value);
+        }
+    }
+    count
+}
+
 pub(crate) fn flatten_json_field_values(raw: &serde_json::Value) -> Vec<f64> {
-    raw.get("values")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .flat_map(|v| {
-                    if let Some(inner) = v.as_array() {
-                        inner.iter().filter_map(|c| c.as_f64()).collect::<Vec<_>>()
-                    } else if let Some(f) = v.as_f64() {
-                        vec![f]
-                    } else {
-                        vec![]
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+    let mut values = Vec::new();
+    visit_json_field_values(raw, |value| values.push(value));
+    values
+}
+
+pub(crate) fn json_field_value_count(raw: &serde_json::Value) -> usize {
+    visit_json_field_values(raw, |_| {})
+}
+
+fn hash_field_value(hash: u64, value: f64) -> u64 {
+    hash.wrapping_mul(1099511628211)
+        .wrapping_add(value.to_bits())
+}
+
+pub(crate) fn field_values_hash(values: &[f64]) -> u64 {
+    values.iter().fold(1469598103934665603_u64, |hash, value| {
+        hash_field_value(hash, *value)
+    })
+}
+
+pub(crate) fn json_field_payload_signature(raw: &serde_json::Value) -> (usize, u64) {
+    let mut hash = 1469598103934665603_u64;
+    let count = visit_json_field_values(raw, |value| hash = hash_field_value(hash, value));
+    (count, hash)
 }
 
 pub(crate) fn json_field_grid(raw: &serde_json::Value) -> Option<[u32; 3]> {
@@ -77,6 +115,12 @@ pub(crate) fn json_field_grid(raw: &serde_json::Value) -> Option<[u32; 3]> {
 pub(crate) fn live_magnetization_values(
     snapshot: &SessionStateResponse,
 ) -> Option<(Vec<f64>, [u32; 3])> {
+    live_magnetization_values_ref(snapshot).map(|(values, grid)| (values.to_vec(), grid))
+}
+
+pub(crate) fn live_magnetization_values_ref(
+    snapshot: &SessionStateResponse,
+) -> Option<(&[f64], [u32; 3])> {
     snapshot.live_state.as_ref().and_then(|ls| {
         let mag = ls.latest_step.magnetization.as_deref()?;
         if mag.is_empty() || mag.len() % 3 != 0 || mag.iter().any(|value| !value.is_finite()) {
@@ -91,7 +135,7 @@ pub(crate) fn live_magnetization_values(
         } else {
             [point_count as u32, 1, 1]
         };
-        Some((mag.to_vec(), grid))
+        Some((mag, grid))
     })
 }
 
