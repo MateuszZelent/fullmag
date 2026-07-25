@@ -549,6 +549,9 @@ def amg_relax_policy_qualification_summary(
     grouped: dict[
         tuple[object, ...], dict[int, list[Mapping[str, object]]]
     ] = {}
+    executed_problem_ir_by_matrix_identity: dict[
+        tuple[str, str], set[str]
+    ] = {}
     failures: list[str] = []
     exact_matrix_identity_ok = True
     expected_policy = {
@@ -592,9 +595,20 @@ def amg_relax_policy_qualification_summary(
                 "has invalid executed_problem_ir_sha256"
             )
             exact_matrix_identity_ok = False
+        else:
+            matrix_identity = (
+                signature,
+                str(row.get("relaxation_algorithm") or ""),
+            )
+            executed_problem_ir_by_matrix_identity.setdefault(
+                matrix_identity,
+                set(),
+            ).add(executed_problem_ir)
         for field, expected in expected_policy.items():
             actual = row.get(field)
-            if field == "demag_relative_tolerance":
+            if expected is None and actual == "":
+                actual = None
+            elif field == "demag_relative_tolerance":
                 actual = as_float(actual)
             elif field.startswith("demag_amg_") and expected is not None:
                 actual = as_int(actual)
@@ -611,6 +625,19 @@ def amg_relax_policy_qualification_summary(
             for field in case_fields
         )
         grouped.setdefault(key, {}).setdefault(relax_type, []).append(row)
+
+    for matrix_identity, executed_problem_ir_hashes in sorted(
+        executed_problem_ir_by_matrix_identity.items()
+    ):
+        if len(executed_problem_ir_hashes) != 1:
+            signature, relaxation_algorithm = matrix_identity
+            failures.append(
+                "executed_problem_ir_sha256 differs across matrix cases for "
+                f"solver_mesh_signature={signature},"
+                f"relaxation_algorithm={relaxation_algorithm}: "
+                f"{sorted(executed_problem_ir_hashes)!r}"
+            )
+            exact_matrix_identity_ok = False
 
     if not grouped:
         failures.append("qualification contains no effective AMG relax type 18/6 rows")
@@ -4154,6 +4181,9 @@ def generated_domain_mesh_env(
     extra_env: dict[str, str],
     timeout_s: float | None,
 ) -> dict[str, str]:
+    explicit_domain_mesh = extra_env.get("FULLMAG_BENCH_DOMAIN_MESH")
+    if explicit_domain_mesh:
+        return {"FULLMAG_BENCH_DOMAIN_MESH": explicit_domain_mesh}
     if cache_dir is None or not benchmark_scenario_requires_shared_domain(scenario):
         return {}
     key = (
@@ -4228,6 +4258,20 @@ def canonical_problem_ir(
             timestep_policy=timestep_policy,
         )
         problem_ir = problem.to_ir(include_geometry_assets=True)
+        geometry_assets = problem_ir.get("geometry_assets")
+        if not isinstance(geometry_assets, dict):
+            raise ValueError("canonical ProblemIR is missing geometry_assets")
+        domain_asset = geometry_assets.get("fem_domain_mesh_asset")
+        if not isinstance(domain_asset, dict):
+            raise ValueError("canonical ProblemIR is missing fem_domain_mesh_asset")
+        resolved_domain_mesh_path = (
+            domain_mesh_path
+            if domain_mesh_path.is_absolute()
+            else REPO_ROOT / domain_mesh_path
+        )
+        domain_asset["mesh"] = json.loads(
+            resolved_domain_mesh_path.read_text(encoding="utf-8")
+        )
     finally:
         os.environ.clear()
         os.environ.update(previous_environment)
@@ -4653,6 +4697,13 @@ def run_backend(
             row["executed_problem_ir_sha256"] = hashlib.sha256(
                 problem_ir_payload
             ).hexdigest()
+            canonical_ir_dir = env.get("FULLMAG_BENCH_CANONICAL_IR_DIR")
+            if canonical_ir_dir:
+                retained_ir_dir = Path(canonical_ir_dir)
+                retained_ir_dir.mkdir(parents=True, exist_ok=True)
+                retained_ir_dir.joinpath(
+                    f"{backend_label}-{row['executed_problem_ir_sha256']}.json"
+                ).write_bytes(problem_ir_payload)
             command = problem_ir_execution_command(
                 binary=binary,
                 problem_ir_path=problem_ir_path,
@@ -6558,14 +6609,17 @@ def single_backend_case_label(row: Mapping[str, object]) -> str:
     if solver or preconditioner:
         parts.append(f"{solver or '-'}/{preconditioner or '-'}")
     if preconditioner in {"AMG", "OMIT"}:
+        def label_value(value: object) -> str:
+            return "-" if value is None or value == "" else str(value)
+
         parts.append(
             "amg="
-            f"{first_present(row.get('demag_amg_relax_type'), row.get('requested_demag_amg_relax_type')) or '-'}/"
-            f"{first_present(row.get('demag_amg_coarsening'), row.get('requested_demag_amg_coarsening')) or '-'}/"
-            f"{first_present(row.get('demag_amg_interpolation'), row.get('requested_demag_amg_interpolation')) or '-'}/"
-            f"{first_present(row.get('demag_amg_aggressive_coarsening'), row.get('requested_demag_amg_aggressive_coarsening')) or '-'}/"
-            f"{first_present(row.get('demag_amg_strength_threshold'), row.get('requested_demag_amg_strength_threshold')) or '-'}/"
-            f"{first_present(row.get('demag_amg_max_levels'), row.get('requested_demag_amg_max_levels')) or '-'}"
+            f"{label_value(first_present(row.get('demag_amg_relax_type'), row.get('requested_demag_amg_relax_type')))}/"
+            f"{label_value(first_present(row.get('demag_amg_coarsening'), row.get('requested_demag_amg_coarsening')))}/"
+            f"{label_value(first_present(row.get('demag_amg_interpolation'), row.get('requested_demag_amg_interpolation')))}/"
+            f"{label_value(first_present(row.get('demag_amg_aggressive_coarsening'), row.get('requested_demag_amg_aggressive_coarsening')))}/"
+            f"{label_value(first_present(row.get('demag_amg_strength_threshold'), row.get('requested_demag_amg_strength_threshold')))}/"
+            f"{label_value(first_present(row.get('demag_amg_max_levels'), row.get('requested_demag_amg_max_levels')))}"
         )
     return " ".join(parts)
 

@@ -434,6 +434,12 @@ fn run_json_summary(
             .iter()
             .map(|step| step.demag_solver_apply_wall_time_ns)
             .find(|duration| *duration > 0),
+        "wall_time_ns": result.steps.last().map(|step| step.wall_time_ns),
+        "exchange_wall_time_ns": result.steps.last().map(|step| step.exchange_wall_time_ns),
+        "demag_wall_time_ns": result.steps.last().map(|step| step.demag_wall_time_ns),
+        "rhs_wall_time_ns": result.steps.last().map(|step| step.rhs_wall_time_ns),
+        "extra_energy_wall_time_ns": result.steps.last().map(|step| step.extra_energy_wall_time_ns),
+        "snapshot_wall_time_ns": result.steps.last().map(|step| step.snapshot_wall_time_ns),
         "rhs_evals": result.steps.last().map(|step| step.rhs_evals),
         "total_rhs_evals": result
             .steps
@@ -834,6 +840,12 @@ mod tests {
                 },
                 fullmag_runner::StepStats {
                     demag_solver_apply_wall_time_ns: 99,
+                    wall_time_ns: 601,
+                    exchange_wall_time_ns: 101,
+                    demag_wall_time_ns: 211,
+                    rhs_wall_time_ns: 307,
+                    extra_energy_wall_time_ns: 13,
+                    snapshot_wall_time_ns: 17,
                     rhs_evals: 3,
                     ..fullmag_runner::StepStats::default()
                 },
@@ -851,6 +863,12 @@ mod tests {
         );
         assert_eq!(payload["rhs_evals"], 3);
         assert_eq!(payload["total_rhs_evals"], 5);
+        assert_eq!(payload["wall_time_ns"], 601);
+        assert_eq!(payload["exchange_wall_time_ns"], 101);
+        assert_eq!(payload["demag_wall_time_ns"], 211);
+        assert_eq!(payload["rhs_wall_time_ns"], 307);
+        assert_eq!(payload["extra_energy_wall_time_ns"], 13);
+        assert_eq!(payload["snapshot_wall_time_ns"], 17);
     }
 
     fn shared_domain_fem_problem() -> ProblemIR {

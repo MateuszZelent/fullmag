@@ -3255,9 +3255,13 @@ def test_task8_identity_capture_uses_materialized_policy_when_requested_print_le
     benchmark = load_benchmark_module()
     monkeypatch.syspath_prepend(str(REPO_ROOT / "packages" / "fullmag-py" / "src"))
     args = benchmark.parse_args(["--demag-print-level", "0"])
+    domain_mesh_path = (
+        REPO_ROOT
+        / "examples/assets/fem_performance/box500_airbox_exchange_demag_amg_coarse_v1.mesh.json"
+    )
     problem_ir = benchmark.canonical_problem_ir(
         mesh_path=tmp_path / "input.mesh.json",
-        domain_mesh_path=tmp_path / "domain.mesh.json",
+        domain_mesh_path=domain_mesh_path,
         scenario="box500_airbox_exchange_demag",
         integrator="heun",
         relaxation_algorithm="projected_gradient_bb",
@@ -4033,6 +4037,44 @@ def test_amg_relax_qualification_rejects_problem_ir_pair_drift() -> None:
     )
 
 
+def test_amg_relax_qualification_rejects_problem_ir_drift_across_matrix_cases() -> None:
+    benchmark = load_benchmark_module()
+    rows = amg_relax_qualification_rows()
+    cpu_profiler_off_rows = []
+    for row in rows:
+        cpu_profiler_off_rows.append(
+            {
+                **row,
+                "backend": "fem_cpu",
+                "step_profiler_enabled": False,
+                "executed_problem_ir_sha256": "c" * 64,
+            }
+        )
+    rows.extend(cpu_profiler_off_rows)
+
+    summary = amg_relax_qualification_summary(benchmark, rows)
+
+    assert summary["promotion_eligible"] is False
+    assert summary["exact_matrix_identity_gate_passed"] is False
+    assert any(
+        "executed_problem_ir_sha256 differs across matrix cases" in failure
+        for failure in summary["failures"]
+    )
+
+
+def test_amg_relax_qualification_normalizes_empty_optional_csv_fields() -> None:
+    benchmark = load_benchmark_module()
+    rows = amg_relax_qualification_rows()
+    for row in rows:
+        row["demag_amg_strength_threshold"] = ""
+        row["demag_amg_max_levels"] = ""
+
+    summary = amg_relax_qualification_summary(benchmark, rows)
+
+    assert summary["exact_matrix_identity_gate_passed"] is True
+    assert summary["promotion_eligible"] is True
+
+
 def test_amg_relax_qualification_summary_enforces_p50_p95_and_geomean_gates() -> None:
     benchmark = load_benchmark_module()
 
@@ -4255,6 +4297,56 @@ def test_demag_amg_qualification_suite_rejects_malformed_runtime_signature(
 
     with pytest.raises(ValueError, match="64 lowercase hexadecimal characters"):
         benchmark.load_amg_qualification_fixture_suite(corrupted_path)
+
+
+def test_canonical_problem_ir_inlines_explicit_shared_domain_mesh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(FULLMAG_PYTHON_SRC))
+    benchmark = load_benchmark_module()
+    mesh_path = REPO_ROOT / "examples/assets/box_40x20x10_coarse.mesh.json"
+    domain_mesh_path = (
+        REPO_ROOT
+        / "examples/assets/fem_performance/box500_airbox_exchange_demag_amg_coarse_v1.mesh.json"
+    )
+
+    problem_ir = benchmark.canonical_problem_ir(
+        mesh_path=mesh_path,
+        domain_mesh_path=domain_mesh_path,
+        scenario="box500_airbox_exchange_demag",
+        integrator="heun",
+        relaxation_algorithm="projected_gradient_bb",
+        steps=64,
+        dt=1.0e-13,
+        timestep_policy="fixed",
+        extra_env={},
+    )
+
+    domain_asset = problem_ir["geometry_assets"]["fem_domain_mesh_asset"]
+    expected_mesh = json.loads(domain_mesh_path.read_text(encoding="utf-8"))
+    assert domain_asset["mesh"] == expected_mesh
+
+
+def test_single_backend_case_label_preserves_explicit_zero_amg_values() -> None:
+    benchmark = load_benchmark_module()
+
+    label = benchmark.single_backend_case_label(
+        {
+            "scenario": "box500_airbox_exchange_demag",
+            "relaxation_algorithm": "nonlinear_cg",
+            "backend": "fem_gpu",
+            "demag_linear_solver": "CG",
+            "demag_preconditioner": "AMG",
+            "demag_amg_relax_type": 0,
+            "demag_amg_coarsening": 0,
+            "demag_amg_interpolation": 0,
+            "demag_amg_aggressive_coarsening": 0,
+            "demag_amg_strength_threshold": 0.0,
+            "demag_amg_max_levels": 0,
+        }
+    )
+
+    assert "amg=0/0/0/0/0.0/0" in label
 
 
 def test_demag_amg_qualification_suite_and_recipe_cover_the_exact_matrix() -> None:
@@ -4596,6 +4688,35 @@ def test_generated_domain_mesh_env_reuses_persistent_cache(
     assert first == second
     assert Path(first["FULLMAG_BENCH_DOMAIN_MESH"]).is_file()
     assert len(calls) == 1
+
+
+def test_generated_domain_mesh_env_preserves_explicit_domain_mesh(monkeypatch) -> None:
+    benchmark = load_benchmark_module()
+
+    def unexpected_export(**_kwargs):
+        raise AssertionError("explicit domain mesh must not be regenerated")
+
+    monkeypatch.setattr(
+        benchmark,
+        "export_generated_domain_mesh",
+        unexpected_export,
+    )
+
+    result = benchmark.generated_domain_mesh_env(
+        cache={},
+        cache_dir=None,
+        mesh_path=Path("input.mesh.json"),
+        scenario="box500_airbox_exchange_demag",
+        integrator="heun",
+        steps=64,
+        dt=1e-13,
+        timestep_policy="fixed",
+        thread_spec=benchmark.ThreadCountSpec(label="auto", env_value="auto"),
+        extra_env={"FULLMAG_BENCH_DOMAIN_MESH": "qualified-domain.mesh.json"},
+        timeout_s=10.0,
+    )
+
+    assert result == {"FULLMAG_BENCH_DOMAIN_MESH": "qualified-domain.mesh.json"}
 
 
 def test_generated_domain_mesh_env_materializes_box500_airbox_alias(
