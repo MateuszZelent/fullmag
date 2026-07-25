@@ -1,5 +1,6 @@
 use crate::field_slice::{FdmField, FemField};
 use crate::preview::quantity_spatial_domain;
+use crate::session::{resolved_current_field_source, ResolvedCurrentFieldSource};
 use crate::types::SessionStateResponse;
 use fullmag_runner::FemMeshPayload;
 
@@ -245,50 +246,28 @@ pub(super) fn extract_fdm_field(
     quantity_id: &str,
     n_comp: usize,
 ) -> Option<FdmField> {
-    if quantity_id == "m" {
-        if let Some((values, grid)) = live_magnetization_values(snapshot) {
-            return Some(fdm_field_with_plan_geometry(
-                snapshot,
-                FdmField {
-                    n_comp: 3,
-                    grid,
-                    values,
-                    origin: None,
-                    spacing: None,
-                    active_mask: None,
-                },
-            ));
+    let (values, grid) = match resolved_current_field_source(snapshot, quantity_id, n_comp)? {
+        ResolvedCurrentFieldSource::Latest(raw) => {
+            (flatten_json_field_values(raw), json_field_grid(raw)?)
         }
-    }
-    if let Some(raw) = snapshot.latest_fields.get(quantity_id) {
-        let values = flatten_json_field_values(raw);
-        let grid = json_field_grid(raw)?;
-        return Some(fdm_field_with_plan_geometry(
-            snapshot,
-            FdmField {
-                n_comp,
-                grid,
-                values,
-                origin: None,
-                spacing: None,
-                active_mask: None,
-            },
-        ));
-    }
-    if let Some(field) = snapshot.preview_cache.get(quantity_id) {
-        return Some(fdm_field_with_plan_geometry(
-            snapshot,
-            FdmField {
-                n_comp,
-                grid: field.preview_grid,
-                values: field.vector_field_values.clone(),
-                origin: None,
-                spacing: None,
-                active_mask: None,
-            },
-        ));
-    }
-    None
+        ResolvedCurrentFieldSource::Preview(field) => {
+            (field.vector_field_values.clone(), field.preview_grid)
+        }
+        ResolvedCurrentFieldSource::LegacyLiveMagnetization { values, grid } => {
+            (values.to_vec(), grid)
+        }
+    };
+    Some(fdm_field_with_plan_geometry(
+        snapshot,
+        FdmField {
+            n_comp,
+            grid,
+            values,
+            origin: None,
+            spacing: None,
+            active_mask: None,
+        },
+    ))
 }
 
 fn fdm_field_with_plan_geometry(snapshot: &SessionStateResponse, mut field: FdmField) -> FdmField {
@@ -317,19 +296,11 @@ fn extract_raw_field_values(
     quantity_id: &str,
     n_comp: usize,
 ) -> Option<Vec<f64>> {
-    if quantity_id == "m" {
-        if let Some((values, _grid)) = live_magnetization_values(snapshot) {
-            return Some(values);
-        }
+    match resolved_current_field_source(snapshot, quantity_id, n_comp)? {
+        ResolvedCurrentFieldSource::Latest(raw) => Some(flatten_json_field_values(raw)),
+        ResolvedCurrentFieldSource::Preview(field) => Some(field.vector_field_values.clone()),
+        ResolvedCurrentFieldSource::LegacyLiveMagnetization { values, .. } => Some(values.to_vec()),
     }
-    if let Some(raw) = snapshot.latest_fields.get(quantity_id) {
-        return Some(flatten_json_field_values(raw));
-    }
-    snapshot
-        .preview_cache
-        .get(quantity_id)
-        .map(|field| field.vector_field_values.clone())
-        .filter(|values| n_comp == 0 || values.len() % n_comp == 0)
 }
 
 pub(super) fn extract_fem_field(

@@ -23236,6 +23236,32 @@ async fn v2_magnetization_meta_vector_revision_and_etag_follow_provenance_field_
         vector_b, field_b,
         "FMVP must use provenance-rich field B instead of legacy magnetization A"
     );
+    let projection_b_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/projection/matrix.json?plane=xy&component=x&mode=projection&aggregation=mean_occupied&x_size=2&y_size=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(projection_b_response.status(), StatusCode::OK);
+    let projection_b_etag = projection_b_response
+        .headers()
+        .get(header::ETAG)
+        .expect("field B projection ETag")
+        .clone();
+    let projection_b = body_json(projection_b_response).await;
+    let projection_b_values = projection_b["values"]
+        .as_array()
+        .expect("field B projection rows")
+        .iter()
+        .flat_map(|row| row.as_array().expect("field B projection row"))
+        .filter_map(serde_json::Value::as_f64)
+        .collect::<Vec<_>>();
+    assert!(!projection_b_values.is_empty());
+    assert!(projection_b_values.iter().all(|value| *value == 0.0));
 
     {
         let mut guard = state.current_live_state.write().await;
@@ -23284,6 +23310,7 @@ async fn v2_magnetization_meta_vector_revision_and_etag_follow_provenance_field_
     assert_eq!(meta_c["stats"]["mean"], -1.0);
 
     let vector_c_response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v2/sessions/current/data/fields/m/samples/vector")
@@ -23318,6 +23345,27 @@ async fn v2_magnetization_meta_vector_revision_and_etag_follow_provenance_field_
         vector_c, field_c,
         "FMVP must advance from field B to field C"
     );
+    let projection_c_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/projection/matrix.json?plane=xy&component=x&mode=projection&aggregation=mean_occupied&x_size=2&y_size=1")
+                .header(header::IF_NONE_MATCH, projection_b_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(projection_c_response.status(), StatusCode::OK);
+    let projection_c = body_json(projection_c_response).await;
+    let projection_c_values = projection_c["values"]
+        .as_array()
+        .expect("field C projection rows")
+        .iter()
+        .flat_map(|row| row.as_array().expect("field C projection row"))
+        .filter_map(serde_json::Value::as_f64)
+        .collect::<Vec<_>>();
+    assert!(!projection_c_values.is_empty());
+    assert!(projection_c_values.iter().all(|value| *value == -1.0));
 }
 
 #[tokio::test]
