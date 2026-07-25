@@ -23125,6 +23125,202 @@ async fn field_meta_component_query_uses_live_magnetization_before_stale_latest_
 }
 
 #[tokio::test]
+async fn v2_magnetization_meta_vector_revision_and_etag_follow_provenance_field_frames() {
+    let state = test_app_state_with_live_session().await;
+    let legacy_a = vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+    let field_b = vec![0.0, 1.0, 0.0, 0.0, -1.0, 0.0];
+    let field_c = vec![-1.0, 0.0, 0.0, -1.0, 0.0, 0.0];
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_100,
+            latest_step: StepUpdateView {
+                step: 1,
+                time: 1.0e-12,
+                dt: 1.0e-13,
+                pseudo_time_s: None,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 100,
+                grid: [2, 1, 1],
+                fem_mesh_generation_id: None,
+                fem_mesh: None,
+                magnetization: Some(legacy_a.clone()),
+                per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
+                preview_field: None,
+                finished: false,
+            },
+        });
+        snapshot.field_quantity_revisions.insert("m".to_string(), 1);
+        snapshot.field_samples_revision = 1;
+
+        let session_id = snapshot.session.session_id.clone();
+        let latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [[0.0, 1.0, 0.0], [0.0, -1.0, 0.0]],
+                "source_step": 2,
+                "source_revision": 2,
+                "materialized_at_unix_ms": 1_700_000_000_200_u64,
+                "materialization_wall_time_ns": 200_u64,
+                "layout": { "grid_cells": [2, 1, 1] }
+            }
+        }))
+        .expect("provenance-rich field B should deserialize");
+        crate::session::apply_current_live_field_frame(
+            snapshot,
+            CurrentLiveFieldFrameRequest {
+                session_id,
+                latest_fields: Some(latest_fields),
+                preview_fields: None,
+                clear_preview_cache: false,
+            },
+        )
+        .expect("field B frame should apply");
+    }
+
+    let app = build_v2_router().with_state(state.clone());
+    let meta_b_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta?component=x")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_b_response.status(), StatusCode::OK);
+    let meta_b = body_json(meta_b_response).await;
+    assert_eq!(meta_b["source_step"], 2);
+    assert_eq!(meta_b["source_revision"], 2);
+    assert_eq!(meta_b["materialized_at_unix_ms"], 1_700_000_000_200_u64);
+    assert_eq!(meta_b["stats"]["min"], 0.0);
+    assert_eq!(meta_b["stats"]["max"], 0.0);
+    assert_eq!(meta_b["stats"]["mean"], 0.0);
+
+    let vector_b_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(vector_b_response.status(), StatusCode::OK);
+    let revision_b = vector_b_response
+        .headers()
+        .get("x-fullmag-field-revision")
+        .expect("field B revision header")
+        .clone();
+    let etag_b = vector_b_response
+        .headers()
+        .get(header::ETAG)
+        .expect("field B ETag")
+        .clone();
+    let vector_b = decode_fmvp_payload_f64(&body_bytes(vector_b_response).await);
+    assert_eq!(
+        vector_b, field_b,
+        "FMVP must use provenance-rich field B instead of legacy magnetization A"
+    );
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        let session_id = snapshot.session.session_id.clone();
+        let latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [[-1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]],
+                "source_step": 3,
+                "source_revision": 3,
+                "materialized_at_unix_ms": 1_700_000_000_300_u64,
+                "materialization_wall_time_ns": 300_u64,
+                "layout": { "grid_cells": [2, 1, 1] }
+            }
+        }))
+        .expect("provenance-rich field C should deserialize");
+        crate::session::apply_current_live_field_frame(
+            snapshot,
+            CurrentLiveFieldFrameRequest {
+                session_id,
+                latest_fields: Some(latest_fields),
+                preview_fields: None,
+                clear_preview_cache: false,
+            },
+        )
+        .expect("field C frame should apply");
+    }
+
+    let meta_c_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta?component=x")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_c_response.status(), StatusCode::OK);
+    let meta_c = body_json(meta_c_response).await;
+    assert_eq!(meta_c["source_step"], 3);
+    assert_eq!(meta_c["source_revision"], 3);
+    assert_eq!(meta_c["materialized_at_unix_ms"], 1_700_000_000_300_u64);
+    assert_eq!(meta_c["stats"]["min"], -1.0);
+    assert_eq!(meta_c["stats"]["max"], -1.0);
+    assert_eq!(meta_c["stats"]["mean"], -1.0);
+
+    let vector_c_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector")
+                .header(header::IF_NONE_MATCH, etag_b.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        vector_c_response.status(),
+        StatusCode::OK,
+        "field C must invalidate field B's ETag instead of returning 304"
+    );
+    let revision_c = vector_c_response
+        .headers()
+        .get("x-fullmag-field-revision")
+        .expect("field C revision header")
+        .clone();
+    let etag_c = vector_c_response
+        .headers()
+        .get(header::ETAG)
+        .expect("field C ETag")
+        .clone();
+    let vector_c = decode_fmvp_payload_f64(&body_bytes(vector_c_response).await);
+    assert_ne!(
+        revision_c, revision_b,
+        "field revision must advance from B to C"
+    );
+    assert_ne!(etag_c, etag_b, "field ETag must advance from B to C");
+    assert_eq!(
+        vector_c, field_c,
+        "FMVP must advance from field B to field C"
+    );
+}
+
+#[tokio::test]
 async fn field_meta_component_query_reports_scoped_object_stats() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
