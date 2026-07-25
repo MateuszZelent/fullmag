@@ -14,7 +14,7 @@ use serde::Deserialize;
 use super::field_resolution::{
     extract_fdm_field, extract_fem_field, fem_magnetic_node_indices,
     field_values_match_current_domain, flatten_json_field_values, json_field_grid,
-    live_magnetization_available, live_magnetization_values,
+    live_magnetization_available,
 };
 use crate::artifacts::{read_json_artifact_value, try_resolve_artifact_path};
 use crate::error::ApiError;
@@ -54,7 +54,7 @@ use crate::router_v2::handlers::sessions::status::{
 use crate::schemas::fields::*;
 use crate::session::{
     current_artifact_dir, latest_field_source_precedence, preview_cache_precedes_latest,
-    preview_field_source_precedence,
+    preview_field_source_precedence, resolved_current_field_source, ResolvedCurrentFieldSource,
 };
 use crate::types::AppState;
 use crate::types::SessionStateResponse;
@@ -759,6 +759,49 @@ fn preview_cache_is_fresher(snapshot: &SessionStateResponse, quantity_id: &str) 
     preview_cache_precedes_latest(snapshot, quantity_id)
 }
 
+fn resolved_current_field_values(
+    snapshot: &SessionStateResponse,
+    quantity_id: &str,
+    n_comp: usize,
+) -> Option<(Vec<f64>, [u32; 3], FieldFreshness)> {
+    match resolved_current_field_source(snapshot, quantity_id, n_comp)? {
+        ResolvedCurrentFieldSource::Latest(raw) => {
+            let values = flatten_json_field_values(raw);
+            let element_count = if n_comp > 0 {
+                values.len() / n_comp
+            } else {
+                values.len()
+            };
+            let grid = json_field_grid(raw).unwrap_or([element_count as u32, 1, 1]);
+            let freshness = latest_json_field_freshness(snapshot, raw, quantity_id);
+            Some((values, grid, freshness))
+        }
+        ResolvedCurrentFieldSource::Preview(field) => {
+            let freshness = preview_field_freshness(snapshot, field);
+            Some((
+                field.vector_field_values.clone(),
+                field.preview_grid,
+                freshness,
+            ))
+        }
+        ResolvedCurrentFieldSource::LegacyLiveMagnetization { values, grid } => Some((
+            values.to_vec(),
+            grid,
+            completed_field_freshness(
+                current_source_step(snapshot),
+                current_source_step(snapshot),
+                field_quantity_revision(snapshot, quantity_id),
+                snapshot
+                    .live_state
+                    .as_ref()
+                    .map(|state| state.updated_at_unix_ms.min(u64::MAX as u128) as u64)
+                    .unwrap_or(0),
+                0,
+            ),
+        )),
+    }
+}
+
 fn materializer_request_freshness(
     snapshot: &SessionStateResponse,
     status: &fullmag_runner::LiveFieldMaterializationStatus,
@@ -1066,53 +1109,6 @@ pub async fn get_field_meta(
         .map(str::trim)
         .filter(|id| !id.is_empty());
 
-    let latest_field_values = || {
-        if let Some(raw) = snapshot.latest_fields.get(quantity_id) {
-            let values = flatten_json_field_values(raw);
-            if !field_values_match_current_domain(snapshot, quantity_id, n_comp as usize, &values) {
-                return None;
-            }
-            let element_count = if n_comp > 0 {
-                values.len() / n_comp as usize
-            } else {
-                values.len()
-            };
-            let grid = json_field_grid(raw).unwrap_or([element_count as u32, 1, 1]);
-            Some((
-                values,
-                grid,
-                latest_json_field_freshness(snapshot, raw, quantity_id),
-            ))
-        } else {
-            None
-        }
-    };
-    let preview_field_values = || {
-        if let Some(field) = snapshot.preview_cache.get(quantity_id) {
-            if !field_values_match_current_domain(
-                snapshot,
-                quantity_id,
-                n_comp as usize,
-                &field.vector_field_values,
-            ) {
-                return None;
-            }
-            Some((
-                field.vector_field_values.clone(),
-                field.preview_grid,
-                preview_field_freshness(snapshot, field),
-            ))
-        } else {
-            None
-        }
-    };
-    let cached_field_values = || {
-        if preview_cache_is_fresher(snapshot, quantity_id) {
-            preview_field_values().or_else(latest_field_values)
-        } else {
-            latest_field_values().or_else(preview_field_values)
-        }
-    };
     let raw_values_opt: Option<(Vec<f64>, [u32; 3], FieldFreshness)> = if let Some(snapshot_id) =
         requested_snapshot_id
     {
@@ -1139,28 +1135,8 @@ pub async fn get_field_meta(
                 0,
             ),
         ))
-    } else if quantity_id == "m" {
-        cached_field_values().or_else(|| {
-            live_magnetization_values(snapshot).map(|(values, grid)| {
-                (
-                    values,
-                    grid,
-                    completed_field_freshness(
-                        current_source_step(snapshot),
-                        current_source_step(snapshot),
-                        field_quantity_revision(snapshot, quantity_id),
-                        snapshot
-                            .live_state
-                            .as_ref()
-                            .map(|state| state.updated_at_unix_ms.min(u64::MAX as u128) as u64)
-                            .unwrap_or(0),
-                        0,
-                    ),
-                )
-            })
-        })
     } else {
-        cached_field_values()
+        resolved_current_field_values(snapshot, quantity_id, n_comp as usize)
     };
 
     let materializer_status = materializer_status(snapshot, quantity_id)
@@ -1994,45 +1970,6 @@ pub async fn get_field_vector(
         .filter(|id| !id.is_empty());
 
     // Collect raw values under the lock, then drop the lock before any heavy work
-    let latest_field_values = || {
-        if let Some(raw) = snapshot.latest_fields.get(quantity_id) {
-            let values = flatten_json_field_values(raw);
-            if !field_values_match_current_domain(snapshot, quantity_id, n_comp, &values) {
-                return None;
-            }
-            let element_count = if n_comp > 0 {
-                values.len() / n_comp
-            } else {
-                values.len()
-            };
-            let grid = json_field_grid(raw).unwrap_or([element_count as u32, 1, 1]);
-            Some((values, grid))
-        } else {
-            None
-        }
-    };
-    let preview_field_values = || {
-        if let Some(field) = snapshot.preview_cache.get(quantity_id) {
-            if !field_values_match_current_domain(
-                snapshot,
-                quantity_id,
-                n_comp,
-                &field.vector_field_values,
-            ) {
-                return None;
-            }
-            Some((field.vector_field_values.clone(), field.preview_grid))
-        } else {
-            None
-        }
-    };
-    let cached_field_values = || {
-        if preview_cache_is_fresher(snapshot, quantity_id) {
-            preview_field_values().or_else(latest_field_values)
-        } else {
-            latest_field_values().or_else(preview_field_values)
-        }
-    };
     let raw_values_opt: Option<(Vec<f64>, [u32; 3])> = if let Some(snapshot_id) =
         requested_snapshot_id
     {
@@ -2047,10 +1984,9 @@ pub async fn get_field_vector(
             snapshot,
             snapshot_id,
         )?)
-    } else if quantity_id == "m" {
-        live_magnetization_values(snapshot).or_else(cached_field_values)
     } else {
-        cached_field_values()
+        resolved_current_field_values(snapshot, quantity_id, n_comp)
+            .map(|(values, grid, _freshness)| (values, grid))
     };
     let has_field_source = snapshot.latest_fields.get(quantity_id).is_some()
         || snapshot.preview_cache.get(quantity_id).is_some()
