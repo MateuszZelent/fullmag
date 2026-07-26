@@ -35,9 +35,14 @@ enum CpuThreadCapReason {
     FULLMAG_FEM_CPU_THREAD_CAP_EXTERNAL_AUTO_RESOLVED = 1,
     FULLMAG_FEM_CPU_THREAD_CAP_SMALL_MESH = 2,
     FULLMAG_FEM_CPU_THREAD_CAP_MEDIUM_MESH = 3,
-    FULLMAG_FEM_CPU_THREAD_CAP_GPU_BYPASS = 4,
+    FULLMAG_FEM_CPU_THREAD_CAP_GPU_DEFAULT_ONE = 4,
     FULLMAG_FEM_CPU_THREAD_CAP_AUTO_UNCAPPED = 5,
 };
+
+inline constexpr int FULLMAG_FEM_HOST_THREAD_POLICY_NONE =
+    FULLMAG_FEM_CPU_THREAD_CAP_NONE;
+inline constexpr int FULLMAG_FEM_HOST_THREAD_POLICY_GPU_DEFAULT_ONE =
+    FULLMAG_FEM_CPU_THREAD_CAP_GPU_DEFAULT_ONE;
 
 /*
  * Resolve CPU thread intent from environment variables.
@@ -51,14 +56,15 @@ CpuThreadRequest requested_cpu_threads();
 /*
  * Cap automatic CPU thread counts according to native FEM problem size.
  *
- * Small meshes avoid oversubscribing OpenMP overhead; large meshes keep the
- * requested count. GPU MFEM device requests bypass this cap.
+ * Small meshes avoid oversubscribing OpenMP overhead; large CPU meshes keep
+ * the requested count. Automatic GPU host policy resolves deliberately to one
+ * thread until an A/B-qualified default is promoted.
  */
 int auto_cpu_thread_cap_for_context(const Context &ctx, int requested_threads);
 int auto_cpu_thread_cap_reason_for_context(const Context &ctx, int requested_threads);
 
 /*
- * Apply the resolved CPU/OpenMP thread policy to the native FEM context.
+ * Apply the resolved host/OpenMP thread policy to the native FEM context.
  *
  * The context fields become the source of truth for telemetry and downstream
  * demag recovery loops; when OpenMP is compiled in, the runtime thread count is
@@ -67,7 +73,7 @@ int auto_cpu_thread_cap_reason_for_context(const Context &ctx, int requested_thr
  * It does not choose MFEM devices, manage contexts, execute steps, or publish
  * solver metrics.
  */
-void configure_cpu_openmp_runtime(Context &ctx);
+void configure_fem_host_runtime_threads(Context &ctx);
 
 /*
  * Emit one startup diagnostic for the selected CPU runtime.

@@ -2509,7 +2509,9 @@ impl NativeFemBackend {
             fsal_reused: 0,
             requested_omp_threads: 0,
             effective_omp_threads: 0,
-            cpu_thread_cap_reason: 0,
+            cpu_thread_cap_reason:
+                ffi::fullmag_fem_host_thread_policy_reason::FULLMAG_FEM_HOST_THREAD_POLICY_NONE
+                    as i32,
             demag_amg_relax_type: 0,
             demag_amg_coarsening: 0,
             demag_amg_interpolation: 0,
@@ -2851,7 +2853,9 @@ impl NativeFemBackend {
             fsal_reused: 0,
             requested_omp_threads: 0,
             effective_omp_threads: 0,
-            cpu_thread_cap_reason: 0,
+            cpu_thread_cap_reason:
+                ffi::fullmag_fem_host_thread_policy_reason::FULLMAG_FEM_HOST_THREAD_POLICY_NONE
+                    as i32,
             demag_amg_relax_type: 0,
             demag_amg_coarsening: 0,
             demag_amg_interpolation: 0,
@@ -3167,7 +3171,9 @@ impl NativeFemBackend {
             fsal_reused: 0,
             requested_omp_threads: 0,
             effective_omp_threads: 0,
-            cpu_thread_cap_reason: 0,
+            cpu_thread_cap_reason:
+                ffi::fullmag_fem_host_thread_policy_reason::FULLMAG_FEM_HOST_THREAD_POLICY_NONE
+                    as i32,
             demag_amg_relax_type: 0,
             demag_amg_coarsening: 0,
             demag_amg_interpolation: 0,

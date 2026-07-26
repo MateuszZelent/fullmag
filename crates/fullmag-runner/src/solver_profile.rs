@@ -135,7 +135,7 @@ fn cpu_thread_cap_reason_label(code: i32) -> &'static str {
         1 => "external-auto-resolved",
         2 => "auto-small-mesh-cap",
         3 => "auto-medium-mesh-cap",
-        4 => "gpu-bypass",
+        4 => "gpu-default-one",
         5 => "auto-uncapped",
         _ => "none",
     }
@@ -1385,7 +1385,7 @@ mod tests {
 
     use super::{
         native_solver_wall_time_ns, phase_time, SolverProfileConfig, SolverProfileState,
-        SolverProfileStepSample,
+        SolverProfileStepSample, SolverProfileThreading,
     };
     use crate::types::StepStats;
 
@@ -1398,6 +1398,19 @@ mod tests {
             emit_engine_log: false,
             persist_artifact: false,
         })
+    }
+
+    #[test]
+    fn gpu_default_one_is_reported_as_a_deliberate_resolved_policy() {
+        let threading = SolverProfileThreading::from_stats(&StepStats {
+            requested_fem_omp_threads: 40,
+            effective_fem_omp_threads: 1,
+            fem_cpu_thread_cap_reason: 4,
+            ..StepStats::default()
+        });
+
+        assert_eq!(threading.thread_mode, "resolved");
+        assert_eq!(threading.cap_reason, "gpu-default-one");
     }
 
     #[test]

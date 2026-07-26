@@ -5304,6 +5304,102 @@ def test_task8_capture_interaction_preset_preserves_explicit_thread_count() -> N
     assert args.thread_counts == "1"
 
 
+def test_gpu_host_thread_contract_requires_effective_request_and_device_hypre() -> None:
+    benchmark = load_benchmark_module()
+    row = {
+        "backend": "fem_gpu",
+        "requested_fem_omp_threads": 4,
+        "effective_fem_omp_threads": 1,
+        "fem_cpu_thread_cap_reason": "gpu-bypass",
+        "fem_demag_operator_mode": "device_hypre_poisson",
+        "hypre_execution_policy": "device",
+    }
+
+    failures = benchmark.gpu_host_thread_contract_failures(row, expected_threads=4)
+
+    assert failures == [
+        "effective_fem_omp_threads must equal requested value 4, got 1",
+        "fem_cpu_thread_cap_reason must not resolve to gpu-bypass",
+    ]
+
+
+def _gpu_host_thread_qualification_rows() -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    candidate_wall_ms = {1: 100.0, 2: 98.0, 4: 90.0, 8: 97.0}
+    for threads in (1, 2, 4, 8):
+        for profiler_enabled in (False, True):
+            for ui_surface in ("headless", "interactive"):
+                for repeat_index in range(5):
+                    rows.append(
+                        {
+                            "backend": "fem_gpu",
+                            "status": "ok",
+                            "requested_cpu_thread_spec": str(threads),
+                            "requested_fem_omp_threads": threads,
+                            "effective_fem_omp_threads": threads,
+                            "fem_demag_operator_mode": "device_hypre_poisson",
+                            "hypre_execution_policy": "device",
+                            "step_profiler_enabled": profiler_enabled,
+                            "ui_surface": ui_surface,
+                            "repeat_index": repeat_index,
+                            "wall_time_ms": candidate_wall_ms[threads] + repeat_index,
+                            "backend_create_wall_time_ms": 10.0 + repeat_index,
+                            "step_wall_time_ms": 5.0 + repeat_index,
+                            "callback_gap_estimate_ms": 1.0 + repeat_index,
+                            "artifact_writer_job_wall_time_ms": 0.5 + repeat_index,
+                            "host_cpu_oversubscribed": False,
+                        }
+                    )
+    return rows
+
+
+def test_gpu_host_thread_qualification_promotes_only_strict_winner() -> None:
+    benchmark = load_benchmark_module()
+
+    summary = benchmark.gpu_host_thread_policy_qualification_summary(
+        _gpu_host_thread_qualification_rows()
+    )
+
+    assert summary["status"] == "pass"
+    assert summary["resolved_default_threads"] == 4
+    assert summary["decision"] == "promote-qualified-default"
+    assert summary["expected_measured_row_count"] == 80
+    assert summary["observed_measured_row_count"] == 80
+
+
+def test_gpu_host_thread_qualification_retains_deliberate_default_one() -> None:
+    benchmark = load_benchmark_module()
+    rows = _gpu_host_thread_qualification_rows()
+    for row in rows:
+        if row["requested_cpu_thread_spec"] != "1":
+            row["wall_time_ms"] = 99.0 + int(row["repeat_index"])
+
+    summary = benchmark.gpu_host_thread_policy_qualification_summary(rows)
+
+    assert summary["status"] == "pass"
+    assert summary["resolved_default_threads"] == 1
+    assert summary["decision"] == "retain-deliberate-default-one"
+
+
+def test_gpu_host_thread_qualification_recipe_is_exact_managed_matrix() -> None:
+    recipe = just_recipe_source(
+        JUSTFILE.read_text(encoding="utf-8"),
+        "verify-fem-gpu-host-thread-policy-qualification",
+    )
+
+    assert "just ensure-managed-fem-runtime" in recipe
+    assert 'FULLMAG_BENCH_THREAD_COUNTS="1,2,4,8"' in recipe
+    assert 'FULLMAG_BENCH_REPEAT="5"' in recipe
+    assert recipe.count("--gpu-warmup") == 4
+    assert recipe.count("--repeat \"$FULLMAG_BENCH_REPEAT\"") == 4
+    assert recipe.count("--ui-surface headless") == 2
+    assert recipe.count("--ui-surface interactive") == 2
+    assert recipe.count("FULLMAG_FEM_STEP_PROFILE=0") == 2
+    assert recipe.count("FULLMAG_FEM_STEP_PROFILE=1") == 2
+    assert "--gpu-host-thread-qualification-inputs" in recipe
+    assert "--gpu-host-thread-qualification-output" in recipe
+
+
 def test_best_demag_policy_uses_row_requested_rtol_by_default() -> None:
     benchmark = load_benchmark_module()
     base_row = {
@@ -5713,6 +5809,41 @@ def test_performance_regression_case_key_normalizes_csv_values() -> None:
         [current_row],
         [baseline_row],
     ) == 1
+
+
+def test_performance_regression_case_key_treats_legacy_blank_preconditioner_as_none() -> None:
+    benchmark = load_benchmark_module()
+    legacy_row = {
+        "solver_mesh_signature": "mesh-a",
+        "backend": "fem_gpu",
+        "mesh_path": "mesh.json",
+        "scenario": "box500_airbox_exchange_demag",
+        "integrator": "heun",
+        "relaxation_algorithm": "nonlinear_cg",
+        "requested_relaxation_preconditioner_strategy": "",
+        "timestep_policy": "fixed",
+        "requested_cpu_thread_spec": "auto",
+        "requested_demag_solver": "CG",
+        "requested_demag_preconditioner": "AMG",
+        "requested_demag_relative_tolerance": "1e-08",
+        "requested_demag_absolute_tolerance": "",
+        "requested_demag_max_iterations": "500",
+        "requested_demag_print_level": "0",
+        "requested_demag_amg_relax_type": "18",
+        "requested_demag_amg_coarsening": "8",
+        "requested_demag_amg_interpolation": "6",
+        "requested_demag_amg_aggressive_coarsening": "1",
+        "requested_demag_amg_strength_threshold": "",
+        "requested_demag_amg_max_levels": "",
+    }
+    current_row = {
+        **legacy_row,
+        "requested_relaxation_preconditioner_strategy": "none",
+    }
+
+    assert benchmark.performance_regression_case_key(current_row) == (
+        benchmark.performance_regression_case_key(legacy_row)
+    )
 
 
 def test_pass_fail_summary_uses_row_requested_rtol_by_default() -> None:
