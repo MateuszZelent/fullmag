@@ -1,0 +1,229 @@
+{
+  "proofs": [
+    {
+      "browser": {
+        "name": "chromium",
+        "version": "148.0.7778.96"
+      },
+      "build": {
+        "commit": "2054cdde572f73f10b3a28239b2d6064dfb3fdb7",
+        "mode": "unspecified"
+      },
+      "cancellation": {
+        "adoptedAfterAbort": false,
+        "completed": false,
+        "requested": false
+      },
+      "dataset": {
+        "checksum": "4eb56b3153865c712b7bf6dcdcd9d487f99fc741156d07a22d9dc71e3976a371",
+        "fixture": "analysis-largest",
+        "rows": 1000000,
+        "series": 2,
+        "size": "largest"
+      },
+      "lifecycle": {
+        "listeners": 23,
+        "observers": 8,
+        "workers": 1
+      },
+      "memory": {
+        "baselineHeapBytes": 531296,
+        "peakHeapBytes": 102468688,
+        "retainedHeapBytes": 102468688
+      },
+      "recordedAt": "2026-07-26T06:14:32.710Z",
+      "schema": "fullmag.chart-performance-proof",
+      "version": 1,
+      "viewport3d": {
+        "contextLost": false,
+        "dirtyFrames": 0,
+        "drawingBufferHeight": 0,
+        "drawingBufferWidth": 0,
+        "fieldRequests": 0,
+        "mounted": false,
+        "topologyRequests": 0,
+        "unchangedBufferUploads": 0,
+        "webglBufferDelta": 0
+      },
+      "chart": {
+        "activeInstances": 2,
+        "createdInstances": 2,
+        "disposedInstances": 0,
+        "modelBuilds": 4,
+        "plannedPoints": 7200,
+        "redraws": 4,
+        "renderedPoints": 2400,
+        "setOptionCalls": 4
+      },
+      "scenario": {
+        "id": "analysis-open",
+        "iteration": 1,
+        "phase": "cold",
+        "sessionAbort": false
+      },
+      "timing": {
+        "longTasks": 1,
+        "p50Ms": 2055.3530680000003,
+        "p95Ms": 2055.3530680000003,
+        "samples": 1
+      },
+      "transport": {
+        "cacheHits": 0,
+        "cacheMisses": 1,
+        "cancelledRequests": 0,
+        "payloadBytes": 115248,
+        "requests": 1
+      }
+    },
+    {
+      "browser": {
+        "name": "chromium",
+        "version": "148.0.7778.96"
+      },
+      "build": {
+        "commit": "2054cdde572f73f10b3a28239b2d6064dfb3fdb7",
+        "mode": "unspecified"
+      },
+      "cancellation": {
+        "adoptedAfterAbort": false,
+        "completed": false,
+        "requested": false
+      },
+      "dataset": {
+        "checksum": "4eb56b3153865c712b7bf6dcdcd9d487f99fc741156d07a22d9dc71e3976a371",
+        "fixture": "analysis-largest",
+        "rows": 1000000,
+        "series": 2,
+        "size": "largest"
+      },
+      "lifecycle": {
+        "listeners": 23,
+        "observers": 8,
+        "workers": 1
+      },
+      "memory": {
+        "baselineHeapBytes": 531296,
+        "peakHeapBytes": 102468688,
+        "retainedHeapBytes": 102468688
+      },
+      "recordedAt": "2026-07-26T06:14:32.710Z",
+      "schema": "fullmag.chart-performance-proof",
+      "version": 1,
+      "viewport3d": {
+        "contextLost": false,
+        "dirtyFrames": 0,
+        "drawingBufferHeight": 0,
+        "drawingBufferWidth": 0,
+        "fieldRequests": 0,
+        "mounted": false,
+        "topologyRequests": 0,
+        "unchangedBufferUploads": 0,
+        "webglBufferDelta": 0
+      },
+      "chart": {
+        "activeInstances": 2,
+        "createdInstances": 165,
+        "disposedInstances": 163,
+        "modelBuilds": 270,
+        "plannedPoints": 645600,
+        "redraws": 270,
+        "renderedPoints": 4800,
+        "setOptionCalls": 270
+      },
+      "scenario": {
+        "id": "analysis-tab-switch",
+        "iteration": 100,
+        "phase": "warm",
+        "sessionAbort": false
+      },
+      "timing": {
+        "longTasks": 100,
+        "p50Ms": 224.3048009999984,
+        "p95Ms": 284.73407900000166,
+        "samples": 100
+      },
+      "transport": {
+        "cacheHits": 1,
+        "cacheMisses": 0,
+        "cancelledRequests": 0,
+        "payloadBytes": 0,
+        "requests": 0
+      }
+    },
+    {
+      "browser": {
+        "name": "chromium",
+        "version": "148.0.7778.96"
+      },
+      "build": {
+        "commit": "2054cdde572f73f10b3a28239b2d6064dfb3fdb7",
+        "mode": "unspecified"
+      },
+      "cancellation": {
+        "adoptedAfterAbort": false,
+        "completed": true,
+        "requested": true
+      },
+      "dataset": {
+        "checksum": "4eb56b3153865c712b7bf6dcdcd9d487f99fc741156d07a22d9dc71e3976a371",
+        "fixture": "analysis-largest",
+        "rows": 1000000,
+        "series": 2,
+        "size": "largest"
+      },
+      "lifecycle": {
+        "listeners": 23,
+        "observers": 8,
+        "workers": 1
+      },
+      "memory": {
+        "baselineHeapBytes": 531296,
+        "peakHeapBytes": 102468688,
+        "retainedHeapBytes": 102468688
+      },
+      "recordedAt": "2026-07-26T06:14:32.710Z",
+      "schema": "fullmag.chart-performance-proof",
+      "version": 1,
+      "viewport3d": {
+        "contextLost": false,
+        "dirtyFrames": 0,
+        "drawingBufferHeight": 0,
+        "drawingBufferWidth": 0,
+        "fieldRequests": 0,
+        "mounted": false,
+        "topologyRequests": 0,
+        "unchangedBufferUploads": 0,
+        "webglBufferDelta": 0
+      },
+      "chart": {
+        "activeInstances": 2,
+        "createdInstances": 165,
+        "disposedInstances": 163,
+        "modelBuilds": 270,
+        "plannedPoints": 645600,
+        "redraws": 270,
+        "renderedPoints": 4800,
+        "setOptionCalls": 270
+      },
+      "scenario": {
+        "id": "analysis-pending-abort",
+        "iteration": 1,
+        "phase": "warm",
+        "sessionAbort": true
+      },
+      "timing": {
+        "longTasks": 1,
+        "p50Ms": 2578.1539559999947,
+        "p95Ms": 2578.1539559999947,
+        "samples": 1
+      },
+      "transport": {
+        "cacheHits": 0,
+        "cacheMisses": 1,
+        "cancelledRequests": 1,
+        "payloadBytes": 0,
+        "requests": 1
+      }
+    }
+  ]
+}

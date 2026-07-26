@@ -10,6 +10,19 @@
   padding: var(--fm-space-3);
 }
 
+.fm-analysis-plots__tabs {
+  display: flex;
+  gap: var(--fm-space-1);
+  min-width: 0;
+  overflow-x: auto;
+  padding: var(--fm-space-2) var(--fm-space-3) 0;
+}
+
+.fm-analysis-plots__tab {
+  flex: 0 0 auto;
+  min-height: 28px;
+}
+
 .fm-analysis-plots__panel {
   display: grid;
   grid-template-rows: auto auto auto minmax(180px, 1fr) auto;
@@ -475,4 +488,41 @@
   width: 100%;
   accent-color: var(--fm-hysteresis-active);
   cursor: pointer;
+}
+
+.fm-quick-chart {
+  min-height: 152px;
+  position: relative;
+}
+
+.fm-quick-chart__canvas {
+  height: 148px;
+  min-width: 0;
+  width: 100%;
+}
+
+.fm-analysis-quick-chart-dock {
+  display: grid;
+  gap: var(--fm-space-2);
+  grid-template-columns: minmax(160px, 0.24fr) minmax(0, 1fr);
+  min-height: 180px;
+  padding: var(--fm-space-2) var(--fm-space-3);
+}
+
+.fm-analysis-quick-chart-dock__header {
+  align-content: start;
+  display: grid;
+  gap: var(--fm-space-1);
+}
+
+.fm-analysis-quick-chart-dock__header span {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-analysis-chart-export {
+  display: flex;
+  gap: var(--fm-space-1);
+  justify-content: flex-end;
+  padding-block: var(--fm-space-1);
 }

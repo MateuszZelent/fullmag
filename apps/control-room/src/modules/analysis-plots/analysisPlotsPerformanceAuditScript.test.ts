@@ -14,10 +14,6 @@ const chartDiagnosticsUrl = new URL(
   "./components/chartDiagnostics.ts",
   import.meta.url,
 );
-const chartSurfaceModelUrl = new URL(
-  "./components/chartSurfaceModel.ts",
-  import.meta.url,
-);
 
 describe("analysis plots performance audit", () => {
   it("is registered and verifies chart idle and lifecycle budgets", () => {
@@ -31,6 +27,24 @@ describe("analysis plots performance audit", () => {
     expect(existsSync(auditScriptUrl)).toBe(true);
 
     const auditScript = readFileSync(auditScriptUrl, "utf8");
+    expect(auditScript).toContain("assertChartPerformanceProof");
+    expect(auditScript).toContain("ChartPerformanceProof");
+    expect(auditScript).toContain("phase: \"cold\"");
+    expect(auditScript).toContain("phase: \"warm\"");
+    expect(auditScript).toContain("payloadBytes");
+    expect(auditScript).toContain("cacheHits");
+    expect(auditScript).toContain("cacheMisses");
+    expect(auditScript).toContain("modelBuilds");
+    expect(auditScript).toContain("plannedPoints");
+    expect(auditScript).toContain("listeners");
+    expect(auditScript).toContain("observers");
+    expect(auditScript).toContain("workers");
+    expect(auditScript).toContain("baselineHeapBytes");
+    expect(auditScript).toContain("retainedHeapBytes");
+    expect(auditScript).toContain("contextLost");
+    expect(auditScript).toContain("drawingBufferWidth");
+    expect(auditScript).toContain("adoptedAfterAbort");
+    expect(auditScript).toContain("writeFile");
     expect(auditScript).toContain("__FULLMAG_ENABLE_CHART_DIAGNOSTICS__");
     expect(auditScript).toContain("collectChartDiagnostics");
     expect(auditScript).toContain("collectChartSurfaceCount");
@@ -46,10 +60,7 @@ describe("analysis plots performance audit", () => {
   });
 
   it("keeps ECharts diagnostics opt-in and bounded", () => {
-    const source = [
-      readFileSync(chartSurfaceUrl, "utf8"),
-      readFileSync(chartSurfaceModelUrl, "utf8"),
-    ].join("\n");
+    const source = readFileSync(chartSurfaceUrl, "utf8");
     const diagnosticsSource = readFileSync(chartDiagnosticsUrl, "utf8");
 
     expect(source).toContain("recordChartInstanceCreated");

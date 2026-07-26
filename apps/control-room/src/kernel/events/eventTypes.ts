@@ -65,7 +65,7 @@ export interface KernelEventMap {
   };
   "footer:tab-requested": {
     reason?: string;
-    tab: "diagnostics" | "engine" | "logs" | "mesh" | "telemetry";
+    tab: "analysis" | "diagnostics" | "engine" | "logs" | "mesh" | "telemetry";
   };
   "diagnostics:recorder-open-requested": {
     source: string;
@@ -114,12 +114,17 @@ export interface KernelEventMap {
     step: number;
     time: number;
   };
-  "charts:add-series-requested": {
+  "analysis-plots:export-requested": {
+    chartId: string;
+    format: "csv" | "tsv" | "png";
+    source: ModuleId;
+  };
+  "analysis-plots:add-series-requested": {
     columnId: string;
     source: ModuleId;
     tableId: string;
   };
-  "charts:series-selected": {
+  "analysis-plots:series-selected": {
     chartId: string;
     quantity: string;
     resourceKey: string;
@@ -127,7 +132,7 @@ export interface KernelEventMap {
     source: ModuleId;
     tableId: string;
   };
-  "charts:range-selected": {
+  "analysis-plots:range-selected": {
     chartId: string;
     range: { fromValue: number; toValue: number } | null;
     source: ModuleId;

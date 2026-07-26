@@ -9,9 +9,9 @@
 
 [C] `analysis-plots` jest modułem inspekcji i postprocessingu danych naukowych w jednym workspace. Nie oblicza ukrytej fizyki, nie jest drugim modelem sesji i nie tworzy osobnego UX dla FDM/FEM. Źródła: `AGENTS.md`, `docs/specs/resource-first-control-room-api-v2.md` oraz `docs/specs/frontend-v2/01-module-kernel-architecture.md`.
 
-[C] Kanoniczna nazwa modułu, eventów i komend to `analysis-plots`; istniejące eventy `charts:*` są compatibility vocabulary do usunięcia w etapie migracji, a nie nazwą modułu. Preferencje wykresu nigdy nie zmieniają canonical Python ani `ProblemIR`.
+[C] Kanoniczna nazwa modułu, eventów i komend to `analysis-plots`. Compatibility vocabulary eventów z baseline została usunięta; identyfikatory wyboru `analysis:charts:*` pozostają stabilnymi identyfikatorami węzłów, nie eventami ani nazwą modułu. Preferencje wykresu nigdy nie zmieniają canonical Python ani `ProblemIR`.
 
-[V] Baseline ma działający manifest `analysis-plots` w `viewport-main`, deklarujący eventy `charts:*` i komendę `analysis-plots.open`: `apps/control-room/src/modules/analysis-plots/manifest.ts:L3-L33 @ 2054cdde572f73f10b3a28239b2d6064dfb3fdb7`.
+[V] Baseline miał manifest `analysis-plots` w `viewport-main` ze starym prefiksem eventów; etap 12 migruje wszystkie eventy do `analysis-plots:*`. Historyczny dowód baseline: `apps/control-room/src/modules/analysis-plots/manifest.ts:L3-L33 @ 2054cdde572f73f10b3a28239b2d6064dfb3fdb7`.
 
 ## 2. Audyt baseline
 

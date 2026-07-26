@@ -1,8 +1,8 @@
 # Analysis workbench refactor — aktywny plan wdrożenia
 
-**Status:** Active  
-**Data:** 2026-07-25  
-**Baseline SHA:** `2054cdde572f73f10b3a28239b2d6064dfb3fdb7`  
+**Status:** Complete
+**Data:** 2026-07-25
+**Baseline SHA:** `2054cdde572f73f10b3a28239b2d6064dfb3fdb7`
 **Spec:** `docs/specs/frontend-v2/16-charts-analysis-module.md`
 
 > **Dla agentów wdrażających:** wykonywać etapami TDD, z osobnym review gate po każdym etapie. Nie zmieniać physics/Python/ProblemIR dla preferencji wykresów.
@@ -53,9 +53,9 @@ Każdy etap poniżej ma własny RED/GREEN, browser proof, performance/memory gat
 
 ### Etap 1: Evidence i instrumentation gaps
 
-**Objective:** rozszerzyć runtime audit o pełną macierz bez zmiany UX.  
-**Exact files:** `apps/control-room/scripts/audit-chart-performance.mjs`, `audit-viewport-3d-memory-churn.mjs`, nowy focused test/audit helper pod `src/kernel/performance/`, package scripts/testy rejestracji.  
-**Interfaces:** emitować versioned JSON `ChartPerformanceProof` z scenario/build/browser/data identity i wszystkimi metrykami spec §10.  
+**Objective:** rozszerzyć runtime audit o pełną macierz bez zmiany UX.
+**Exact files:** `apps/control-room/scripts/audit-chart-performance.mjs`, `audit-viewport-3d-memory-churn.mjs`, nowy focused test/audit helper pod `src/kernel/performance/`, package scripts/testy rejestracji.
+**Interfaces:** emitować versioned JSON `ChartPerformanceProof` z scenario/build/browser/data identity i wszystkimi metrykami spec §10.
 **Migration:** brak danych/state migration.
 
 - **RED:** test fixture wykazuje brak payload bytes/cache/model/observer/listener/heap/WebGL/cancel fields.
@@ -68,7 +68,7 @@ Każdy etap poniżej ma własny RED/GREEN, browser proof, performance/memory gat
 
 ### Etap 2: Semantic descriptors i unit compatibility
 
-**Files:** nowe `src/shared/domain/analysis/chartContracts.ts`, `chartUnits.ts`; migracja `chartTableModel.ts`, frequency models; focused tests.  
+**Files:** nowe `src/shared/domain/analysis/chartContracts.ts`, `chartUnits.ts`; migracja `chartTableModel.ts`, frequency models; focused tests.
 **Interfaces:** dokładne typy `ChartDescriptor`, `ChartSeriesDescriptor`, `ChartCursor`, `ChartSelection`, `ChartRange` ze spec §7.1.
 
 - **RED:** mixed m/J/torque/residual zostaje odrzucone; kompatybilne SI/display units akceptowane.
@@ -81,7 +81,7 @@ Każdy etap poniżej ma własny RED/GREEN, browser proof, performance/memory gat
 
 ### Etap 3: Usunięcie server payload z workspace store
 
-**Files:** `analysisPlotsWorkspace.ts`, `useAnalysisPlotsWorkspace.ts`, controller, `ChartInspectorPanel.tsx`, tests.  
+**Files:** `analysisPlotsWorkspace.ts`, `useAnalysisPlotsWorkspace.ts`, controller, `ChartInspectorPanel.tsx`, tests.
 **Interfaces:** store zachowuje `tableId`, axes, range, selection row identity, display prefs; columns czytane z resource hook/shared selector.
 
 - **RED:** test zabrania `TableRowsResource`, arrays i payload fields w snapshot/persistence.
@@ -94,7 +94,7 @@ Każdy etap poniżej ma własny RED/GREEN, browser proof, performance/memory gat
 
 ### Etap 4: Bounded decode/cache i `ChartDataPlan`
 
-**Files:** table codec/cache/resource hook, nowe shared data-plan builders/worker protocol, adapters/tests.  
+**Files:** table codec/cache/resource hook, nowe shared data-plan builders/worker protocol, adapters/tests.
 **Interfaces:** `ChartDataPlan` ze spec; decoded columnar lease z AbortSignal i byte budget.
 
 - **RED:** oversized, aborted, revision mismatch, malformed, endpoint/extrema decimation tests.
@@ -108,7 +108,7 @@ Każdy etap poniżej ma własny RED/GREEN, browser proof, performance/memory gat
 
 ### Etap 5: Neutral shared renderer/model boundary
 
-**Files:** nowe `src/shared/analysis-charts/` contracts/model/ECharts adapter/surface; migracja `EChartsSurface`, `FrequencyDomainCharts`, tests.  
+**Files:** nowe `src/shared/analysis-charts/` contracts/model/ECharts adapter/surface; migracja `EChartsSurface`, `FrequencyDomainCharts`, tests.
 **Interfaces:** `ChartRenderModel`, renderer `mount/update/resize/export/dispose`; renderer-specific option prywatny.
 
 - **RED:** real lifecycle test init/update/event/observer/dispose i zero post-unmount callback.
@@ -122,7 +122,7 @@ Każdy etap poniżej ma własny RED/GREEN, browser proof, performance/memory gat
 
 ### Etap 6: Rozdzielenie Analysis workbench surfaces
 
-**Files:** thin `AnalysisPlotsView.tsx`, surface registry i `Overview/Energy/Dynamics/Convergence` components/models/tests.  
+**Files:** thin `AnalysisPlotsView.tsx`, surface registry i `Overview/Energy/Dynamics/Convergence` components/models/tests.
 **Interfaces:** każda surface konsumuje descriptor + render model status, nie resource hook bezpośrednio.
 
 - **RED:** surface quantity/default/state matrix tests.
@@ -136,7 +136,7 @@ Każdy etap poniżej ma własny RED/GREEN, browser proof, performance/memory gat
 
 ### Etap 7: Inspector Quick Chart
 
-**Files:** Inspector registry/panel adapter, shared Quick Chart view, descriptor selection adapter, tests.  
+**Files:** Inspector registry/panel adapter, shared Quick Chart view, descriptor selection adapter, tests.
 **Interfaces:** selected resource → `ChartDescriptor`; hover local; click `ChartSelection`.
 
 - **RED:** open/close przy 3D nie może fetchować field/topology ani dirty 3D.
@@ -150,7 +150,7 @@ Każdy etap poniżej ma własny RED/GREEN, browser proof, performance/memory gat
 
 ### Etap 8: Dock/aux ownership
 
-**Files:** `manifest.ts`, kernel slot/layout typings/host, slot adapters, tests/spec catalog if semantics change.  
+**Files:** `manifest.ts`, kernel slot/layout typings/host, slot adapters, tests/spec catalog if semantics change.
 **Interfaces:** `analysis-plots` contributes `viewport-main` + `panel-bottom`; slot-specific config only.
 
 - **RED:** duplicate payload fetch and duplicate cache entry test.
@@ -163,7 +163,7 @@ Każdy etap poniżej ma własny RED/GREEN, browser proof, performance/memory gat
 
 ### Etap 9: Selection i chart-to-viewport command
 
-**Files:** shared selection types, kernel event/command registry, chart/viewport adapters, tests.  
+**Files:** shared selection types, kernel event/command registry, chart/viewport adapters, tests.
 **Interfaces:** `ChartSelection`, cancellable `ChartViewportHandoff`; command completion resource.
 
 - **RED:** point click cannot load field implicitly; abort/session switch covered.
@@ -177,7 +177,7 @@ Każdy etap poniżej ma własny RED/GREEN, browser proof, performance/memory gat
 
 ### Etap 10: Export i provenance
 
-**Files:** shared export model, command contribution, facade only if existing persistence export is insufficient, tests/UI.  
+**Files:** shared export model, command contribution, facade only if existing persistence export is insufficient, tests/UI.
 **Interfaces:** CSV/TSV/PNG + provenance sidecar schema ze spec §11.
 
 - **RED:** numeric round-trip, unit/provenance, stale/degraded and abort tests.
@@ -191,7 +191,7 @@ Każdy etap poniżej ma własny RED/GREEN, browser proof, performance/memory gat
 
 ### Etap 11: Frequency-domain consolidation
 
-**Files:** `FrequencyDomainCharts.tsx`, Analysis frequency surfaces, shared models/renderer, Inspector sections/tests.  
+**Files:** `FrequencyDomainCharts.tsx`, Analysis frequency surfaces, shared models/renderer, Inspector sections/tests.
 **Interfaces:** common descriptors for response/eigenmodes/dispersion; Inspector remains detail, Analysis workbench overview/exploration.
 
 - **RED:** unit/trust/provenance/state parity and no private module import.
@@ -204,7 +204,7 @@ Każdy etap poniżej ma własny RED/GREEN, browser proof, performance/memory gat
 
 ### Etap 12: Compatibility cleanup
 
-**Files:** legacy adapters/events/types/tests/docs directly referencing `charts` alias or old row ownership.  
+**Files:** legacy adapters/events/types/tests/docs directly referencing `charts` alias or old row ownership.
 **Interfaces:** canonical `analysis-plots:*` vocabulary, migration map for persisted keys.
 
 - **RED:** repo scans fail on unallowlisted alias/direct fetch/private import.
@@ -217,7 +217,7 @@ Każdy etap poniżej ma własny RED/GREEN, browser proof, performance/memory gat
 
 ### Etap 13: Final stress i cutover
 
-**Files:** all audits/tests touched above, acceptance docs only after evidence.  
+**Files:** all audits/tests touched above, acceptance docs only after evidence.
 **Interfaces:** final `ChartPerformanceProof` artifact.
 
 - **RED:** run full matrix before enabling cutover; any missing metric is failure, not zero.

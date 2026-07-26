@@ -1,52 +1,63 @@
 import type { TableRowsResource } from "@/kernel/api/apiTypes";
-import type { AnalysisTableState } from "@/kernel/workspace/analysisPlotsWorkspace";
-
+import {
+  chartTableWindowFromBinary,
+  analysisColumnDescriptorsForQuery,
+  mergeChartTableWindows,
+  type ChartTableWindow,
+} from "@/shared/domain/analysis/chartDataPlan";
 import { DEFAULT_TABLE_CHART_COLUMNS } from "./chartTableModel";
 
-export const ANALYSIS_SCALAR_COLUMNS = Object.freeze([
-  ...DEFAULT_TABLE_CHART_COLUMNS,
-  "pseudo_time_s",
-  "active_runtime_s",
-] as const);
+export { ANALYSIS_CHART_COLUMNS as ANALYSIS_SCALAR_COLUMNS } from "@/shared/domain/analysis/chartDataPlan";
+import { ANALYSIS_CHART_COLUMNS as ANALYSIS_SCALAR_COLUMNS } from "@/shared/domain/analysis/chartDataPlan";
 
-const MAX_VISIBLE_TABLE_ROWS = 5_000;
+export interface AnalysisTableState {
+  cursor: number | undefined;
+  visibleTable: ChartTableWindow | null;
+}
 
-type AnalysisTableAction = {
-  advanceCursor?: boolean;
-  mode?: "append" | "replace";
-  resource: TableRowsResource;
-  type: "append";
-};
+type AnalysisTableAction =
+  | { type: "reset" }
+  | {
+      advanceCursor?: boolean;
+      mode?: "append" | "replace";
+      resource: ChartTableWindow;
+      type: "append";
+    };
 
 export function tableResourceReducer(
   state: AnalysisTableState,
   action: AnalysisTableAction,
 ): AnalysisTableState {
+  if (action.type === "reset") {
+    return { cursor: undefined, visibleTable: null };
+  }
   if (
-    (action.resource.resync_required || action.mode === "replace") &&
-    action.resource.rows.length === 0 &&
+    (action.resource.resyncRequired || action.mode === "replace") &&
+    action.resource.rowCount === 0 &&
     state.visibleTable &&
-    state.visibleTable.rows.length > 0
+    state.visibleTable.rowCount > 0
   ) {
     return state;
   }
 
-  if (action.resource.resync_required || action.mode === "replace") {
+  if (action.resource.resyncRequired || action.mode === "replace") {
     const cursor =
-      action.advanceCursor === false ? state.cursor : action.resource.cursor_end;
+      action.advanceCursor === false ? state.cursor : action.resource.cursorEnd;
     return {
       cursor,
-      visibleTable: trimTableRows(action.resource),
+      visibleTable: action.resource,
     };
   }
-  const visibleTable = mergeTableRows(state.visibleTable, action.resource);
+  const visibleTable = mergeChartTableWindows(
+    state.visibleTable,
+    action.resource,
+  );
   const cursor =
     action.advanceCursor === false
       ? state.cursor
-      :
-    state.cursor === action.resource.cursor_end
-      ? state.cursor
-      : action.resource.cursor_end;
+      : state.cursor === action.resource.cursorEnd
+        ? state.cursor
+        : action.resource.cursorEnd;
   if (visibleTable === state.visibleTable && cursor === state.cursor) {
     return state;
   }
@@ -73,32 +84,14 @@ export function tableRowsResourceFromBinary({
   };
   queryColumns: readonly string[];
   tableId: string;
-}): TableRowsResource | null {
-  const selectedColumns = columnsForQuery(columns, queryColumns);
+}): ChartTableWindow | null {
+  const selectedColumns = analysisColumnDescriptorsForQuery(columns, queryColumns);
   if (selectedColumns.length !== decoded.columnCount) return null;
-  const rows: number[][] = [];
-  for (let rowIndex = 0; rowIndex < decoded.rowCount; rowIndex++) {
-    const start = rowIndex * decoded.columnCount;
-    rows.push(
-      Array.from(
-        decoded.values.subarray(start, start + decoded.columnCount),
-      ),
-    );
-  }
-
-  return {
+  return chartTableWindowFromBinary({
     columns: selectedColumns,
-    cursor_end: decoded.cursorEnd,
-    cursor_start: decoded.cursorStart,
-    decimation: null,
-    resync_required: decoded.resyncRequired,
-    returned_rows: decoded.rowCount,
-    revision: decoded.revision,
-    rows,
-    schema_revision: decoded.schemaRevision,
-    table_id: tableId,
-    total_rows: decoded.totalRows,
-  };
+    decoded,
+    tableId,
+  });
 }
 
 export function tableRowsResourceFromScalarSample({
@@ -114,44 +107,33 @@ export function tableRowsResourceFromScalarSample({
     row: Record<string, number>;
   };
   tableId: string;
-}): TableRowsResource | null {
+}): ChartTableWindow | null {
   const revision =
     typeof sample.revision === "number"
       ? sample.revision
       : Number(sample.revision);
   if (!Number.isFinite(revision) || revision < 1) return null;
-  const selectedColumns = columnsForQuery(columns, queryColumns);
+  const selectedColumns = analysisColumnDescriptorsForQuery(columns, queryColumns);
   if (selectedColumns.length === 0) return null;
-  return {
+  return chartTableWindowFromBinary({
     columns: selectedColumns,
-    cursor_end: revision,
-    cursor_start: revision,
-    decimation: null,
-    resync_required: false,
-    returned_rows: 1,
-    revision,
-    rows: [
-      selectedColumns.map((column) =>
-        scalarSampleColumnValue(sample.row, column.column_id),
+    decoded: {
+      columnCount: selectedColumns.length,
+      cursorEnd: revision,
+      cursorStart: revision,
+      resyncRequired: false,
+      revision,
+      rowCount: 1,
+      schemaRevision: 1,
+      totalRows: revision,
+      values: Float64Array.from(
+        selectedColumns.map((column) =>
+          scalarSampleColumnValue(sample.row, column.column_id),
+        ),
       ),
-    ],
-    schema_revision: 1,
-    table_id: tableId,
-    total_rows: revision,
-  };
-}
-
-function columnsForQuery(
-  columns: readonly TableRowsResource["columns"][number][],
-  queryColumns: readonly string[],
-): TableRowsResource["columns"] {
-  const byId = new Map(columns.map((column) => [column.column_id, column]));
-  const selectedColumns: TableRowsResource["columns"] = [];
-  for (const columnId of queryColumns) {
-    const column = byId.get(columnId);
-    if (column) selectedColumns.push(column);
-  }
-  return selectedColumns;
+    },
+    tableId,
+  });
 }
 
 function scalarSampleColumnValue(
@@ -172,65 +154,10 @@ function scalarSampleColumnValue(
   }
 }
 
-function mergeTableRows(
-  current: TableRowsResource | null,
-  incoming: TableRowsResource,
-): TableRowsResource {
-  if (
-    !current ||
-    incoming.resync_required ||
-    incoming.cursor_start <= 1 ||
-    !sameColumns(current, incoming)
-  ) {
-    return trimTableRows(incoming);
-  }
-  const overlap = Math.max(0, current.cursor_end - incoming.cursor_start + 1);
-  const incomingRows =
-    overlap > 0 ? incoming.rows.slice(overlap) : incoming.rows;
-  if (incomingRows.length === 0) {
-    return current;
-  }
-
-  return trimTableRows({
-    ...incoming,
-    columns: current.columns,
-    cursor_start: current.cursor_start,
-    returned_rows: Math.min(
-      current.rows.length + incomingRows.length,
-      MAX_VISIBLE_TABLE_ROWS,
-    ),
-    rows: [...current.rows, ...incomingRows],
-  });
-}
-
-function trimTableRows(table: TableRowsResource): TableRowsResource {
-  if (table.rows.length <= MAX_VISIBLE_TABLE_ROWS) {
-    return table;
-  }
-
-  const rows = table.rows.slice(-MAX_VISIBLE_TABLE_ROWS);
-  return {
-    ...table,
-    cursor_start: table.cursor_end - rows.length + 1,
-    returned_rows: rows.length,
-    rows,
-  };
-}
-
-function sameColumns(left: TableRowsResource, right: TableRowsResource): boolean {
-  return (
-    left.columns.length === right.columns.length &&
-    left.columns.every(
-      (column, index) => column.column_id === right.columns[index]?.column_id,
-    )
-  );
-}
-
 export const __analysisTableRowsAdapterTestUtils = {
   analysisScalarColumns: ANALYSIS_SCALAR_COLUMNS,
   defaultTableChartColumns: DEFAULT_TABLE_CHART_COLUMNS,
   tableResourceReducer,
   tableRowsResourceFromScalarSample,
   tableRowsResourceFromBinary,
-  mergeTableRows,
 };

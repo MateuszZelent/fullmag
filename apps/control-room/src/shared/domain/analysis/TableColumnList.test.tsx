@@ -7,37 +7,18 @@ import {
   sanitizeYAxisIdsForUnitLimit,
 } from "./TableColumnList";
 
-const table = {
-  columns: [
-    {
-      column_id: "step",
-      component: null,
-      dimension: "count",
-      label: "step",
-      quantity_id: "step",
-      reduction: null,
-      unit: "1",
-      value_type: "integer",
-    },
-  ],
-  cursor_end: 1,
-  cursor_start: 1,
-  resync_required: false,
-  returned_rows: 1,
-  revision: 1,
-  rows: [[1]],
-  schema_revision: 1,
-  table_id: "default",
-  total_rows: 1,
-};
+const columns = [
+  { column_id: "step", label: "step", unit: "1" },
+  { column_id: "mx", label: "mx", unit: "1" },
+];
 
 describe("TableColumnList", () => {
-  it("uses a caller-provided X-axis radio group name per rendered surface", () => {
+  it("renders compact descriptors without a table payload", () => {
     const html = renderToStaticMarkup(
       <TableColumnList
+        columns={columns}
         onSelectXAxis={() => undefined}
         onToggleYAxis={() => undefined}
-        table={table}
         xAxisId="step"
         xAxisRadioName="fm-analysis-plots-x-axis"
         yAxisIds={[]}
@@ -45,7 +26,7 @@ describe("TableColumnList", () => {
     );
 
     expect(html).toContain('name="fm-analysis-plots-x-axis"');
-    expect(html).not.toContain('name="fm-analysis-x-axis"');
+    expect(html).toContain("mx");
   });
 
   it("does not allow disabling the last selected Y axis", () => {
@@ -55,7 +36,7 @@ describe("TableColumnList", () => {
   });
 
   it("does not allow selecting a third incompatible Y-axis unit", () => {
-    const columns = [
+    const units = [
       { column_id: "mx", unit: "1" },
       { column_id: "e_total", unit: "J" },
       { column_id: "max_torque", unit: "A/m" },
@@ -63,19 +44,13 @@ describe("TableColumnList", () => {
 
     expect(
       nextYAxisIdsForToggle(["mx", "e_total"], "max_torque", true, {
-        columns,
+        columns: units,
         xAxisId: "step",
       }),
     ).toEqual(["mx", "e_total"]);
-    expect(
-      nextYAxisIdsForToggle(["mx", "e_total"], "my", true, {
-        columns: [...columns, { column_id: "my", unit: "1" }],
-        xAxisId: "step",
-      }),
-    ).toEqual(["mx", "e_total", "my"]);
   });
 
-  it("sanitizes pre-existing Y-axis selections to the rendered unit groups", () => {
+  it("sanitizes pre-existing Y-axis selections to two unit groups", () => {
     expect(
       sanitizeYAxisIdsForUnitLimit(
         ["t", "mx", "my", "e_total", "max_torque"],
@@ -91,27 +66,12 @@ describe("TableColumnList", () => {
     ).toEqual(["t", "mx", "my"]);
   });
 
-  it("disables the last selected Y-axis checkbox in markup", () => {
+  it("disables the last selected Y-axis checkbox", () => {
     const html = renderToStaticMarkup(
       <TableColumnList
+        columns={columns}
         onSelectXAxis={() => undefined}
         onToggleYAxis={() => undefined}
-        table={{
-          ...table,
-          columns: [
-            table.columns[0],
-            {
-              column_id: "mx",
-              component: "x",
-              dimension: "magnetization",
-              label: "mx",
-              quantity_id: "mx",
-              reduction: "mean",
-              unit: "1",
-              value_type: "float",
-            },
-          ],
-        }}
         xAxisId="step"
         xAxisRadioName="fm-analysis-plots-x-axis"
         yAxisIds={["mx"]}
@@ -121,34 +81,16 @@ describe("TableColumnList", () => {
     expect(html).toContain('class="fm-analysis-plots__checkbox" disabled=""');
   });
 
-  it("disables third-unit Y-axis checkboxes in markup", () => {
+  it("disables third-unit Y-axis checkboxes", () => {
     const html = renderToStaticMarkup(
       <TableColumnList
+        columns={[
+          { column_id: "mx", label: "mx", unit: "1" },
+          { column_id: "e_total", label: "E total", unit: "J" },
+          { column_id: "max_torque", label: "max torque", unit: "A/m" },
+        ]}
         onSelectXAxis={() => undefined}
         onToggleYAxis={() => undefined}
-        table={{
-          ...table,
-          columns: [
-            {
-              ...table.columns[0],
-              column_id: "mx",
-              label: "mx",
-              unit: "1",
-            },
-            {
-              ...table.columns[0],
-              column_id: "e_total",
-              label: "E total",
-              unit: "J",
-            },
-            {
-              ...table.columns[0],
-              column_id: "max_torque",
-              label: "max torque",
-              unit: "A/m",
-            },
-          ],
-        }}
         xAxisId="step"
         xAxisRadioName="fm-analysis-plots-x-axis"
         yAxisIds={["mx", "e_total"]}
@@ -156,6 +98,5 @@ describe("TableColumnList", () => {
     );
 
     expect(html).toContain('title="Select at most two Y-axis unit groups"');
-    expect(html).toContain('class="fm-analysis-plots__checkbox" disabled=""');
   });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useReducer } from "react";
 
 import type { KernelApi } from "@/kernel/types";
 import { analysisPlotsWorkspaceStore } from "@/kernel/workspace/analysisPlotsWorkspace";
@@ -60,6 +60,7 @@ import {
 import { frequencyDomainChartSeriesForAnalysisPlots } from "./frequencyDomainSeriesAdapter";
 import {
   ANALYSIS_SCALAR_COLUMNS,
+  type AnalysisTableState,
   tableResourceReducer,
   tableRowsResourceFromBinary,
   tableRowsResourceFromScalarSample,
@@ -67,11 +68,15 @@ import {
 
 export function useAnalysisPlotsController(kernel: KernelApi) {
   const { bus, selection } = kernel;
-  const { range, tableState, xAxisId, yAxisIds } =
+  const { activeSurface, range, xAxisId, yAxisIds } =
     useAnalysisPlotsWorkspaceSelector((state) => state);
   const selectedPoint = useAnalysisPlotsWorkspaceSelector(
     (state) => state.selectedPoint,
   );
+  const [tableState, dispatchTableState] = useReducer(tableResourceReducer, {
+    cursor: undefined,
+    visibleTable: null,
+  } satisfies AnalysisTableState);
   const { cursor, visibleTable } = tableState;
 
   const scalarsRevision = useSessionStatusSelector(
@@ -83,6 +88,16 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
       ? null
       : { resources: { scalars_revision: scalarsRevision } },
   );
+  const loadTableRows =
+    loadScalars &&
+    (activeSurface === "overview" ||
+      activeSurface === "dynamics" ||
+      activeSurface === "convergence");
+  const loadEnergy =
+    loadScalars &&
+    (activeSurface === "overview" || activeSurface === "energy");
+  const loadFrequency =
+    activeSurface === "overview" || activeSurface === "frequency";
   const tableQuery = useMemo(
     () => buildAnalysisPlotsTableQuery({ cursor, range, xAxisId }),
     [cursor, range, xAxisId],
@@ -93,13 +108,13 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
   const tableRows = useTableRowsBinaryResource("default", {
     ...tableQuery,
     enabled: shouldFetchAnalysisTableRows({
-      hasVisibleRows: Boolean(visibleTable && visibleTable.rows.length > 0),
-      loadScalars,
+      hasVisibleRows: Boolean(visibleTable && visibleTable.rowCount > 0),
+      loadScalars: loadTableRows,
       range,
     }),
   });
   const solverEnergyHistory = useSolverEnergyHistoryResource(400, {
-    enabled: loadScalars,
+    enabled: loadEnergy,
   });
   const solverEnergySeries = useMemo(
     () =>
@@ -123,16 +138,16 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     ...frequencyDomainRouteOverride,
   };
   const frequencyDomainSpectrum = useFrequencyDomainEigenSpectrumResource({
-    enabled: frequencyDomainRoute.primaryChart === "modal-spectrum",
+    enabled: loadFrequency && frequencyDomainRoute.primaryChart === "modal-spectrum",
   });
   const frequencyDomainDispersion = useFrequencyDomainEigenDispersionResource({
-    enabled: frequencyDomainRoute.primaryChart === "dispersion",
+    enabled: loadFrequency && frequencyDomainRoute.primaryChart === "dispersion",
   });
   const frequencyDomainBranches = useFrequencyDomainEigenBranchesResource({
-    enabled: frequencyDomainRoute.primaryChart === "dispersion",
+    enabled: loadFrequency && frequencyDomainRoute.primaryChart === "dispersion",
   });
   const frequencyDomainResponse = useFrequencyDomainResponseSweepResource({
-    enabled: frequencyDomainRoute.primaryChart === "response-sweep",
+    enabled: loadFrequency && frequencyDomainRoute.primaryChart === "response-sweep",
   });
   const frequencyDomainSpectrumModel = useMemo(
     () => buildEigenSpectrumChartModel(frequencyDomainSpectrum.data),
@@ -193,6 +208,9 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
             ? "error"
           : frequencyDomainManifest.status;
 
+  const setActiveSurface = (surface: import("@/kernel/workspace/analysisPlotsWorkspace").AnalysisWorkbenchSurface) => {
+    analysisPlotsWorkspaceStore.setActiveSurface(surface);
+  };
   const setXAxisId = (columnId: string) => {
     analysisPlotsWorkspaceStore.setAxes(
       columnId,
@@ -218,10 +236,7 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
   };
   const clearRange = () => {
     if (range) {
-      analysisPlotsWorkspaceStore.setTableState({
-        cursor: undefined,
-        visibleTable: null,
-      });
+      dispatchTableState({ type: "reset" });
     }
     analysisPlotsWorkspaceStore.clearRange();
     emitRangeSelected(bus, null, xAxisId);
@@ -263,12 +278,22 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
   };
   const selectSeries = (series: ChartSeries) => {
     const event = analysisPlotsSeriesSelectedEvent(series);
-    bus.emit("charts:series-selected", {
+    bus.emit("analysis-plots:series-selected", {
       ...event,
       source: "analysis-plots",
     });
     recordChartSeriesSelectedEvent(event);
   };
+
+  useEffect(() => {
+    analysisPlotsWorkspaceStore.setAvailableColumns(
+      (tableColumns.data ?? []).map((column) => ({
+        column_id: column.column_id,
+        label: column.label || column.column_id,
+        unit: column.unit,
+      })),
+    );
+  }, [tableColumns.data]);
 
   useEffect(() => {
     const columns = tableColumns.data;
@@ -310,15 +335,12 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
       tableId: "default",
     });
     if (!resource) return;
-    const currentState = analysisPlotsWorkspaceStore.getSnapshot().tableState;
-    analysisPlotsWorkspaceStore.setTableState(
-      tableResourceReducer(currentState, {
-        advanceCursor: range ? false : undefined,
-        mode: range ? "replace" : "append",
-        resource,
-        type: "append",
-      }),
-    );
+    dispatchTableState({
+      advanceCursor: range ? false : undefined,
+      mode: range ? "replace" : "append",
+      resource,
+      type: "append",
+    });
   }, [range, tableColumns.data, tableRows.data]);
 
   useEffect(() => {
@@ -332,19 +354,16 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
         tableId: "default",
       });
       if (!resource) return;
-      const currentState = analysisPlotsWorkspaceStore.getSnapshot().tableState;
-      analysisPlotsWorkspaceStore.setTableState(
-        tableResourceReducer(currentState, {
-          advanceCursor: false,
-          resource,
-          type: "append",
-        }),
-      );
+      dispatchTableState({
+        advanceCursor: false,
+        resource,
+        type: "append",
+      });
     });
   }, [bus, tableColumns.data]);
 
   useEffect(() => {
-    return bus.on("charts:add-series-requested", (request) => {
+    return bus.on("analysis-plots:add-series-requested", (request) => {
       if (request.tableId !== "default") return;
       const columns = tableColumns.data;
       if (!columns) return;
@@ -362,7 +381,7 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
 
   useEffect(() => {
     recordChartDispatchSeriesRequest((columnId) => {
-      bus.emit("charts:add-series-requested", {
+      bus.emit("analysis-plots:add-series-requested", {
         columnId,
         source: "analysis-plots",
         tableId: "default",
@@ -376,6 +395,7 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
   );
 
   return {
+    activeSurface,
     clearRange,
     range,
     selectedPoint,
@@ -404,6 +424,7 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
             frequencyDomainResponseModel.diagnostics,
             frequencyDomainSpectrumModel.diagnostics,
           ]),
+    setActiveSurface,
     solverEnergySeries,
     solverEnergyStatus: solverEnergyHistory.status,
     setXAxisId,
@@ -605,7 +626,7 @@ function emitRangeSelected(
   xAxisId: string,
 ): void {
   const event = analysisPlotsRangeSelectedEvent({ range, xAxisId });
-  bus.emit("charts:range-selected", {
+  bus.emit("analysis-plots:range-selected", {
     ...event,
     source: "analysis-plots",
   });

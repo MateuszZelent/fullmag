@@ -15,49 +15,50 @@ describe("analysisPlotsWorkspaceStore", () => {
     resetAnalysisPlotsWorkspaceForTests();
   });
 
-  it("starts with production chart axes that fit the two-unit ECharts contract", () => {
-    expect(analysisPlotsWorkspaceStore.getSnapshot()).toMatchObject({
+  it("starts with production chart axes and no server payload", () => {
+    const snapshot = analysisPlotsWorkspaceStore.getSnapshot();
+
+    expect(snapshot).toMatchObject({
+      activeSurface: "overview",
+      availableColumns: [],
       xAxisId: "step",
       yAxisIds: ["mx", "my", "mz", "e_total"],
     });
+    expect("tableState" in snapshot).toBe(false);
+    expect("visibleTable" in snapshot).toBe(false);
+    expect("setTableState" in analysisPlotsWorkspaceStore).toBe(false);
+    expect(JSON.stringify(snapshot)).not.toContain("\"rows\"");
   });
 
-  it("updates chart axes without resetting the visible table window", () => {
-    const tableState = {
-      cursor: 3,
-      visibleTable: {
-        columns: [
-          {
-            column_id: "step",
-            component: null,
-            dimension: "count",
-            label: "step",
-            quantity_id: "step",
-            reduction: null,
-            unit: "1",
-            value_type: "integer",
-          },
-        ],
-        cursor_end: 3,
-        cursor_start: 1,
-        resync_required: false,
-        returned_rows: 3,
-        revision: 3,
-        rows: [[1], [2], [3]],
-        schema_revision: 1,
-        table_id: "default",
-        total_rows: 3,
-      },
-    };
-    analysisPlotsWorkspaceStore.setTableState(tableState);
+  it("stores the active surface as a compact preference", () => {
+    analysisPlotsWorkspaceStore.setActiveSurface("energy");
+    expect(analysisPlotsWorkspaceStore.getSnapshot().activeSurface).toBe("energy");
+  });
 
-    analysisPlotsWorkspaceStore.setAxes("t", ["mx", "my"]);
+  it("stores only compact column descriptors for cross-surface controls", () => {
+    analysisPlotsWorkspaceStore.setAvailableColumns([
+      { column_id: "step", label: "Step", unit: "1" },
+      { column_id: "mx", label: "mx", unit: "1" },
+    ]);
 
-    expect(analysisPlotsWorkspaceStore.getSnapshot()).toMatchObject({
-      tableState,
-      xAxisId: "t",
-      yAxisIds: ["mx", "my"],
+    expect(analysisPlotsWorkspaceStore.getSnapshot().availableColumns).toEqual([
+      { column_id: "step", label: "Step", unit: "1" },
+      { column_id: "mx", label: "mx", unit: "1" },
+    ]);
+  });
+
+  it("does not notify subscribers when column descriptors are unchanged", () => {
+    const columns = [{ column_id: "step", label: "Step", unit: "1" }];
+    analysisPlotsWorkspaceStore.setAvailableColumns(columns);
+    let notifications = 0;
+    const unsubscribe = analysisPlotsWorkspaceStore.subscribe(() => {
+      notifications += 1;
     });
+
+    analysisPlotsWorkspaceStore.setAvailableColumns([{ ...columns[0] }]);
+
+    unsubscribe();
+    expect(notifications).toBe(0);
   });
 
   it("does not notify subscribers when axes are unchanged", () => {
@@ -77,30 +78,15 @@ describe("analysisPlotsWorkspaceStore", () => {
     expect(notifications).toBe(0);
   });
 
-  it("does not notify subscribers when table state is unchanged", () => {
-    const tableState = analysisPlotsWorkspaceStore.getSnapshot().tableState;
-    let notifications = 0;
-    const unsubscribe = analysisPlotsWorkspaceStore.subscribe(() => {
-      notifications += 1;
-    });
-
-    analysisPlotsWorkspaceStore.setTableState(tableState);
-
-    unsubscribe();
-    expect(notifications).toBe(0);
-  });
-
-  it("stores chart ranges separately from visible table rows", () => {
+  it("stores chart ranges independently from resource data", () => {
     analysisPlotsWorkspaceStore.setRange({
       fromValue: 100,
       toValue: 200,
     });
 
-    expect(analysisPlotsWorkspaceStore.getSnapshot()).toMatchObject({
-      range: {
-        fromValue: 100,
-        toValue: 200,
-      },
+    expect(analysisPlotsWorkspaceStore.getSnapshot().range).toEqual({
+      fromValue: 100,
+      toValue: 200,
     });
 
     analysisPlotsWorkspaceStore.clearRange();
@@ -108,7 +94,7 @@ describe("analysisPlotsWorkspaceStore", () => {
     expect(analysisPlotsWorkspaceStore.getSnapshot().range).toBe(null);
   });
 
-  it("stores the selected chart cursor point as local chart state", () => {
+  it("stores the selected chart cursor point as bounded semantic state", () => {
     const point = {
       label: "mx",
       point: { rowIndex: 2, x: 3, y: 0.2 },

@@ -162,7 +162,7 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("targetPoints: clampInteger(");
     expect(auditScript).toContain("Number.isFinite(x) && Number.isFinite(y)");
     expect(auditScript).toContain("DEFAULT_TABLE_CHART_COLUMNS");
-    expect(auditScript).toContain("mergeTableRows");
+    expect(auditScript).toContain("mergeChartTableWindows");
     expect(auditScript).toContain("computePerformanceMicrobench.test.ts");
     expect(auditScript).toContain("makeLargeTopologyBuffer");
     expect(auditScript).toContain("makeLargeQualityBuffer");

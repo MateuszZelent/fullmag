@@ -181,6 +181,10 @@ const analysisPlotsViewPath = path.join(
   appRoot,
   "src/modules/analysis-plots/AnalysisPlotsView.tsx",
 );
+const analysisTableSurfacePath = path.join(
+  appRoot,
+  "src/modules/analysis-plots/components/AnalysisTableSurface.tsx",
+);
 const analysisTableRowsAdapterPath = path.join(
   appRoot,
   "src/modules/analysis-plots/tableRowsAdapter.ts",
@@ -1702,6 +1706,7 @@ function checkAnalysisPlotsStableResourceInputs() {
   const controllerSource = readFileSync(analysisPlotsControllerPath, "utf8");
   const modelSource = readFileSync(analysisPlotsModelPath, "utf8");
   const viewSource = readFileSync(analysisPlotsViewPath, "utf8");
+  const tableSurfaceSource = readFileSync(analysisTableSurfacePath, "utf8");
   const adapterSource = readFileSync(analysisTableRowsAdapterPath, "utf8");
   const chartTableSource = readFileSync(chartTableModelPath, "utf8");
   requireTokens(moduleSource, "analysis plots stable resource inputs", [
@@ -1728,13 +1733,15 @@ function checkAnalysisPlotsStableResourceInputs() {
     "buildScalarChartSeries(table,",
     "const chartSeries = useMemo(",
     "onRangeChange={onRangeChange}",
+  ]);
+  requireTokens(tableSurfaceSource, "analysis plots stable resource inputs", [
     "series={chartSeries}",
     "xAxisLabel={xAxisLabel}",
   ]);
   requireTokens(adapterSource, "analysis plots table rows adapter", [
     "ANALYSIS_SCALAR_COLUMNS",
-    "mergeTableRows",
-    "MAX_VISIBLE_TABLE_ROWS",
+    "mergeChartTableWindows",
+    "ChartTableWindow",
     "tableRowsResourceFromBinary",
     "tableRowsResourceFromScalarSample",
   ]);

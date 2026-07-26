@@ -1,29 +1,31 @@
-import type { TableRowsResource } from "@/kernel/api/apiTypes";
-
 export interface AxisColumnUnit {
   column_id: string;
   unit: string;
+}
+
+export interface AxisColumnDescriptor extends AxisColumnUnit {
+  label: string;
 }
 
 const MAX_Y_AXIS_UNIT_GROUPS = 2;
 const THIRD_UNIT_DISABLED_REASON = "Select at most two Y-axis unit groups";
 
 export function TableColumnList({
+  columns,
   onSelectXAxis,
   onToggleYAxis,
-  table,
   xAxisId,
   xAxisRadioName,
   yAxisIds,
 }: {
+  columns: readonly AxisColumnDescriptor[] | null;
   onSelectXAxis: (id: string) => void;
   onToggleYAxis: (id: string, enabled: boolean) => void;
-  table: TableRowsResource | null;
   xAxisId: string;
   xAxisRadioName: string;
   yAxisIds: string[];
 }) {
-  if (!table) {
+  if (!columns) {
     return <div className="fm-analysis-plots__empty">No table schema</div>;
   }
   return (
@@ -34,13 +36,13 @@ export function TableColumnList({
         <span>Name</span>
         <span>Unit</span>
       </div>
-      {table.columns.map((column) => {
+      {columns.map((column) => {
         const yAxisChecked = yAxisIds.includes(column.column_id);
         const nextCheckedIds = nextYAxisIdsForToggle(
           yAxisIds,
           column.column_id,
           true,
-          { columns: table.columns, xAxisId },
+          { columns, xAxisId },
         );
         const exceedsUnitLimit =
           !yAxisChecked && !nextCheckedIds.includes(column.column_id);
@@ -69,8 +71,8 @@ export function TableColumnList({
               disabled={yAxisDisabled}
               title={checkboxTitle}
               type="checkbox"
-              onChange={(e) =>
-                onToggleYAxis(column.column_id, e.target.checked)
+              onChange={(event) =>
+                onToggleYAxis(column.column_id, event.target.checked)
               }
             />
             <span className="fm-analysis-plots__column-label">
