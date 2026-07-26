@@ -26,6 +26,7 @@
 | state store | store unit test and cross-module import check |
 | inspector edit | draft/validate/commit/failure tests |
 | viewport renderer | lifecycle test, dirty-loop test, resource cleanup test |
+| Analysis or Quick Chart | unit/dimension model test, relevant/irrelevant invalidation, real renderer cleanup, request/model/redraw audit, 3D coexistence stress, screenshot and keyboard/a11y proof |
 | geometry object lifecycle | scene transaction hook test, explorer badge test, inspector draft/commit/rejection test, command gate test, primitive/fallback wireframe viewport test, mesh-build invalidation test |
 | CSS/layout | design contract test, screenshot or visual check once implementation exists |
 | interactive chrome | shadcn/ui-style primitive usage test and accessibility check |

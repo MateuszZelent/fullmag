@@ -19,10 +19,6 @@
 - Nie dodawać nowej fizyki do `Context`, `mfem_bridge.cpp`, generycznego dispatchu ani orkiestratora. Właściciele to odpowiednio subsystem demag, subsystem relaxation, runner publication i resource-first API.
 - Profiler pozostaje opt-in, bounded i bez alokacji próbek, serializacji oraz I/O, gdy `enabled=false`.
 - Preview zachowuje domyślną rozdzielczość, maskę aktywnego obszaru, jednostki, quantity semantics i ostatnią kompletną klatkę. Obniżenie jakości jest poza zakresem tego planu.
-- Istniejące stage-scoped mesh/dedup, background HTTP publisher, CUDA preview snapshots, pending handoff i `last_good` są punktami rozszerzenia, nie kodem do zastąpienia. Każdy task zaczyna się od testu potwierdzającego aktualny kontrakt i usuwa wyłącznie zmierzony koszt.
-- Thin `/v2/sessions/current/status` pozostaje revision-driven. Szczegóły częstotliwości publishera należą do diagnostics, a świeżość pól do zasobów data/fields; `time_to_tolerance_seconds` jest własnością lifecycle wykonania etapu.
-- Każdy wariant natywnego runtime ma hash-addressed bundle root, manifest, zestaw bibliotek i jawny mechanizm wyboru/odtworzenia. Rebuild nie może nadpisać jedynej kopii baseline'u.
-- Task badawczy zakończony `no_go` usuwa cały prototype/runtime selection z normalnego drzewa; pozostają wyłącznie nota, test/oracle potrzebny do reprodukcji wyniku i raport kwalifikacji.
 - Wszystkie natywne FEM/MFEM/CUDA/HYPRE buildy oraz dowody runtime wykonywać przez zarządzane receptury `just`. Hostowe `cargo test` i testy Pythona są testami pomocniczymi, nie końcowym dowodem GPU.
 - Zmiany OpenAPI wykonywać resource-first: najpierw ADR/spec/schema, następnie generacja klienta; nie edytować ręcznie plików wygenerowanych.
 - Zmiany planera/crossover wymagają podczas wykonania umiejętności `capability-matrix-check`; zmiany numeryczne preconditionera i delta-potential wymagają najpierw publikacyjnej noty fizycznej.
@@ -51,7 +47,7 @@ Po Task 2 każde porównanie używa następujących znaczeń:
 
 | Metryka | Definicja | Źródło |
 |---|---|---|
-| `solver_steps_per_second` | zaakceptowane kroki / suma czasu faz natywnego solvera w tym samym domkniętym oknie (`native_solver_wall_time_ns`), bez callbacku/publikacji | profiler solvera |
+| `solver_steps_per_second` | zaakceptowane kroki / suma natywnego `StepStats.wall_time_ns` w oknie | profiler solvera |
 | `end_to_end_steps_per_second` | zaakceptowane kroki / monotoniczny czas od pierwszego do ostatniego kroku w oknie | profiler przedziałowy |
 | `published_steps_per_second` | różnica numerów kroków skutecznie opublikowanych / monotoniczny czas publikacji | publisher worker |
 | `time_to_tolerance_seconds` | monotoniczny czas od startu etapu do potwierdzonego stop reason spełniającego tolerancję | lifecycle etapu |
@@ -87,13 +83,10 @@ flowchart TD
   T7 --> T11["T11: GPU exchange-mass preconditioner"]
   T4 --> T12["T12: host OpenMP 1/2/4/8"]
   T5 --> T13["T13: NVTX i Nsight"]
-  T7 --> T13
-  T8 --> T13
   T9 --> T14["T14: głębszy tuning HYPRE"]
   T12 --> T15["T15: skalibrowany crossover CPU/GPU"]
   T13 --> T16["T16: CUDA Graphs/fusion go-no-go"]
-  T9 --> T17["T17: delta-potential research gate"]
-  T14 --> T17
+  T13 --> T17["T17: delta-potential research gate"]
   T2 --> T18["T18: końcowa kwalifikacja"]
   T5 --> T18
   T6 --> T18
@@ -119,8 +112,7 @@ Tasks 10, 11, 14, 15, 16 i 17 są warunkowe. Ich brak promocji nie blokuje zamkn
 - `benchmarks/fem-gpu/accepted/rtx4080-sm89/` — promowany baseline po końcowej kwalifikacji.
 - `scripts/inspect_cuda_architectures.py` i `scripts/test_inspect_cuda_architectures.py` — parser `cuobjdump` i fail-closed arch gate.
 - `crates/fullmag-cli/src/solver_profile_persistence.rs` — bounded worker JSONL profilu.
-- `crates/fullmag-cli/src/live_publisher_diagnostics.rs` — wydzielone bounded telemetry publishera bez dalszego rozrostu orkiestratora.
-- `crates/fullmag-cli/src/stage_heartbeat.rs` — lekki stage heartbeat bez pól numerycznych i payloadów.
+- `crates/fullmag-runner/src/fem/relax/preview_worker.rs` — bounded async materialization worker.
 - `backends/fem/core/demag_solver_policy.hpp` i `backends/fem/core/demag_solver_policy.cpp` — jeden natywny właściciel defaultów i resolved AMG policy.
 - `backends/fem/gpu/cuda/relaxation/exchange_mass_preconditioner.hpp` i `backends/fem/gpu/cuda/relaxation/exchange_mass_preconditioner.cpp` — opcjonalny device-resident preconditioner.
 - `docs/physics/0581-fem-gpu-direct-minimizer-preconditioning.md` — kontrakt SPD, jednostki, warianty i walidacja.
@@ -133,9 +125,9 @@ Tasks 10, 11, 14, 15, 16 i 17 są warunkowe. Ich brak promocji nie blokuje zamkn
 
 - `scripts/analysis/fem_gpu_benchmark.py`, `scripts/test_validate_fem_relaxation_runtime_log.py`, `justfile` — fixture, statystyki, semantyczne performance gates.
 - `crates/fullmag-runner/src/solver_profile.rs`, `crates/fullmag-runner/src/types.rs` — monotoniczne okna, fazy hosta i lekkie updates.
-- `crates/fullmag-runner/src/fem/relax/direct_minimizer.rs`, `llg_overdamped.rs`, `preview.rs` — brak per-step mesh i domknięcie istniejącego async preview dla nadal synchronicznych quantity.
+- `crates/fullmag-runner/src/fem/relax/direct_minimizer.rs`, `llg_overdamped.rs`, `preview.rs` — brak per-step mesh i async preview.
 - `crates/fullmag-cli/src/step_utils.rs`, `orchestrator.rs`, `live_workspace.rs`, `types.rs` — move semantics, heartbeat, worker publication.
-- `crates/fullmag-api/src/schemas/status.rs`, `schemas/diagnostics.rs`, `schemas/fields.rs`, handlers diagnostics/data — prawdziwe rate metrics i freshness we właściwych zasobach; thin status zawiera tylko wskaźniki/revisions.
+- `crates/fullmag-api/src/schemas/status.rs`, `schemas/diagnostics.rs`, `router_v2/handlers/sessions/status.rs` — prawdziwe rate metrics.
 - `apps/control-room/src/modules/footer/FooterTelemetry.tsx`, `FooterDiagnostics.tsx` i ich testy — jawne solver/end-to-end/published oraz current/delta/cumulative.
 - `docs/adr/0011-resource-first-api.md`, `docs/specs/resource-first-control-room-api-v2.md` — kontrakt metryk.
 - `crates/fullmag-fem-sys/build.rs`, `scripts/export_fem_gpu_runtime.sh`, `scripts/validate_managed_fem_runtime_bundle.py`, `compose.yaml`, `docker/fem-gpu/Dockerfile` — architektury i integralność bundle.
@@ -159,7 +151,6 @@ Tasks 10, 11, 14, 15, 16 i 17 są warunkowe. Ich brak promocji nie blokuje zamkn
 - Create: `benchmarks/fem-gpu/accepted/rtx4080-sm89/benchmark.csv`
 - Create: `benchmarks/fem-gpu/accepted/rtx4080-sm89/summary.json`
 - Create: `benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json`
-- Create at execution: `.fullmag/runtimes/fem-gpu-variants/pre-remediation-sm52-<manifest-sha256>/snapshot.json`
 - Modify: `scripts/analysis/fem_gpu_benchmark.py`
 - Modify: `scripts/test_validate_fem_relaxation_runtime_log.py`
 - Modify: `justfile`
@@ -167,7 +158,7 @@ Tasks 10, 11, 14, 15, 16 i 17 są warunkowe. Ich brak promocji nie blokuje zamkn
 **Interfaces:**
 
 - Consumes: istniejące `--reuse-generated-domain-mesh`, `--accepted-baseline`, `--repeat`, `--gpu-warmup` i `solver_mesh_signature`.
-- Produces: `--fixture-manifest PATH`, `--require-fixture-identity`, rozkłady `p50/p95/stddev`, hash-addressed snapshot całego baseline runtime oraz recepturę `verify-fem-gpu-performance-regression` wymagającą baseline'u.
+- Produces: `--fixture-manifest PATH`, `--require-fixture-identity`, rozkłady `p50/p95/stddev` oraz recepturę `verify-fem-gpu-performance-regression` wymagającą baseline'u.
 
 - [ ] **Step 1: Dodać failing tests dla fixture identity i statystyk**
 
@@ -296,9 +287,7 @@ Receptura najpierw wywołuje `just ensure-managed-fem-runtime`, następnie `dock
 
 Receptura ma fail-closed, jeśli urządzenie nie pasuje do `environment.json`; nie może porównywać np. RTX 4080 do innego GPU jako tego samego baseline'u.
 
-- [ ] **Step 6: Zamrozić binarny runtime i zarejestrować pre-remediation baseline**
-
-Przed pierwszym rebuildem skopiować lub utworzyć hardlink snapshot całego zwalidowanego bundle do `.fullmag/runtimes/fem-gpu-variants/pre-remediation-sm52-<manifest-sha256>/`. `snapshot.json` zapisuje SHA-256 manifestu, `libfullmag_fem`, faktycznie załadowanego HYPRE/MFEM/libCEED, wynik arch inspection, GPU UUID/name/compute capability, driver/toolkit i komendę wyboru tego bundle. Test restore uruchamia walidator na snapshot root i potwierdza, że późniejszy eksport do `fem-gpu-host` nie zmienia inode/hash snapshotu. Sam CSV bez odtwarzalnych bibliotek nie jest baseline'em architektury.
+- [ ] **Step 6: Zarejestrować pre-remediation baseline**
 
 Run:
 
@@ -310,7 +299,7 @@ FULLMAG_BENCH_DEMAG_AMG_RELAX_TYPES=6 \
 just verify-fem-gpu-demag-performance-benchmark
 ```
 
-Expected: pięć porównywalnych GPU runs, jedna signature, CPU oracle, p50/p95/stddev, residual i synchronizacje. Skopiować identyczne CSV/summary/environment do `reference/pre-remediation` jako niezmienny historyczny punkt oraz do `accepted` jako bieżący baseline wymagany przez następne tasks. `environment.json` zapisuje osobno target GPU `sm_89`, faktyczny kod bundle `sm_52`/PTX, hash-addressed bundle root i wszystkie library hashes, aby późniejsze A/B architektury było rzeczywiście odtwarzalne.
+Expected: pięć porównywalnych GPU runs, jedna signature, CPU oracle, p50/p95/stddev, residual i synchronizacje. Skopiować identyczne CSV/summary/environment do `reference/pre-remediation` jako niezmienny historyczny punkt oraz do `accepted` jako bieżący baseline wymagany przez następne tasks. `environment.json` zapisuje osobno target GPU `sm_89` i faktyczny kod bundle `compute_52 PTX-JIT`, aby późniejsze A/B architektury pozostało porównywalne.
 
 - [ ] **Step 7: GREEN i commit**
 
@@ -344,7 +333,6 @@ git commit -m "test: freeze FEM GPU performance baseline"
 
 - Consumes: `StepStats`, monotoniczny `Instant`, istniejący bounded `SolverProfileState`.
 - Produces: prawdziwe okno kroków i fazy `mesh_payload`, `live_state_build`, `publisher_replace`, `profile_persist_enqueue`, `publisher_http`.
-- Produces: także jawne `native_solver_wall_time_ns` jako sumę natywnych faz solvera w dokładnie tym samym oknie; `StepStats.wall_time_ns` zachowuje dotychczasowe znaczenie całego synchronicznego kroku i nie jest przemianowane po cichu.
 
 - [ ] **Step 1: Napisać RED dla wielokrokowego okna**
 
@@ -399,8 +387,6 @@ pub struct SolverProfilePhaseWindow {
 
 `SolverProfileStepSample` otrzymuje pola wskazane w teście, `sample_kinds: Vec<SolverProfileSampleKind>` oraz `phase_windows`. `record_step` ma natychmiast wracać przed `Instant::now()` i przed budowaniem wektorów, gdy profiler jest wyłączony. Prywatne `record_step_at(&StepStats, Instant)` zapewnia deterministyczne testy.
 
-Agregator zamyka wszystkie rate na jednym zakresie `[span_first_step, span_last_step]`: licznik jest sumą zaakceptowanych kroków w tym oknie, `native_solver_wall_time_ns` jest sumą natywnych faz tych samych próbek, a end-to-end używa monotonicznego span tego samego okna. Zabronione jest łączenie ostatniego kroku z licznikiem całego runu.
-
 - [ ] **Step 4: Dodać dokładne host phase counters**
 
 `StepStats` otrzymuje:
@@ -451,10 +437,9 @@ git commit -m "fix: make FEM solver profiling interval-accurate"
 
 - Modify first: `docs/adr/0011-resource-first-api.md`
 - Modify first: `docs/specs/resource-first-control-room-api-v2.md`
-- Modify only for compatibility/revision wiring: `crates/fullmag-api/src/schemas/status.rs`
-- Modify only for compatibility/revision wiring: `crates/fullmag-api/src/router_v2/handlers/sessions/status.rs`
+- Modify: `crates/fullmag-api/src/schemas/status.rs`
+- Modify: `crates/fullmag-api/src/router_v2/handlers/sessions/status.rs`
 - Modify: `crates/fullmag-api/src/schemas/diagnostics.rs`
-- Modify: stage execution/completion resource schema and handler owning `time_to_tolerance_seconds`
 - Modify: `crates/fullmag-cli/src/orchestrator.rs`
 - Modify: `crates/fullmag-cli/src/live_workspace.rs`
 - Regenerate: `apps/control-room/src/kernel/api/generated/openapi-v2.json`
@@ -463,7 +448,7 @@ git commit -m "fix: make FEM solver profiling interval-accurate"
 - Regenerate: `apps/control-room/src/kernel/api/generated/openapi-v2-paths.ts`
 - Modify: `apps/control-room/src/modules/footer/FooterTelemetry.tsx`
 - Modify: `apps/control-room/src/modules/footer/FooterDiagnostics.tsx`
-- Test: inline `#[cfg(test)]` modules przy diagnostics rate aggregator, stage completion resource oraz compatibility status alias
+- Test: inline `#[cfg(test)]` module w `crates/fullmag-api/src/router_v2/handlers/sessions/status.rs`
 - Test: `apps/control-room/src/modules/footer/FooterTelemetry.test.ts`
 - Test: `apps/control-room/src/modules/footer/FooterDiagnostics.test.ts`
 - Test: `apps/control-room/src/kernel/api/ControlRoomApi.test.ts`
@@ -471,31 +456,30 @@ git commit -m "fix: make FEM solver profiling interval-accurate"
 **Interfaces:**
 
 - Consumes: okna z Task 1 i successful-publish diagnostics.
-- Produces: trzy jawne rate metrics z oknem i revision w diagnostics, `time_to_tolerance_seconds` w stage execution completion oraz przejściowy alias starego pola bez dalszego pogrubiania thin status.
+- Produces: cztery jawne rate metrics z oknem i revision; przejściowy alias starego pola.
 
 - [ ] **Step 1: Zapisać decyzję API przed kodem**
 
 ADR 0011 ma określić:
 
 ```text
-diagnostics.rates.solver_steps_per_second     = accepted steps / native_solver_wall_time_ns in the same closed window
-diagnostics.rates.end_to_end_steps_per_second = accepted-step monotonic span rate
-diagnostics.rates.published_steps_per_second  = successfully published-step rate
-stage_execution.completion.time_to_tolerance_seconds = present only for tolerance-qualified completion
-status.steps_per_second = deprecated compatibility alias of end_to_end value; no new rate payloads are added to thin status
+metrics.solver_steps_per_second     = native compute rate
+metrics.end_to_end_steps_per_second = accepted-step monotonic span rate
+metrics.published_steps_per_second  = successfully published-step rate
+metrics.time_to_tolerance_seconds   = present only for tolerance-qualified completion
+metrics.steps_per_second            = deprecated alias of end_to_end value
 ```
 
 Każda rate jest obiektem `{ value, window_step_count, window_wall_time_ns, source_revision }`. Alias usuwa się po dwóch wersjach API i po migracji jedynego klienta Control Room.
 
 - [ ] **Step 2: Napisać RED dla błędnego fallbacku**
 
-Test agregatora tworzy okno 10 kroków, `native_solver_wall_time_ns=2 s`, monotoniczny span `5 s` i trzy skuteczne publikacje w `3 s`. Oczekiwanie:
+Test status handlera tworzy `total_steps=100`, ostatni krok `wall_time_ns=200 ms`, ale span 10 kroków/5 s. Oczekiwanie:
 
 ```rust
 assert_eq!(metrics.solver_steps_per_second.unwrap().value, 5.0);
 assert_eq!(metrics.end_to_end_steps_per_second.unwrap().value, 2.0);
-assert_eq!(metrics.published_steps_per_second.unwrap().value, 1.0);
-assert_eq!(compat_status.steps_per_second, Some(2.0));
+assert_eq!(metrics.steps_per_second, Some(2.0));
 ```
 
 Przy braku span `end_to_end` i alias muszą być `None`; zakazane jest `total_steps / last_step.wall_time`.
@@ -510,14 +494,18 @@ pub struct RateMetric {
     pub source_revision: u64,
 }
 
-pub struct SolverRateDiagnostics {
+pub struct MetricsSummary {
+    pub uptime_seconds: u64,
+    pub total_steps: u64,
     pub solver_steps_per_second: Option<RateMetric>,
     pub end_to_end_steps_per_second: Option<RateMetric>,
     pub published_steps_per_second: Option<RateMetric>,
+    pub time_to_tolerance_seconds: Option<f64>,
+    pub steps_per_second: Option<f64>,
 }
 ```
 
-Publisher zapisuje monotoniczny span wyłącznie po udanym HTTP sync. Lifecycle etapu zapisuje `time_to_tolerance` wyłącznie, gdy `StageCompletionIR` potwierdza osiągnięcie kryterium, nigdy dla `max_steps`, cancel lub failure. Thin status niesie jedynie resource revisions i przejściowy stary alias.
+Publisher zapisuje monotoniczny span wyłącznie po udanym HTTP sync. Orkiestrator zapisuje `time_to_tolerance` wyłącznie, gdy `StageCompletionIR` potwierdza osiągnięcie kryterium, nigdy dla `max_steps`, cancel lub failure.
 
 - [ ] **Step 4: Rozdzielić artefakt current/delta/cumulative**
 
@@ -573,12 +561,6 @@ git commit -m "fix: expose truthful FEM throughput metrics"
 - Modify: `crates/fullmag-runner/src/types.rs`
 - Modify: `crates/fullmag-runner/src/fem/relax/direct_minimizer.rs`
 - Modify: `crates/fullmag-runner/src/fem/relax/llg_overdamped.rs`
-- Modify: `crates/fullmag-runner/src/frequency_response.rs`
-- Modify: `crates/fullmag-runner/src/interactive_runtime.rs` and FEM submodules constructing updates
-- Modify: `crates/fullmag-runner/src/hysteresis.rs`
-- Modify: `crates/fullmag-runner/src/lib.rs`
-- Modify: `crates/fullmag-runner/src/quantities.rs`
-- Modify: all constructing/consuming call sites in `crates/fullmag-runner/src/session.rs`
 - Modify: `crates/fullmag-cli/src/types.rs`
 - Modify: `crates/fullmag-cli/src/step_utils.rs`
 - Modify: `crates/fullmag-cli/src/orchestrator.rs`
@@ -590,7 +572,7 @@ git commit -m "fix: expose truthful FEM throughput metrics"
 **Interfaces:**
 
 - Consumes: istniejące `fem_mesh_payload_from_backend_plan` i top-level `CurrentLiveSnapshotPayload.fem_mesh`.
-- Produces: stage-scoped `FemMeshPayload`, `StepUpdate.fem_mesh_generation_id` i kontrolowaną migrację wszystkich producentów/konsumentów; nested compatibility mesh znika dopiero po przejściu kompletnego call-site gate.
+- Produces: stage-scoped `FemMeshPayload`, `StepUpdate.fem_mesh_generation_id`, brak nested compatibility mesh.
 
 - [ ] **Step 1: Napisać RED dowodzący jednego fingerprintu**
 
@@ -619,14 +601,14 @@ Expected: FAIL; obecnie mesh powstaje w każdym callbacku i występuje w `latest
 
 - [ ] **Step 3: Zmienić kontrakt update**
 
-Najpierw dodać stage resource oraz lekkie generation ID, zachowując przejściowo odczyt starego pola dla kompatybilności deserializacji. Po migracji wszystkich konstruktorów (`frequency_response`, `interactive_runtime`, `hysteresis`, `lib`, `quantities`, `session` oraz relax) `StepUpdate` traci runtime ownership `fem_mesh: Option<FemMeshPayload>` i otrzymuje:
+`StepUpdate` traci `fem_mesh: Option<FemMeshPayload>` i otrzymuje lekkie:
 
 ```rust
 #[serde(default, skip_serializing_if = "Option::is_none")]
 pub fem_mesh_generation_id: Option<String>,
 ```
 
-`LiveStepView` traci nested mesh dopiero po testach compatibility. Top-level stage mesh pozostaje jedynym wire ownerem. Runner wylicza payload/fingerprint przed wejściem do pętli i przekazuje tylko generation ID w każdym kroku. Istniejące stage-level mesh/dedup w `orchestrator`, `live_workspace` i `session` jest reużywane, a nie implementowane drugi raz.
+`LiveStepView` traci nested mesh. Top-level mesh pozostaje jedynym wire ownerem. Runner wylicza payload/fingerprint przed wejściem do pętli i przekazuje tylko generation ID w każdym kroku.
 
 - [ ] **Step 4: Usunąć compatibility duplication**
 
@@ -634,7 +616,7 @@ pub fem_mesh_generation_id: Option<String>,
 
 - [ ] **Step 5: Dodać semantic source gate**
 
-Test ma sprawdzać brak `FemMeshPayload::from(plan)` wewnątrz callback closures, brak runtime zapisów `StepUpdate.fem_mesh` we wszystkich call sites wskazanych przez `rg`, oraz po zakończeniu migracji brak pola `fem_mesh` w `StepUpdate`/`LiveStepView`. Nie sprawdzać numerów linii ani dokładnego stylu pętli. Gate musi wykonać pełne `rg "StepUpdate\\s*\\{|\\.fem_mesh" crates/fullmag-runner crates/fullmag-cli crates/fullmag-api` i sklasyfikować każdy pozostały wynik.
+Test ma sprawdzać brak `FemMeshPayload::from(plan)` wewnątrz callback closures i brak pola `fem_mesh` w `StepUpdate`/`LiveStepView`. Nie sprawdzać numerów linii ani dokładnego stylu pętli.
 
 - [ ] **Step 6: GREEN i pomiar**
 
@@ -664,8 +646,6 @@ git commit -m "perf: remove FEM mesh payload from the step hot loop"
 **Files:**
 
 - Create: `crates/fullmag-cli/src/solver_profile_persistence.rs`
-- Create: `crates/fullmag-cli/src/stage_heartbeat.rs`
-- Create: `crates/fullmag-cli/src/live_publisher_diagnostics.rs`
 - Modify: `crates/fullmag-cli/src/main.rs`
 - Modify: `crates/fullmag-cli/src/step_utils.rs`
 - Modify: `crates/fullmag-cli/src/orchestrator.rs`
@@ -679,7 +659,7 @@ git commit -m "perf: remove FEM mesh payload from the step hot loop"
 **Interfaces:**
 
 - Consumes: lekki `StepUpdate` z Task 3.
-- Produces: `offset_step_update(StepUpdate, u64, f64, bool) -> StepUpdate`, wydzielony `StageHeartbeatProgress`, worker-built delta na istniejącym background publisherze, wydzielone publisher diagnostics i bounded profile persistence.
+- Produces: `offset_step_update(StepUpdate, u64, f64, bool) -> StepUpdate`, `StageHeartbeatProgress`, worker-built delta, bounded profile persistence.
 
 - [ ] **Step 1: RED dla ownership i heartbeat**
 
@@ -727,7 +707,7 @@ return StepAction
 
 - [ ] **Step 3: Przenieść budowę delta do workera**
 
-Nie tworzyć drugiego workera HTTP: `LocalLiveWorkspace::update` ma dalej używać istniejącego background publishera, ale synchronicznie tylko mutuje state i wywołuje `request_publish()`. Istniejący worker po throttle pobiera state, a po zmianie sam buduje `publish_delta`, wykonuje scalar filtering/merge/size estimation i HTTP. Synchroniczna ścieżka solvera raportuje wyłącznie czas mutacji oraz enqueue/wake. Nowa logika heartbeat i diagnostics trafia do nowych modułów, nie powiększa dalej `orchestrator.rs` ani `live_workspace.rs` poza cienkim wiringiem.
+`LocalLiveWorkspace::update` tylko mutuje state i wywołuje `request_publish()`. Worker po throttle pobiera state, buduje `publish_delta`, wykonuje scalar filtering/merge/size estimation i HTTP. Synchroniczna ścieżka solvera raportuje wyłącznie czas mutacji oraz enqueue/wake.
 
 Wymagany kontrakt diagnostyczny:
 
@@ -782,10 +762,12 @@ git commit -m "perf: move FEM live publication off the solver callback"
 
 ---
 
-### Task 5: Domknąć istniejący async preview/cache poza deadline kroku bez obniżenia jakości
+### Task 5: Oddzielić preview/cache od deadline kroku bez obniżenia jakości
 
 **Files:**
 
+- Create: `crates/fullmag-runner/src/fem/relax/preview_worker.rs`
+- Modify: `crates/fullmag-runner/src/fem/relax/mod.rs`
 - Modify: `crates/fullmag-runner/src/fem/relax/preview.rs`
 - Modify: `crates/fullmag-runner/src/fem/relax/direct_minimizer.rs`
 - Modify: `crates/fullmag-runner/src/fem/relax/llg_overdamped.rs`
@@ -793,7 +775,7 @@ git commit -m "perf: move FEM live publication off the solver callback"
 - Modify: `crates/fullmag-runner/src/types.rs`
 - Modify: `crates/fullmag-api/src/types.rs`
 - Modify: `crates/fullmag-api/src/schemas/fields.rs`
-- Modify: właściwe handlers/resources `data/fields` wybrane po source audit; nie dodawać freshness payload do thin status
+- Modify: `crates/fullmag-api/src/router_v2/handlers/sessions/status.rs`
 - Regenerate: `apps/control-room/src/kernel/api/generated/openapi-v2.json`
 - Regenerate: `apps/control-room/src/kernel/api/generated/openapi-v2-types.ts`
 - Regenerate: `apps/control-room/src/kernel/api/generated/openapi-v2-client.ts`
@@ -807,21 +789,21 @@ git commit -m "perf: move FEM live publication off the solver callback"
 **Interfaces:**
 
 - Consumes: `NativeFemPreviewSnapshot` i `NativeFemFieldSnapshot`, które są `Send`.
-- Produces: rozszerzenie istniejących CUDA snapshotów, pending handoff i `last_good` o quantity nadal materializowane synchronicznie oraz freshness metadata zasobu pola. Nie tworzy konkurencyjnego `FemPreviewMaterializer`.
+- Produces: `FemPreviewMaterializer`, latest-complete frame semantics i staleness metadata.
 
 - [ ] **Step 1: RED dla nieblokującego heavy preview**
 
-Najpierw test charakteryzujący potwierdza, że istniejące `NativeFemPreviewSnapshot`/`NativeFemFieldSnapshot`, pending handoff i `last_good` wykonują asynchroniczny przypadek magnetization/demag bez blokady. Następnie fake energy-density snapshot czeka 80 ms. Solver callback ma jedynie przekazać go istniejącym mechanizmem i natychmiast zwrócić; wynik jest publikowany później:
+Fake snapshot czeka 80 ms. Solver callback ma jedynie enqueue i natychmiast zwrócić; worker publikuje wynik później:
 
 ```rust
-assert!(handoff_elapsed < Duration::from_millis(2));
-assert_eq!(preview_state.last_good("H_demag").unwrap().source_step, 40);
-assert_eq!(preview_state.pending_step("H_demag"), Some(50));
+assert!(enqueue_elapsed < Duration::from_millis(2));
+assert_eq!(materializer.last_complete("H_demag").unwrap().source_step, 40);
+assert_eq!(materializer.pending_step("H_demag"), Some(50));
 ```
 
 Test energii `eden_total` wymaga, aby solver thread nie wywoływał `copy_live_preview_field`.
 
-- [ ] **Step 2: Rozszerzyć istniejący bounded handoff, bez drugiego workera**
+- [ ] **Step 2: Zdefiniować bounded worker**
 
 ```rust
 pub(crate) struct PreviewResult {
@@ -831,16 +813,16 @@ pub(crate) struct PreviewResult {
     pub field: LivePreviewField,
 }
 
-pub(crate) struct PendingFemPreviewState { /* existing one-in-flight ownership */ }
+pub(crate) struct FemPreviewMaterializer { /* one in-flight job, result channel */ }
 
-impl PendingFemPreviewState {
+impl FemPreviewMaterializer {
     pub fn can_accept(&self) -> bool;
     pub fn submit(&self, job: PendingFemPreviewJob) -> Result<(), PendingFemPreviewJob>;
     pub fn try_take_completed(&self) -> Option<Result<PreviewResult, RunError>>;
 }
 ```
 
-Przed utworzeniem snapshotów solver sprawdza istniejące `can_accept`; dzięki temu nie niszczy w locie snapshotu przy pełnej kolejce. Gdy handoff jest zajęty, zachowana zostaje ostatnia kompletna klatka i rośnie jawny `preview_superseded_count`. Nazwy i typy implementacyjne mają podążać za aktualnym `preview.rs`; pseudokod nie upoważnia do duplikacji już obecnego stanu.
+Przed utworzeniem snapshotów solver sprawdza `can_accept`; dzięki temu nie niszczy w locie snapshotu przy pełnej kolejce. Gdy worker jest zajęty, zachowana zostaje ostatnia kompletna klatka i rośnie jawny `preview_superseded_count`.
 
 - [ ] **Step 3: Obsłużyć energy density przez async field snapshots**
 
@@ -848,7 +830,7 @@ Przed utworzeniem snapshotów solver sprawdza istniejące `can_accept`; dzięki 
 
 - [ ] **Step 4: Dodać staleness resource contract**
 
-Preview field/resource w data/fields otrzymuje:
+Preview field/resource otrzymuje:
 
 ```text
 source_step
@@ -859,7 +841,7 @@ materialization_wall_time_ns
 state = complete | stale_complete | pending | error
 ```
 
-Control Room nadal renderuje `stale_complete`, jeżeli topology generation jest zgodna; nie czyści widoku podczas oczekiwania. Zmiana quantity nadal kończy się ostatnią kompletną klatką odpowiedniego quantity albo jawnym pending. Thin session status publikuje wyłącznie revision zasobu pola, nie kopię freshness metadata.
+Control Room nadal renderuje `stale_complete`, jeżeli topology generation jest zgodna; nie czyści widoku podczas oczekiwania. Zmiana quantity nadal kończy się ostatnią kompletną klatką odpowiedniego quantity albo jawnym pending.
 
 - [ ] **Step 5: Porównać macierz preview**
 
@@ -910,7 +892,7 @@ git commit -m "perf: materialize FEM previews outside the solver deadline"
 **Interfaces:**
 
 - Consumes: `FULLMAG_CUDA_ARCHITECTURES`.
-- Produces: manifest schema v2 z hashami bibliotek i rzeczywistymi cubin/PTX, exact `sm_89` gate dla `libfullmag_fem.so` oraz faktycznie załadowanego HYPRE, a także jawny hash-addressed candidate bundle i restore/select command.
+- Produces: manifest schema v2 z hashami bibliotek i rzeczywistymi cubin/PTX; exact `sm_89` gate.
 
 - [ ] **Step 1: RED dla build.rs i walidatora**
 
@@ -1001,9 +983,7 @@ Manifest zawiera dla `libfullmag_fem`, MFEM, HYPRE i libCEED:
 }
 ```
 
-Top-level build metadata zawiera MFEM `4.9`, HYPRE `3.1.0`, libCEED `0.12.0`, CUDA toolkit, compiler i requested/effective architectures. Walidator hashuje rozwiązaną bibliotekę, nie sam symlink, i potwierdza przez loader trace/`ldd` oraz runtime diagnostics, którą bibliotekę HYPRE ładuje launcher. Gate sprawdza oba obiekty CUDA oddzielnie; `sm_89` tylko w Fullmag nie wystarcza.
-
-Eksport zapisuje wynik do `.fullmag/runtimes/fem-gpu-variants/<variant>-<manifest-sha256>/`, a alias `fem-gpu-host` jest wyłącznie wyborem aktywnego bundle. Receptury `select-fem-gpu-runtime-variant` i `validate-fem-gpu-runtime-variant` potrafią przełączyć baseline/candidate bez rebuilda i potwierdzają wszystkie hashe.
+Top-level build metadata zawiera MFEM `4.9`, HYPRE `3.1.0`, libCEED `0.12.0`, CUDA toolkit, compiler i requested/effective architectures. Walidator hashuje rozwiązaną bibliotekę, nie sam symlink, i potwierdza, którą bibliotekę ładuje launcher.
 
 - [ ] **Step 5: Rebuild i fail-closed proof**
 
@@ -1017,7 +997,7 @@ python3 scripts/inspect_cuda_architectures.py \
   --require-native-cubin sm_89
 ```
 
-Expected: `sm_89` występuje osobno w Fullmag i faktycznie załadowanym HYPRE; manifest hashes przechodzą; wykryte compute capability runtime to `8.9` i jest zgodne z bundle.
+Expected: `sm_89` występuje w Fullmag i HYPRE; manifest hashes przechodzą; wykryte compute capability runtime to `8.9` i jest zgodne z bundle.
 
 - [ ] **Step 6: Cold/steady A/B**
 
@@ -1045,7 +1025,7 @@ git commit -m "fix: package native CUDA architectures in FEM runtime"
 
 ---
 
-### Task 7: Udowodnić i utrwalić kanoniczne NCG 3 sync/krok bez regresji
+### Task 7: Usunąć redundantny readback NCG i zejść z 4 do 3 sync/krok
 
 **Files:**
 
@@ -1062,21 +1042,20 @@ git commit -m "fix: package native CUDA architectures in FEM runtime"
 **Interfaces:**
 
 - Consumes: pole `GpuDirectArmijoResult::trial_snapshot.total_energy_j` zwracane przez `gpu_direct_armijo_evaluate`.
-- Produces: świeży source/runtime proof istniejącego compute-only effective-field helpera i dokładny skumulowany sync budget; implementacja zmienia się tylko jeśli test najpierw wykaże regresję względem kontraktu.
+- Produces: compute-only effective-field helper bez host readback; semantyczny sync budget `3 + conditional extras`.
 
 - [ ] **Step 1: RED dla normalnego zaakceptowanego kroku**
 
-Test używa kanonicznego wzoru z noty 0532:
+Zmienić test z literalnego defaultu na wzór:
 
 ```python
-extra_armijo_reads = max(0, total_rhs_evals - 2 * executed_steps)
-expected_max = initial_syncs + 3 * executed_steps + extra_armijo_reads
+expected_max = initial_syncs + 3 * accepted_steps + direction_recovery_reads + refinement_reads
 assert hot_loop_control_scalar_host_sync_count <= expected_max
 ```
 
 Test C++ wymaga, by trial total energy pochodziła z `armijo_result.trial_snapshot.total_energy_j`, a nie osobnego `gpu_copy_scalar_to_host`.
 
-- [ ] **Step 2: Scharakteryzować istniejące rozdzielenie compute/readback i naprawić tylko odchylenie**
+- [ ] **Step 2: Rozdzielić compute od readbacku**
 
 Wprowadzić helper:
 
@@ -1089,7 +1068,7 @@ bool gpu_relax_compute_effective_field_and_energy_terms(
     std::string &reason);
 ```
 
-Test source najpierw potwierdza, że helper już liczy fresh demag, effective field i final energy term slots w istniejącym `gpu.reductions.scalar_result`, ale nie kopiuje total energy na host. Normalna i recovery ścieżka mają używać direct Armijo batch. Nie reimplementować helpera, jeśli ten kontrakt przechodzi.
+Helper liczy fresh demag, effective field i final energy term slots w istniejącym `gpu.reductions.scalar_result`, ale nie kopiuje total energy na host. Normalna i recovery ścieżka wywołują następnie direct Armijo batch, który już zwraca snapshot.
 
 - [ ] **Step 3: Zachować failure diagnostics**
 
@@ -1114,7 +1093,7 @@ FULLMAG_BENCH_REPEAT=5 \
 just verify-fem-gpu-performance-regression
 ```
 
-Acceptance: dokładny limit `initial_syncs + 3 * executed_steps + max(0, total_rhs_evals - 2 * executed_steps)`; dodatkowe sync odpowiadają każdemu kolejnemu trialowi Armijo. Brak osobnych, ręcznie liczonych `direction_recovery_reads`. Energia i trajektoria przechodzą dotychczasowe bramki.
+Acceptance: steady no-backtrack `1 + 3*N`; dodatkowe sync są nazwane i odpowiadają rzeczywistemu recovery/refinement. Energia i trajektoria przechodzą dotychczasowe bramki.
 
 - [ ] **Step 5: Commit**
 
@@ -1129,7 +1108,7 @@ git commit -m "perf: remove redundant FEM GPU NCG energy readback"
 
 ---
 
-### Task 8: Udowodnić i utrwalić kanoniczne PG-BB 4 sync/krok oraz usunąć stare testowe sufity
+### Task 8: Naprawić PG-BB 11 do kanonicznych 4 sync i usunąć stare testowe sufity
 
 **Files:**
 
@@ -1155,12 +1134,11 @@ git commit -m "perf: remove redundant FEM GPU NCG energy readback"
 Usunąć asercję `DEFAULT_GPU_PGBB_CONTROL_READBACK_PER_STEP == 11`. Nowy test wymaga:
 
 ```python
-extra_armijo_reads = max(0, total_rhs_evals - 2 * executed_steps)
-expected_max = initial_syncs + 4 * executed_steps + extra_armijo_reads
+expected_max = initial_syncs + 4 * accepted_steps + rejected_trial_reads + refinement_reads
 assert control_syncs <= expected_max
 ```
 
-Source test zakazuje dwóch osobnych current-state scalar copies oraz trial total readbacku bezpośrednio przed direct Armijo. `total_rhs_evals` jest sumą wszystkich zwróconych rekordów kroków, nie wartością ostatniego kroku.
+Source test zakazuje dwóch osobnych current-state scalar copies oraz trial total readbacku bezpośrednio przed direct Armijo.
 
 - [ ] **Step 2: Spakować current energy i gradient metrics**
 
@@ -1172,7 +1150,7 @@ Tak jak w Task 7, nie kopiować trial total energy przed `gpu_direct_armijo_eval
 
 - [ ] **Step 4: Uaktualnić wszystkie recipes i docs jako jeden kontrakt**
 
-Wartość 4 ma występować jako domyślny limit benchmarku, nie jako wymaganie dokładnego stylu źródła. Wspólna funkcja `expected_control_sync_budget(algorithm, executed_steps, total_rhs_evals, initial_syncs)` ma być jedynym właścicielem formuły w skrypcie i implementować dokładnie `base + per_step * executed_steps + max(0, total_rhs_evals - 2 * executed_steps)`.
+Wartość 4 ma występować jako domyślny limit benchmarku, nie jako wymaganie dokładnego stylu źródła. Wspólna funkcja `expected_control_sync_budget(algorithm, accepted, rejected, refinement)` ma być jedynym właścicielem formuły w skrypcie.
 
 - [ ] **Step 5: Managed GREEN**
 
@@ -1226,7 +1204,7 @@ git commit -m "perf: reduce FEM GPU PG-BB control readbacks"
 
 - [ ] **Step 1: RED dla jednego właściciela defaultu**
 
-Test źródłowy ma zakazać niezależnych default/fallback owners w CPU solverze, GPU solverze i Rust artifact. Nie zakazuje literalnego `18` w kwalifikacyjnych fixtures/test vectors. Wymagany interfejs:
+Test źródłowy ma zakazać literalnego fallbacku `18` w CPU solverze, GPU solverze, Rust artifact i testach. Wymagany interfejs:
 
 ```cpp
 struct ResolvedDemagAmgPolicy {
@@ -1319,16 +1297,12 @@ git commit -am "perf: promote qualified FEM AMG relax policy"
 - Create at execution: `.fullmag/reports/fem-hypre-variants/umpire.json`
 - Create at execution: `.fullmag/reports/fem-hypre-variants/cuda_async.json`
 - Create at execution: `.fullmag/reports/fem-hypre-variants/thrust_async.json`
-- Create at execution: `.fullmag/runtimes/fem-gpu-variants/hypre-baseline-<manifest-sha256>/`
-- Create at execution: `.fullmag/runtimes/fem-gpu-variants/hypre-umpire-<manifest-sha256>/`
-- Create at execution: `.fullmag/runtimes/fem-gpu-variants/hypre-cuda-async-<manifest-sha256>/`
-- Create at execution: `.fullmag/runtimes/fem-gpu-variants/hypre-thrust-async-<manifest-sha256>/`
 - Create: `docs/audits/2026-07-20-fem-hypre-memory-strategy-qualification.md`
 
 **Interfaces:**
 
 - Consumes: arch validator z Task 6 i stabilny benchmark z Task 0.
-- Produces: izolowane, hash-addressed build variants `baseline`, `umpire`, `cuda_async`, `thrust_async`, które można wybrać bez rebuilda; najwyżej jeden promowany.
+- Produces: izolowane build variants `baseline`, `umpire`, `cuda_async`, `thrust_async`; najwyżej jeden promowany.
 
 - [ ] **Step 1: Wprowadzić jawne build args**
 
@@ -1350,7 +1324,7 @@ Build najpierw sprawdza `./configure --help`; brak wymaganej flagi przerywa dany
 
 - [ ] **Step 2: Zapis konfiguracji w manifeście**
 
-Manifest rejestruje exact configure flags, HYPRE config macros, library hash i cubins. Validator potwierdza, że deklarowany wariant zgadza się z `HYPRE_config.h`. Każdy build eksportuje do osobnego immutable bundle root; A/B używa jawnego select/restore, nigdy kolejnych nadpisań `fem-gpu-host` bez zachowania poprzednika.
+Manifest rejestruje exact configure flags, HYPRE config macros, library hash i cubins. Validator potwierdza, że deklarowany wariant zgadza się z `HYPRE_config.h`.
 
 - [ ] **Step 3: A/B jedna zmienna naraz**
 
@@ -1392,8 +1366,6 @@ Commit message: `build: qualify HYPRE GPU memory strategy`.
 - Modify: `crates/fullmag-fem-sys/src/lib.rs`
 - Modify: `crates/fullmag-runner/src/native_fem.rs`
 - Modify: `crates/fullmag-runner/src/types.rs`
-- Modify: `crates/fullmag-runner/src/artifacts.rs`
-- Modify: właściwe provenance/API schemas dla resolved preconditioner strategy
 - Modify: `backends/fem/tests/relaxation_source_contract.cpp`
 - Modify: `backends/fem/tests/relaxation_energy_derivative_contract.cpp`
 - Modify: `scripts/analysis/fem_gpu_benchmark.py`
@@ -1403,7 +1375,7 @@ Commit message: `build: qualify HYPRE GPU memory strategy`.
 **Interfaces:**
 
 - Consumes: uploaded exchange CSR, lumped mass, tangent gradient i krok `step_m_per_a`.
-- Produces: `none`, `diagonal_mass`, `lumped_exchange_mass_cg4`, `lumped_exchange_mass_cg8`, `stagnation_triggered_cg8` jako wewnętrzne resolved strategies oraz jawny resolved strategy/parameters w native stats, provenance, artifacts i diagnostics API.
+- Produces: `none`, `diagonal_mass`, `lumped_exchange_mass_cg4`, `lumped_exchange_mass_cg8`, `stagnation_triggered_cg8` jako wewnętrzne resolved strategies.
 
 - [ ] **Step 1: Opublikować kontrakt numeryczny przed kodem**
 
@@ -1515,7 +1487,7 @@ Commit: `perf: qualify FEM GPU host thread policy`.
 - Modify: `backends/fem/gpu/cuda/relaxation/pgbb.cpp`
 - Modify: `backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp`
 - Modify: `backends/fem/gpu/cuda/demag_poisson/hypre_stream_interop.cpp`
-- Modify: `crates/fullmag-runner/src/fem/relax/preview.rs`
+- Modify: `crates/fullmag-runner/src/fem/relax/preview_worker.rs`
 - Modify: `crates/fullmag-cli/src/orchestrator.rs`
 - Modify: `crates/fullmag-cli/src/live_workspace.rs`
 - Modify: `scripts/export_fem_gpu_runtime.sh`
@@ -1523,7 +1495,7 @@ Commit: `perf: qualify FEM GPU host thread policy`.
 
 **Interfaces:**
 
-- Consumes: CUDA Toolkit NVTX headers, fixed fixture/run ID, ukończone Tasks 7 i 8 oraz zarządzany obraz zawierający sprawdzone `nsys` i `ncu`.
+- Consumes: CUDA Toolkit NVTX headers, fixed fixture/run ID.
 - Produces: opt-in ranges i JSON/Markdown trace summary; zero NVTX calls w normalnym buildzie, jeśli opcja wyłączona.
 
 - [ ] **Step 1: RED dla stabilnych range IDs**
@@ -1540,8 +1512,6 @@ fem.preview.snapshot
 fem.host.callback
 fem.host.publish
 ```
-
-Preflight receptury sprawdza `nsys --version` i `ncu --version` wewnątrz tego samego zarządzanego obrazu, który uruchamia fixture. Brak narzędzia jest statusem `unavailable` i blokuje Tasks 16/17 jako nieweryfikowalne; nie jest zielonym wynikiem capture. Dockerfile może dodać narzędzia dopiero po potwierdzeniu zgodnej wersji CUDA i warunków dystrybucji.
 
 - [ ] **Step 2: Dodać opt-in `FULLMAG_ENABLE_NVTX`**
 
@@ -1614,17 +1584,7 @@ Selector wolno dodać tylko jeśli różne klasy mają stabilnie różnych zwyci
 
 Wymaga >=5% geometric-mean improvement, brak case regression >5%, p95 bez regresji >5%, pełny CPU oracle. Jeśli brak, zachować policy z Task 9.
 
-Run:
-
-```bash
-COMPOSE_PROJECT_NAME=fullmag just bench-fem-gpu-demag-amg-profile-sweep
-COMPOSE_PROJECT_NAME=fullmag just verify-fem-demag-poisson-contract
-COMPOSE_PROJECT_NAME=fullmag just verify-fem-relaxation-runtime
-COMPOSE_PROJECT_NAME=fullmag just verify-fem-frequency-domain-native-contract
-COMPOSE_PROJECT_NAME=fullmag just verify-fem-gpu-performance-regression
-```
-
-Commit: `perf: qualify FEM demag AMG policy by problem size` tylko gdy selector przechodzi; w przeciwnym razie commit wyłącznie raportu `docs: record FEM AMG tuning no-go`.
+Run pełnych demag/relax/frequency managed gates. Commit: `perf: qualify FEM demag AMG policy by problem size` tylko gdy selector przechodzi; w przeciwnym razie commit wyłącznie raportu `docs: record FEM AMG tuning no-go`.
 
 ---
 
@@ -1651,7 +1611,7 @@ Commit: `perf: qualify FEM demag AMG policy by problem size` tylko gdy selector 
 **Interfaces:**
 
 - Consumes: CPU/GPU benchmark suite po usunięciu host overhead.
-- Produces: versioned, signed/hashed `FemCrossoverProfileV1` oraz `FemCrossoverDecision { requested, resolved, reason, calibration_id, confidence }` wyłącznie dla `auto`; explicit GPU jest fail-closed.
+- Produces: `FemCrossoverDecision { requested, resolved, reason, calibration_id, confidence }` dla `auto`.
 
 - [ ] **Step 1: ADR przed implementacją**
 
@@ -1663,20 +1623,17 @@ ADR musi rozstrzygnąć:
 - node count sam nie wystarcza; profil uwzględnia rows, nnz, demag, algorithm i preview mode;
 - hysteresis band zapobiega niestabilnej decyzji przy granicy;
 - provenance zawsze pokazuje requested i resolved.
-- profil zapisuje rozkład próbek, nie tylko punkt crossover: fixture IDs, p50/p95/stddev/count, warmup/repeat policy, bundle/library hashes, GPU UUID/name/compute capability, driver/toolkit, CPU identity, schema version i profile SHA-256/signature;
-- lookup fail-closed odrzuca niezgodny schema/hash/device/library identity i nie może zastosować profilu innego GPU;
-- `matrix_nnz` nie istnieje obecnie w `FemPlanIR`: ADR ma najpierw ustalić canonical owner i sposób wyliczenia po assembly. Nie rozszerzać IR tylko dla wygody selektora, jeśli planner może użyć istniejącego operator summary bez zmiany publicznej semantyki.
 
 - [ ] **Step 2: RED dla obecnego `FULLMAG_FEM_GPU_MIN_NODES`**
 
-Test ma wykazać, że explicit script `device="gpu"` nie może zostać cicho przełączony przez `FULLMAG_FEM_GPU_MIN_NODES`: jeśli GPU/runtime/capability jest niedostępny, wykonanie kończy się błędem zamiast CPU fallbacku. Nowy test `auto` z poprawnym profilem wybiera CPU poniżej dolnej granicy i GPU powyżej górnej; profil ze złym SHA, GPU identity lub library hashes jest odrzucany.
+Test ma wykazać, że explicit script `device="gpu"` nie może zostać cicho przełączony przez env threshold. Nowy test `auto` z profilem wybiera CPU poniżej dolnej granicy i GPU powyżej górnej.
 
 - [ ] **Step 3: Implementacja kalibracji poza hot path**
 
 ```rust
 pub struct FemCrossoverFeatures {
     pub node_count: u64,
-    pub matrix_nnz: Option<u64>, // populated only by the canonical assembled-operator owner
+    pub matrix_nnz: u64,
     pub demag_enabled: bool,
     pub relaxation_algorithm: String,
     pub preview_enabled: bool,
@@ -1689,8 +1646,6 @@ pub fn resolve_auto_fem_device(
 ```
 
 Runtime tylko odczytuje profil; nie wykonuje CPU/GPU trial solve użytkownika. Stary `FULLMAG_FEM_GPU_MIN_NODES` zostaje wyłącznie jawnym debug override z deprecation warning, a następnie jest usuwany według ADR.
-
-Brak `matrix_nnz` nie może być zastąpiony zmyśloną wartością ani wymusić zmiany `FemPlanIR`; decyzja używa jawnie wersjonowanego profilu dla dostępnego zestawu cech albo przechodzi do opisanej w ADR polityki availability-first dla `auto`.
 
 - [ ] **Step 4: Capability/API/UI propagation**
 
@@ -1731,7 +1686,7 @@ ADR/capability commit: `docs: define calibrated FEM runtime crossover`. Implemen
 
 **Interfaces:**
 
-- Consumes: Task 13 traces wykonane po ukończeniu Tasks 7 i 8 oraz potwierdzone dostępne `nsys`/`ncu`.
+- Consumes: Task 13 traces po redukcji readbacków.
 - Produces: najwyżej graph dla stabilnych Fullmag-owned kernel segments; HYPRE i host-driven Armijo pozostają poza graphem, dopóki capture legality nie jest jawnie potwierdzona.
 
 - [ ] **Step 1: Go/no-go przed kodem**
@@ -1754,21 +1709,11 @@ Przy pozytywnym gate cache key zawiera mesh/operator/material/interaction/algori
 
 - [ ] **Step 4: Promocja**
 
-Wymaga >=5% end-to-end p50, p95 bez regresji >5%, zero nowych sync, identycznych outputs i stabilnej pamięci. Inaczej usunąć wszystkie pliki/wiring prototype z backendu i normalnego builda; zachować wyłącznie raport, raw trace references i ewentualny niezależny oracle test.
+Wymaga >=5% end-to-end p50, p95 bez regresji >5%, zero nowych sync, identycznych outputs i stabilnej pamięci. Inaczej usunąć prototype i zachować raport.
 
 - [ ] **Step 5: Managed verification/commit**
 
-Run:
-
-```bash
-COMPOSE_PROJECT_NAME=fullmag just capture-fem-gpu-nsight
-COMPOSE_PROJECT_NAME=fullmag just verify-fem-relaxation-source-contract
-COMPOSE_PROJECT_NAME=fullmag just verify-fem-relaxation-runtime
-COMPOSE_PROJECT_NAME=fullmag just verify-fem-demag-poisson-contract
-COMPOSE_PROJECT_NAME=fullmag just verify-fem-gpu-performance-regression
-```
-
-Commit produkcyjny tylko po gate: `perf: capture stable FEM relaxation CUDA segments`; przy `no_go` commit raportu nie może zawierać prototype/runtime wiring.
+Uruchomić wszystkie relaxation/demag gates oraz Nsight before/after. Commit tylko po gate: `perf: capture stable FEM relaxation CUDA segments`.
 
 ---
 
@@ -1785,13 +1730,12 @@ Commit produkcyjny tylko po gate: `perf: capture stable FEM relaxation CUDA segm
 - Modify for research branch: `backends/fem/CMakeLists.txt`
 - Create: `backends/fem/tests/demag_delta_potential_contract.cpp`
 - Create: `docs/audits/2026-07-20-fem-delta-potential-demag-qualification.md`
-- Modify: `justfile` — dodać managed `verify-fem-demag-mesh-airbox-convergence`, jeśli nie istnieje
 - Modify after full qualification only: `backends/fem/core/demag_solver_policy.hpp`
 - Modify after full qualification only: `backends/fem/core/demag_solver_policy.cpp`
 
 **Interfaces:**
 
-- Consumes: liniowy operator Poissona o niezmiennej signature, poprzedni zaakceptowany endpoint oraz ukończone Tasks 9 i 14, aby badanie używało finalnej zakwalifikowanej polityki demag.
+- Consumes: liniowy operator Poissona o niezmiennej signature i poprzedni zaakceptowany endpoint.
 - Produces: badawczy `fresh_delta_correction` mode, nigdy zwykły warm start z odrzuconego trialu.
 
 - [ ] **Step 1: Nota fizyczna przed kodem**
@@ -1820,21 +1764,11 @@ Wymagane: manufactured solutions, trzy mesh sizes, airbox convergence, CPU oracl
 
 - [ ] **Step 5: Promocja lub no-go**
 
-Produkcja wyłącznie przy identycznych decyzjach solvera w zakresie kontraktu, braku akumulacji residual i >=10% time-to-tolerance improvement. Inaczej usunąć kod badawczy, CMake wiring, runtime selection i feature switches z normalnego drzewa; pozostają nota, oracle/fixture potrzebne do reprodukcji oraz no-go report.
+Produkcja wyłącznie przy identycznych decyzjach solvera w zakresie kontraktu, braku akumulacji residual i >=10% time-to-tolerance improvement. Inaczej kod badawczy nie trafia do default runtime; nota i no-go report pozostają.
 
 - [ ] **Step 6: Verification**
 
-Run:
-
-```bash
-COMPOSE_PROJECT_NAME=fullmag just verify-fem-demag-poisson-contract
-COMPOSE_PROJECT_NAME=fullmag just verify-fem-relaxation-runtime
-COMPOSE_PROJECT_NAME=fullmag just verify-fem-relaxation-cpu-gpu-consistency-smoke
-COMPOSE_PROJECT_NAME=fullmag just verify-fem-demag-mesh-airbox-convergence
-COMPOSE_PROJECT_NAME=fullmag just verify-fem-gpu-performance-regression
-```
-
-Receptura mesh/airbox convergence ma powstać przed kwalifikacją, jeśli nie istnieje, i używać tej samej wersjonowanej suite z Task 0. Commit produkcyjny tylko po kwalifikacji: `perf: add qualified FEM demag delta correction`; przy `no_go` commit nie zawiera prototype/runtime wiring.
+Run pełnych demag, relaxation, CPU/GPU consistency i mesh-convergence gates. Commit produkcyjny tylko po kwalifikacji: `perf: add qualified FEM demag delta correction`.
 
 ---
 
@@ -1922,7 +1856,7 @@ Nie stawiać arbitralnego wymogu wysokiego `GPU-Util`. Dla małego fixture niski
 
 - [ ] **Step 6: Promować accepted baseline**
 
-Skopiować wyłącznie finalne, powtarzalne candidate CSV/summary/environment do `benchmarks/fem-gpu/accepted/rtx4080-sm89/` i zapisać tam hash-addressed accepted bundle root wraz z manifest/library hashes oraz restore/select command. Pre-remediation reference i jego bundle pozostają niezmienne do porównań historycznych.
+Skopiować wyłącznie finalne, powtarzalne candidate CSV/summary/environment do `benchmarks/fem-gpu/accepted/rtx4080-sm89/`. Pre-remediation reference pozostaje niezmienny do porównań historycznych.
 
 - [ ] **Step 7: Napisać closure ledger**
 
@@ -1965,10 +1899,10 @@ git commit -m "docs: close FEM GPU performance remediation evidence"
 | Heartbeat przechowuje pełny update | P0 | 4 | `StageHeartbeatProgress` |
 | Delta/payload budowane na solver thread | P0 | 4 | worker build i bounded enqueue |
 | Profile JSONL/publish poza pomiarem callbacku | P0 | 1, 4 | nazwane sync/async phases |
-| Cache spike około 79 ms | P1 | 5 | rozszerzenie istniejących async snapshots/pending/last-good, handoff <2 ms |
+| Cache spike około 79 ms | P1 | 5 | worker, last-complete, enqueue <2 ms |
 | Artifact UI miesza current/max/cumulative | P1 | 2 | jawne etykiety i delty |
-| NCG historycznie 4 readbacki | P1 | 7 | świeży proof 3 + skumulowane extra Armijo z `total_rhs_evals` |
-| PG-BB stare testowe sufity vs nota 4 | P1 | 8 | świeży proof 4 + skumulowane extra Armijo z `total_rhs_evals` |
+| NCG 4 readbacki | P1 | 7 | 3 + nazwane extras |
+| PG-BB test/implementacja 11 vs nota 4 | P1 | 8 | 4 + trial/refinement extras |
 | AMG 6 wygląda szybciej na jednej siatce | P1 | 9 | pełna macierz lub brak promocji |
 | Brak GPU exchange-mass preconditionera | P1 | 11 | >=10% time-to-tolerance albo no-go |
 | OpenMP=1 w GPU | P1 | 12 | A/B po usunięciu clone kosztów |

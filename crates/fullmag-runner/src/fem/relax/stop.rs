@@ -152,16 +152,19 @@ impl ConvergenceDiagnostic {
         let torque_ok = control
             .stop
             .torque_tolerance_apm
-            .is_none_or(|t| max_torque_apm <= t);
+            .is_some_and(|threshold| {
+                max_torque_apm.is_finite() && max_torque_apm <= threshold
+            });
         let energy_ok = match (control.stop.energy_tolerance_j, energy_plateau) {
             (Some(threshold), Some(range)) => range.value <= threshold,
             (Some(_), None) => false,
             (None, _) => true,
         };
-        let converged = (control.stop.torque_tolerance_apm.is_some()
-            || control.stop.energy_tolerance_j.is_some())
-            && torque_ok
-            && energy_ok;
+        let converged = relaxation_stop_criteria_satisfied(
+            control,
+            energy_plateau,
+            max_torque_apm,
+        );
         ConvergenceDiagnostic {
             max_torque_apm,
             torque_threshold_apm: control.stop.torque_tolerance_apm,
@@ -175,5 +178,37 @@ impl ConvergenceDiagnostic {
             max_pseudotime_s: control.stop.max_relaxation_time_s,
             converged,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use fullmag_ir::{RelaxStopIR, RelaxationAlgorithmIR};
+
+    use super::*;
+
+    #[test]
+    fn diagnostic_energy_plateau_without_torque_never_reports_converged() {
+        let control = RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::LlgOverdamped,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: None,
+                energy_tolerance_j: Some(1.0e-18),
+                max_steps: Some(50_000),
+                max_relaxation_time_s: None,
+            },
+        };
+
+        let diagnostic = ConvergenceDiagnostic::from_step(
+            &control,
+            0.0,
+            Some(EnergyPlateauRangeJ { value: 0.0 }),
+            50,
+            0.0,
+        );
+
+        assert!(!diagnostic.converged);
+        assert!(!diagnostic.torque_ok);
+        assert!(diagnostic.energy_ok);
     }
 }
