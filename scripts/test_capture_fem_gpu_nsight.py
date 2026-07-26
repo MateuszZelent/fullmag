@@ -22,6 +22,44 @@ def load_capture_module():
     return module
 
 
+def test_nsight_sys_admin_capability_is_capture_only() -> None:
+    capture = subprocess.run(
+        ["just", "--dry-run", "capture-fem-gpu-nsight"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    capture = capture.stdout + capture.stderr
+    assert capture.count("--cap-add SYS_ADMIN") == 3
+
+    ordinary_commands = (
+        ["just", "--dry-run", "rebuild-fem-runtime"],
+        ["just", "--dry-run", "verify-fem-relaxation-runtime"],
+        [
+            "just",
+            "--dry-run",
+            "fem-managed-container-headless",
+            "gpu",
+            "examples/bench_fem_gpu_long.py",
+        ],
+    )
+    for command in ordinary_commands:
+        completed = subprocess.run(
+            command,
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        rendered = completed.stdout + completed.stderr
+        assert "--cap-add SYS_ADMIN" not in rendered
+
+    compose = (REPO_ROOT / "compose.yaml").read_text(encoding="utf-8")
+    assert "SYS_ADMIN" not in compose
+    assert "cap_add:" not in compose
+
+
 def test_task13_sources_wire_exact_stable_ranges_and_opt_in_build() -> None:
     required_ranges = {
         "fem.relax.ncg.step",

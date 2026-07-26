@@ -2,12 +2,12 @@
 
 ## Status
 
-**IMPLEMENTED and runtime-verified; authoritative Nsight qualification remains BLOCKED.**
+**IMPLEMENTED and runtime-verified; authoritative Nsight qualification remains BLOCKED after the capture-only `SYS_ADMIN` retry.**
 
 The default-OFF managed bundle is fresh, validator-green, binary-inspected, and passed the complete managed FEM relaxation gate. The opt-in capture is fail-closed and the prior diagnostic ON capture remains unqualified for two independent host-profiler blockers:
 
-1. Nsight Systems recorded all eight required NVTX IDs but exported no CUDA kernel rows (`0` unique kernels).
-2. The bounded Nsight Compute access probe reached device 0 and returned the exact error `ERR_NVGPUCTRPERM`.
+1. Nsight Systems recorded all eight required NVTX IDs but exported no CUDA kernel rows (`0` unique kernels), including in the fresh capability-enabled capture.
+2. The bounded Nsight Compute access probe reached device 0 and returned the exact error `ERR_NVGPUCTRPERM`, including when its container had effective `SYS_ADMIN`.
 
 No current `summary.json.status="captured"` evidence exists. Tasks 16 and 17 therefore remain a **no-go**; range visibility and a green runtime gate do not substitute for kernel attribution and GPU performance counters.
 
@@ -43,7 +43,7 @@ Reviewer remediation started with eight focused RED failures covering wrapper ga
 ```text
 PYTHONPATH=packages/fullmag-py/src \
   python3 -m pytest -q scripts/test_capture_fem_gpu_nsight.py
-24 passed
+25 passed
 
 PYTHONPATH=packages/fullmag-py/src python3 -m pytest -q \
   packages/fullmag-py/tests/test_fem_benchmark_config.py \
@@ -64,7 +64,66 @@ git diff --check
 PASS
 ```
 
+The new permission-scope contract was run RED before the recipe edit (`0` of
+the required `3` profiler runs contained `--cap-add SYS_ADMIN`) and GREEN
+afterwards. It renders the recipe commands and proves the capability is present
+on exactly the two capture preflights and the final capture container, while it
+is absent from ordinary runtime rebuild, verification, managed execution, and
+the `fem-gpu` service definition.
+
 An earlier broad diagnostic run of `test_fem_benchmark_config.py` produced `235 passed, 1 skipped, 26 failed`. Those failures cover pre-existing broader benchmark/native-layout contracts outside Task 13. They were not treated as a pass and were not used as the acceptance gate for this change.
+
+## Fresh capture-only `SYS_ADMIN` retry
+
+Exact command:
+
+```text
+just capture-fem-gpu-nsight
+```
+
+The recipe added `--cap-add SYS_ADMIN` only to its two same-image preflight
+containers and final profiling container. It did not add `cap_add` to
+`compose.yaml`, the normal `fem-gpu` service, builds, managed execution, or
+runtime verification. A same-image `/proc/self/status` diagnostic proved the
+flag is effective rather than a no-op:
+
+```text
+ordinary CapEff 00000000a80425fb
+capture  CapEff 00000000a82425fb
+difference       0000000000200000  # capability 21, SYS_ADMIN
+```
+
+Fresh ON identity:
+
+- Docker image ID `sha256:4806867d78b8e94207f6266cb2fa7bafc3778ae69f1bfae1e7659f209b099f59` (unchanged)
+- ON manifest SHA-256 `9a91e68d329dc52f0efb1af453e9d358b5c69b9a0f9761b72454579f1fb5b008`
+- ON source manifest SHA-256 `0ab6704f416c88e90d09f6b90b64d68254ac683a8ff77189a63dc16671f992fe`
+- ON `libfullmag_fem` SHA-256 `1573590aeed8804b498952909d5220a1bf78cc525ed3ec661410e2f9ad952422`
+- `instrumentation.nvtx_enabled=true`
+
+Both capability-enabled preflights reported Nsight Systems `2024.1.1.0` and
+Nsight Compute `2024.1.1.0` build `33998838`. The actual capture still ended
+fail-closed with exit `1` and wrote a fresh `summary.json` with:
+
+```text
+status="failed"
+compute nsys reported only 0 unique kernels
+ncu access probe failed: ERR_NVGPUCTRPERM
+```
+
+All five compute NVTX IDs and all three host NVTX IDs were observed. No NCU
+top-five passes were attempted after the unconditional access probe failed, and
+no parser or acceptance threshold was weakened. The persisted evidence remains:
+
+```text
+.fullmag/reports/task-13-nsight/task13-box500-airbox-ncg-sm89-v1/summary.json
+```
+
+The recipe trap restored the prior active OFF alias after the failure. A fresh
+default-OFF managed rebuild and the complete relaxation gate were then run.
+Tasks 16 and 17 remain blocked because effective container `SYS_ADMIN` was
+necessary but not sufficient to expose either kernel rows or counters on this
+host.
 
 ## Prior diagnostic ON capture
 
@@ -125,7 +184,7 @@ Artifacts remain under:
 .fullmag/reports/task-13-nsight/task13-box500-airbox-ncg-sm89-v1/
 ```
 
-This capture predates the reviewer hardening of snapshot lifetime, transfer-overlap accounting, actual Pass A validation, and strict NCU metrics. It is retained as diagnostic evidence only and is not presented as qualification of the final code. A new full capture was not repeated because the same image/host still lacks kernel rows and performance-counter permission; the harness remains fail-closed.
+This capture predates the reviewer hardening of snapshot lifetime, transfer-overlap accounting, actual Pass A validation, and strict NCU metrics. It is retained as diagnostic evidence only and is not presented as qualification of the final code. The fresh capability-enabled retry above supersedes it as current evidence and independently reproduced both blockers with the hardened fail-closed harness.
 
 ## Export-cache defect and symbol hardening
 
@@ -151,8 +210,8 @@ python3 scripts/validate_managed_fem_runtime_bundle.py \
 
 Published identity:
 
-- active variant/manifest SHA-256: `9702a516351700943e31ede31cfebb6833372d63b83cb079219033594880da29`
-- source manifest SHA-256: `60b3ee60ba17e9c5ad074d60266c46113441160d8faebb13a2ae93c2658fb099`
+- active variant/manifest SHA-256: `53aa20df99f42ea992219207afd025c10c680059b5b47d19f6cf1096ecd0b7ec`
+- source manifest SHA-256: `8399065a78ce4c2227f6b4d2fa087250ee7b7d2c2d0a32e467693d3b0a6f85fd`
 - Docker image ID: `sha256:4806867d78b8e94207f6266cb2fa7bafc3778ae69f1bfae1e7659f209b099f59`
 - `instrumentation.nvtx_enabled=false`
 - OFF `libfullmag_fem` SHA-256: `b2afa1c3550e4b275f04c8138aed160dce782dddc7e594ac4872d38e6938f0f0`
@@ -190,7 +249,7 @@ Command:
 just verify-fem-relaxation-runtime
 ```
 
-The first sandboxed invocation stopped before container execution because Docker access was denied. The same exact recipe was immediately rerun with the managed Docker permission and passed with exit `0`:
+The fresh post-capture recipe passed with exit `0` on the rebuilt default-OFF bundle:
 
 - semantic mesh-ownership source contract passed;
 - native relaxation source, energy-derivative, stage-completion, and explicit-RK contracts passed;

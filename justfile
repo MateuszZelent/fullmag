@@ -4111,6 +4111,7 @@ capture-fem-gpu-nsight:
       trap restore_active EXIT; \
       docker compose --profile fem-gpu build fem-gpu; \
       if ! docker compose --profile fem-gpu run --rm -T \
+        --cap-add SYS_ADMIN \
         -e PYTHONPATH=/workspace/packages/fullmag-py/src \
         fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/capture_fem_gpu_nsight.py --preflight-only'; then \
           echo "status=unavailable: Nsight preflight failed in managed fem-gpu fixture image" >&2; \
@@ -4118,12 +4119,14 @@ capture-fem-gpu-nsight:
       fi; \
       FULLMAG_ENABLE_NVTX=1 just rebuild-fem-runtime; \
       if ! docker compose --profile fem-gpu run --rm -T \
+        --cap-add SYS_ADMIN \
         -e PYTHONPATH=/workspace/packages/fullmag-py/src \
         fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/capture_fem_gpu_nsight.py --preflight-only'; then \
           echo "status=unavailable: Nsight preflight failed in rebuilt managed fem-gpu fixture image" >&2; \
           exit 2; \
       fi; \
       docker compose --profile fem-gpu run --rm -T \
+        --cap-add SYS_ADMIN \
         -e PYTHONPATH=/workspace/packages/fullmag-py/src \
         -e FULLMAG_PYTHON=/usr/bin/python3 \
         fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/capture_fem_gpu_nsight.py'
