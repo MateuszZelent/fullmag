@@ -4,8 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import { analysisPlotsManifest } from "./manifest";
 
 describe("Analysis Quick Chart dock ownership", () => {
-  it("contributes one slot-aware module to viewport-main and panel-bottom only", () => {
-    expect(analysisPlotsManifest.slots).toEqual(["viewport-main", "panel-bottom"]);
+  it("leaves panel-bottom ownership to the transport footer", () => {
+    expect(analysisPlotsManifest.slots).toEqual(["viewport-main"]);
+    expect(analysisPlotsManifest.slots).not.toContain("panel-bottom");
     expect(analysisPlotsManifest.slots).not.toContain("viewport-aux");
 
     const source = readFileSync(new URL("./AnalysisPlotsModule.tsx", import.meta.url), "utf8");

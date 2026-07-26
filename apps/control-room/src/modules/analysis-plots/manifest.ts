@@ -5,7 +5,7 @@ export const analysisPlotsManifest: ModuleManifest = {
   id: "analysis-plots",
   title: "Analysis",
   version: "0.1.0",
-  slots: ["viewport-main", "panel-bottom"],
+  slots: ["viewport-main"],
   component: () => import("./AnalysisPlotsModule"),
   emits: [
     "workspace:selection-changed",
