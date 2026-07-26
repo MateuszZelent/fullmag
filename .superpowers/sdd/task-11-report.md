@@ -313,3 +313,43 @@ physics note, report, and immutable evidence. They do not restore the rejected
 native preconditioner, runtime selector, ABI/API fields, or generated bindings.
 The outcome remains literal: no strategy is promoted and the production FEM
 GPU relaxation path stays on the clean `none` baseline.
+
+## Final-magnetization content-integrity fix
+
+Date: 2026-07-26
+
+A final review found that the parity validator previously checked
+`final_magnetization_sha256` only for valid SHA-256 syntax while trusting
+`final_magnetization_values_json` independently. Identically fabricated CPU
+and GPU vectors could therefore retain stale artifact hashes and still pass
+field parity.
+
+The harness now defines `final_magnetization_sha256` as a canonical digest of
+the exact validated payload. The byte stream is domain-separated and contains,
+in order:
+
+1. length-prefixed UTF-8 observable `m` and unit `1`;
+2. the nonnegative step and vector count as big-endian unsigned 64-bit values;
+3. every vector component in node and component order as big-endian IEEE-754
+   binary64.
+
+The raw file digest is retained separately as
+`final_magnetization_artifact_sha256`. Qualification reparses the stored vector
+payload, reconstructs the canonical byte stream, and rejects a missing,
+malformed, or mismatched content digest before any strategy can be promoted.
+
+TDD evidence:
+
+- RED: six parity rows with identically fabricated values and unchanged hashes
+  returned `status=pass` and promoted `lumped_exchange_mass_cg8`;
+- GREEN: the same case returns `status=invalid`, `promoted_strategy=null`, and
+  reports `final magnetization content SHA-256 mismatch`;
+- focused Task 11 tests: 38 passed;
+- complete benchmark-validator test file: 327 passed;
+- Python compilation and `git diff --check`: passed;
+- frozen historical evidence: `sha256sum -c SHA256SUMS` passed.
+
+The historical CSV and corrected qualification JSON do not contain the missing
+six-row parity artifact, so their bytes and recorded SHA-256 values are
+unchanged. Their classification remains `status=invalid`, and the production
+decision remains no-go.

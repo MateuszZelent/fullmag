@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 import importlib.util
 import subprocess
 import sys
 import tempfile
+import struct
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -162,6 +164,24 @@ def task11_expected_qualification_identity() -> dict[str, object]:
     }
 
 
+def task11_test_final_magnetization_sha256(
+    values: list[list[float]],
+    *,
+    step: int = 16,
+) -> str:
+    digest = hashlib.sha256()
+    digest.update(b"fullmag.task11.final_magnetization.v1\0")
+    for text in ("m", "1"):
+        encoded = text.encode("utf-8")
+        digest.update(struct.pack(">I", len(encoded)))
+        digest.update(encoded)
+    digest.update(struct.pack(">Q", step))
+    digest.update(struct.pack(">Q", len(values)))
+    for vector in values:
+        digest.update(struct.pack(">ddd", *vector))
+    return digest.hexdigest()
+
+
 def task11_preconditioner_qualification_rows(
     *,
     candidate_p95_regression: bool = False,
@@ -306,6 +326,10 @@ def task11_preconditioner_cpu_gpu_parity_rows() -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for mesh_size in ("coarse", "medium", "fine"):
         for backend in ("fem_cpu", "fem_gpu"):
+            final_values = [
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0 if backend == "fem_cpu" else 1e-12],
+            ]
             rows.append(
                 {
                     "backend": backend,
@@ -386,15 +410,10 @@ def task11_preconditioner_cpu_gpu_parity_rows() -> list[dict[str, object]]:
                     "final_magnetization_unit": "1",
                     "final_magnetization_step": 16,
                     "final_magnetization_node_count": 2,
-                    "final_magnetization_sha256": (
-                        ("a" if backend == "fem_cpu" else "b") * 64
+                    "final_magnetization_sha256": task11_test_final_magnetization_sha256(
+                        final_values
                     ),
-                    "final_magnetization_values_json": json.dumps(
-                        [
-                            [1.0, 0.0, 0.0],
-                            [0.0, 1.0, 0.0 if backend == "fem_cpu" else 1e-12],
-                        ]
-                    ),
+                    "final_magnetization_values_json": json.dumps(final_values),
                 }
             )
     return rows
@@ -777,6 +796,31 @@ def test_task11_preconditioner_qualification_rejects_magnetization_parity_failur
     )
 
 
+def test_task11_preconditioner_qualification_rejects_values_with_stale_content_hash(
+) -> None:
+    benchmark = load_benchmark_module()
+    parity_rows = task11_preconditioner_cpu_gpu_parity_rows()
+    fabricated_values = json.dumps(
+        [[0.0, 0.0, 1.0], [0.0, 1.0, 0.0]],
+        separators=(",", ":"),
+    )
+    for row in parity_rows:
+        row["final_magnetization_values_json"] = fabricated_values
+
+    summary = benchmark.relaxation_preconditioner_qualification_summary(
+        task11_preconditioner_qualification_rows(),
+        cpu_gpu_parity_rows=parity_rows,
+        qualification_identity=task11_expected_qualification_identity(),
+    )
+
+    assert summary["status"] == "invalid"
+    assert summary["promoted_strategy"] is None
+    assert any(
+        "final magnetization content SHA-256 mismatch" in failure
+        for failure in summary["matrix_failures"]
+    )
+
+
 def test_task11_preconditioner_qualification_rejects_parity_runtime_drift() -> None:
     benchmark = load_benchmark_module()
     parity_rows = task11_preconditioner_cpu_gpu_parity_rows()
@@ -833,9 +877,14 @@ def test_task11_final_magnetization_evidence_is_captured_before_tempdir_cleanup(
     assert evidence["final_magnetization_node_count"] == 2
     assert evidence["final_magnetization_step"] == 16
     assert json.loads(evidence["final_magnetization_values_json"])[1][2] == 1e-12
-    assert evidence["final_magnetization_sha256"] == benchmark.hashlib.sha256(
-        artifact.read_bytes()
-    ).hexdigest()
+    assert evidence["final_magnetization_sha256"] == (
+        task11_test_final_magnetization_sha256(
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 1e-12]]
+        )
+    )
+    assert evidence["final_magnetization_artifact_sha256"] == (
+        benchmark.hashlib.sha256(artifact.read_bytes()).hexdigest()
+    )
 
 
 def test_task11_cumulative_runtime_payload_is_materialized_in_csv_units() -> None:

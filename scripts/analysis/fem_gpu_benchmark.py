@@ -12,6 +12,7 @@ import math
 import os
 import shutil
 import statistics
+import struct
 import subprocess
 import sys
 import tempfile
@@ -685,6 +686,32 @@ def task11_final_magnetization_values(
     return values
 
 
+def task11_final_magnetization_content_sha256(
+    *,
+    observable: str,
+    unit: str,
+    step: int,
+    values: Sequence[tuple[float, float, float]],
+) -> str:
+    if observable != "m" or unit != "1" or type(step) is not int or step < 0:
+        raise ValueError("invalid Task 11 final magnetization identity")
+    digest = hashlib.sha256()
+    digest.update(b"fullmag.task11.final_magnetization.v1\0")
+    for text in (observable, unit):
+        encoded = text.encode("utf-8")
+        digest.update(struct.pack(">I", len(encoded)))
+        digest.update(encoded)
+    digest.update(struct.pack(">Q", step))
+    digest.update(struct.pack(">Q", len(values)))
+    for vector in values:
+        if len(vector) != 3 or any(
+            not math.isfinite(component) for component in vector
+        ):
+            raise ValueError("invalid Task 11 final magnetization vector")
+        digest.update(struct.pack(">ddd", *vector))
+    return digest.hexdigest()
+
+
 def task11_qualification_identity_failures(
     matrix_rows: Sequence[Mapping[str, object]],
     parity_rows: Sequence[Mapping[str, object]],
@@ -1066,16 +1093,36 @@ def task11_preconditioner_cpu_gpu_parity_summary(
                     "match executed_steps"
                 )
             final_sha256 = row.get("final_magnetization_sha256")
-            if (
-                not isinstance(final_sha256, str)
-                or len(final_sha256) != 64
-                or any(
+            final_sha256_valid = (
+                isinstance(final_sha256, str)
+                and len(final_sha256) == 64
+                and not any(
                     character not in "0123456789abcdef"
                     for character in final_sha256
                 )
-            ):
+            )
+            if not final_sha256_valid:
                 failures.append(
                     f"mesh={mesh_size}: {backend} final magnetization SHA-256 is invalid"
+                )
+            final_values = task11_final_magnetization_values(row)
+            if (
+                final_sha256_valid
+                and final_values is not None
+                and row.get("final_magnetization_observable") == "m"
+                and row.get("final_magnetization_unit") == "1"
+                and final_step is not None
+                and final_sha256
+                != task11_final_magnetization_content_sha256(
+                    observable="m",
+                    unit="1",
+                    step=final_step,
+                    values=final_values,
+                )
+            ):
+                failures.append(
+                    f"mesh={mesh_size}: {backend} final magnetization content "
+                    "SHA-256 mismatch"
                 )
             row_node_count = as_int(row.get("node_count"))
             final_node_count = as_int(row.get("final_magnetization_node_count"))
@@ -5366,7 +5413,13 @@ def load_final_magnetization_evidence(run_dir: str | Path) -> dict[str, object]:
         "final_magnetization_unit": "1",
         "final_magnetization_step": step,
         "final_magnetization_node_count": len(values),
-        "final_magnetization_sha256": hashlib.sha256(raw).hexdigest(),
+        "final_magnetization_sha256": task11_final_magnetization_content_sha256(
+            observable="m",
+            unit="1",
+            step=step,
+            values=values,
+        ),
+        "final_magnetization_artifact_sha256": hashlib.sha256(raw).hexdigest(),
         "final_magnetization_values_json": json.dumps(
             values,
             separators=(",", ":"),
