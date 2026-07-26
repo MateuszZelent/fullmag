@@ -31,9 +31,15 @@ cd "${REPO_ROOT}"
 : "${FULLMAG_HYPRE_MEMORY_VARIANT:=baseline}"
 : "${FULLMAG_FEM_RUNTIME_VARIANT:=hypre-${FULLMAG_HYPRE_MEMORY_VARIANT}}"
 : "${FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY:=8.9}"
+: "${FULLMAG_ENABLE_NVTX:=0}"
+case "${FULLMAG_ENABLE_NVTX}" in
+  0|1) ;;
+  *) echo "[export_fem_gpu_runtime] FULLMAG_ENABLE_NVTX must be 0 or 1" >&2; exit 2 ;;
+esac
 export FULLMAG_CUDA_ARCHITECTURES
 export FULLMAG_HYPRE_GPU_ARCHITECTURES
 export FULLMAG_HYPRE_MEMORY_VARIANT
+export FULLMAG_ENABLE_NVTX
 FULLMAG_HOST_UID="$(id -u)"
 FULLMAG_HOST_GID="$(id -g)"
 
@@ -42,6 +48,7 @@ docker compose --profile fem-gpu build fem-gpu
 docker compose --profile fem-gpu run --rm -T \
   -e FULLMAG_FEM_RUNTIME_CARGO_JOBS="${FULLMAG_FEM_RUNTIME_CARGO_JOBS}" \
   -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES}" \
+  -e FULLMAG_ENABLE_NVTX="${FULLMAG_ENABLE_NVTX}" \
   -e FULLMAG_HOST_UID="${FULLMAG_HOST_UID}" \
   -e FULLMAG_HOST_GID="${FULLMAG_HOST_GID}" \
   -e FULLMAG_RUNTIME_EXPORT_STAGING="${STAGING_RELATIVE}" \
@@ -74,7 +81,22 @@ clear_runtime_bundle_contents() {
   mkdir -p "$runtime_root/openmpi/bin"
 }
 echo "[export_fem_gpu_runtime] forcing fullmag-fem-sys native rebuild before copying runtime libraries"
-cargo clean -p fullmag-fem-sys
+if [ "${FULLMAG_ENABLE_NVTX}" = "0" ] &&
+   [[ "${RUSTFLAGS:-}" == *fullmag_enable_nvtx* ]]; then
+  echo "[export_fem_gpu_runtime] inherited RUSTFLAGS contains fullmag_enable_nvtx while FULLMAG_ENABLE_NVTX=0" >&2
+  exit 2
+fi
+cargo +nightly clean -p fullmag-fem-sys --release
+mapfile -t stale_fem_native_artifacts < <(
+  find target/release/build \
+    -path "*fullmag-fem-sys*/out/native-build/backends/fem/libfullmag_fem.so.0" \
+    -print 2>/dev/null
+)
+if [ "${#stale_fem_native_artifacts[@]}" -ne 0 ]; then
+  echo "[export_fem_gpu_runtime] stale fullmag-fem-sys native artifacts remain after targeted clean" >&2
+  printf "  %s\n" "${stale_fem_native_artifacts[@]}" >&2
+  exit 2
+fi
 
 echo "[export_fem_gpu_runtime] building fullmag-cli, fullmag-api, and PyO3 core with cuda fem-gpu release features"
 cargo_jobs="${FULLMAG_FEM_RUNTIME_CARGO_JOBS:-1}"
@@ -83,6 +105,9 @@ if ! [[ "$cargo_jobs" =~ ^[1-9][0-9]*$ ]]; then
   exit 2
 fi
 echo "[export_fem_gpu_runtime] cargo build jobs: ${cargo_jobs}"
+if [ "${FULLMAG_ENABLE_NVTX}" = "1" ]; then
+  export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }--cfg fullmag_enable_nvtx --check-cfg=cfg(fullmag_enable_nvtx)"
+fi
 FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES}" FULLMAG_USE_MFEM_STACK=ON cargo +nightly build -j "$cargo_jobs" -p fullmag-cli -p fullmag-api -p fullmag-py-core --features "fullmag-cli/cuda fullmag-cli/fem-gpu fullmag-api/cuda fullmag-api/fem-gpu" --release 2>&1 | tee /tmp/fullmag-build.log
 echo "[export_fem_gpu_runtime] clearing previous runtime bundle contents"
 clear_runtime_bundle_contents
@@ -110,6 +135,17 @@ latest_native_lib_dir() {
     exit 1
   fi
   dirname "$selected"
+}
+only_native_lib_dir() {
+  local pattern="$1"
+  local matches=()
+  mapfile -t matches < <(find target/release/build -path "$pattern" -print)
+  if [ "${#matches[@]}" -ne 1 ]; then
+    echo "[export_fem_gpu_runtime] expected exactly one native library matching pattern: $pattern" >&2
+    printf "  %s\n" "${matches[@]}" >&2
+    exit 1
+  fi
+  dirname "${matches[0]}"
 }
 copy_library_group_entry_replace() {
   local src="$1"
@@ -243,11 +279,78 @@ copy_pkg_include_dirs() {
     exit 1
   fi
 }
-FEM_LIB="$(latest_native_lib_dir "*fullmag-fem-sys*/out/native-build/backends/fem/libfullmag_fem.so.0")"
+FEM_LIB="$(only_native_lib_dir "*fullmag-fem-sys*/out/native-build/backends/fem/libfullmag_fem.so.0")"
 FDM_LIB="$(latest_native_lib_dir "*fullmag-fdm-sys*/out/native-build/backends/fdm/libfullmag_fdm.so.0")"
 echo "[export_fem_gpu_runtime] bundling FEM and FDM native libraries"
 copy_native_library_group "$FEM_LIB" libfullmag_fem
 copy_native_library_group "$FDM_LIB" libfullmag_fdm
+validate_nvtx_artifact() {
+  local artifact="$1"
+  shift
+  local range_name
+  for range_name in "$@"; do
+    if grep -aFq -- "$range_name" "$artifact"; then
+      if [ "${FULLMAG_ENABLE_NVTX}" = "0" ]; then
+        echo "[export_fem_gpu_runtime] NVTX-off artifact contains phase range $range_name: $artifact" >&2
+        exit 2
+      fi
+    elif [ "${FULLMAG_ENABLE_NVTX}" = "1" ]; then
+      echo "[export_fem_gpu_runtime] NVTX-on artifact is missing phase range $range_name: $artifact" >&2
+      exit 2
+    fi
+  done
+}
+validate_nvtx_artifact "${runtime_root}/lib/libfullmag_fem.so.0" \
+  fem.relax.ncg.step \
+  fem.relax.armijo \
+  fem.demag.rhs \
+  fem.demag.hypre.apply \
+  fem.demag.recovery
+validate_nvtx_artifact "${runtime_root}/bin/fullmag-fem-gpu-bin" \
+  fem.preview.snapshot \
+  fem.host.callback \
+  fem.host.publish
+validate_nvtx_symbol_contract() {
+  local native_artifact="$1"
+  local worker_artifact="$2"
+  local native_defined
+  local worker_undefined
+  local native_dynamic
+  local worker_dynamic
+  local combined_symbols
+  native_defined="$(nm -D --defined-only "$native_artifact")"
+  worker_undefined="$(nm -D --undefined-only "$worker_artifact")"
+  native_dynamic="$(readelf -d "$native_artifact")"
+  worker_dynamic="$(readelf -d "$worker_artifact")"
+  combined_symbols="$(nm -D "$native_artifact" "$worker_artifact")"
+  local symbol
+  for symbol in fullmag_fem_nvtx_range_start fullmag_fem_nvtx_range_end; do
+    if [ "${FULLMAG_ENABLE_NVTX}" = "1" ]; then
+      if ! grep -Eq "[[:space:]]${symbol}$" <<<"$native_defined"; then
+        echo "[export_fem_gpu_runtime] NVTX-on FEM library is missing defined wrapper symbol ${symbol}" >&2
+        exit 2
+      fi
+      if ! grep -Eq "[[:space:]]${symbol}$" <<<"$worker_undefined"; then
+        echo "[export_fem_gpu_runtime] NVTX-on worker is missing wrapper reference ${symbol}" >&2
+        exit 2
+      fi
+    elif grep -Fq -- "$symbol" <<<"$combined_symbols"; then
+      echo "[export_fem_gpu_runtime] NVTX-off artifact contains wrapper symbol ${symbol}" >&2
+      exit 2
+    fi
+  done
+  if ! grep -Eq "NEEDED.*libfullmag_fem\\.so\\.0" <<<"$worker_dynamic"; then
+    echo "[export_fem_gpu_runtime] worker is missing its managed libfullmag_fem.so.0 dependency" >&2
+    exit 2
+  fi
+  if grep -Eqi "NEEDED.*(libnvToolsExt|libnvtx)" <<<"${native_dynamic}${worker_dynamic}"; then
+    echo "[export_fem_gpu_runtime] NVTX instrumentation must use header injection without an unbundled NVTX shared-library dependency" >&2
+    exit 2
+  fi
+}
+validate_nvtx_symbol_contract \
+  "${runtime_root}/lib/libfullmag_fem.so.0" \
+  "${runtime_root}/bin/fullmag-fem-gpu-bin"
 petsc_version="$(pkg-config --modversion PETSc)"
 slepc_version="$(pkg-config --modversion SLEPc)"
 petsc_pkgconfig_dir="$(pkg-config --variable=pcfiledir PETSc)"
@@ -606,6 +709,21 @@ docker run --rm --network none \
     --runtime-diagnostics-json "/workspace/${STAGING_RELATIVE}/runtime-diagnostics.json" \
     --docker-image-id "${docker_image_id}" \
     --created-at "${created_at}"
+
+RUNTIME_ROOT="${STAGING_ROOT}" python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+manifest_path = Path(os.environ["RUNTIME_ROOT"]) / "manifest.json"
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+manifest["instrumentation"] = {
+    "nvtx_enabled": os.environ["FULLMAG_ENABLE_NVTX"] == "1",
+}
+manifest_path.write_text(
+    json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+)
+PY
 
 python3 scripts/validate_managed_fem_runtime_bundle.py \
   --runtime-root "${STAGING_ROOT}" \

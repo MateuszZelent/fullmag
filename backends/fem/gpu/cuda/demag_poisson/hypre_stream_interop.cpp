@@ -3,6 +3,7 @@
  */
 
 #include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
+#include "gpu/cuda/runtime/nvtx_ranges.hpp"
 
 #if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK
 #include <mfem/config/_config.hpp>
@@ -27,6 +28,18 @@ cudaStream_t hypre_DeviceDataComputeStream(hypre_DeviceData *data);
 #endif
 
 namespace fullmag::fem {
+
+#if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_ENABLE_NVTX
+extern "C" uint64_t fullmag_fem_nvtx_range_start(const char *name) noexcept
+{
+    return nvtx::start(name);
+}
+
+extern "C" void fullmag_fem_nvtx_range_end(uint64_t id) noexcept
+{
+    nvtx::end(id);
+}
+#endif
 
 #if FULLMAG_HAS_CUDA_RUNTIME
 namespace {

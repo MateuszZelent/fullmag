@@ -16,6 +16,7 @@ mod formatting;
 mod interactive_runtime_host;
 mod live_publisher_diagnostics;
 mod live_workspace;
+mod nvtx_range;
 mod orchestrator;
 mod python_bridge;
 mod runtime_supervisor;

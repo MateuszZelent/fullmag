@@ -16,6 +16,7 @@ use crate::control_room::{
 };
 use crate::feature_flags::FeatureFlags;
 use crate::formatting::{push_engine_log, unix_time_millis};
+use crate::nvtx_range;
 use crate::python_bridge::{python_mesh_preparation_update, PythonMeshPreparationUpdate};
 use crate::simulation_preparation::{
     PreparationLogLevel, PreparationStageId, PreparationTransitionError, SimulationPreparationState,
@@ -3098,13 +3099,16 @@ fn current_live_publisher_loop(
             let mut full_sync = |session_id: &str, payload: &CurrentLiveSnapshotPayload| {
                 full_sink(session_id, payload)
             };
-            let publish_result = execute_publish_cycle(
-                &session_id,
-                &snapshot,
-                fallback_allowed,
-                &mut delta_sync,
-                &mut full_sync,
-            );
+            let publish_result = {
+                let _publish_nvtx = nvtx_range::Range::new(b"fem.host.publish\0");
+                execute_publish_cycle(
+                    &session_id,
+                    &snapshot,
+                    fallback_allowed,
+                    &mut delta_sync,
+                    &mut full_sync,
+                )
+            };
             let publish_wall_time_ns = elapsed_ns(cycle_start);
             let cycle_ms = publish_wall_time_ns / 1_000_000;
             record_live_publish_diagnostics(
@@ -3178,15 +3182,18 @@ fn current_live_publisher_loop(
         };
         let mut full_sync =
             |session_id: &str, payload: &CurrentLiveSnapshotPayload| full_sink(session_id, payload);
-        let publish_result = publish_final_snapshot_with_diagnostics(
-            &session_id,
-            &mut snapshot,
-            &diagnostics,
-            &mut successful_publish_window,
-            fallback_allowed,
-            &mut delta_sync,
-            &mut full_sync,
-        );
+        let publish_result = {
+            let _publish_nvtx = nvtx_range::Range::new(b"fem.host.publish\0");
+            publish_final_snapshot_with_diagnostics(
+                &session_id,
+                &mut snapshot,
+                &diagnostics,
+                &mut successful_publish_window,
+                fallback_allowed,
+                &mut delta_sync,
+                &mut full_sync,
+            )
+        };
         record_live_publish_diagnostics(
             &diagnostics,
             clone_wall_time_ns,

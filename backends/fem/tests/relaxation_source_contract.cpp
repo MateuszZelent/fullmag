@@ -8,12 +8,37 @@
 
 #include "source_facade_contract_utils.hpp"
 
+#include <cctype>
+
 namespace {
 
 using fullmag::fem::tests::check;
 using fullmag::fem::tests::fem_source_root;
 using fullmag::fem::tests::read_text_file;
 using fullmag::fem::tests::repo_root;
+
+std::string compact_source(const std::string &source) {
+    std::string compact;
+    compact.reserve(source.size());
+    for (const unsigned char character : source) {
+        if (!std::isspace(character)) {
+            compact.push_back(static_cast<char>(character));
+        }
+    }
+    return compact;
+}
+
+size_t count_occurrences(
+    const std::string &source,
+    const std::string &needle) {
+    size_t count = 0;
+    size_t position = 0;
+    while ((position = source.find(needle, position)) != std::string::npos) {
+        ++count;
+        position += needle.size();
+    }
+    return count;
+}
 
 void native_relaxation_algorithms_live_under_mfem_relaxation() {
     const std::filesystem::path root = fem_source_root();
@@ -1586,11 +1611,11 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
                 std::string::npos,
         "native FEM GPU PG-BB must own, account for, preflight, and free persistent accepted-state H_eff storage");
     check(
-        pgbb_step.find(
-            "gpu.fields.h_eff, gpu.relaxation.projected_gradient_accepted_h_eff") !=
+        compact_source(pgbb_step).find(
+            "gpu.fields.h_eff,gpu.relaxation.projected_gradient_accepted_h_eff") !=
                 std::string::npos &&
-            pgbb_step.find(
-                "gpu.relaxation.projected_gradient_accepted_h_eff,\n                reason") !=
+            compact_source(pgbb_step).find(
+                "gpu.relaxation.projected_gradient_accepted_h_eff,reason") !=
                 std::string::npos &&
             pgbb_step.find("cudaMalloc") == std::string::npos &&
             pgbb_step.find("cudaFree") == std::string::npos,
@@ -2126,6 +2151,9 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
             ncg_source.find("ArmijoDifferenceDecision::Accept") !=
                 std::string::npos,
         "native FEM GPU nonlinear-CG must own a device-resident Armijo/PR+ accepted-step loop with static periodic trial projection");
+    const std::string compact_ncg_source = compact_source(ncg_source);
+    const std::string ncg_trial_total_assignment =
+        "last_trial_energy_j=armijo_result.trial_snapshot.total_energy_j;";
     check(
         direct_energy_source.find(
             "auto &trial = result.trial_snapshot;") !=
@@ -2136,12 +2164,8 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
              direct_energy_source.find(
                  "unpack_energy_snapshot(") !=
                  std::string::npos) &&
-            ncg_source.find(
-            "last_trial_energy_j =\n                armijo_result.trial_snapshot.total_energy_j;") !=
-                std::string::npos &&
-            ncg_source.find(
-                "last_trial_energy_j =\n            armijo_result.trial_snapshot.total_energy_j;") !=
-                std::string::npos &&
+            count_occurrences(
+                compact_ncg_source, ncg_trial_total_assignment) == 2 &&
             ncg_source.find(
                 "gpu_copy_scalar_to_host") == std::string::npos,
         "native FEM GPU direct Armijo evaluation must populate the trial snapshot total and both normal and recovery nonlinear-CG consumers must use it without a separate scalar readback");

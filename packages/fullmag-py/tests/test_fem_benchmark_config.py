@@ -1,4 +1,5 @@
 import io
+import hashlib
 import importlib.util
 import inspect
 import json
@@ -2277,6 +2278,101 @@ def test_build_uses_cli_safe_uniform_initializer():
     assert problem.magnets[0].m0.to_ir()["kind"] == "uniform"
 
 
+def test_executed_problem_ir_sha256_hashes_the_exact_canonical_bytes():
+    bench = load_benchmark_module()
+    problem = bench.build()
+    canonical_bytes = json.dumps(
+        problem.to_ir(include_geometry_assets=True),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    assert bench.executed_problem_ir_sha256(problem) == hashlib.sha256(
+        canonical_bytes
+    ).hexdigest()
+
+
+def test_executed_problem_ir_sha256_changes_with_physical_inputs(monkeypatch):
+    bench = load_benchmark_module()
+    monkeypatch.setenv("FULLMAG_BENCH_SCENARIO", "box500_airbox_exchange_demag")
+    monkeypatch.setenv(
+        "FULLMAG_BENCH_DOMAIN_MESH",
+        str(
+            REPO_ROOT
+            / "examples/assets/fem_performance/box500_airbox_exchange_demag_v1.mesh.json"
+        ),
+    )
+    monkeypatch.setenv("FULLMAG_BENCH_DEMAG_RTOL", "1e-8")
+    baseline = bench.executed_problem_ir_sha256(bench.build())
+    monkeypatch.setenv("FULLMAG_BENCH_DEMAG_RTOL", "1e-10")
+
+    assert bench.executed_problem_ir_sha256(bench.build()) != baseline
+
+
+def test_executed_problem_ir_sha256_ignores_profiler_only_toggles(monkeypatch):
+    bench = load_benchmark_module()
+    monkeypatch.setenv("FULLMAG_BENCH_SCENARIO", "box500_airbox_exchange_demag")
+    monkeypatch.setenv(
+        "FULLMAG_BENCH_DOMAIN_MESH",
+        str(
+            REPO_ROOT
+            / "examples/assets/fem_performance/box500_airbox_exchange_demag_v1.mesh.json"
+        ),
+    )
+    monkeypatch.setenv("FULLMAG_FEM_STEP_PROFILE", "0")
+    baseline = bench.executed_problem_ir_sha256(bench.build())
+    monkeypatch.setenv("FULLMAG_FEM_STEP_PROFILE", "1")
+
+    assert bench.executed_problem_ir_sha256(bench.build()) == baseline
+
+
+def test_runtime_helper_writes_hash_of_exact_exported_problem_ir(
+    monkeypatch, tmp_path
+):
+    from fullmag.runtime import helper
+
+    identity_path = tmp_path / "executed-problem-ir.sha256"
+    monkeypatch.setenv(
+        "FULLMAG_BENCH_EXECUTED_PROBLEM_IR_SHA256_FILE", str(identity_path)
+    )
+    problem_ir = {"z": [3, 2, 1], "a": {"value": 1.0}}
+    canonical_bytes = json.dumps(
+        problem_ir, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+
+    helper._write_executed_problem_ir_identity(problem_ir)
+
+    assert identity_path.read_text(encoding="ascii") == (
+        hashlib.sha256(canonical_bytes).hexdigest() + "\n"
+    )
+    assert list(tmp_path.iterdir()) == [identity_path]
+
+
+def test_analysis_benchmark_rejects_missing_or_malformed_problem_ir_sidecar(
+    tmp_path,
+):
+    bench = load_analysis_benchmark_module()
+    identity_path = tmp_path / "executed-problem-ir.sha256"
+
+    with pytest.raises(ValueError, match="missing executed ProblemIR identity"):
+        bench.read_executed_problem_ir_identity(identity_path)
+
+    for malformed in ("A" * 64 + "\n", "a" * 63 + "\n", "a" * 64 + "\nextra\n"):
+        identity_path.write_text(malformed, encoding="ascii")
+        with pytest.raises(ValueError, match="malformed executed ProblemIR identity"):
+            bench.read_executed_problem_ir_identity(identity_path)
+
+    identity_path.write_text("b" * 64 + "\n", encoding="ascii")
+    assert bench.read_executed_problem_ir_identity(identity_path) == "b" * 64
+
+
+def test_script_identity_sidecar_is_outside_replaceable_simulation_output() -> None:
+    source = ANALYSIS_BENCHMARK_PATH.read_text(encoding="utf-8")
+
+    assert 'case_dir / "simulation-output"' in source
+    assert 'case_dir / "executed-problem-ir.sha256"' in source
+
+
 def test_emit_summary_includes_integrator(capsys):
     bench = load_benchmark_module()
 
@@ -2320,7 +2416,16 @@ def test_emit_summary_includes_integrator(capsys):
 
     mesh_path = REPO_ROOT / "examples" / "assets" / "box_40x20x10_coarse.mesh.json"
 
-    bench.emit_summary(Result(), mesh_path, 1, 2e-13, "exchange_only", "rk4", "adaptive")
+    bench.emit_summary(
+        Result(),
+        mesh_path,
+        1,
+        2e-13,
+        "exchange_only",
+        "rk4",
+        "adaptive",
+        executed_problem_ir_sha256="a" * 64,
+    )
 
     output = capsys.readouterr().out.strip()
     assert output.startswith("BENCHMARK_RESULT=")
@@ -2331,6 +2436,7 @@ def test_emit_summary_includes_integrator(capsys):
     assert payload["error_estimate"] == 0.25
     assert payload["dt_suggested_s"] == 2e-13
     assert payload["rhs_evals"] == 5
+    assert payload["executed_problem_ir_sha256"] == "a" * 64
 
 
 def test_emit_summary_accumulates_direct_minimizer_line_search_work(capsys):

@@ -18,6 +18,7 @@ use crate::dev_smoke::run_post_materialization_dev_smoke_tests;
 use crate::formatting::*;
 use crate::interactive_runtime_host::{CurrentLiveDisplaySelectionHandle, InteractiveRuntimeHost};
 use crate::live_workspace::*;
+use crate::nvtx_range;
 use crate::python_bridge::*;
 use crate::simulation_preparation::{
     PreparationLogLevel, PreparationStageId, PreparationStatus, SimulationPreparationState,
@@ -4915,6 +4916,7 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
             field_every_n,
             |update| {
                 let callback_start = solver_profile_callback_start(live_workspace);
+                let _callback_nvtx = nvtx_range::Range::new(b"fem.host.callback\0");
                 let mut adjusted = offset_step_update(
                     update,
                     global_step_offset + local_step_offset,
@@ -7986,6 +7988,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     Some(&current_stage_id),
                     |update| {
                         let callback_start = solver_profile_callback_start(&live_workspace);
+                        let _callback_nvtx = nvtx_range::Range::new(b"fem.host.callback\0");
                         let finished = update.finished && is_session_final_stage;
                         let mut adjusted = offset_step_update(
                             update,
@@ -8079,6 +8082,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     Some(&current_stage_id),
                     |update| {
                         let callback_start = solver_profile_callback_start(&live_workspace);
+                        let _callback_nvtx = nvtx_range::Range::new(b"fem.host.callback\0");
                         let finished = update.finished && is_session_final_stage;
                         let mut adjusted =
                             offset_step_update(update, step_offset, time_offset, finished);
@@ -9184,6 +9188,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     let interrupt_signal = running_control.running_interrupt_signal();
                     let mut on_step = |update| {
                         let callback_start = solver_profile_callback_start(&live_workspace);
+                        let _callback_nvtx = nvtx_range::Range::new(b"fem.host.callback\0");
                         let mut adjusted =
                             offset_step_update(update, step_offset, time_offset, false);
                         if let Some(heartbeat) = stage_heartbeat.as_mut() {
@@ -9338,6 +9343,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         Some(&current_stage_id),
                         |update| {
                             let callback_start = solver_profile_callback_start(&live_workspace);
+                            let _callback_nvtx = nvtx_range::Range::new(b"fem.host.callback\0");
                             let mut adjusted =
                                 offset_step_update(update, step_offset, time_offset, false);
                             if let Some(heartbeat) = stage_heartbeat.as_mut() {

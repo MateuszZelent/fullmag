@@ -4088,6 +4088,46 @@ fem-gpu-py-layer-hole-headless:
 rebuild-fem-runtime:
     ./scripts/export_fem_gpu_runtime.sh
 
+# Capture the fixed FEM GPU NCG fixture in the managed fem-gpu image. The
+# preflight is fail-closed: missing Nsight tools write status=unavailable and
+# stop before an instrumented runtime rebuild or a fabricated capture.
+capture-fem-gpu-nsight:
+    set -eu; \
+      mkdir -p .fullmag/reports/task-13-nsight; \
+      active=".fullmag/runtimes/fem-gpu-host"; \
+      if [ ! -L "$active" ]; then \
+        echo "status=unavailable: active managed FEM runtime must be a symlink before capture" >&2; \
+        exit 2; \
+      fi; \
+      prior_target="$(readlink "$active")"; \
+      restore_active() { \
+        status=$?; \
+        trap - EXIT; \
+        next=".fullmag/runtimes/.fem-gpu-host.restore.$$"; \
+        ln -sfn "$prior_target" "$next"; \
+        mv -Tf "$next" "$active"; \
+        exit "$status"; \
+      }; \
+      trap restore_active EXIT; \
+      docker compose --profile fem-gpu build fem-gpu; \
+      if ! docker compose --profile fem-gpu run --rm -T \
+        -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+        fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/capture_fem_gpu_nsight.py --preflight-only'; then \
+          echo "status=unavailable: Nsight preflight failed in managed fem-gpu fixture image" >&2; \
+          exit 2; \
+      fi; \
+      FULLMAG_ENABLE_NVTX=1 just rebuild-fem-runtime; \
+      if ! docker compose --profile fem-gpu run --rm -T \
+        -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+        fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/capture_fem_gpu_nsight.py --preflight-only'; then \
+          echo "status=unavailable: Nsight preflight failed in rebuilt managed fem-gpu fixture image" >&2; \
+          exit 2; \
+      fi; \
+      docker compose --profile fem-gpu run --rm -T \
+        -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+        -e FULLMAG_PYTHON=/usr/bin/python3 \
+        fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/capture_fem_gpu_nsight.py'
+
 # Build and export one immutable, hash-addressed HYPRE memory-strategy bundle.
 # The exporter atomically selects the resulting bundle as fem-gpu-host only
 # after its manifest and CUDA architecture contract have validated.

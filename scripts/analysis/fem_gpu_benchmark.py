@@ -10,6 +10,7 @@ import importlib.util
 import json
 import math
 import os
+import re
 import resource
 import shutil
 import statistics
@@ -6274,6 +6275,15 @@ def script_execution_command(
     return command
 
 
+def read_executed_problem_ir_identity(path: Path) -> str:
+    if not path.is_file():
+        raise ValueError(f"missing executed ProblemIR identity sidecar: {path}")
+    contents = path.read_text(encoding="ascii")
+    if re.fullmatch(r"[0-9a-f]{64}\n", contents) is None:
+        raise ValueError(f"malformed executed ProblemIR identity sidecar: {path}")
+    return contents[:-1]
+
+
 def parse_script_run_summary(output: str) -> Mapping[str, object] | None:
     decoder = json.JSONDecoder()
     for offset, character in reversed(tuple(enumerate(output))):
@@ -6633,14 +6643,29 @@ def run_backend(
             pass
 
     with tempfile.TemporaryDirectory(prefix=f"fullmag_{backend_label.lower()}_bench_") as run_dir:
-        env["FULLMAG_RUN_DIR"] = run_dir
-        command = script_execution_command(binary, Path(run_dir), ui_surface)
+        case_dir = Path(run_dir)
+        execution_dir = (
+            case_dir / "simulation-output" if problem_ir is None else case_dir
+        )
+        execution_dir.mkdir(parents=True, exist_ok=True)
+        env["FULLMAG_RUN_DIR"] = str(execution_dir)
+        command = script_execution_command(binary, execution_dir, ui_surface)
+        executed_problem_ir_identity_path: Path | None = None
+        if problem_ir is None:
+            executed_problem_ir_identity_path = (
+                case_dir / "executed-problem-ir.sha256"
+            )
+            env["FULLMAG_BENCH_EXECUTED_PROBLEM_IR_SHA256_FILE"] = str(
+                executed_problem_ir_identity_path
+            )
+        else:
+            env.pop("FULLMAG_BENCH_EXECUTED_PROBLEM_IR_SHA256_FILE", None)
         if problem_ir is not None:
             if ui_surface != "headless":
                 raise ValueError(
                     "interactive benchmark surface requires script execution, not run-json"
                 )
-            problem_ir_path = Path(run_dir) / "canonical.problem-ir.json"
+            problem_ir_path = case_dir / "canonical.problem-ir.json"
             problem_ir_payload = canonical_problem_ir_bytes(problem_ir)
             problem_ir_path.write_bytes(problem_ir_payload)
             row["executed_problem_ir_sha256"] = hashlib.sha256(
@@ -6656,7 +6681,7 @@ def run_backend(
             command = problem_ir_execution_command(
                 binary=binary,
                 problem_ir_path=problem_ir_path,
-                run_dir=Path(run_dir),
+                run_dir=execution_dir,
                 until_seconds=max(dt, steps * dt),
             )
         started = time.perf_counter_ns()
@@ -6676,7 +6701,7 @@ def run_backend(
             wall_time_ms = (time.perf_counter_ns() - started) / 1_000_000.0
             stdout = exc.stdout or ""
             stderr = exc.stderr or ""
-            row.update(execution_plan_mesh_stats(load_run_metadata(run_dir)))
+            row.update(execution_plan_mesh_stats(load_run_metadata(execution_dir)))
             row.update(
                 {
                     "status": "timeout",
@@ -6696,15 +6721,25 @@ def run_backend(
             - child_cpu_started.ru_utime
             - child_cpu_started.ru_stime
         )
-        metadata = load_run_metadata(run_dir)
-        final_scalar_row = load_final_scalar_row(run_dir)
-        artifact_payload = load_authoritative_benchmark_payload(run_dir)
-        energy_monotonicity_evidence = load_energy_monotonicity_evidence(run_dir)
+        metadata = load_run_metadata(execution_dir)
+        final_scalar_row = load_final_scalar_row(execution_dir)
+        artifact_payload = load_authoritative_benchmark_payload(execution_dir)
+        energy_monotonicity_evidence = load_energy_monotonicity_evidence(execution_dir)
         final_magnetization_evidence = (
-            load_final_magnetization_evidence(run_dir)
+            load_final_magnetization_evidence(execution_dir)
             if capture_final_magnetization
             else {}
         )
+        if completed.returncode == 0 and executed_problem_ir_identity_path is not None:
+            try:
+                row["executed_problem_ir_sha256"] = (
+                    read_executed_problem_ir_identity(
+                        executed_problem_ir_identity_path
+                    )
+                )
+            except ValueError:
+                if ui_surface == "interactive":
+                    raise
 
     combined_output = "\n".join(
         part for part in [completed.stdout, completed.stderr] if part.strip()
@@ -6781,6 +6816,10 @@ def run_backend(
             {
                 **task11_cumulative_relaxation_evidence(payload),
                 **task12_exact_runtime_evidence(payload),
+                "executed_problem_ir_sha256": first_present(
+                    row.get("executed_problem_ir_sha256"),
+                    payload.get("executed_problem_ir_sha256"),
+                ),
                 "executed_steps": first_present(
                     payload.get("executed_steps"), payload.get("total_steps")
                 ),

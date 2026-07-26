@@ -22,6 +22,41 @@ use crate::types::{
 };
 use crate::DisplaySelectionState;
 
+#[allow(unexpected_cfgs)]
+mod nvtx_range {
+    #[cfg(fullmag_enable_nvtx)]
+    pub(super) struct Range(u64);
+
+    #[cfg(not(fullmag_enable_nvtx))]
+    pub(super) struct Range;
+
+    impl Range {
+        #[cfg(fullmag_enable_nvtx)]
+        pub(super) fn new(name: &'static [u8]) -> Self {
+            unsafe extern "C" {
+                fn fullmag_fem_nvtx_range_start(name: *const std::ffi::c_char) -> u64;
+            }
+            debug_assert_eq!(name.last(), Some(&0));
+            Self(unsafe { fullmag_fem_nvtx_range_start(name.as_ptr().cast()) })
+        }
+
+        #[cfg(not(fullmag_enable_nvtx))]
+        pub(super) const fn new(_: &'static [u8]) -> Self {
+            Self
+        }
+    }
+
+    #[cfg(fullmag_enable_nvtx)]
+    impl Drop for Range {
+        fn drop(&mut self) {
+            unsafe extern "C" {
+                fn fullmag_fem_nvtx_range_end(id: u64);
+            }
+            unsafe { fullmag_fem_nvtx_range_end(self.0) };
+        }
+    }
+}
+
 #[derive(Default, Clone, Copy)]
 pub(crate) struct FemPreviewHandoffTimings {
     pub(crate) harvest_query_wall_time_ns: u64,
@@ -76,6 +111,7 @@ enum PendingFemPreviewJob {
         request_revision: u64,
         source_step: u64,
         snapshot: NativeFemPreviewSnapshot,
+        nvtx: nvtx_range::Range,
     },
     EnergyDensity {
         destination: PreviewDestination,
@@ -83,6 +119,7 @@ enum PendingFemPreviewJob {
         request_revision: u64,
         source_step: u64,
         snapshot: NativeFemEnergyDensitySnapshot,
+        nvtx: nvtx_range::Range,
     },
     #[cfg(test)]
     Test {
@@ -167,6 +204,7 @@ impl PendingFemPreviewJob {
                 request_revision,
                 source_step,
                 snapshot,
+                nvtx: _nvtx,
             } => (
                 destination,
                 request_revision,
@@ -179,6 +217,7 @@ impl PendingFemPreviewJob {
                 request_revision,
                 source_step,
                 snapshot,
+                nvtx: _nvtx,
             } => (
                 destination,
                 request_revision,
@@ -237,6 +276,7 @@ fn schedule_preview_job(
     backend: &NativeFemBackend,
     deferred: DeferredFemPreviewJob,
 ) -> Result<PendingFemPreviewJob, RunError> {
+    let nvtx = nvtx_range::Range::new(b"fem.preview.snapshot\0");
     if let Some(snapshot) = backend.begin_energy_density_snapshot(
         &deferred.request,
         deferred.node_count,
@@ -250,6 +290,7 @@ fn schedule_preview_job(
             request_revision: deferred.request.revision,
             source_step: deferred.source_step,
             snapshot,
+            nvtx,
         });
     }
     Ok(PendingFemPreviewJob::Vector {
@@ -258,6 +299,7 @@ fn schedule_preview_job(
         request_revision: deferred.request.revision,
         source_step: deferred.source_step,
         snapshot: backend.begin_live_preview_snapshot(&deferred.request)?,
+        nvtx,
     })
 }
 
@@ -399,10 +441,11 @@ impl Default for PendingFemPreviewState {
                         )
                     });
                     let scheduled_magnetization = frame.magnetization.take().map(|deferred| {
+                        let nvtx = nvtx_range::Range::new(b"fem.preview.snapshot\0");
                         let scheduled = backend
                             .expect("production magnetization frame backend")
                             .begin_field_snapshot("m", deferred.source_step, 0.0, 0.0);
-                        (deferred, scheduled)
+                        (deferred, scheduled, nvtx)
                     });
                     if !try_send_worker_output(&frame.schedule_tx, ()) {
                         break;
@@ -434,9 +477,11 @@ impl Default for PendingFemPreviewState {
                             }
                         }
                     });
-                    let magnetization = scheduled_magnetization.map(|(deferred, scheduled)| {
-                        scheduled.and_then(|snapshot| materialize_magnetization(snapshot, deferred))
-                    });
+                    let magnetization =
+                        scheduled_magnetization.map(|(deferred, scheduled, _nvtx)| {
+                            scheduled
+                                .and_then(|snapshot| materialize_magnetization(snapshot, deferred))
+                        });
                     let completion = PreviewFrameCompletion {
                         preview,
                         magnetization,

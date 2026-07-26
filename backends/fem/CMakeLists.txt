@@ -6,6 +6,7 @@
 option(FULLMAG_ENABLE_FEM_GPU "Build FEM GPU backend sources" ON)
 option(FULLMAG_USE_MFEM_STACK "Build FEM backend against MFEM/libCEED/hypre" OFF)
 option(FULLMAG_FEM_WITH_SLEPC "Build FEM frequency-domain dependency slice against PETSc/SLEPc" ON)
+option(FULLMAG_ENABLE_NVTX "Enable phase-level FEM GPU NVTX ranges" OFF)
 
 if(FULLMAG_ENABLE_CUDA AND FULLMAG_ENABLE_FEM_GPU AND NOT CMAKE_CUDA_ARCHITECTURES)
     message(FATAL_ERROR
@@ -292,6 +293,12 @@ if(FULLMAG_USE_MFEM_STACK)
 endif()
 
 add_library(fullmag_fem SHARED ${FEM_SOURCES})
+
+if(FULLMAG_ENABLE_NVTX)
+    target_compile_definitions(fullmag_fem PRIVATE FULLMAG_ENABLE_NVTX=1)
+else()
+    target_compile_definitions(fullmag_fem PRIVATE FULLMAG_ENABLE_NVTX=0)
+endif()
 
 function(fullmag_private_string_define target macro value)
     string(REPLACE "\\" "\\\\" escaped "${value}")
