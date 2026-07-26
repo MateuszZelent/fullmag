@@ -126,3 +126,55 @@ References:
 ## Continuation
 
 Treat the accepted-baseline p95 failure as a cross-task performance investigation. Do not promote 2/4/8 based on these data, do not rewrite the accepted baseline from this task, and do not weaken the 5% gate. A follow-up should profile why the current accumulated runtime is slower than the accepted snapshot while preserving the validated one-thread policy and device-Hypre identity.
+
+## Review remediation and superseding status
+
+The original v1 qualification above is retained as historical execution evidence, but its promotion conclusion is superseded. Review found that it did not pin the complete runtime/device/workload identity, normalized the CPU-use diagnostic by each candidate's effective thread count, and used a calculated callback residual plus cumulative writer service time instead of exact callback/publication/contention signals. Those gaps are now closed fail-closed in schema v2:
+
+- every row must carry one identical runtime manifest, source manifest, `libfullmag_fem` hash, GPU UUID/model/compute capability, solver mesh signature, and host CPU capacity;
+- every row must be the exact 32-step PG-BB/double/CG-AMG-`1e-12`/AMG6/device-Hypre/device-resident workload;
+- candidate process CPU time and average-core-count p50 and p95 may not increase at all relative to the corresponding thread-1 profiler/surface baseline;
+- qualification requires exact cumulative step-interval, native-solver, publisher-replace, publish-lag, artifact-enqueue-block, and artifact-queue-depth signals;
+- the fabricated `callback_gap_estimate_ms` and cumulative writer-service proxy are no longer qualification metrics;
+- each of the four managed matrix invocations captures the current GPU identity directly.
+
+Adversarial tests mutate runtime, GPU, mesh, scenario, step count, algorithm, precision, tolerance, and Hypre execution policy one at a time. Every mutation returns `status=invalid`, retains thread 1, and makes all candidates ineligible. A separate adversarial test sets the old normalized oversubscription flag to false while increasing raw CPU use; the candidate is rejected on raw p50/p95. Missing any exact cumulative signal also makes the whole qualification invalid.
+
+The already-captured 80-row v1 matrix lacks GPU identity and the exact cumulative publisher/publish-lag/enqueue/queue signals. It must therefore be treated as **invalid/no promotion** under v2. It still supports the operational observation that no tested candidate had a compelling end-to-end result, but it no longer qualifies any default. The implemented automatic GPU policy remains the conservative deliberate value 1.
+
+## Accepted-regression root-cause trace
+
+The accepted and current performance rows use the same physical fixture, solver mesh signature `20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431`, canonical ProblemIR `403afa1214681d3317e23b14f4095dfea6141197cea813655c07d24104fbcc08`, NCG 64-step workload, CG/AMG6 policy at `1e-12`, device Hypre, and effective GPU OpenMP count 1. Their runtime identities are not the same:
+
+| Identity | Accepted | Current |
+|---|---|---|
+| source snapshot/manifest | Git `bb46eac50415096d1805b30bab836f1260308863`; runtime manifest `65e02cbed5dc...` | source manifest `575996134af7...`; runtime manifest `692ee072525f...` |
+| `libfullmag_fem` | `5c91c5e63d6...` | `5c63211f614c...` |
+| HYPRE | `44f0d0e6a87b...` | `d2699a93ff31...` |
+| MFEM | `1619251a4da3...` | `16cdc246b93d...` |
+
+The regression is visible inside solver phases, not only in unclassified end-to-end time. Accepted to current p95 changes are:
+
+- CPU demag solve: `122.591087` -> `143.391417` ms, about `+16.97%`;
+- CPU demag apply: `122.522337` -> `143.318203` ms, about `+16.97%`;
+- CPU assemble: `16.456374` -> `22.126492` ms, about `+34.46%`;
+- CPU recover: `6.569447` -> `8.800722` ms, about `+33.97%`;
+- GPU demag solve/apply: `56.574542` -> `66.667010` ms, about `+17.84%`.
+
+The last recorded accepted-performance pass before this persistent red state is Task 9 (`5ed238a9` plus its identity closure), with GPU p95 `5484.353` ms, `+4.96%` and still inside the unchanged 5% gate. The first persistent recorded red state is Task 10 commit `05dfec97`, whose Docker dependency-layer change rebuilt HYPRE/MFEM and whose final retained bundle reported GPU p95 `5918.739` ms, `+13.27%`. This chronology identifies the inherited boundary, not a proven single compiler-level cause.
+
+To isolate Task 12, a controlled immutable A/B used one common runner SHA-256 `00fd6bfeffa6c8b04e82ee1c586172acde8d4041132d6463dc637f902c83ee4d`, one RTX 4080, one localized fixture/ProblemIR, and two schema-v2 bundles with identical HYPRE `d2699a93...`, MFEM `16cdc246...`, libCEED `58531e36...`, and public C ABI:
+
+| Metric | Task 10 final `6ba6c06a...` | Current `692ee072...` | Current delta |
+|---|---:|---:|---:|
+| steady wall p50 | `25702.351` ms | `25910.452` ms | `+0.81%` |
+| steady wall p95 | `26623.422` ms | `26227.533` ms | `-1.49%` |
+| steady create p95 | `5838.651` ms | `5884.849` ms | `+0.79%` |
+
+The current Task 12 bundle improves the controlled end-to-end p95 relative to the already-red Task 10 bundle. Task 12 is therefore not the source of the accepted-baseline regression. The raw ignored A/B evidence is under `.fullmag/reports/task12-review-runtime-ab-task10-current-v2/`, and the script restored and revalidated the current candidate bundle afterward.
+
+An exact green-Task9 versus Task10 causal bisect is not available: the exact green Task 9 runtime bundle was not retained, and the nearest earlier preserved Task 8 bundle has a different public C ABI because `fullmag_fem_backend_take_accepted_energy_proof_v1` was added later. Reverting Task 10 packaging or replacing dependency binaries without an exact matched-runtime proof would be unsafe and outside Task 12. No baseline, threshold, packaging policy, or solver policy was changed.
+
+## Formal final status
+
+**BLOCKED / DONE WITH CONCERNS.** The host-thread implementation and reviewed fail-closed v2 qualifier are implemented and focused-tested. Production qualification is blocked because current rows do not yet publish every required exact cumulative signal, and the mandatory accepted-performance gate remains inherited-red from the Task 10 runtime boundary. Task 13 owns the deeper dependency/runtime root-cause trace; no candidate thread count, accepted baseline, or packaging change is promoted here.

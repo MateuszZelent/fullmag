@@ -283,9 +283,26 @@ GPU_HOST_THREAD_QUALIFICATION_REPEATS = 5
 GPU_HOST_THREAD_QUALIFICATION_METRICS = (
     "wall_time_ms",
     "backend_create_wall_time_ms",
-    "step_wall_time_ms",
-    "callback_gap_estimate_ms",
-    "artifact_writer_job_wall_time_ms",
+    "cumulative_step_interval_wall_time_ms",
+    "cumulative_native_solver_wall_time_ms",
+    "cumulative_publisher_replace_wall_time_ms",
+    "cumulative_publish_lag_wall_time_ms",
+    "cumulative_artifact_enqueue_block_wall_time_ms",
+    "artifact_queue_depth_max",
+)
+GPU_HOST_THREAD_QUALIFICATION_CPU_METRICS = (
+    "host_cpu_time_ms",
+    "host_cpu_average_core_count",
+)
+GPU_HOST_THREAD_QUALIFICATION_PINNED_IDENTITY_FIELDS = (
+    "runtime_manifest_sha256",
+    "source_manifest_sha256",
+    "libfullmag_fem_sha256",
+    "device_uuid",
+    "device_name",
+    "compute_capability",
+    "solver_mesh_signature",
+    "host_cpu_capacity",
 )
 FEM_CPU_NO_PBC_ADAPTIVE_SCENARIOS = {
     "exchange_demag_anis_uniaxial",
@@ -694,6 +711,90 @@ def gpu_host_thread_contract_failures(
     return failures
 
 
+def gpu_host_thread_qualification_identity_failures(
+    row: Mapping[str, object],
+) -> list[str]:
+    failures: list[str] = []
+
+    def valid_sha256(value: object) -> bool:
+        return (
+            isinstance(value, str)
+            and len(value) == 64
+            and all(character in "0123456789abcdef" for character in value)
+        )
+
+    for field in (
+        "runtime_manifest_sha256",
+        "source_manifest_sha256",
+        "libfullmag_fem_sha256",
+        "solver_mesh_signature",
+    ):
+        if not valid_sha256(row.get(field)):
+            failures.append(f"{field} must be a canonical SHA-256")
+    for field in ("device_uuid", "device_name", "compute_capability"):
+        if not isinstance(row.get(field), str) or not str(row.get(field)).strip():
+            failures.append(f"{field} must be present")
+
+    exact_fields: tuple[tuple[str, object], ...] = (
+        ("backend", "fem_gpu"),
+        ("scenario", "box500_airbox_exchange_demag"),
+        ("reported_scenario", "box500_airbox_exchange_demag"),
+        ("relaxation_algorithm", "projected_gradient_bb"),
+        ("reported_relaxation_algorithm", "projected_gradient_bb"),
+        ("reported_precision", "double"),
+        ("requested_fem_execution", "gpu"),
+        ("requested_relaxation_preconditioner_strategy", "none"),
+        ("requested_demag_solver", "CG"),
+        ("requested_demag_preconditioner", "AMG"),
+        ("demag_linear_solver", "CG"),
+        ("demag_preconditioner", "AMG"),
+        ("execution_engine", "fem_native_gpu"),
+        ("fem_assembly_mode", "legacy_sparse"),
+        ("fem_execution_mode", "all_in_gpu_legacy_sparse"),
+        ("fem_data_residency", "device_source_of_truth"),
+        ("fem_demag_operator_mode", "device_hypre_poisson"),
+        ("hypre_execution_policy", "device"),
+        ("demag_residency", "device"),
+        ("fem_gpu_qualification_status", "production_executable"),
+    )
+    for field, expected in exact_fields:
+        if row.get(field) != expected:
+            failures.append(
+                f"{field} must be {expected!r}, got {row.get(field)!r}"
+            )
+    for field, expected in (
+        ("steps", 32),
+        ("executed_steps", 32),
+        ("requested_demag_amg_relax_type", 6),
+        ("demag_amg_relax_type", 6),
+    ):
+        if as_int(row.get(field)) != expected:
+            failures.append(
+                f"{field} must be {expected}, got {row.get(field)!r}"
+            )
+    for field in (
+        "requested_demag_relative_tolerance",
+        "demag_relative_tolerance",
+    ):
+        value = as_float(row.get(field))
+        if value is None or not math.isclose(
+            value,
+            1e-12,
+            rel_tol=1e-12,
+            abs_tol=0.0,
+        ):
+            failures.append(f"{field} must be 1e-12, got {row.get(field)!r}")
+    mfem_device = str(row.get("mfem_device") or "").lower()
+    if not mfem_device.startswith("ceed-cuda:"):
+        failures.append(
+            f"mfem_device must resolve to ceed-cuda, got {row.get('mfem_device')!r}"
+        )
+    host_capacity = as_int(row.get("host_cpu_capacity"))
+    if host_capacity is None or host_capacity < 1:
+        failures.append("host_cpu_capacity must be a positive integer")
+    return failures
+
+
 def gpu_host_thread_policy_qualification_summary(
     rows: Sequence[Mapping[str, object]],
 ) -> dict[str, object]:
@@ -741,6 +842,13 @@ def gpu_host_thread_policy_qualification_summary(
     for key in sorted(set(rows_by_key) - expected_keys):
         failures.append(f"unexpected matrix key {key!r}")
 
+    for field in GPU_HOST_THREAD_QUALIFICATION_PINNED_IDENTITY_FIELDS:
+        values = {str(row.get(field)) for row in rows}
+        if len(values) != 1:
+            failures.append(
+                f"{field} differs across the qualification matrix: {sorted(values)!r}"
+            )
+
     for key, key_rows in sorted(rows_by_key.items()):
         for row in key_rows:
             if row.get("status") != "ok":
@@ -751,15 +859,28 @@ def gpu_host_thread_policy_qualification_summary(
                     row, expected_threads=key[0]
                 )
             )
-            for metric in GPU_HOST_THREAD_QUALIFICATION_METRICS:
+            failures.extend(
+                f"matrix key {key!r}: {failure}"
+                for failure in gpu_host_thread_qualification_identity_failures(row)
+            )
+            for metric in (
+                *GPU_HOST_THREAD_QUALIFICATION_METRICS,
+                *GPU_HOST_THREAD_QUALIFICATION_CPU_METRICS,
+            ):
                 value = as_float(row.get(metric))
                 if value is None or not math.isfinite(value) or value < 0.0:
                     failures.append(
                         f"matrix key {key!r}: {metric} must be finite and non-negative"
                     )
-            if qualification_bool(row.get("host_cpu_oversubscribed")) is None:
+            average_cores = as_float(row.get("host_cpu_average_core_count"))
+            host_capacity = as_int(row.get("host_cpu_capacity"))
+            if (
+                average_cores is not None
+                and host_capacity is not None
+                and average_cores > host_capacity + 1e-12
+            ):
                 failures.append(
-                    f"matrix key {key!r}: host_cpu_oversubscribed is missing"
+                    f"matrix key {key!r}: host_cpu_average_core_count exceeds host_cpu_capacity"
                 )
 
     case_summaries: list[dict[str, object]] = []
@@ -788,7 +909,10 @@ def gpu_host_thread_policy_qualification_summary(
                         )
                     ]
                     metric_distributions: dict[str, dict[str, float | int]] = {}
-                    for metric in GPU_HOST_THREAD_QUALIFICATION_METRICS:
+                    for metric in (
+                        *GPU_HOST_THREAD_QUALIFICATION_METRICS,
+                        *GPU_HOST_THREAD_QUALIFICATION_CPU_METRICS,
+                    ):
                         values = [as_float(row.get(metric)) for row in selected_rows]
                         finite = [
                             value
@@ -829,17 +953,38 @@ def gpu_host_thread_policy_qualification_summary(
                                 f"p95 regression {p95_regression_percent:.3f}% exceeds 5%"
                             )
                         p50_speedups.append(baseline_p50 / candidate_p50)
+                raw_cpu_regressions: dict[str, dict[str, float]] = {}
+                if threads != 1:
+                    for metric in GPU_HOST_THREAD_QUALIFICATION_CPU_METRICS:
+                        baseline_cpu = distributions["baseline"].get(metric)
+                        candidate_cpu = distributions["candidate"].get(metric)
+                        if baseline_cpu is None or candidate_cpu is None:
+                            candidate_failures.append(
+                                f"profiler={profiler_enabled},surface={ui_surface}: "
+                                f"incomplete {metric} distribution"
+                            )
+                            continue
+                        regressions: dict[str, float] = {}
+                        for percentile in ("p50", "p95"):
+                            baseline_value = float(baseline_cpu[percentile])
+                            candidate_value = float(candidate_cpu[percentile])
+                            increase = candidate_value - baseline_value
+                            regressions[percentile] = increase
+                            if increase > 1e-12:
+                                candidate_failures.append(
+                                    f"profiler={profiler_enabled},surface={ui_surface}: "
+                                    f"{metric} {percentile} increased by {increase:.6f}; "
+                                    "zero increase is allowed"
+                                )
+                        raw_cpu_regressions[metric] = regressions
                 oversubscribed = any(
-                    qualification_bool(row.get("host_cpu_oversubscribed")) is True
+                    (as_float(row.get("host_cpu_average_core_count")) or 0.0)
+                    > (as_int(row.get("host_cpu_capacity")) or 0) + 1e-12
                     for repeat_index in range(GPU_HOST_THREAD_QUALIFICATION_REPEATS)
                     for row in rows_by_key.get(
                         (threads, profiler_enabled, ui_surface, repeat_index), ()
                     )
                 )
-                if threads != 1 and oversubscribed:
-                    candidate_failures.append(
-                        f"profiler={profiler_enabled},surface={ui_surface}: host CPU oversubscription observed"
-                    )
                 case_summaries.append(
                     {
                         "threads": threads,
@@ -849,6 +994,7 @@ def gpu_host_thread_policy_qualification_summary(
                         "p50_improvement_percent": p50_improvement_percent,
                         "p95_regression_percent": p95_regression_percent,
                         "host_cpu_oversubscribed": oversubscribed,
+                        "raw_host_cpu_regressions": raw_cpu_regressions,
                     }
                 )
         qualifies = threads != 1 and not failures and not candidate_failures
@@ -876,10 +1022,12 @@ def gpu_host_thread_policy_qualification_summary(
         else 1
     )
     return {
-        "schema": "fullmag.fem_gpu.host_thread_policy_qualification.v1",
+        "schema": "fullmag.fem_gpu.host_thread_policy_qualification.v2",
         "status": "invalid" if failures else "pass",
         "decision": (
-            "promote-qualified-default"
+            "qualification-invalid-retain-deliberate-default-one"
+            if failures
+            else "promote-qualified-default"
             if resolved_default != 1
             else "retain-deliberate-default-one"
         ),
@@ -887,7 +1035,8 @@ def gpu_host_thread_policy_qualification_summary(
         "promotion_thresholds": {
             "minimum_end_to_end_p50_improvement_percent": 5.0,
             "maximum_end_to_end_p95_regression_percent": 5.0,
-            "host_cpu_oversubscription_allowed": False,
+            "maximum_raw_host_cpu_p50_increase": 0.0,
+            "maximum_raw_host_cpu_p95_increase": 0.0,
         },
         "expected_measured_row_count": len(expected_keys),
         "observed_measured_row_count": len(rows),
@@ -3924,6 +4073,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Comma-separated benchmark CSVs containing the exact Task 12 host-thread matrix",
     )
     parser.add_argument(
+        "--gpu-host-thread-qualification-run",
+        action="store_true",
+        help="Pin current GPU identity into every Task 12 host-thread benchmark row",
+    )
+    parser.add_argument(
         "--gpu-host-thread-qualification-output",
         type=Path,
         default=None,
@@ -5728,6 +5882,27 @@ def task11_cumulative_relaxation_evidence(
     }
 
 
+def task12_exact_runtime_evidence(
+    payload: Mapping[str, object],
+) -> dict[str, object]:
+    evidence: dict[str, object] = {}
+    for field in (
+        "cumulative_step_interval_wall_time",
+        "cumulative_native_solver_wall_time",
+        "cumulative_publisher_replace_wall_time",
+        "cumulative_publish_lag_wall_time",
+        "cumulative_artifact_enqueue_block_wall_time",
+    ):
+        value_ms = as_float(payload.get(f"{field}_ms"))
+        if value_ms is None:
+            value_ms = ns_to_ms(payload.get(f"{field}_ns"))
+        evidence[f"{field}_ms"] = value_ms
+    evidence["artifact_queue_depth_max"] = as_int(
+        payload.get("artifact_queue_depth_max")
+    )
+    return evidence
+
+
 def load_final_scalar_row_from_payload(payload: Mapping[str, object] | None) -> dict[str, object]:
     if payload is None:
         return {}
@@ -6582,6 +6757,7 @@ def run_backend(
             "host_cpu_average_core_count": (
                 host_cpu_time_ms / wall_time_ms if wall_time_ms > 0.0 else 0.0
             ),
+            "host_cpu_capacity": os.cpu_count() or 1,
             "stdout_lines": len(completed.stdout.splitlines()),
             "stderr_lines": len(completed.stderr.splitlines()),
         }
@@ -6590,6 +6766,7 @@ def run_backend(
         row.update(
             {
                 **task11_cumulative_relaxation_evidence(payload),
+                **task12_exact_runtime_evidence(payload),
                 "executed_steps": first_present(
                     payload.get("executed_steps"), payload.get("total_steps")
                 ),
@@ -6900,20 +7077,12 @@ def run_backend(
                 "e_dmi": first_present(payload.get("e_dmi"), payload.get("final_e_dmi_j")),
             }
         )
-        executed_steps = max(1, as_int(row.get("executed_steps")) or 1)
-        create_ms = as_float(row.get("backend_create_wall_time_ms")) or 0.0
-        steady_solver_ms = as_float(row.get("step_wall_time_ms")) or 0.0
-        callback_gap_ms = max(
-            0.0,
-            (wall_time_ms - create_ms - executed_steps * steady_solver_ms)
-            / executed_steps,
-        )
-        row["callback_gap_estimate_ms"] = round(callback_gap_ms, 6)
         effective_threads = as_int(row.get("effective_fem_omp_threads")) or 1
         average_cores = as_float(row.get("host_cpu_average_core_count")) or 0.0
+        host_capacity = as_int(row.get("host_cpu_capacity")) or 1
         row["host_cpu_oversubscribed"] = (
-            effective_threads > (os.cpu_count() or 1)
-            or average_cores > effective_threads + 0.25
+            effective_threads > host_capacity
+            or average_cores > host_capacity + 1e-12
         )
     else:
         row["error"] = "missing BENCHMARK_RESULT payload"
@@ -10111,7 +10280,11 @@ def main() -> None:
         if repeat_count != RELAXATION_PRECONDITIONER_REQUIRED_REPEATS:
             raise SystemExit("the exact Task 11 sweep requires --repeat 5")
     observed_gpu_identity: dict[str, object] | None = None
-    if args.task8_qualification_identity is not None or task11_resolution_sweep:
+    if (
+        args.task8_qualification_identity is not None
+        or task11_resolution_sweep
+        or args.gpu_host_thread_qualification_run
+    ):
         raw_gpu_index = os.environ.get("FULLMAG_FEM_GPU_INDEX", "0")
         try:
             gpu_index = int(raw_gpu_index)

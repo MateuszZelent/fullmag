@@ -2772,6 +2772,7 @@ verify-fem-gpu-host-thread-policy-qualification:
           --demag-solvers CG --demag-preconditioners AMG --demag-rtols 1e-12 \
           --demag-amg-relax-types 6 --steps 32 --repeat "$FULLMAG_BENCH_REPEAT" \
           --gpu-warmup --reuse-generated-domain-mesh \
+          --gpu-host-thread-qualification-run \
           --generated-domain-mesh-cache-dir .fullmag/reports/task-12-host-thread-policy/mesh-cache \
           --require-stable-solver-mesh --require-demag-converged \
           --require-gpu-strict-residency --require-gpu-control-readback-budget \
@@ -2786,6 +2787,7 @@ verify-fem-gpu-host-thread-policy-qualification:
           --demag-solvers CG --demag-preconditioners AMG --demag-rtols 1e-12 \
           --demag-amg-relax-types 6 --steps 32 --repeat "$FULLMAG_BENCH_REPEAT" \
           --gpu-warmup --reuse-generated-domain-mesh \
+          --gpu-host-thread-qualification-run \
           --generated-domain-mesh-cache-dir .fullmag/reports/task-12-host-thread-policy/mesh-cache \
           --require-stable-solver-mesh --require-demag-converged \
           --require-gpu-strict-residency --require-gpu-control-readback-budget \
@@ -2800,6 +2802,7 @@ verify-fem-gpu-host-thread-policy-qualification:
           --demag-solvers CG --demag-preconditioners AMG --demag-rtols 1e-12 \
           --demag-amg-relax-types 6 --steps 32 --repeat "$FULLMAG_BENCH_REPEAT" \
           --gpu-warmup --reuse-generated-domain-mesh \
+          --gpu-host-thread-qualification-run \
           --generated-domain-mesh-cache-dir .fullmag/reports/task-12-host-thread-policy/mesh-cache \
           --require-stable-solver-mesh --require-demag-converged \
           --require-gpu-strict-residency --require-gpu-control-readback-budget \
@@ -2814,6 +2817,7 @@ verify-fem-gpu-host-thread-policy-qualification:
           --demag-solvers CG --demag-preconditioners AMG --demag-rtols 1e-12 \
           --demag-amg-relax-types 6 --steps 32 --repeat "$FULLMAG_BENCH_REPEAT" \
           --gpu-warmup --reuse-generated-domain-mesh \
+          --gpu-host-thread-qualification-run \
           --generated-domain-mesh-cache-dir .fullmag/reports/task-12-host-thread-policy/mesh-cache \
           --require-stable-solver-mesh --require-demag-converged \
           --require-gpu-strict-residency --require-gpu-control-readback-budget \

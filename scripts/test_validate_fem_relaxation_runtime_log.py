@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import inspect
 import json
 import os
 import importlib.util
@@ -5334,19 +5335,60 @@ def _gpu_host_thread_qualification_rows() -> list[dict[str, object]]:
                         {
                             "backend": "fem_gpu",
                             "status": "ok",
+                            "runtime_manifest_sha256": "1" * 64,
+                            "source_manifest_sha256": "2" * 64,
+                            "libfullmag_fem_sha256": "3" * 64,
+                            "device_uuid": "GPU-task12",
+                            "device_name": "NVIDIA Task 12",
+                            "compute_capability": "8.9",
+                            "solver_mesh_signature": "4" * 64,
+                            "scenario": "box500_airbox_exchange_demag",
+                            "reported_scenario": "box500_airbox_exchange_demag",
+                            "steps": 32,
+                            "executed_steps": 32,
+                            "relaxation_algorithm": "projected_gradient_bb",
+                            "reported_relaxation_algorithm": "projected_gradient_bb",
+                            "reported_precision": "double",
+                            "requested_fem_execution": "gpu",
+                            "requested_relaxation_preconditioner_strategy": "none",
+                            "requested_demag_solver": "CG",
+                            "requested_demag_preconditioner": "AMG",
+                            "demag_linear_solver": "CG",
+                            "demag_preconditioner": "AMG",
+                            "requested_demag_relative_tolerance": 1e-12,
+                            "demag_relative_tolerance": 1e-12,
+                            "requested_demag_amg_relax_type": 6,
+                            "demag_amg_relax_type": 6,
                             "requested_cpu_thread_spec": str(threads),
                             "requested_fem_omp_threads": threads,
                             "effective_fem_omp_threads": threads,
+                            "execution_engine": "fem_native_gpu",
+                            "fem_assembly_mode": "legacy_sparse",
+                            "fem_execution_mode": "all_in_gpu_legacy_sparse",
+                            "fem_data_residency": "device_source_of_truth",
                             "fem_demag_operator_mode": "device_hypre_poisson",
                             "hypre_execution_policy": "device",
+                            "demag_residency": "device",
+                            "fem_gpu_qualification_status": "production_executable",
+                            "mfem_device": "ceed-cuda:/gpu/cuda/shared",
                             "step_profiler_enabled": profiler_enabled,
                             "ui_surface": ui_surface,
                             "repeat_index": repeat_index,
                             "wall_time_ms": candidate_wall_ms[threads] + repeat_index,
                             "backend_create_wall_time_ms": 10.0 + repeat_index,
-                            "step_wall_time_ms": 5.0 + repeat_index,
-                            "callback_gap_estimate_ms": 1.0 + repeat_index,
-                            "artifact_writer_job_wall_time_ms": 0.5 + repeat_index,
+                            "cumulative_step_interval_wall_time_ms": (
+                                candidate_wall_ms[threads] - 15.0 + repeat_index
+                            ),
+                            "cumulative_native_solver_wall_time_ms": (
+                                candidate_wall_ms[threads] - 20.0 + repeat_index
+                            ),
+                            "cumulative_publisher_replace_wall_time_ms": 1.0,
+                            "cumulative_publish_lag_wall_time_ms": 2.0,
+                            "cumulative_artifact_enqueue_block_wall_time_ms": 0.5,
+                            "artifact_queue_depth_max": 1,
+                            "host_cpu_time_ms": candidate_wall_ms[threads] * 1.5,
+                            "host_cpu_average_core_count": 1.5,
+                            "host_cpu_capacity": 16,
                             "host_cpu_oversubscribed": False,
                         }
                     )
@@ -5381,6 +5423,117 @@ def test_gpu_host_thread_qualification_retains_deliberate_default_one() -> None:
     assert summary["decision"] == "retain-deliberate-default-one"
 
 
+@pytest.mark.parametrize(
+    "field,replacement",
+    [
+        ("runtime_manifest_sha256", "9" * 64),
+        ("device_uuid", "GPU-mixed"),
+        ("solver_mesh_signature", "8" * 64),
+        ("reported_scenario", "box500_airbox_exchange_only"),
+        ("executed_steps", 31),
+        ("reported_relaxation_algorithm", "nonlinear_cg"),
+        ("reported_precision", "single"),
+        ("demag_relative_tolerance", 1e-10),
+        ("hypre_execution_policy", "host"),
+    ],
+)
+def test_gpu_host_thread_qualification_rejects_mixed_identity_or_workload(
+    field: str,
+    replacement: object,
+) -> None:
+    benchmark = load_benchmark_module()
+    rows = _gpu_host_thread_qualification_rows()
+    rows[-1][field] = replacement
+
+    summary = benchmark.gpu_host_thread_policy_qualification_summary(rows)
+
+    assert summary["status"] == "invalid"
+    assert summary["resolved_default_threads"] == 1
+    assert not any(candidate["qualifies"] for candidate in summary["candidates"])
+    assert any(field in failure for failure in summary["failures"])
+
+
+def test_gpu_host_thread_qualification_rejects_raw_cpu_use_increase() -> None:
+    benchmark = load_benchmark_module()
+    rows = _gpu_host_thread_qualification_rows()
+    for row in rows:
+        if row["requested_cpu_thread_spec"] == "4":
+            row["host_cpu_time_ms"] = 250.0
+            row["host_cpu_average_core_count"] = 2.5
+            row["host_cpu_oversubscribed"] = False
+
+    summary = benchmark.gpu_host_thread_policy_qualification_summary(rows)
+
+    candidate = next(
+        item for item in summary["candidates"] if item["threads"] == 4
+    )
+    assert candidate["qualifies"] is False
+    assert any("host_cpu_time_ms p50" in failure for failure in candidate["failures"])
+    assert any(
+        "host_cpu_average_core_count p95" in failure
+        for failure in candidate["failures"]
+    )
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "cumulative_step_interval_wall_time_ms",
+        "cumulative_native_solver_wall_time_ms",
+        "cumulative_publisher_replace_wall_time_ms",
+        "cumulative_publish_lag_wall_time_ms",
+        "cumulative_artifact_enqueue_block_wall_time_ms",
+        "artifact_queue_depth_max",
+    ],
+)
+def test_gpu_host_thread_qualification_requires_exact_cumulative_telemetry(
+    field: str,
+) -> None:
+    benchmark = load_benchmark_module()
+    rows = _gpu_host_thread_qualification_rows()
+    rows[0].pop(field)
+
+    summary = benchmark.gpu_host_thread_policy_qualification_summary(rows)
+
+    assert summary["status"] == "invalid"
+    assert summary["resolved_default_threads"] == 1
+    assert any(field in failure for failure in summary["failures"])
+
+
+def test_gpu_host_thread_rows_do_not_fabricate_callback_gap_or_use_writer_proxy() -> None:
+    benchmark = load_benchmark_module()
+    source = inspect.getsource(benchmark.run_backend)
+
+    assert "callback_gap_estimate_ms" not in source
+    assert "artifact_writer_job_wall_time_ms" not in (
+        benchmark.GPU_HOST_THREAD_QUALIFICATION_METRICS
+    )
+
+
+def test_gpu_host_thread_rows_convert_only_exact_cumulative_runtime_signals() -> None:
+    benchmark = load_benchmark_module()
+
+    evidence = benchmark.task12_exact_runtime_evidence(
+        {
+            "cumulative_step_interval_wall_time_ns": 11_000_000,
+            "cumulative_native_solver_wall_time_ns": 7_000_000,
+            "cumulative_publisher_replace_wall_time_ns": 300_000,
+            "cumulative_publish_lag_wall_time_ns": 400_000,
+            "cumulative_artifact_enqueue_block_wall_time_ns": 500_000,
+            "artifact_queue_depth_max": 3,
+        }
+    )
+
+    assert evidence == {
+        "cumulative_step_interval_wall_time_ms": 11.0,
+        "cumulative_native_solver_wall_time_ms": 7.0,
+        "cumulative_publisher_replace_wall_time_ms": 0.3,
+        "cumulative_publish_lag_wall_time_ms": 0.4,
+        "cumulative_artifact_enqueue_block_wall_time_ms": 0.5,
+        "artifact_queue_depth_max": 3,
+    }
+
+
 def test_gpu_host_thread_qualification_recipe_is_exact_managed_matrix() -> None:
     recipe = just_recipe_source(
         JUSTFILE.read_text(encoding="utf-8"),
@@ -5396,6 +5549,7 @@ def test_gpu_host_thread_qualification_recipe_is_exact_managed_matrix() -> None:
     assert recipe.count("--ui-surface interactive") == 2
     assert recipe.count("FULLMAG_FEM_STEP_PROFILE=0") == 2
     assert recipe.count("FULLMAG_FEM_STEP_PROFILE=1") == 2
+    assert recipe.count("--gpu-host-thread-qualification-run") == 4
     assert "--gpu-host-thread-qualification-inputs" in recipe
     assert "--gpu-host-thread-qualification-output" in recipe
 
