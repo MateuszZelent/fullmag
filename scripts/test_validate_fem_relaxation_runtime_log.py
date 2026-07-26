@@ -5344,6 +5344,12 @@ def _gpu_host_thread_qualification_rows() -> list[dict[str, object]]:
                             "solver_mesh_signature": "4" * 64,
                             "scenario": "box500_airbox_exchange_demag",
                             "reported_scenario": "box500_airbox_exchange_demag",
+                            "integrator": "heun",
+                            "reported_integrator": "heun",
+                            "timestep_policy": "fixed",
+                            "reported_timestep_policy": "fixed",
+                            "dt_s": 1e-13,
+                            "executed_problem_ir_sha256": "5" * 64,
                             "steps": 32,
                             "executed_steps": 32,
                             "relaxation_algorithm": "projected_gradient_bb",
@@ -5449,6 +5455,65 @@ def test_gpu_host_thread_qualification_rejects_mixed_identity_or_workload(
 
     assert summary["status"] == "invalid"
     assert summary["resolved_default_threads"] == 1
+    assert not any(candidate["qualifies"] for candidate in summary["candidates"])
+    assert any(field in failure for failure in summary["failures"])
+
+
+@pytest.mark.parametrize(
+    "field,replacement",
+    [
+        ("integrator", "rk45"),
+        ("reported_integrator", "rk45"),
+        ("timestep_policy", "adaptive"),
+        ("reported_timestep_policy", "adaptive"),
+        ("dt_s", 9e-9),
+        ("executed_problem_ir_sha256", "6" * 64),
+    ],
+)
+def test_gpu_host_thread_qualification_rejects_task12_workload_mutation(
+    field: str,
+    replacement: object,
+) -> None:
+    benchmark = load_benchmark_module()
+    rows = _gpu_host_thread_qualification_rows()
+    rows[-1][field] = replacement
+
+    summary = benchmark.gpu_host_thread_policy_qualification_summary(rows)
+
+    assert summary["status"] == "invalid"
+    assert summary["resolved_default_threads"] == 1
+    assert summary["decision"] == (
+        "qualification-invalid-retain-deliberate-default-one"
+    )
+    assert not any(candidate["qualifies"] for candidate in summary["candidates"])
+    assert any(field in failure for failure in summary["failures"])
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "integrator",
+        "reported_integrator",
+        "timestep_policy",
+        "reported_timestep_policy",
+        "dt_s",
+        "executed_problem_ir_sha256",
+    ],
+)
+def test_gpu_host_thread_qualification_rejects_missing_task12_workload_identity(
+    field: str,
+) -> None:
+    benchmark = load_benchmark_module()
+    rows = _gpu_host_thread_qualification_rows()
+    rows[-1].pop(field)
+
+    summary = benchmark.gpu_host_thread_policy_qualification_summary(rows)
+
+    assert summary["status"] == "invalid"
+    assert summary["resolved_default_threads"] == 1
+    assert summary["decision"] == (
+        "qualification-invalid-retain-deliberate-default-one"
+    )
     assert not any(candidate["qualifies"] for candidate in summary["candidates"])
     assert any(field in failure for failure in summary["failures"])
 

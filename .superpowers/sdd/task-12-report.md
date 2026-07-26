@@ -1,8 +1,8 @@
 # Task 12 report: FEM GPU host OpenMP policy qualification
 
-Status: **DONE_WITH_CONCERNS**
+Status: **BLOCKED / NOT QUALIFIED**
 
-The host-runtime policy is implemented and qualified, and the selected GPU automatic default is deliberately one OpenMP thread. All functional, native, managed-runtime, device-identity, and 1/2/4/8 qualification checks passed. The required accepted-baseline performance gate remains red because the current accumulated runtime is persistently slower than the accepted RTX 4080 baseline; the baseline and the 5% threshold were not changed.
+This is the authoritative Task 12 status. The host-runtime policy is implemented, but no GPU host-thread default is qualified or promoted by this task. The captured 80-row matrix used the superseded v1 qualifier and is invalid under the reviewed fail-closed v2 contract; current rows lack required exact cumulative telemetry and the complete pinned workload identity. The required accepted-baseline performance gate also remains inherited-red from Task 10. The deliberate automatic default remains one OpenMP thread without a qualification claim; the baseline and the 5% threshold were not changed.
 
 ## Implemented contract
 
@@ -16,7 +16,9 @@ The host-runtime policy is implemented and qualified, and the selected GPU autom
 - Added the managed `verify-fem-gpu-host-thread-policy-qualification` recipe and a strict JSON qualifier.
 - Added compatibility in the accepted-baseline comparison key only: a legacy blank `requested_relaxation_preconditioner_strategy` is semantically normalized to `none`. The accepted CSV was not rewritten.
 
-## TDD evidence
+## Historical v1 TDD evidence — qualification conclusion superseded
+
+This section records the initial implementation loop only. It does not establish current qualification.
 
 ### RED
 
@@ -38,7 +40,9 @@ The host-runtime policy is implemented and qualified, and the selected GPU autom
 - The native GPU-auto test now observes effective 1 and the `gpu-default-one` reason; explicit GPU 4 still observes effective 4.
 - `git diff --check` -> exit 0 before report generation.
 
-## Managed runtime identity
+## Historical v1 managed runtime identity — superseded
+
+This identity was observed during the initial run, but it was not sufficient for the reviewed v2 qualification contract.
 
 The runtime was rebuilt through `just ensure-managed-fem-runtime`, not with a host-first build. The schema-v2 bundle validator reported:
 
@@ -50,7 +54,9 @@ The runtime was rebuilt through `just ensure-managed-fem-runtime`, not with a ho
 
 The managed relaxation gate identified `NVIDIA GeForce RTX 4080 SUPER`, `device_hypre_poisson`, and `hypre_gpu_policy=device`.
 
-## Exact A/B matrix
+## Historical v1 A/B matrix — invalid for promotion
+
+The following matrix and decision are retained only as historical execution evidence. The v1 qualifier did not pin the full Task 12 workload identity or require the exact cumulative telemetry now required by v2, so its `pass` and promotion conclusion are superseded and must not be used to qualify a default.
 
 Recipe: `just verify-fem-gpu-host-thread-policy-qualification`
 
@@ -73,7 +79,7 @@ The promotion thresholds were at least 5% end-to-end p50 improvement in every pr
 | 4 | +1.312% / -9.622% / -1.432% / -5.138% | interactive/off +9.625% | false in all four cases; no increase versus baseline | reject |
 | 8 | +2.416% / -3.222% / -4.479% / -0.188% | interactive/on +9.760% | false in all four cases; no increase versus baseline | reject |
 
-No candidate achieved the 5% p50 contract. The qualifier therefore returned:
+No candidate achieved the 5% p50 contract. The superseded v1 qualifier returned:
 
 ```json
 {
@@ -88,7 +94,7 @@ No candidate achieved the 5% p50 contract. The qualifier therefore returned:
 
 The one-thread `host_cpu_oversubscribed` signal is process-level, derived from child-process CPU time versus effective OpenMP threads; it includes control-plane, publisher, and writer activity and is not an OpenMP-only counter. The promotion rule is no *increase*, and every candidate reduced that signal to false.
 
-## Measurement semantics
+## Historical v1 measurement semantics — superseded
 
 - create/setup: exact `backend_create_wall_time_ms`
 - steady solver: exact `step_wall_time_ms`
@@ -98,13 +104,13 @@ The one-thread `host_cpu_oversubscribed` signal is process-level, derived from c
 
 The callback gap is intentionally labelled an estimate. It includes callback, publisher, control-plane, and unclassified end-to-end work; it is not a direct callback span. No claim of an exact publisher-only measurement is made.
 
-## Required verification gates
+## Historical v1 verification results — superseded for qualification
 
-### Passing
+### Historical passes — not current qualification
 
 - `just verify-fem-time-domain-native-contract` -> exit 0.
 - `just verify-fem-relaxation-runtime` -> exit 0 after the final schema-v2 managed rebuild. GPU `llg_overdamped`, `projected_gradient_bb`, and `nonlinear_cg` smokes completed; CPU `tangent_plane_implicit` completed.
-- A/B qualification recipe -> pass with deliberate default 1.
+- A/B v1 recipe -> historical pass with deliberate default 1; superseded and invalid under v2.
 - Managed accepted-baseline runs: every scientific row, CPU/GPU consistency check, stable mesh signature, strict GPU residency check, demag convergence check, and device-Hypre identity check passed.
 
 ### Persistent concern
@@ -123,9 +129,9 @@ References:
 - https://docs.nvidia.com/cutlass/latest/media/docs/cpp/gemm_performance_measurement_methodology_guidelines.html
 - https://hypre.readthedocs.io/en/latest/solvers-boomeramg.html#memory-locations-and-execution-policies
 
-## Continuation
+## Historical v1 continuation note — superseded
 
-Treat the accepted-baseline p95 failure as a cross-task performance investigation. Do not promote 2/4/8 based on these data, do not rewrite the accepted baseline from this task, and do not weaken the 5% gate. A follow-up should profile why the current accumulated runtime is slower than the accepted snapshot while preserving the validated one-thread policy and device-Hypre identity.
+Treat the accepted-baseline p95 failure as a cross-task performance investigation. Do not promote 2/4/8 based on these data, do not rewrite the accepted baseline from this task, and do not weaken the 5% gate. A follow-up should profile why the current accumulated runtime is slower than the accepted snapshot while preserving the implemented one-thread policy and device-Hypre identity.
 
 ## Review remediation and superseding status
 
@@ -139,6 +145,25 @@ The original v1 qualification above is retained as historical execution evidence
 - each of the four managed matrix invocations captures the current GPU identity directly.
 
 Adversarial tests mutate runtime, GPU, mesh, scenario, step count, algorithm, precision, tolerance, and Hypre execution policy one at a time. Every mutation returns `status=invalid`, retains thread 1, and makes all candidates ineligible. A separate adversarial test sets the old normalized oversubscription flag to false while increasing raw CPU use; the candidate is rejected on raw p50/p95. Missing any exact cumulative signal also makes the whole qualification invalid.
+
+## Re-review 2 workload-identity closure
+
+The v2 qualifier now additionally requires every one of the 80 rows to carry the exact same complete execution identity:
+
+- authored and reported integrator are both exactly `heun`;
+- authored and reported timestep policy are both exactly `fixed`;
+- `dt_s` converts to the exact canonical Python float value `1e-13`, with zero relative and absolute tolerance;
+- `executed_problem_ir_sha256` is a nonempty canonical lowercase 64-hex SHA-256 and is identical across the full matrix.
+
+TDD first proved that all 12 missing/mutated cases were incorrectly accepted. The implementation then made each case fail closed: `rk45`, `adaptive`, `dt_s=9e-9`, a changed ProblemIR hash, and removal of any corresponding authored/reported field all return `status=invalid`, retain deliberate thread 1, and leave every candidate ineligible. This closes an identity loophole only; it does not retroactively validate the historical v1 rows.
+
+Final focused evidence for this fix wave:
+
+- RED: the 12 new missing/mutated workload-identity cases all failed because the old qualifier returned `status=pass`;
+- Task 12 subset: `python3 -m pytest -q scripts/test_validate_fem_relaxation_runtime_log.py -k 'gpu_host_thread'` -> `34 passed, 328 deselected`;
+- full focused validator file: `python3 -m pytest -q scripts/test_validate_fem_relaxation_runtime_log.py` -> `362 passed`;
+- `python3 -m py_compile scripts/analysis/fem_gpu_benchmark.py scripts/test_validate_fem_relaxation_runtime_log.py` -> exit 0;
+- scoped `git diff --check` and the authoritative opening-status assertion -> exit 0.
 
 The already-captured 80-row v1 matrix lacks GPU identity and the exact cumulative publisher/publish-lag/enqueue/queue signals. It must therefore be treated as **invalid/no promotion** under v2. It still supports the operational observation that no tested candidate had a compelling end-to-end result, but it no longer qualifies any default. The implemented automatic GPU policy remains the conservative deliberate value 1.
 
@@ -177,4 +202,4 @@ An exact green-Task9 versus Task10 causal bisect is not available: the exact gre
 
 ## Formal final status
 
-**BLOCKED / DONE WITH CONCERNS.** The host-thread implementation and reviewed fail-closed v2 qualifier are implemented and focused-tested. Production qualification is blocked because current rows do not yet publish every required exact cumulative signal, and the mandatory accepted-performance gate remains inherited-red from the Task 10 runtime boundary. Task 13 owns the deeper dependency/runtime root-cause trace; no candidate thread count, accepted baseline, or packaging change is promoted here.
+**BLOCKED / NOT QUALIFIED.** The host-thread implementation and reviewed fail-closed v2 qualifier are implemented and focused-tested, but Task 12 has no valid production qualification. Current rows do not publish every required exact cumulative signal or the complete newly pinned workload identity, and the mandatory accepted-performance gate remains inherited-red from the Task 10 runtime boundary. Task 13 owns the deeper dependency/runtime root-cause trace; no candidate thread count, accepted baseline, or packaging change is promoted here.

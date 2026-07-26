@@ -302,6 +302,7 @@ GPU_HOST_THREAD_QUALIFICATION_PINNED_IDENTITY_FIELDS = (
     "device_name",
     "compute_capability",
     "solver_mesh_signature",
+    "executed_problem_ir_sha256",
     "host_cpu_capacity",
 )
 FEM_CPU_NO_PBC_ADAPTIVE_SCENARIOS = {
@@ -728,6 +729,7 @@ def gpu_host_thread_qualification_identity_failures(
         "source_manifest_sha256",
         "libfullmag_fem_sha256",
         "solver_mesh_signature",
+        "executed_problem_ir_sha256",
     ):
         if not valid_sha256(row.get(field)):
             failures.append(f"{field} must be a canonical SHA-256")
@@ -739,6 +741,10 @@ def gpu_host_thread_qualification_identity_failures(
         ("backend", "fem_gpu"),
         ("scenario", "box500_airbox_exchange_demag"),
         ("reported_scenario", "box500_airbox_exchange_demag"),
+        ("integrator", "heun"),
+        ("reported_integrator", "heun"),
+        ("timestep_policy", "fixed"),
+        ("reported_timestep_policy", "fixed"),
         ("relaxation_algorithm", "projected_gradient_bb"),
         ("reported_relaxation_algorithm", "projected_gradient_bb"),
         ("reported_precision", "double"),
@@ -772,6 +778,14 @@ def gpu_host_thread_qualification_identity_failures(
             failures.append(
                 f"{field} must be {expected}, got {row.get(field)!r}"
             )
+    dt_s = as_float(row.get("dt_s"))
+    if dt_s is None or not math.isclose(
+        dt_s,
+        1e-13,
+        rel_tol=0.0,
+        abs_tol=0.0,
+    ):
+        failures.append(f"dt_s must be exactly 1e-13, got {row.get('dt_s')!r}")
     for field in (
         "requested_demag_relative_tolerance",
         "demag_relative_tolerance",
