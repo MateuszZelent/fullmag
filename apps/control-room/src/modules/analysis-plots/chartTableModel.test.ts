@@ -26,7 +26,7 @@ describe("chartTableModel", () => {
       "my",
       "mz",
       "e_total",
-      "max_torque",
+      "max_torque_Apm",
     ]);
     expect(
       buildTableRowsQuery({

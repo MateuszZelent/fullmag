@@ -11,6 +11,7 @@ export function createCommandContext(
     api: kernel.api,
     analysisFieldOverlay: kernel.analysisFieldOverlay,
     bus: kernel.bus,
+    chartViewportHandoff: kernel.chartViewportHandoff,
     cameraRegistry: kernel.cameraRegistry,
     input: patch.input,
     source,

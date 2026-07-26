@@ -65,6 +65,7 @@ import { useRuntimeCommandControlResourceData } from "./resources/studyRuntimeRe
 import { STUDY_RUNTIME_COMMANDS } from "./runtime/studyRuntimeCommandContributions";
 import { SelectionController } from "./selection/SelectionController";
 import type { KernelApi } from "./types";
+import { ChartViewportHandoffController } from "./visualization/ChartViewportHandoffController";
 import { CameraRegistryController } from "./visualization/CameraRegistryController";
 import { AnalysisFieldOverlayController } from "./visualization/AnalysisFieldOverlayController";
 import { ANALYSIS_FIELD_OVERLAY_COMMANDS } from "./visualization/analysisFieldOverlayCommandContributions";
@@ -112,6 +113,12 @@ function createKernel(): KernelApi {
   const resources = new ResourceInvalidationController(bus);
   const selection = new SelectionController(bus);
   const layout = new LayoutController(bus);
+  const chartViewportHandoff = new ChartViewportHandoffController();
+  bus.on("session:status-changed", ({ status }) => {
+    if (status !== "connected") {
+      chartViewportHandoff.cancel("Session changed while loading a chart field.");
+    }
+  });
   const cameraRegistry = new CameraRegistryController({
     api: api.visualization,
   });
@@ -166,6 +173,7 @@ function createKernel(): KernelApi {
     api,
     analysisFieldOverlay,
     bus,
+    chartViewportHandoff,
     cameraRegistry,
     commandDiagnostics,
     commands,

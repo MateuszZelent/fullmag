@@ -1,20 +1,23 @@
-import type { TableRowsResource } from "@/kernel/api/apiTypes";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
-
-export interface AnalysisTableState {
-  cursor: number | undefined;
-  visibleTable: TableRowsResource | null;
-}
+import type { AxisColumnDescriptor } from "@/shared/domain/analysis/TableColumnList";
 
 interface AnalysisChartRange {
   fromValue: number;
   toValue: number;
 }
 
+export type AnalysisWorkbenchSurface =
+  | "overview"
+  | "energy"
+  | "dynamics"
+  | "convergence"
+  | "frequency";
+
 export interface AnalysisPlotsWorkspaceState {
+  activeSurface: AnalysisWorkbenchSurface;
+  availableColumns: AxisColumnDescriptor[];
   range: AnalysisChartRange | null;
   selectedPoint: AnalysisChartCursorPoint | null;
-  tableState: AnalysisTableState;
   xAxisId: string;
   yAxisIds: string[];
 }
@@ -22,12 +25,10 @@ export interface AnalysisPlotsWorkspaceState {
 type AnalysisPlotsWorkspaceListener = () => void;
 
 const INITIAL_STATE: AnalysisPlotsWorkspaceState = {
+  activeSurface: "overview",
+  availableColumns: [],
   range: null,
   selectedPoint: null,
-  tableState: {
-    cursor: undefined,
-    visibleTable: null,
-  },
   xAxisId: "step",
   yAxisIds: ["mx", "my", "mz", "e_total"],
 };
@@ -47,6 +48,21 @@ class AnalysisPlotsWorkspaceStore {
     if (this.state === nextState) return;
     this.state = nextState;
     this.notify();
+  }
+
+  setActiveSurface(activeSurface: AnalysisWorkbenchSurface): void {
+    if (this.state.activeSurface === activeSurface) return;
+    this.setState({ ...this.state, activeSurface });
+  }
+
+  setAvailableColumns(availableColumns: AxisColumnDescriptor[]): void {
+    if (columnDescriptorsEqual(this.state.availableColumns, availableColumns)) {
+      return;
+    }
+    this.setState({
+      ...this.state,
+      availableColumns,
+    });
   }
 
   setAxes(xAxisId: string, yAxisIds: string[]): void {
@@ -92,14 +108,6 @@ class AnalysisPlotsWorkspaceStore {
     });
   }
 
-  setTableState(tableState: AnalysisTableState): void {
-    if (this.state.tableState === tableState) return;
-    this.setState({
-      ...this.state,
-      tableState,
-    });
-  }
-
   reset(): void {
     this.setState(INITIAL_STATE);
   }
@@ -121,6 +129,23 @@ function stringArraysEqual(left: readonly string[], right: readonly string[]): b
   return (
     left.length === right.length &&
     left.every((value, index) => value === right[index])
+  );
+}
+
+function columnDescriptorsEqual(
+  left: readonly AxisColumnDescriptor[],
+  right: readonly AxisColumnDescriptor[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => {
+      const other = right[index];
+      return (
+        value.column_id === other?.column_id &&
+        value.label === other.label &&
+        value.unit === other.unit
+      );
+    })
   );
 }
 

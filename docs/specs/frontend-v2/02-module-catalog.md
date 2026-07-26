@@ -17,7 +17,7 @@ As of 2026-05-22, `apps/control-room` registers these manifests through `src/mod
 | `viewport-3d` | `src/modules/viewport-3d` | `viewport-main` | implemented |
 | `cross-section-image` | `src/modules/cross-section-image` | `viewport-main` | implemented compatibility export/fallback; removed as a competing top-level workflow after field-map parity |
 | `field-map` | `src/modules/field-map` | `viewport-main` | production target for interactive planar spatial quantities; implementation tracked by ADR 0020 |
-| `analysis-plots` | `src/modules/analysis-plots` | `viewport-main` | planned center-surface chart module |
+| `analysis-plots` | `src/modules/analysis-plots` | `viewport-main` | implemented baseline; refactor to the canonical workbench and slot-aware Quick Chart is active |
 | `viewport-aux` slot | `src/kernel/layout` | `viewport-aux` | implemented as an empty auxiliary dock slot, rendered only when a registered module targets it |
 | `inspector` | `src/modules/inspector` | `panel-right` | implemented |
 | `transport-footer` | `src/modules/footer` | `panel-bottom` | implemented as the current footer/log dock |
@@ -73,7 +73,7 @@ Authoring modules never mutate local-only physics state. They submit semantic tr
 | `viewport-3d` | `viewport-main` | 3D scene, mesh, field, glyph, overlay, selection visualization. | Mesh/topology/field binary resources. |
 | `cross-section-image` | `viewport-main` during migration; export/fallback after cutover | Server-rendered mesh cross-section preview and PNG export. | Meshing cross-section image resource plus FMCS/FMQS statistics resources. |
 | `field-map` | `viewport-main` | Interactive heatmaps, contours, probes, vectors, mesh overlays, plane/slab/depth reductions, and surface projections for every compatible published spatial quantity. | Canonical planar-monitor metadata plus bounded scalar, vector, occupancy, mesh-overlay, probe, and PNG resources. |
-| `analysis-plots` | `viewport-main`, `panel-bottom` | Scalar histories, energies, convergence, profiles, and analysis series. | Scalar and analysis resources through a chart adapter. |
+| `analysis-plots` | `viewport-main`, target `panel-bottom` | Full Analysis workbench in the active-only center surface; slot-aware Quick Chart target in the bottom dock. | Revisioned scalar/analysis resources through the shared chart data-plan and renderer boundary; no server payload in workspace stores. |
 | `viewport-2d` | disabled after replacement | Legacy live WebGL slices, projections, probes, line profiles, and mesh cross-sections. | Removed from default registration once `cross-section-image` is active. |
 | `legend-scale` | `viewport-main` overlay | Quantity legend, units, range, stale/degraded status. | Visualization state and field stats. |
 | `view-controls` | `ribbon`, `viewport-main` overlay | Camera, layer, quantity, clip, selection, display controls. | Command registry and visualization resource. |

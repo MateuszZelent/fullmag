@@ -112,7 +112,7 @@ export function analysisPlotsRangeSelectedEvent({
 }: {
   range: ChartValueRange | null;
   xAxisId: string;
-}): Omit<KernelEventMap["charts:range-selected"], "source"> {
+}): Omit<KernelEventMap["analysis-plots:range-selected"], "source"> {
   return {
     chartId: "default",
     range,
@@ -123,7 +123,7 @@ export function analysisPlotsRangeSelectedEvent({
 
 export function analysisPlotsSeriesSelectedEvent(
   series: ChartSeries,
-): Omit<KernelEventMap["charts:series-selected"], "source"> {
+): Omit<KernelEventMap["analysis-plots:series-selected"], "source"> {
   return {
     chartId: series.source.tableId,
     quantity: series.quantity,

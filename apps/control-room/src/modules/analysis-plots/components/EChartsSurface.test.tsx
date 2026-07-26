@@ -3,10 +3,11 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 
 import { buildScalarChartSeries } from "../chartTableModel";
-import { EChartsSurface } from "./EChartsSurface";
+import { EChartsSurface, tableSeriesRenderModel } from "./EChartsSurface";
 
 const sourceUrl = new URL("./EChartsSurface.tsx", import.meta.url);
-const surfaceModelUrl = new URL("./chartSurfaceModel.ts", import.meta.url);
+const sharedSurfaceUrl = new URL("../../../shared/analysis-charts/EChartsCanvasSurface.tsx", import.meta.url);
+const rendererUrl = new URL("../../../shared/analysis-charts/chartRenderer.ts", import.meta.url);
 const table = {
   columns: [
     { column_id: "step", dimension: "count", label: "Step", unit: "1" },
@@ -23,6 +24,14 @@ const series = buildScalarChartSeries(table, {
 });
 
 describe("EChartsSurface", () => {
+  it("preserves the resource revision in export provenance", () => {
+    const model = tableSeriesRenderModel(
+      series.map((entry) => ({ ...entry, dataRevision: 17 })),
+      "step",
+    );
+    expect(model.provenance?.dataRevision).toBe(17);
+  });
+
   it("keeps the ECharts mount element present before table samples arrive", () => {
     const html = renderToStaticMarkup(
       <EChartsSurface series={[]} xAxisLabel="step" />
@@ -65,25 +74,23 @@ describe("EChartsSurface", () => {
     expect(errorHtml).toContain("Table samples unavailable");
   });
 
-  it("schedules chart updates by animation frame instead of polling", () => {
-    const source = [
-      readFileSync(sourceUrl, "utf8"),
-      readFileSync(surfaceModelUrl, "utf8"),
+  it("delegates lifecycle to the shared frame-scheduled renderer owner", () => {
+    const localSource = readFileSync(sourceUrl, "utf8");
+    const sharedSource = [
+      readFileSync(sharedSurfaceUrl, "utf8"),
+      readFileSync(rendererUrl, "utf8"),
     ].join("\n");
-
-    expect(source).toContain("createChartFrameScheduler");
-    expect(source).toContain("scheduleChartOptionUpdate");
-    expect(source).toContain('chart.on("dataZoom"');
-    expect(source).toContain('chart.on("click"');
-    expect(source).toContain("chartCursorPointFromEChartsClick");
-    expect(source).toContain("if (onRangeChangeRef.current)");
-    expect(source).toContain("recordChartDispatchDataZoom");
-    expect(source).toContain("scheduleRangeCommit");
-    expect(source).toContain('chart.off("dataZoom"');
-    expect(source).toContain('chart.off("click"');
-    expect(source).toContain("resizeScheduler.schedule");
-    expect(source).toContain(".catch(() =>");
-    expect(source).toContain("Chart renderer unavailable");
-    expect(source).not.toContain("setInterval");
+    expect(localSource).toContain("EChartsCanvasSurface");
+    expect(localSource).toContain("chartCursorPointFromEChartsClick");
+    expect(localSource).toContain("recordChartDispatchDataZoom");
+    expect(localSource).toContain("if (onRangeChange) recordChartDispatchDataZoom");
+    expect(localSource).toContain("scheduleRangeCommit");
+    expect(localSource).not.toContain("echarts.init");
+    expect(sharedSource).toContain('renderer: "canvas"');
+    expect(sharedSource).toContain("requestAnimationFrame");
+    expect(sharedSource).toContain("ResizeObserver");
+    expect(sharedSource).toContain("ownerRef.current.dispose");
+    expect(sharedSource).toContain(".catch(() =>");
+    expect(sharedSource).not.toContain("setInterval");
   });
 });

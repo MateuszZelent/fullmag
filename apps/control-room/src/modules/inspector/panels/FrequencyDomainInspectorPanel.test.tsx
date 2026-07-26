@@ -3270,7 +3270,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("FMR Response Sweep Chart");
     expect(html).toContain("Driven FMR frequency response");
     expect(html).toContain('data-renderer="echarts"');
-    expect(html).toContain("Plot field");
+    expect(html).toContain("Load in 3D");
     expect(html).toContain("FMR Response Point Browser");
     expect(html).toContain("mx, frequency point 0");
     expect(html).toContain("Amplitude");

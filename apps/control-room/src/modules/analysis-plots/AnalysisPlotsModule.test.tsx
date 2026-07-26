@@ -32,6 +32,7 @@ import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
+import type { ChartTableWindow } from "@/shared/domain/analysis/chartDataPlan";
 import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
 import {
   adjacentHysteresisPointIndex,
@@ -122,6 +123,32 @@ const table = {
   table_id: "default",
   total_rows: 2,
 };
+
+function chartWindow(value: {
+  columns: readonly unknown[];
+  cursor_end: number;
+  cursor_start: number;
+  resync_required: boolean;
+  revision: number;
+  rows: readonly (readonly number[])[];
+  schema_revision: number;
+  table_id: string;
+  total_rows: number;
+}): ChartTableWindow {
+  return {
+    columnCount: value.columns.length,
+    columns: value.columns as ChartTableWindow["columns"],
+    cursorEnd: value.cursor_end,
+    cursorStart: value.cursor_start,
+    resyncRequired: value.resync_required,
+    revision: value.revision,
+    rowCount: value.rows.length,
+    schemaRevision: value.schema_revision,
+    tableId: value.table_id,
+    totalRows: value.total_rows,
+    values: new Float64Array(value.rows.flat()),
+  };
+}
 
 describe("AnalysisPlotsView", () => {
   it("fits hysteresis chart axes to collected points during live sweeps", () => {
@@ -1167,13 +1194,13 @@ describe("AnalysisPlotsView", () => {
         solverEnergySeries={[]}
         solverEnergyStatus="idle"
         tableRowsStatus="ready"
-        visibleTable={table}
+        visibleTable={chartWindow(table)}
         xAxisId="step"
         yAxisIds={["mx"]}
       />,
     );
 
-    expect(html).toContain("Table charts");
+    expect(html).toContain("Analysis overview");
     expect(html).toContain("2 rows / 2 columns");
     expect(html).toContain('class="fm-analysis-plots__echarts"');
     expect(html).toContain('class="fm-analysis-plots__echarts"');
@@ -1939,7 +1966,7 @@ describe("AnalysisPlotsView", () => {
         solverEnergySeries={[]}
         solverEnergyStatus="idle"
         tableRowsStatus="ready"
-        visibleTable={table}
+        visibleTable={chartWindow(table)}
         xAxisId="step"
         yAxisIds={["mx"]}
       />,
@@ -1962,7 +1989,7 @@ describe("AnalysisPlotsView", () => {
         solverEnergySeries={[]}
         solverEnergyStatus="idle"
         tableRowsStatus="ready"
-        visibleTable={table}
+        visibleTable={chartWindow(table)}
         xAxisId="step"
         yAxisIds={["mx"]}
       />,
@@ -2001,7 +2028,7 @@ describe("AnalysisPlotsView", () => {
         solverEnergySeries={[]}
         solverEnergyStatus="idle"
         tableRowsStatus="ready"
-        visibleTable={table}
+        visibleTable={chartWindow(table)}
         xAxisId="step"
         yAxisIds={["mx"]}
       />,
@@ -2046,7 +2073,7 @@ describe("AnalysisPlotsView", () => {
         solverEnergySeries={[]}
         solverEnergyStatus="idle"
         tableRowsStatus="ready"
-        visibleTable={table}
+        visibleTable={chartWindow(table)}
         xAxisId="step"
         yAxisIds={["mx"]}
       />,
@@ -2104,7 +2131,7 @@ describe("AnalysisPlotsView", () => {
         solverEnergySeries={solverEnergySeries}
         solverEnergyStatus="ready"
         tableRowsStatus="ready"
-        visibleTable={table}
+        visibleTable={chartWindow(table)}
         xAxisId="step"
         yAxisIds={["mx"]}
       />,
@@ -2212,9 +2239,9 @@ describe("AnalysisPlotsView", () => {
   });
 
   it("declares the add-series event path in the module manifest", () => {
-    expect(analysisPlotsManifest.listens).toContain("charts:add-series-requested");
-    expect(analysisPlotsManifest.emits).toContain("charts:range-selected");
-    expect(analysisPlotsManifest.emits).toContain("charts:series-selected");
+    expect(analysisPlotsManifest.listens).toContain("analysis-plots:add-series-requested");
+    expect(analysisPlotsManifest.emits).toContain("analysis-plots:range-selected");
+    expect(analysisPlotsManifest.emits).toContain("analysis-plots:series-selected");
   });
 
   it("adds requested chart series through the same Y-axis unit policy as the UI", () => {

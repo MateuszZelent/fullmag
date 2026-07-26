@@ -229,6 +229,16 @@ Explorer, Inspector, and optional analysis surfaces communicate through kernel
 selection, resource hooks, and commands. The extension must not mutate viewport
 quantity, layers, colorbar, camera, or render-loop state.
 
+### 7.4 Inspector Quick Chart
+
+The Inspector may host a Quick Chart through a shared neutral chart descriptor,
+resource hook/cache, and renderer boundary. It must not import private
+`analysis-plots` code, own a second server payload, or implement a separate
+ECharts lifecycle. Hover stays renderer-local; point click publishes a small
+semantic selection. Loading a field or snapshot in 3D requires an explicit,
+cancellable command. With Quick Chart open, the mounted 3D viewport must retain
+its camera, topology, field buffers, WebGL context, and idle-frame budget.
+
 ## 8. Tests
 
 Required tests:

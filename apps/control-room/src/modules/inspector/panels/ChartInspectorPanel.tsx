@@ -1,8 +1,7 @@
 import { useCallback } from "react";
 
-import {
-  analysisPlotsWorkspaceStore,
-} from "@/kernel/workspace/analysisPlotsWorkspace";
+
+import { analysisPlotsWorkspaceStore } from "@/kernel/workspace/analysisPlotsWorkspace";
 import { useAnalysisPlotsWorkspaceSelector } from "@/kernel/workspace/useAnalysisPlotsWorkspace";
 import {
   nextYAxisIdsForToggle,
@@ -10,6 +9,7 @@ import {
   TableColumnList,
 } from "@/shared/domain/analysis/TableColumnList";
 import { yAxisIdsAfterXAxisSelection } from "@/shared/domain/analysis/axisSelection";
+import { QuickChartResourceView } from "@/shared/analysis-charts/QuickChartResourceView";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FieldRow } from "../primitives/FieldRow";
@@ -29,18 +29,16 @@ export function ChartInspectorPanel({ selection }: InspectorPanelProps) {
   const selectedPoint =
     selection.ref?.type === "analysis-chart-point" ? selection.ref : null;
 
-  const { tableState, xAxisId, yAxisIds } = useAnalysisPlotsWorkspaceSelector(
-    (state) => state,
-  );
+  const { availableColumns, xAxisId, yAxisIds } =
+    useAnalysisPlotsWorkspaceSelector((state) => state);
 
   const toggleYAxis = useCallback(
     (columnId: string, enabled: boolean) => {
       const current = analysisPlotsWorkspaceStore.getSnapshot();
-      const columns = current.tableState.visibleTable?.columns;
       analysisPlotsWorkspaceStore.setAxes(
         current.xAxisId,
         nextYAxisIdsForToggle(current.yAxisIds, columnId, enabled, {
-          columns,
+          columns: current.availableColumns,
           xAxisId: current.xAxisId,
         }),
       );
@@ -50,16 +48,13 @@ export function ChartInspectorPanel({ selection }: InspectorPanelProps) {
 
   const setXAxisId = useCallback((columnId: string) => {
     const current = analysisPlotsWorkspaceStore.getSnapshot();
-    const columns = current.tableState.visibleTable?.columns;
     analysisPlotsWorkspaceStore.setAxes(
       columnId,
-      columns
-        ? sanitizeYAxisIdsForUnitLimit(
-            yAxisIdsAfterXAxisSelection(current.yAxisIds, columnId),
-            columns,
-            columnId,
-          )
-        : yAxisIdsAfterXAxisSelection(current.yAxisIds, columnId),
+      sanitizeYAxisIdsForUnitLimit(
+        yAxisIdsAfterXAxisSelection(current.yAxisIds, columnId),
+        current.availableColumns,
+        columnId,
+      ),
     );
   }, []);
 
@@ -78,11 +73,14 @@ export function ChartInspectorPanel({ selection }: InspectorPanelProps) {
           <FieldRow label="Y" value={formatInspectorNumber(selectedPoint.y)} />
         </InspectorGroup>
       ) : null}
+      <InspectorGroup title="Quick Chart">
+        <QuickChartResourceView selection={selection} />
+      </InspectorGroup>
       <InspectorGroup title="Columns">
         <TableColumnList
+          columns={availableColumns.length > 0 ? availableColumns : null}
           onSelectXAxis={setXAxisId}
           onToggleYAxis={toggleYAxis}
-          table={tableState.visibleTable}
           xAxisId={xAxisId}
           xAxisRadioName="fm-inspector-analysis-x-axis"
           yAxisIds={yAxisIds}
@@ -91,7 +89,10 @@ export function ChartInspectorPanel({ selection }: InspectorPanelProps) {
       <InspectorGroup title="Range">
         <FieldRow label="Mode" value="follow table cursor" />
         <FieldRow label="Visible cap" value="5000 rows" />
-        <FieldRow label="Decimation" value="server target_points + bounded client window" />
+        <FieldRow
+          label="Decimation"
+          value="server target_points + bounded client window"
+        />
       </InspectorGroup>
     </div>
   );

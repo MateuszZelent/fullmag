@@ -17,6 +17,7 @@ import { ResourceInvalidationController } from "../resources/ResourceInvalidatio
 import { SelectionController } from "../selection/SelectionController";
 import type { KernelApi } from "../types";
 import { AnalysisFieldOverlayController } from "../visualization/AnalysisFieldOverlayController";
+import { ChartViewportHandoffController } from "@/kernel/visualization/ChartViewportHandoffController";
 import { CameraRegistryController } from "../visualization/CameraRegistryController";
 import { ObjectVisualizationController } from "../visualization/ObjectVisualizationController";
 import { VisualizationDebugController } from "../visualization/VisualizationDebugController";
@@ -36,6 +37,7 @@ function makeKernel(): KernelApi {
   return {
     api,
     analysisFieldOverlay: new AnalysisFieldOverlayController(),
+  chartViewportHandoff: new ChartViewportHandoffController(),
     bus,
     cameraRegistry: new CameraRegistryController({ api: api.visualization }),
     commandDiagnostics: new CommandDiagnosticsController(),

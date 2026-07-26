@@ -52,10 +52,11 @@ not contribute `cross-section-image.open`. Spatial field PNG export belongs to
 
 ## 3. Analysis Plot Surface
 
-`analysis-plots` owns lightweight 2D plot rendering for scalar histories and
-analysis series. The current implementation uses SVG paths over resource-hook
-data; future engines such as Plotly or ECharts are allowed only behind the
-module boundary and must stay demand-driven.
+`analysis-plots` owns 2D plot rendering for scalar histories and analysis
+series. The implemented baseline uses ECharts Canvas v6; the canonical target
+keeps renderer choice behind the shared neutral chart boundary and remains
+demand-driven. Renderer replacement requires a reproducible hard-gate failure
+and comparative spike; it is not assumed by this specification.
 
 Plot modules must separate:
 

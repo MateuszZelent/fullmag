@@ -127,6 +127,17 @@ Procedure:
 4. assert hook refetches exactly once;
 5. abort while pending and assert no state update after unmount.
 
+### Analysis / Quick Chart and 3D Stress
+
+The chart audit must record cold and warm p50/p95, request count and bytes,
+cache hits/misses, chart-model builds, `setOption`/redraws, viewport dirty
+frames, active Canvas/ECharts/worker/listener/observer counts, heap and WebGL
+growth, cancellation, `gl.isContextLost()`, and drawing-buffer dimensions.
+It covers Quick Chart with mounted 3D, open/close/pin/unpin, local chart
+controls, relevant and irrelevant revisions, session abort, and at least 100
+3D/Analysis/Quick Chart transitions. Missing metrics are `NOT MEASURED`, never
+implicit zero.
+
 ## 7. Anti-Patterns
 
 - `setInterval` for resource refresh.
