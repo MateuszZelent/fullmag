@@ -2,7 +2,13 @@
 
 Date: 2026-07-26
 
-Status: **NO-GO — no strategy is promoted and no production selection path is retained.**
+Status: **MEASURED NO-GO / INVALID QUALIFICATION — no strategy is promoted and no production selection path is retained.**
+
+The review-remediation addendum below supersedes the earlier `status=no_go`
+interpretation. The raw 75-row experiment is preserved, but the strengthened
+contract correctly classifies it as `status=invalid` because mandatory
+cumulative-work, separate CPU/GPU parity, and immutable execution-identity
+evidence is absent.
 
 ## Decision
 
@@ -123,3 +129,187 @@ The post-cleanup active managed variant is `hypre-baseline-47b182f02495898418b7a
 ## Continuation boundary
 
 Do not promote diagonal mass, fixed-CG exchange mass, or stagnation-triggered CG8 from this experiment. A future attempt needs a materially different preconditioner or solver formulation and must rerun the same literal 75-case matrix. It must also address the fine-mesh inability to reach the torque tolerance within 64 steps before any time-to-tolerance claim can qualify.
+
+## Review-remediation addendum
+
+Date: 2026-07-26
+
+### Corrected evidence classification
+
+The strengthened validator preserves two separate facts:
+
+1. The experiment executed all 75 requested managed FEM GPU rows with stable
+   three-mesh and common runtime identities.
+2. Those rows do not constitute a valid qualification matrix.
+
+The corrected immutable JSON reports:
+
+- `status=invalid`,
+- `row_count=75`, `expected_row_count=75`,
+- `matrix_complete=true`,
+- `baseline_eligible=false`,
+- `cpu_gpu_parity.status=missing`,
+- `promoted_strategy=null`,
+- validator exit code 20.
+
+The `none` baseline is validated physically before any timing distribution can
+become a reference. Its five fine-mesh rows stopped at the 64-step limit rather
+than at the torque tolerance, so no candidate timing can qualify against it.
+This closes the original loophole where an invalid baseline could still anchor
+a promotion decision.
+
+### Fail-closed contract added after review
+
+The retained qualification harness now rejects:
+
+- any workload other than exact double-precision, 64-step, 8000 A/m NCG on
+  `box500_airbox_exchange_demag` with CG/AMG, `rtol=1e-12`, AMG relax type 6;
+- CPU execution, non-CUDA/non-HYPRE execution, wrong device residency, mixed
+  runtime/source/library identity, or unstable per-mesh solver identity;
+- nonzero compute/exchange synchronization or transfer counters, and NCG
+  control-scalar readbacks beyond the canonical cumulative-RHS budget;
+- missing accepted-step, cumulative Armijo-trial, cumulative demag-solve,
+  cumulative preconditioner-time, or cumulative HYPRE-time evidence;
+- a `stagnation_triggered_cg8` strategy without a positive all-run apply count;
+- missing or mismatched separate CPU/GPU `none` rows for all three meshes,
+  including final magnetization vectors, final energy, convergence/stop state,
+  runtime identity, and solver-mesh identity.
+
+Synthetic RED cases were observed for an invalid `none` baseline, CPU engine,
+wrong scenario, 999 control synchronizations, mixed runtime identity, mixed
+mesh identity, every missing cumulative field, a zero-apply triggered strategy,
+missing parity, magnetization mismatch, and parity runtime drift. The final
+focused suite is 326/326 passing.
+
+The final reviewer pass added an immutable execution-identity boundary. Future
+qualification runs must provide both the existing three-resolution fixture
+suite and the accepted RTX 4080 environment. The validator now requires every
+matrix row and every parity row to match:
+
+- the active managed runtime manifest, source manifest, and native-library
+  SHA-256 values;
+- the accepted GPU UUID, device name, and compute capability for GPU rows;
+- the fixture-suite mesh byte hash, runtime mesh signature, node count, and
+  element count for each resolution;
+- the Task 11-specific canonical ProblemIR SHA-256 generated for the exact
+  64-step, `dt=1e-13` s, 8000 A/m, CG/AMG workload;
+- the scenario, integrator, timestep policy, algorithm, and precision reported
+  by the executed payload rather than values copied from the request.
+
+The pinned fixture-suite SHA-256 is
+`ac4f48dfc17baf092329be65b3baef454cb318e09efa258bf4091011ce0618e8`;
+the accepted-environment SHA-256 is
+`8346f0ddd3d85df294a672d132d9508c01eb3256c0a5c6fc6ab1e2a3d2cd17ef`.
+Neither source artifact was modified. The historical CSV predates this
+identity capture: it has no GPU UUID, solver-mesh byte hash, or executed
+ProblemIR hash. The immutable corrected JSON therefore records
+`qualification_identity=null` and the explicit failure `immutable Task 11
+qualification identity is missing`; it does not retrofit current identity onto
+old measurements.
+
+### Historical work and timing fields
+
+The following values are medians across the five historical repeats. `Steps`
+is the executed direct-minimizer step count and therefore the best available
+accepted-step count in this artifact. `RHS` is cumulative. `Demag`,
+`preconditioner ms`, and `HYPRE ms` are explicitly last-step samples, not
+cumulative totals. `Norm max` is the maximum across repeats.
+
+| Strategy | Mesh | Steps | Cumulative RHS | Demag (last step) | Preconditioner ms (last step) | HYPRE apply ms (last step) | Norm max | Torque-stop rows |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `none` | coarse | 59 | 118 | 1 | 0.000000 | 11.549830 | 1.110223e-16 | 5/5 |
+| `none` | medium | 60 | 120 | 1 | 0.000000 | 29.854353 | 2.220446e-16 | 5/5 |
+| `none` | fine | 64 | 128 | 1 | 0.000000 | 60.742667 | 2.220446e-16 | 0/5 |
+| `diagonal_mass` | coarse | 59 | 118 | 1 | 0.135051 | 10.407017 | 1.110223e-16 | 5/5 |
+| `diagonal_mass` | medium | 60 | 120 | 1 | 0.141202 | 27.370811 | 2.220446e-16 | 5/5 |
+| `diagonal_mass` | fine | 64 | 128 | 1 | 0.117158 | 58.797984 | 2.220446e-16 | 0/5 |
+| `lumped_exchange_mass_cg4` | coarse | 59 | 118 | 1 | 1.405370 | 11.562685 | 2.220446e-16 | 5/5 |
+| `lumped_exchange_mass_cg4` | medium | 64 | 128 | 1 | 1.304446 | 28.395965 | 2.220446e-16 | 5/5 |
+| `lumped_exchange_mass_cg4` | fine | 64 | 128 | 1 | 1.218500 | 61.930505 | 2.220446e-16 | 0/5 |
+| `lumped_exchange_mass_cg8` | coarse | 59 | 118 | 1 | 2.644478 | 12.000929 | 1.110223e-16 | 5/5 |
+| `lumped_exchange_mass_cg8` | medium | 60 | 120 | 1 | 2.352723 | 26.715052 | 2.220446e-16 | 5/5 |
+| `lumped_exchange_mass_cg8` | fine | 64 | 128 | 1 | 2.341522 | 60.571858 | 2.220446e-16 | 0/5 |
+| `stagnation_triggered_cg8` | coarse | 59 | 118 | 1 | 0.000000 | 11.027692 | 1.110223e-16 | 5/5 |
+| `stagnation_triggered_cg8` | medium | 60 | 120 | 1 | 0.000000 | 28.865756 | 2.220446e-16 | 5/5 |
+| `stagnation_triggered_cg8` | fine | 64 | 128 | 1 | 0.000000 | 63.802141 | 2.220446e-16 | 0/5 |
+
+The historical CSV has no explicit cumulative Armijo-trial count, cumulative
+demag total, cumulative preconditioner wall time, or cumulative HYPRE wall
+time. Reporting the last-step fields as totals would be false, so the corrected
+validator marks every affected row invalid. Future runs expose accepted steps
+and cumulative demag work from `solver_steps.csv`, but still fail closed unless
+the runtime supplies the remaining cumulative fields.
+
+All 15 `stagnation_triggered_cg8` samples report zero resolved iterations and
+zero sampled preconditioner wall time. Its measured behavior is therefore a
+no-op. Because these old fields are last-step snapshots and no cumulative apply
+counter was captured, they also cannot prove that an earlier step applied CG8;
+the strengthened contract rejects the strategy instead of inferring success.
+
+### CPU/GPU parity boundary
+
+No Task 11 CPU/GPU parity artifact was captured under the candidate runtime for
+the coarse, medium, and fine `none` baselines. In particular, the historical
+CSV contains no final magnetization vectors. Candidate energy/torque comparison
+against GPU `none` rows is not CPU/GPU field parity. The corrected qualification
+is therefore invalid.
+
+The updated recipe generates a separate six-row CPU/GPU CSV and captures
+`m_final.json` values before each temporary run directory is removed. The
+validator requires numerical final-magnetization and energy parity plus exact
+stop state and common runtime/mesh identity before it evaluates candidate
+timings. It also requires the captured artifact to declare `observable=m`,
+unit `1`, a nonnegative step equal to `executed_steps`, a valid content
+SHA-256, and a vector count equal to the pinned solver-mesh node count. Both CPU
+and GPU rows must report a finite final torque no greater than 8000 A/m.
+
+The general clean-runtime command
+`just verify-fem-relaxation-cpu-gpu-consistency-smoke` passed, but its current
+direct-minimizer policy does not compare final magnetization fields. It is
+supporting runtime smoke evidence only and does not repair the missing Task 11
+candidate-runtime parity evidence.
+
+### Immutable evidence
+
+Committed artifacts:
+
+- `docs/audits/evidence/task-11/task-11-relaxation-preconditioner.csv`
+  - SHA-256 `f8695edb588022adf0be2c2cba86a761793b8305a24cca9af2fe43735100f55d`
+- `docs/audits/evidence/task-11/task-11-relaxation-preconditioner-qualification.json`
+  - SHA-256 `693ab2916f55f95007bcbe695461022220fbff7e70cc724a4b25086643bff49e`
+- `docs/audits/evidence/task-11/SHA256SUMS`
+
+The committed CSV is byte-identical to the original ignored runtime artifact.
+`cd docs/audits/evidence/task-11 && sha256sum -c SHA256SUMS` passes.
+
+### Fresh managed gate ledger
+
+All runs first validated the clean managed
+`hypre-baseline-47b182f02495898418b7a0ccc3599e8bcb47866d4e1fb76179af7a82e8197534`
+bundle with compute capability 8.9.
+
+| Command | Result | Evidence / failure |
+|---|---|---|
+| `just verify-fem-exchange-runtime` | **FAIL**, exit 1 | All three sinusoidal validation launches were rejected during planning: `llg.adaptive_timestep.dt_max is required for executable adaptive dynamics`; numerical exchange comparison did not run. |
+| `just verify-fem-relaxation-cpu-gpu-consistency-smoke` | **PASS** | 6/6 rows, 3/3 paired cases, zero reported consistency/gate/group failures. This is not Task 11 magnetization parity, as explained above. |
+| `just verify-fem-gpu-performance-regression` | **FAIL**, exit 7 | 10/10 current rows completed and the strict-residency/consistency summary passed, but the accepted baseline produced zero comparable case keys. The accepted rows have an empty preconditioner-strategy token; current rows use `none`. |
+
+The performance gate's current and accepted solver-mesh signatures are both
+`20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431`.
+The non-comparability is specifically the newly explicit strategy token, not a
+mesh mismatch. For diagnosis only, the current versus accepted p95 wall times
+were:
+
+- FEM CPU: 13241.121 ms versus 11094.684 ms, +19.35%;
+- FEM GPU: 6706.854 ms versus 5225.245 ms, +28.35%.
+
+Those manual comparisons also exceed the 5% regression limit, but they are not
+reported as a passing or formally comparable accepted-baseline gate.
+
+### Final production boundary
+
+The review fixes change only the qualification harness, tests, managed recipe,
+physics note, report, and immutable evidence. They do not restore the rejected
+native preconditioner, runtime selector, ABI/API fields, or generated bindings.
+The outcome remains literal: no strategy is promoted and the production FEM
+GPU relaxation path stays on the clean `none` baseline.

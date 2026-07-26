@@ -1,6 +1,6 @@
 # FEM GPU Direct-Minimizer Exchange-Mass Preconditioning
 
-- Status: qualification-gated candidate contract
+- Status: measured no-go; no production implementation or selector retained
 - Owners: Fullmag FEM backend
 - Last updated: 2026-07-26
 - Related physics notes:
@@ -17,13 +17,16 @@ exchange stiffness. On refined or exchange-dominated meshes this can increase
 the number of accepted steps, Armijo trials, and expensive demagnetizing-field
 solves needed to reach the unchanged physical stopping tolerance.
 
-This note specifies a bounded, device-resident exchange-mass preconditioner for
-the strict GPU NCG path. The preconditioner is an optimization of the search
+This note records the contract that was used to evaluate a bounded,
+device-resident exchange-mass preconditioner for the strict GPU NCG path. The
+preconditioner is an optimization of the search
 direction only. It must not redefine energy, the Armijo condition, accepted
 state, convergence tolerance, or any reported physical observable. It becomes
 an automatic production choice only after the literal qualification gate in
-Section 7 passes; otherwise the runtime implementation and selector are
-removed and this note remains as a no-go design record.
+Section 7 passes. The measured candidates did not pass, so the experimental
+runtime implementation and selector were removed. This note remains as the
+scientific design and no-go record; it does not describe a reachable production
+feature.
 
 ## 2. Physical and numerical model
 
@@ -198,8 +201,8 @@ silently changing lanes.
 
 ### 6.3 Runtime, artifacts, diagnostics, and provenance
 
-Native step stats, runner diagnostics, execution provenance, run artifacts,
-and the resource-first v2 diagnostics schema expose the resolved values:
+During the rejected experiment, native step stats and benchmark provenance
+exposed the resolved values:
 
 ```text
 relaxation_preconditioner_strategy
@@ -210,12 +213,12 @@ relaxation_preconditioner_cache_hits
 relaxation_preconditioner_cache_misses
 ```
 
-`strategy` is one exact token from Section 3. `iterations` is `0`, `4`, or `8`
-for the operation actually used by the sampled step. `lambda_m_per_a` is the
-finite bounded coefficient actually used; it is zero for `none` and
-`diagonal_mass`. Existing counters remain cumulative according to their
-current StepStats contract. JSON/OpenAPI and generated frontend types must stay
-aligned if the diagnostics JSON representation changes.
+`strategy` was one exact token from Section 3. `iterations` was `0`, `4`, or
+`8` for the operation actually used by the sampled step. `lambda_m_per_a` was
+the finite bounded coefficient actually used. These experimental fields are
+not retained in the production runtime, ABI, OpenAPI, or generated frontend
+types. The qualification harness keeps only the schema needed to reject stale
+or incomplete evidence.
 
 Requested physical intent and resolved execution provenance remain separate.
 Artifacts must be sufficient to reconstruct which strategy and parameters
@@ -250,6 +253,20 @@ Each strategy must preserve:
 - maximum magnetization norm defect;
 - CPU/GPU energy, magnetization, and stopping parity;
 - strict residency and the existing exact NCG scalar-readback budget.
+
+Qualification evidence is valid only when both sweeps match the immutable
+execution identity supplied to the validator: active managed runtime/source/
+native-library hashes; accepted GPU UUID, name, and compute capability; exact
+per-resolution mesh byte hash, runtime mesh signature, node/element counts;
+and the executed canonical ProblemIR hash for the fixed Task 11 workload.
+Requested values cannot substitute for values reported by the execution
+payload.
+
+The CPU/GPU parity artifact must declare `observable=m`, unit `1`, and a final
+step equal to the executed relaxation step. Its content hash must be present,
+its vector count must equal the pinned solver-mesh node count, and both CPU and
+GPU final torques must be finite and no greater than the requested 8000 A/m
+tolerance.
 
 ### 7.3 Five-strategy performance matrix
 
@@ -299,6 +316,30 @@ just verify-fem-gpu-performance-regression
 Host builds and synthetic source checks are diagnostic only and cannot replace
 these runtime and device-identity-pinned gates.
 
+### 7.6 Measured outcome and evidence status
+
+The 2026-07-26 experiment produced all 75 requested GPU rows and selected no
+strategy. The strengthened post-review validator classifies that historical
+matrix as `invalid`, not as a valid qualifying `no_go`, because:
+
+- the `none` baseline did not reach the torque tolerance on the fine mesh and
+  is therefore ineligible as a time-to-tolerance reference;
+- CPU/GPU magnetization, energy, and stop-state parity was not captured as the
+  required separate six-row baseline under the same runtime and mesh identity;
+- accepted-step, cumulative Armijo-trial, cumulative demag-solve, cumulative
+  preconditioner-time, and cumulative HYPRE-time fields were not all recorded;
+- every `stagnation_triggered_cg8` row reported zero resolved iterations and
+  zero preconditioner wall time, so that candidate was a measured no-op.
+- the historical rows did not capture the accepted GPU UUID, solver-mesh byte
+  hashes, or executed canonical ProblemIR hashes required by the immutable
+  execution-identity contract.
+
+This is still a literal production no-go: no candidate is promoted, and the
+experimental implementation, selector, ABI fields, and runtime tests remain
+removed. The immutable raw CSV, corrected fail-closed JSON, and hashes are in
+`docs/audits/evidence/task-11/`. The full interpretation and managed gate
+ledger are in `.superpowers/sdd/task-11-report.md`.
+
 ## 8. Completeness checklist
 
 - [x] Physical problem and governing equations
@@ -310,9 +351,10 @@ these runtime and device-identity-pinned gates.
 - [x] Planner and capability-matrix impact
 - [x] Runtime, artifact, diagnostics, and provenance impact
 - [x] Validation and literal go/no-go plan
-- [ ] Device implementation and manufactured tests
-- [ ] Five-strategy managed qualification evidence
-- [ ] Production auto-selector, conditional on qualification
+- [x] Five-strategy managed measurement captured and preserved
+- [x] Literal no-go decision recorded; no strategy promoted
+- [x] Experimental implementation and production selector removed
+- [ ] Valid cumulative-work and separate CPU/GPU parity qualification evidence
 
 ## 9. Known limits and deferred work
 
@@ -324,8 +366,9 @@ these runtime and device-identity-pinned gates.
 - A more adaptive Krylov tolerance, host convergence test, AMG hierarchy, or
   learned selector is explicitly out of scope because it would change the
   synchronization, memory, and qualification contract.
-- Production thresholds and mesh-size selector boundaries are evidence-derived;
-  they must not be guessed before the five-strategy matrix is complete.
+- Production thresholds and mesh-size selector boundaries remain unavailable;
+  the historical matrix is invalid qualification evidence and cannot justify
+  either.
 
 ## 10. References
 
@@ -334,3 +377,6 @@ these runtime and device-identity-pinned gates.
 - R. E. Bank and D. J. Rose, "Parameter selection for Newton-like methods
   applicable to nonlinear partial differential equations," *SIAM Journal on
   Numerical Analysis* 17(6), 1980.
+- `docs/audits/evidence/task-11/task-11-relaxation-preconditioner.csv`
+- `docs/audits/evidence/task-11/task-11-relaxation-preconditioner-qualification.json`
+- `.superpowers/sdd/task-11-report.md`

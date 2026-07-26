@@ -2692,6 +2692,36 @@ verify-fem-gpu-relaxation-preconditioner-qualification:
           --meshes coarse,medium,fine \
           --scenarios box500_airbox_exchange_demag \
           --integrators heun \
+          --backends cpu,gpu \
+          --timestep-policies fixed \
+          --thread-counts 1 \
+          --relax-algorithms nonlinear_cg \
+          --relaxation-preconditioner-strategies none \
+          --demag-solvers CG \
+          --demag-preconditioners AMG \
+          --demag-rtols 1e-12 \
+          --demag-amg-relax-types 6 \
+          --steps 64 \
+          --dt 1e-13 \
+          --relax-torque-tolerance-apm 8000 \
+          --repeat 1 \
+          --case-timeout-s 900 \
+          --gpu-warmup \
+          --reuse-generated-domain-mesh \
+          --require-stable-solver-mesh \
+          --require-demag-converged \
+          --require-gpu-strict-residency \
+          --require-gpu-control-readback-budget \
+          --capture-final-magnetization \
+          --task11-relaxation-preconditioner-cpu-gpu-parity-sweep \
+          --task11-qualification-fixture-suite examples/assets/fem_performance/amg_qualification_suite_v1.json \
+          --task11-qualification-environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json \
+          --output .fullmag/reports/task-11-relaxation-preconditioner-cpu-gpu-parity.csv \
+          --quiet-json-summary; \
+        python3 scripts/analysis/fem_gpu_benchmark.py \
+          --meshes coarse,medium,fine \
+          --scenarios box500_airbox_exchange_demag \
+          --integrators heun \
           --backends gpu \
           --timestep-policies fixed \
           --thread-counts 1 \
@@ -2702,16 +2732,25 @@ verify-fem-gpu-relaxation-preconditioner-qualification:
           --demag-rtols 1e-12 \
           --demag-amg-relax-types 6 \
           --steps 64 \
+          --dt 1e-13 \
           --relax-torque-tolerance-apm 8000 \
           --repeat 5 \
           --case-timeout-s 900 \
           --gpu-warmup \
           --reuse-generated-domain-mesh \
           --require-stable-solver-mesh \
+          --require-demag-converged \
+          --require-gpu-strict-residency \
+          --require-gpu-control-readback-budget \
+          --task11-qualification-fixture-suite examples/assets/fem_performance/amg_qualification_suite_v1.json \
+          --task11-qualification-environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json \
           --output .fullmag/reports/task-11-relaxation-preconditioner.csv \
           --quiet-json-summary; \
         python3 scripts/analysis/fem_gpu_benchmark.py \
           --relaxation-preconditioner-qualification-input .fullmag/reports/task-11-relaxation-preconditioner.csv \
+          --relaxation-preconditioner-cpu-gpu-parity-input .fullmag/reports/task-11-relaxation-preconditioner-cpu-gpu-parity.csv \
+          --task11-qualification-fixture-suite examples/assets/fem_performance/amg_qualification_suite_v1.json \
+          --task11-qualification-environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json \
           --relaxation-preconditioner-qualification-output .fullmag/reports/task-11-relaxation-preconditioner-qualification.json'
 
 capture-fem-gpu-pre-remediation-performance-baseline:
