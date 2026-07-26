@@ -119,6 +119,115 @@ def test_benchmark_summary_reports_distribution() -> None:
     }
 
 
+def task11_preconditioner_qualification_rows(
+    *,
+    candidate_p95_regression: bool = False,
+) -> list[dict[str, object]]:
+    strategies = (
+        "none",
+        "diagonal_mass",
+        "lumped_exchange_mass_cg4",
+        "lumped_exchange_mass_cg8",
+        "stagnation_triggered_cg8",
+    )
+    mesh_times = {
+        "coarse": 100.0,
+        "medium": 200.0,
+        "fine": 400.0,
+    }
+    candidate_factors = {
+        "coarse": 0.88,
+        "medium": 0.89,
+        "fine": 0.98,
+    }
+    rows: list[dict[str, object]] = []
+    for strategy in strategies:
+        for mesh_size, baseline_ms in mesh_times.items():
+            for repeat_index in range(5):
+                factor = 1.0
+                if strategy == "lumped_exchange_mass_cg8":
+                    factor = candidate_factors[mesh_size]
+                    if candidate_p95_regression and repeat_index == 4:
+                        factor = 1.10
+                row = {
+                    "backend": "fem_gpu",
+                    "status": "ok",
+                    "scenario": "box500_airbox_exchange_demag",
+                    "reported_relaxation_algorithm": "nonlinear_cg",
+                    "mesh_size": mesh_size,
+                    "repeat_index": repeat_index,
+                    "requested_relaxation_preconditioner_strategy": strategy,
+                    "relaxation_preconditioner_strategy": strategy,
+                    "relaxation_preconditioner_iterations": (
+                        4
+                        if strategy == "lumped_exchange_mass_cg4"
+                        else 8
+                        if strategy
+                        in {
+                            "lumped_exchange_mass_cg8",
+                            "stagnation_triggered_cg8",
+                        }
+                        else 0
+                    ),
+                    "relaxation_preconditioner_lambda_m_per_a": (
+                        1e-3 if "exchange_mass" in strategy or "triggered" in strategy else 0.0
+                    ),
+                    "relaxation_preconditioner_wall_time_ms": 1.0,
+                    "relaxation_preconditioner_cache_hits": 4,
+                    "relaxation_preconditioner_cache_misses": 1,
+                    "wall_time_ms": baseline_ms * factor,
+                    "executed_steps": 16,
+                    "rhs_evals": 2,
+                    "total_rhs_evals": 32,
+                    "demag_solves": 32,
+                    "converged": True,
+                    "stop_reason": "torque",
+                    "energy_monotonicity_satisfied": True,
+                    "norm_defect": 1e-12,
+                    "final_e_total_j": 1e-20,
+                    "final_torque_apm": 1e-7,
+                    "hot_loop_compute_host_sync_count": 0,
+                    "hot_loop_exchange_host_sync_count": 0,
+                }
+                rows.append(row)
+    return rows
+
+
+def test_task11_preconditioner_qualification_promotes_only_complete_physical_matrix() -> None:
+    benchmark = load_benchmark_module()
+
+    summary = benchmark.relaxation_preconditioner_qualification_summary(
+        task11_preconditioner_qualification_rows()
+    )
+
+    assert summary["status"] == "pass"
+    assert summary["row_count"] == 75
+    assert summary["promoted_strategy"] == "lumped_exchange_mass_cg8"
+    candidate = next(
+        item
+        for item in summary["strategies"]
+        if item["strategy"] == "lumped_exchange_mass_cg8"
+    )
+    assert candidate["qualifies"] is True
+    assert candidate["p50_improved_size_count"] == 2
+
+
+def test_task11_preconditioner_qualification_rejects_p95_regression() -> None:
+    benchmark = load_benchmark_module()
+
+    summary = benchmark.relaxation_preconditioner_qualification_summary(
+        task11_preconditioner_qualification_rows(candidate_p95_regression=True)
+    )
+
+    candidate = next(
+        item
+        for item in summary["strategies"]
+        if item["strategy"] == "lumped_exchange_mass_cg8"
+    )
+    assert candidate["qualifies"] is False
+    assert any("p95 regression" in failure for failure in candidate["failures"])
+
+
 def test_benchmark_csv_uses_repository_line_endings(tmp_path) -> None:
     benchmark = load_benchmark_module()
     output = tmp_path / "benchmark.csv"
@@ -765,6 +874,25 @@ def test_fem_gpu_performance_regression_recipe_is_fail_closed() -> None:
         "--fixture-environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json",
         "FULLMAG_BENCH_DOMAIN_HMAX=50e-9",
         "FULLMAG_BENCH_AIRBOX_HMAX=100e-9",
+    ]:
+        assert required in recipe
+
+
+def test_task11_preconditioner_qualification_recipe_is_literal_and_fail_closed() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+    recipe = just_recipe_source(
+        justfile,
+        "verify-fem-gpu-relaxation-preconditioner-qualification",
+    )
+
+    for required in [
+        "--meshes coarse,medium,fine",
+        "--backends gpu",
+        "--relax-algorithms nonlinear_cg",
+        "--relaxation-preconditioner-strategies none,diagonal_mass,lumped_exchange_mass_cg4,lumped_exchange_mass_cg8,stagnation_triggered_cg8",
+        "--repeat 5",
+        "--relaxation-preconditioner-qualification-input",
+        "--relaxation-preconditioner-qualification-output",
     ]:
         assert required in recipe
 

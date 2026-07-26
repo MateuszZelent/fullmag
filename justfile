@@ -2678,6 +2678,42 @@ verify-fem-gpu-performance-regression:
           --output .fullmag/reports/fem_gpu_performance_regression.csv \
           --cpu-gpu-summary-output .fullmag/reports/fem_gpu_performance_regression_summary.json'
 
+verify-fem-gpu-relaxation-preconditioner-qualification:
+    COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime
+    mkdir -p .fullmag/reports
+    COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FEM_STEP_PROFILE=1 \
+      -e FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC=1 \
+      -e FULLMAG_GMSH_THREADS=1 \
+      fem-gpu bash -lc 'cd /workspace && set -euo pipefail; \
+        python3 scripts/analysis/fem_gpu_benchmark.py \
+          --meshes coarse,medium,fine \
+          --scenarios box500_airbox_exchange_demag \
+          --integrators heun \
+          --backends gpu \
+          --timestep-policies fixed \
+          --thread-counts 1 \
+          --relax-algorithms nonlinear_cg \
+          --relaxation-preconditioner-strategies none,diagonal_mass,lumped_exchange_mass_cg4,lumped_exchange_mass_cg8,stagnation_triggered_cg8 \
+          --demag-solvers CG \
+          --demag-preconditioners AMG \
+          --demag-rtols 1e-12 \
+          --demag-amg-relax-types 6 \
+          --steps 64 \
+          --relax-torque-tolerance-apm 8000 \
+          --repeat 5 \
+          --case-timeout-s 900 \
+          --gpu-warmup \
+          --reuse-generated-domain-mesh \
+          --require-stable-solver-mesh \
+          --output .fullmag/reports/task-11-relaxation-preconditioner.csv \
+          --quiet-json-summary; \
+        python3 scripts/analysis/fem_gpu_benchmark.py \
+          --relaxation-preconditioner-qualification-input .fullmag/reports/task-11-relaxation-preconditioner.csv \
+          --relaxation-preconditioner-qualification-output .fullmag/reports/task-11-relaxation-preconditioner-qualification.json'
+
 capture-fem-gpu-pre-remediation-performance-baseline:
     COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime
     mkdir -p .fullmag/reports
