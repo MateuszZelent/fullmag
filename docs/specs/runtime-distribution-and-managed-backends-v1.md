@@ -358,14 +358,21 @@ The canonical behavior is:
 3. record the actual resolved runtime in provenance,
 4. surface the runtime decision to the user in CLI/UI.
 
+For FEM, explicit device intent is stricter than the generic fallback rule:
+explicit `cpu` or `gpu` is never changed by performance policy, and an
+unavailable explicit GPU request fails closed. Requested `auto` may use only a
+qualified, schema-versioned crossover profile whose profile hash, runtime and
+native-library hashes, and exact hardware identity match. With no matching
+profile, FEM `auto` uses availability-first GPU preference. See ADR 0021.
+
 ### 9.1 Example
 
-If the user requests FEM GPU but the managed `fem-gpu` runtime is unavailable:
-
-- the launcher may fall back to CPU reference only if that fallback is semantically valid for the
-  problem,
-- the control room and metadata must clearly show the resolved runtime,
-- the user must not be misled into thinking the GPU backend actually ran.
+If the user explicitly requests FEM GPU but the managed `fem-gpu` runtime is
+unavailable, the launcher fails before solve and reports the unavailable GPU
+lane. It does not fall back to CPU. If the user requests FEM `auto`, the
+launcher may resolve an executable CPU lane when GPU is unavailable and must
+publish requested device, resolved device, reason, and any calibration ID and
+confidence to the control room and metadata.
 
 ---
 
@@ -384,6 +391,8 @@ Minimum required runtime provenance fields:
 - CUDA driver/runtime version when applicable
 - device name / compute capability when applicable
 - MFEM/libCEED/hypre build identifiers when applicable
+- requested and resolved device plus selection reason
+- FEM crossover calibration ID and confidence when calibrated auto selection applied
 
 This information must be accessible through run metadata and artifacts.
 

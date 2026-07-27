@@ -1,6 +1,6 @@
 {
   "schema_version": "capability_matrix.v0",
-  "updated_at": "2026-07-23",
+  "updated_at": "2026-07-27",
   "status_vocabulary": {
     "unsupported": "The current lane has no legal executable realization for this feature.",
     "source_visible": "Source or planner scaffolding exists, but the lane is not a legal public executable path.",
@@ -18,6 +18,19 @@
     "fem_gpu_public"
   ],
   "features": [
+    {
+      "id": "fem_auto_device_crossover",
+      "label": "Calibrated FEM auto-device crossover",
+      "lanes": {
+        "fdm_cpu_reference": "unsupported",
+        "fdm_gpu_production": "unsupported",
+        "fem_cpu_public": "production_executable",
+        "fem_gpu_public": "production_executable"
+      },
+      "validated_workloads": [],
+      "notes": "Only requested auto may use an exact schema/hash/device/library-matching qualified FemCrossoverProfileV1. Explicit CPU/GPU never performance-switch and unavailable explicit GPU fails closed. No matching qualified profile preserves availability-first GPU preference. Requested/resolved/reason/calibration_id/confidence are provenance. The current RTX 4080 SM89 evidence is unqualified and inactive; missing matrix_nnz is never invented.",
+      "validation_state": "unvalidated"
+    },
     {
       "id": "fdm_periodic_demag_boundary_semantics",
       "label": "FDM periodic demagnetization boundary semantics",
