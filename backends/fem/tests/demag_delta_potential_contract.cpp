@@ -240,17 +240,34 @@ void record_delta_potential_candidate(
     ownership.candidate_valid = true;
 }
 
-bool observe_delta_potential_generation(
+bool discard_delta_potential_candidate(
     DeltaPotentialOwnership &ownership,
-    std::uint64_t observed_generation)
+    std::uint64_t accepted_generation,
+    std::uint64_t candidate_token)
 {
-    if (!ownership.base_valid ||
-        observed_generation == ownership.accepted_generation) {
+    if (!ownership.base_valid || !ownership.candidate_valid ||
+        ownership.accepted_generation != accepted_generation ||
+        ownership.candidate_generation != accepted_generation ||
+        ownership.candidate_token != candidate_token) {
         return false;
     }
-    if (ownership.candidate_valid &&
-        ownership.candidate_generation == ownership.accepted_generation &&
-        observed_generation == ownership.accepted_generation + 1) {
+    ownership.candidate_generation = 0;
+    ownership.candidate_token = 0;
+    ownership.candidate_valid = false;
+    return true;
+}
+
+bool accept_delta_potential_candidate(
+    DeltaPotentialOwnership &ownership,
+    std::uint64_t accepted_generation,
+    std::uint64_t accepted_candidate_token,
+    std::uint64_t observed_generation)
+{
+    if (ownership.base_valid && ownership.candidate_valid &&
+        ownership.accepted_generation == accepted_generation &&
+        ownership.candidate_generation == accepted_generation &&
+        ownership.candidate_token == accepted_candidate_token &&
+        observed_generation == accepted_generation + 1) {
         ownership.accepted_generation = observed_generation;
         ownership.accepted_candidate_token = ownership.candidate_token;
         ownership.candidate_generation = 0;
@@ -388,16 +405,24 @@ void rejected_trial_cannot_become_next_correction_base()
     record_delta_potential_candidate(ownership, 12u, 101u);
     check(ownership.accepted_candidate_token == 0u,
           "completed trial is not accepted implicitly");
-    check(!observe_delta_potential_generation(ownership, 12u),
-          "same accepted generation cannot promote a rejected trial");
+    check(discard_delta_potential_candidate(ownership, 12u, 101u),
+          "rejected trial explicitly discards its candidate token");
     check(ownership.accepted_generation == 12u,
           "rejected trial leaves accepted base generation unchanged");
     check(ownership.accepted_candidate_token == 0u,
           "rejected trial token never becomes the base token");
+    check(!ownership.candidate_valid,
+          "rejected trial leaves no promotable candidate");
+    check(!accept_delta_potential_candidate(ownership, 12u, 101u, 13u),
+          "a discarded stale token cannot be promoted later");
+    check(!ownership.base_valid && !ownership.candidate_valid,
+          "stale-token promotion attempt resets ambiguous delta ownership");
 
+    check(initialize_delta_potential_base(ownership, 12u),
+          "ownership can be reinitialized after stale-token rejection");
     record_delta_potential_candidate(ownership, 12u, 202u);
-    check(observe_delta_potential_generation(ownership, 13u),
-          "accepted-step generation advance promotes the last candidate");
+    check(accept_delta_potential_candidate(ownership, 12u, 202u, 13u),
+          "accepted-step generation advance promotes the exact accepted token");
     check(ownership.accepted_generation == 13u,
           "accepted base advances exactly one generation");
     check(ownership.accepted_candidate_token == 202u,
@@ -406,7 +431,15 @@ void rejected_trial_cannot_become_next_correction_base()
           "earlier rejected candidate cannot contaminate the next base");
 
     record_delta_potential_candidate(ownership, 13u, 303u);
-    check(!observe_delta_potential_generation(ownership, 15u),
+    check(!accept_delta_potential_candidate(ownership, 13u, 404u, 14u),
+          "a different accepted endpoint cannot promote a cached candidate token");
+    check(!ownership.base_valid && !ownership.candidate_valid,
+          "accepted-token mismatch resets ambiguous delta ownership");
+
+    check(initialize_delta_potential_base(ownership, 20u),
+          "ownership can be reinitialized after fail-closed reset");
+    record_delta_potential_candidate(ownership, 20u, 505u);
+    check(!accept_delta_potential_candidate(ownership, 20u, 505u, 22u),
           "generation jump fails closed instead of promoting ambiguous state");
     check(!ownership.base_valid && !ownership.candidate_valid,
           "ambiguous generation transition resets delta ownership");

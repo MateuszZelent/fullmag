@@ -3801,6 +3801,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Fixed timestep in seconds",
     )
     parser.add_argument(
+        "--airbox-extent-scale",
+        type=positive_float_arg,
+        default=None,
+        help=(
+            "Benchmark-only multiplier for the box500 shared-domain airbox size; "
+            "recorded in every row and canonical ProblemIR"
+        ),
+    )
+    parser.add_argument(
         "--repeat",
         type=int,
         default=1,
@@ -4593,6 +4602,7 @@ def box500_airbox_interaction_manifest(
     max_step_delta: int,
     relax_torque_tolerance_apm: float | None = None,
     relax_torque_tolerance_t: float | None = None,
+    airbox_extent_scale: float | None = None,
 ) -> dict[str, object]:
     contract = interaction_contract_for_scenario(scenario)
     if contract is None:
@@ -4611,12 +4621,20 @@ def box500_airbox_interaction_manifest(
         relaxation["torque_tolerance_apm"] = relax_torque_tolerance_apm
     if relax_torque_tolerance_t is not None:
         relaxation["torque_tolerance_t"] = relax_torque_tolerance_t
-    return {
+    if airbox_extent_scale is not None and (
+        not math.isfinite(airbox_extent_scale) or airbox_extent_scale <= 0.0
+    ):
+        raise ValueError("airbox_extent_scale must be finite and positive")
+    resolved_airbox_extent_scale = airbox_extent_scale or 1.0
+    manifest: dict[str, object] = {
         "case_id": scenario,
         "relaxation_algorithm": relaxation_algorithm,
         "required_backends": required_backends_for_relaxation_algorithm(relaxation_algorithm),
         "magnet_size_m": BOX500_AIRBOX_BODY_SIZE_M,
-        "airbox_size_m": BOX500_AIRBOX_SIZE_M,
+        "airbox_size_m": [
+            component * resolved_airbox_extent_scale
+            for component in BOX500_AIRBOX_SIZE_M
+        ],
         "initial_magnetization": initial_magnetization,
         "interactions": interactions,
         "demag_enabled": "demag" in interactions,
@@ -4631,6 +4649,9 @@ def box500_airbox_interaction_manifest(
             "max_step_delta": max_step_delta,
         },
     }
+    if airbox_extent_scale is not None:
+        manifest["qualification_airbox_extent_scale"] = airbox_extent_scale
+    return manifest
 
 
 def box500_airbox_exchange_manifest(
@@ -4646,6 +4667,7 @@ def box500_airbox_exchange_manifest(
     max_step_delta: int,
     relax_torque_tolerance_apm: float | None = None,
     relax_torque_tolerance_t: float | None = None,
+    airbox_extent_scale: float | None = None,
 ) -> dict[str, object]:
     return box500_airbox_interaction_manifest(
         BOX500_AIRBOX_SCENARIO,
@@ -4660,6 +4682,7 @@ def box500_airbox_exchange_manifest(
         max_step_delta=max_step_delta,
         relax_torque_tolerance_apm=relax_torque_tolerance_apm,
         relax_torque_tolerance_t=relax_torque_tolerance_t,
+        airbox_extent_scale=airbox_extent_scale,
     )
 
 
@@ -4677,6 +4700,7 @@ def cpu_gpu_case_manifests(
     relaxation_algorithms: list[str] | None = None,
     relax_torque_tolerance_apm: float | None = None,
     relax_torque_tolerance_t: float | None = None,
+    airbox_extent_scale: float | None = None,
 ) -> list[dict[str, object]]:
     manifests: list[dict[str, object]] = []
     explicit_relaxation_algorithms = relaxation_algorithms is not None
@@ -4701,6 +4725,7 @@ def cpu_gpu_case_manifests(
                 max_step_delta=max_step_delta,
                 relax_torque_tolerance_apm=relax_torque_tolerance_apm,
                 relax_torque_tolerance_t=relax_torque_tolerance_t,
+                airbox_extent_scale=airbox_extent_scale,
             )
             if not explicit_relaxation_algorithms:
                 manifest["relaxation_algorithm"] = None
@@ -4716,6 +4741,7 @@ def benchmark_mesh_env(args: argparse.Namespace) -> dict[str, str]:
             "FULLMAG_BENCH_DOMAIN_HMAX",
             "FULLMAG_BENCH_AIRBOX_HMAX",
             "FULLMAG_BENCH_DOMAIN_MESH",
+            "FULLMAG_BENCH_AIRBOX_EXTENT_SCALE",
         )
         if (value := os.environ.get(key))
     }
@@ -6015,6 +6041,7 @@ def generated_domain_mesh_env(
         scenario,
         extra_env.get("FULLMAG_BENCH_DOMAIN_HMAX", ""),
         extra_env.get("FULLMAG_BENCH_AIRBOX_HMAX", ""),
+        extra_env.get("FULLMAG_BENCH_AIRBOX_EXTENT_SCALE", ""),
     )
     cached = cache.get(key)
     if cached is None:
@@ -6585,6 +6612,17 @@ def run_backend(
         env,
         "FULLMAG_FEM_GPU_RELAXATION_PRECONDITIONER_STRATEGY",
     ) or "none"
+    airbox_extent_scale = env_text(env, "FULLMAG_BENCH_AIRBOX_EXTENT_SCALE")
+    if airbox_extent_scale is not None:
+        scale = float(airbox_extent_scale)
+        row.update(
+            {
+                "qualification_airbox_extent_scale": scale,
+                "qualification_airbox_size_x_m": BOX500_AIRBOX_SIZE_M[0] * scale,
+                "qualification_airbox_size_y_m": BOX500_AIRBOX_SIZE_M[1] * scale,
+                "qualification_airbox_size_z_m": BOX500_AIRBOX_SIZE_M[2] * scale,
+            }
+        )
     if (
         backend_label == "fem_gpu"
         and requires_phase2_compute_hot_loop_gate(scenario)
@@ -10430,8 +10468,13 @@ def main() -> None:
         max_step_delta=args.cpu_gpu_max_step_delta,
         relax_torque_tolerance_apm=relax_torque_tolerance_apm,
         relax_torque_tolerance_t=args.relax_torque_tolerance_t,
+        airbox_extent_scale=args.airbox_extent_scale,
     )
     mesh_env = benchmark_mesh_env(args)
+    if args.airbox_extent_scale is not None:
+        mesh_env["FULLMAG_BENCH_AIRBOX_EXTENT_SCALE"] = repr(
+            args.airbox_extent_scale
+        )
 
     def task11_mesh_env(mesh_path: Path) -> dict[str, str]:
         resolved = dict(mesh_env)
@@ -10619,6 +10662,7 @@ def main() -> None:
                                             fixture is not None
                                             or args.task8_qualification_identity is not None
                                             or task11_resolution_sweep
+                                            or args.airbox_extent_scale is not None
                                             or args.qualification_fixture_problem_ir_sha256
                                             is not None
                                         ):

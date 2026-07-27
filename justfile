@@ -3053,10 +3053,10 @@ verify-fem-demag-mesh-airbox-convergence:
       -e FULLMAG_HOST_UID="$(id -u)" \
       -e FULLMAG_HOST_GID="$(id -g)" \
       fem-gpu bash -lc 'cd /workspace && set -euo pipefail; \
+        python3 scripts/test_validate_fem_demag_mesh_airbox_convergence.py; \
         report_dir=.fullmag/reports/fem-demag-mesh-airbox-convergence; \
         trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" "$report_dir" 2>/dev/null || true'\'' EXIT; \
         rm -rf "$report_dir"; mkdir -p "$report_dir"; \
-        input_csvs=(); \
         while IFS=$'\''\t'\'' read -r resolution solver_mesh domain_hmax airbox_hmax solver_mesh_signature problem_ir_sha256; do \
           export FULLMAG_BENCH_DOMAIN_MESH="$solver_mesh" FULLMAG_BENCH_DOMAIN_HMAX="$domain_hmax" FULLMAG_BENCH_AIRBOX_HMAX="$airbox_hmax"; \
           stem="$report_dir/$resolution"; \
@@ -3093,10 +3093,49 @@ verify-fem-demag-mesh-airbox-convergence:
             --require-demag-converged \
             --require-cpu-gpu-consistency \
             --require-gpu-strict-residency; \
-          input_csvs+=("$stem.csv"); \
         done < <(python3 scripts/analysis/fem_gpu_benchmark.py --list-amg-qualification-fixture-suite examples/assets/fem_performance/amg_qualification_suite_v1.json); \
-        if [ "${#input_csvs[@]}" -ne 3 ]; then echo "expected three measured mesh/airbox qualification CSVs" >&2; exit 2; fi; \
-        python3 -c '\''import csv,json,os,pathlib; root=pathlib.Path(".fullmag/reports/fem-demag-mesh-airbox-convergence"); suite=json.loads(pathlib.Path("examples/assets/fem_performance/amg_qualification_suite_v1.json").read_text()); repeat=int(os.environ["FULLMAG_BENCH_REPEAT"]); evidence=[]; expected={entry["resolution"]:entry for entry in suite["fixtures"]}; [(lambda rows,warmup,entry,name: (len(rows)==4*repeat or (_ for _ in ()).throw(AssertionError(f"{name}: expected {4*repeat} measured rows, got {len(rows)}")), len(warmup)==4 or (_ for _ in ()).throw(AssertionError(f"{name}: expected 4 warmup rows, got {len(warmup)}")), all(row["status"]=="ok" and row["solver_mesh_signature"]==entry["solver_mesh_signature"] and row["qualification_fixture_problem_ir_sha256"]==entry["problem_ir_sha256"] and int(row["node_count"])==entry["node_count"] and int(row["element_count"])==entry["element_count"] for row in rows+warmup) or (_ for _ in ()).throw(AssertionError(f"{name}: identity/status mismatch")), {(row["backend"],row["relaxation_algorithm"]) for row in rows}=={("fem_cpu","projected_gradient_bb"),("fem_cpu","nonlinear_cg"),("fem_gpu","projected_gradient_bb"),("fem_gpu","nonlinear_cg")} or (_ for _ in ()).throw(AssertionError(f"{name}: matrix coverage mismatch")), sorted({int(row["repeat_index"]) for row in rows})==list(range(repeat)) or (_ for _ in ()).throw(AssertionError(f"{name}: repeat coverage mismatch")), evidence.append({"resolution":name,"solver_mesh_signature":entry["solver_mesh_signature"],"node_count":entry["node_count"],"element_count":entry["element_count"],"domain_hmax_m":entry["domain_hmax_m"],"airbox_hmax_m":entry["airbox_hmax_m"],"warmup_row_count":len(warmup),"measured_row_count":len(rows),"status":"pass"})))(list(csv.DictReader((root/f"{name}.csv").open())),list(csv.DictReader((root/f"{name}-warmup.csv").open())),entry,name) for name,entry in expected.items()]; (root/"qualification-summary.json").write_text(json.dumps({"schema":"fullmag.fem.demag_mesh_airbox_convergence.v1","status":"pass","fixture_suite":suite["schema"],"scenario":suite["scenario"],"airbox_factor":suite["airbox_factor"],"warmup_count":1,"measured_repeat_count":repeat,"algorithms":["projected_gradient_bb","nonlinear_cg"],"backends":["fem_cpu","fem_gpu"],"evidence":evidence},indent=2)+chr(10))'\'''
+        unset FULLMAG_BENCH_DOMAIN_MESH; \
+        export FULLMAG_BENCH_DOMAIN_HMAX=1e-7 FULLMAG_BENCH_AIRBOX_HMAX=2.5e-7; \
+        for airbox_scale in 1.0 1.5 2.0; do \
+          stem="$report_dir/airbox-$airbox_scale"; \
+          python3 scripts/analysis/fem_gpu_benchmark.py \
+            --meshes coarse \
+            --scenarios box500_airbox_exchange_demag \
+            --integrators heun \
+            --backends fem_cpu,fem_gpu \
+            --timestep-policies fixed \
+            --relax-algorithms nonlinear_cg \
+            --demag-solvers CG \
+            --demag-preconditioners AMG \
+            --demag-rtols 1e-12 \
+            --demag-amg-relax-types 6 \
+            --demag-amg-coarsenings 8 \
+            --demag-amg-interpolations 6 \
+            --demag-amg-aggressive-coarsenings 1 \
+            --steps "$FULLMAG_BENCH_STEPS" \
+            --relax-torque-tolerance-t 1e-4 \
+            --case-timeout-s "$FULLMAG_BENCH_CASE_TIMEOUT_S" \
+            --airbox-extent-scale "$airbox_scale" \
+            --repeat 1 \
+            --reuse-generated-domain-mesh \
+            --output "$stem.csv" \
+            --cpu-gpu-summary-output "$stem-summary.json" \
+            --require-stable-solver-mesh \
+            --require-demag-converged \
+            --require-cpu-gpu-consistency \
+            --require-gpu-strict-residency \
+            --quiet-json-summary; \
+        done; \
+        python3 scripts/validate_fem_demag_mesh_airbox_convergence.py \
+          --fixture-suite examples/assets/fem_performance/amg_qualification_suite_v1.json \
+          --mesh-input coarse:"$report_dir/coarse-warmup.csv":"$report_dir/coarse.csv" \
+          --mesh-input medium:"$report_dir/medium-warmup.csv":"$report_dir/medium.csv" \
+          --mesh-input fine:"$report_dir/fine-warmup.csv":"$report_dir/fine.csv" \
+          --airbox-input 1.0:"$report_dir/airbox-1.0.csv" \
+          --airbox-input 1.5:"$report_dir/airbox-1.5.csv" \
+          --airbox-input 2.0:"$report_dir/airbox-2.0.csv" \
+          --repeat "$FULLMAG_BENCH_REPEAT" \
+          --output "$report_dir/qualification-summary.json"'
 
 resource-first-gates mode="strict":
     if [ "{{mode}}" = "report" ]; then ./scripts/ci-resource-first-gates.sh --report; \

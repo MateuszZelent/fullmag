@@ -372,6 +372,30 @@ preserve:
 - the existing airbox-convergence acceptance rule;
 - no growth of full residual with accepted-step count or backtracking depth.
 
+The post-cleanup retained Task 0 suite is not sufficient to validate strong
+mesh convergence: its three performance fixtures are widely spaced and have no
+analytical reference. The retained validator therefore reports the median
+`E_demag` and maximum `H_demag` deltas and applies only a nonqualifying trend
+check: medium must be closer to fine than coarse, with a `0.90` relative-delta
+ceiling that catches near-total decorrelation. That ceiling is not a physics
+tolerance and cannot satisfy promotion gate 8. Quantitative mesh convergence
+remains `not_validated`.
+
+Airbox extent is checked separately at `1.0x`, `1.5x`, and `2.0x` of the fixed
+`1 um` box, using equal extent increments and fixed mesh-size controls. For
+both CPU and GPU, the `1.5x -> 2.0x` relative changes in final demag energy and
+maximum demag field must be no larger than the `1.0x -> 1.5x` changes and no
+greater than `0.15`. This is a bounded managed smoke threshold, not a substitute
+for an analytical exterior-domain validation.
+
+The final 2026-07-27 managed sweep failed this predeclared criterion without any
+threshold adjustment. For CPU/GPU respectively, energy tail deltas were
+`0.446971`/`0.446936` after leading deltas of `0.175791`/`0.175791`; maximum-field
+tail deltas were `0.668162`/`0.668158` after leading deltas of
+`0.397449`/`0.397450`. All four tail deltas also exceeded `0.15`. The closely
+matching CPU/GPU results classify this as an unvalidated exterior-domain
+response, not a GPU-only discrepancy, and independently preserve no-go.
+
 ### 7.4 Managed qualification matrix
 
 The matrix uses one warm-up and five measured repeats for each exact case:
@@ -431,19 +455,28 @@ baseline, or expose an experimental production selector to manufacture a pass.
 - [x] Planner, runtime, provenance, OpenAPI, and workspace impact specified
 - [x] Manufactured, determinism, mesh, airbox, and performance gates specified
 - [x] Research prototype implemented and RED/GREEN evidence captured
-- [x] Managed qualification matrix executed
+- [x] Labeled managed matrix artifacts captured; attribution later found incomplete
 - [x] No-go audit published
 - [x] Production wiring omitted because the promotion gates did not all pass
 
 ### 9.1 Qualification outcome
 
-The 2026-07-27 qualification decision is **no-go**. The paired GPU aggregate
-geometric-mean time-to-tolerance improvement was 15.36%, but NCG regressed in
-multiple mandatory per-case distributions: coarse p50 end-to-end, coarse p95
-demag apply, and fine p50/p95 end-to-end and demag apply. The experiment also
-added one demag solve per fine-mesh repeat. Correctness, accepted/rejected-step
-ownership, full residual, CPU/GPU parity, and strict GPU residency checks passed,
-but performance promotion requires every gate, not an aggregate-only win.
+The 2026-07-27 qualification decision is **no-go**. Archived directories labeled
+baseline and candidate produce a nominal 15.36% aggregate improvement and NCG
+regressions in several distributions, but their CSVs do not persist the
+research-mode switch, invocation/environment hash, or prototype-private
+correction, residual, and fallback counters. The stripped prototype cannot now
+reconstruct that missing provenance. Those rows are therefore non-reproducible
+supporting measurements, not attributable candidate qualification evidence.
+The provenance gap alone blocks promotion; the nominal per-case regressions,
+the lack of quantitative Task 0 mesh convergence, and the failed predeclared
+airbox-extent criterion independently support no-go.
+
+Full-equation residual and fallback behavior are established only by the
+standalone manufactured oracle and a separate targeted two-step telemetry
+smoke. They are not claimed across the archived matrix. Exact candidate-token
+acceptance and explicit rejected-token discard are pinned by the retained
+oracle.
 
 The prototype, runtime selector, feature switches, telemetry, accepted-state
 buffers, and production-library CMake wiring were therefore removed. The
@@ -458,6 +491,12 @@ in `docs/audits/2026-07-20-fem-delta-potential-demag-qualification.md`.
   or fully periodic 3D.
 - Production provenance and policy selection are deliberately deferred until a
   successful qualification.
+- The archived baseline/candidate labels are not attributable enough for
+  promotion and must not be cited as reproducible candidate performance.
+- Quantitative Task 0 mesh convergence remains unvalidated; the retained
+  `0.90` check is trend-only and nonqualifying.
+- The final managed airbox sweep failed the unchanged `0.15` and shrinking-tail
+  rules for energy and maximum field on both CPU and GPU.
 - A future attempt after no-go must start from a new identity-pinned full matrix;
   it cannot reuse timing or runtime identity from this experiment.
 

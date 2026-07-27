@@ -3626,6 +3626,47 @@ def test_box500_airbox_manifest_records_physical_consistency_contract():
     assert "wall_time_ms" in manifest["observables"]
 
 
+def test_box500_airbox_manifest_records_benchmark_extent_scale():
+    bench = load_analysis_benchmark_module()
+
+    default_manifest = bench.box500_airbox_exchange_manifest(
+        steps=25,
+        dt=2e-13,
+        energy_rtol=1e-6,
+        energy_atol=1e-30,
+        torque_rtol=1e-6,
+        torque_atol_apm=1e-9,
+        torque_atol_t=1e-15,
+        max_step_delta=0,
+    )
+    manifest = bench.box500_airbox_exchange_manifest(
+        steps=25,
+        dt=2e-13,
+        energy_rtol=1e-6,
+        energy_atol=1e-30,
+        torque_rtol=1e-6,
+        torque_atol_apm=1e-9,
+        torque_atol_t=1e-15,
+        max_step_delta=0,
+        airbox_extent_scale=1.5,
+    )
+
+    assert "qualification_airbox_extent_scale" not in default_manifest
+    assert manifest["airbox_size_m"] == [1.5e-6, 1.5e-6, 1.5e-6]
+    assert manifest["qualification_airbox_extent_scale"] == 1.5
+
+
+def test_box500_benchmark_example_applies_airbox_extent_scale(monkeypatch):
+    monkeypatch.setenv("FULLMAG_BENCH_AIRBOX_EXTENT_SCALE", "1.5")
+    bench = load_benchmark_module()
+
+    assert bench.scenario_airbox_size("box500_airbox_exchange_demag") == (
+        1.5e-6,
+        1.5e-6,
+        1.5e-6,
+    )
+
+
 def test_box500_airbox_interaction_manifests_cover_deterministic_terms():
     bench = load_analysis_benchmark_module()
     scenarios = list(bench.BOX500_AIRBOX_CONSISTENCY_SCENARIOS)

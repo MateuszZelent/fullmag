@@ -315,7 +315,8 @@ def scenario_body_size(scenario: str) -> tuple[float, float, float]:
 
 def scenario_airbox_size(scenario: str) -> tuple[float, float, float]:
     if scenario_is_box500_airbox(scenario):
-        return BOX500_AIRBOX_SIZE
+        scale = env_float("FULLMAG_BENCH_AIRBOX_EXTENT_SCALE", 1.0)
+        return tuple(component * scale for component in BOX500_AIRBOX_SIZE)
     return DEFAULT_AIRBOX_SIZE
 
 
