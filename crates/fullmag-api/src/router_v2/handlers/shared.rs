@@ -12,46 +12,47 @@ use serde::Serialize;
 
 use fullmag_runner::{FemMeshPartPayload, FemMeshPayload};
 
+pub(crate) fn mesh_part_surface_faces(
+    mesh: &FemMeshPayload,
+    part: &FemMeshPartPayload,
+) -> Option<Vec<Vec<u32>>> {
+    let face_indices = if !part.facet_global_ordinals.is_empty() {
+        let mut indices = Vec::with_capacity(part.facet_global_ordinals.len());
+        for global_ordinal in &part.facet_global_ordinals {
+            indices.push(
+                mesh.facets
+                    .global_ordinals
+                    .iter()
+                    .position(|candidate| candidate == global_ordinal)?,
+            );
+        }
+        indices
+    } else if !part.boundary_face_indices.is_empty() {
+        part.boundary_face_indices
+            .iter()
+            .map(|index| *index as usize)
+            .collect()
+    } else if part.boundary_face_count > 0 {
+        let start = part.boundary_face_start as usize;
+        let end = start.saturating_add(part.boundary_face_count as usize);
+        (start..end).collect()
+    } else {
+        return None;
+    };
+
+    face_indices
+        .into_iter()
+        .map(|index| mesh.facets.item_nodes(index).map(<[u32]>::to_vec))
+        .collect()
+}
+
 pub(crate) fn mesh_part_surface_node_indices(
     mesh: &FemMeshPayload,
     part: &FemMeshPartPayload,
 ) -> Option<Vec<u32>> {
     let mut node_indices = BTreeSet::new();
-    if !part.facet_global_ordinals.is_empty() {
-        for global_ordinal in &part.facet_global_ordinals {
-            let face_index = mesh
-                .facets
-                .global_ordinals
-                .iter()
-                .position(|candidate| candidate == global_ordinal)?;
-            node_indices.extend(mesh.facets.item_nodes(face_index)?);
-        }
-        return Some(node_indices.into_iter().collect());
-    }
-
-    let boundary_face_indices = if !part.boundary_face_indices.is_empty() {
-        Some(
-            part.boundary_face_indices
-                .iter()
-                .copied()
-                .collect::<Vec<_>>(),
-        )
-    } else if part.boundary_face_count > 0 {
-        Some(
-            (part.boundary_face_start
-                ..part
-                    .boundary_face_start
-                    .saturating_add(part.boundary_face_count))
-                .collect::<Vec<_>>(),
-        )
-    } else {
-        None
-    }?;
-
-    for face_index in boundary_face_indices {
-        if let Some(face) = mesh.facets.item_nodes(face_index as usize) {
-            node_indices.extend(face);
-        }
+    for face in mesh_part_surface_faces(mesh, part)? {
+        node_indices.extend(face);
     }
     Some(node_indices.into_iter().collect())
 }

@@ -1662,6 +1662,9 @@ pub async fn get_mesh_shared_domain_manifest(
                             crate::router_v2::handlers::shared::mesh_part_surface_node_indices(
                                 mesh, part,
                             );
+                        resource.surface_faces =
+                            crate::router_v2::handlers::shared::mesh_part_surface_faces(mesh, part)
+                                .unwrap_or_default();
                         resource
                     })
                     .collect(),
@@ -1705,6 +1708,7 @@ pub async fn get_mesh_shared_domain_manifest(
         (status = 200, description = "Binary shared-domain FEM topology (FMMT)", content_type = "application/octet-stream"),
         (status = 206, description = "Partial shared-domain FEM topology range (FMMT)", content_type = "application/octet-stream"),
         (status = 304, description = "Shared-domain topology not modified for the supplied ETag"),
+        (status = 409, description = "FMMT v1 cannot represent the active mixed or malformed FEM topology"),
         (status = 416, description = "Requested topology byte range is not satisfiable"),
         (status = 204, description = "No FEM mesh available"),
         (status = 404, description = "No active workspace"),
@@ -2000,6 +2004,7 @@ pub async fn get_mesh_object_size_field(
         (status = 200, description = "Binary per-object FEM topology (FMMT)", content_type = "application/octet-stream"),
         (status = 206, description = "Partial per-object FEM topology range (FMMT)", content_type = "application/octet-stream"),
         (status = 304, description = "Per-object topology not modified for the supplied ETag"),
+        (status = 409, description = "FMMT v1 cannot represent the selected mixed or malformed FEM topology"),
         (status = 416, description = "Requested topology byte range is not satisfiable"),
         (status = 204, description = "No FEM mesh available"),
         (status = 404, description = "No active workspace or object mesh"),
@@ -2050,6 +2055,7 @@ pub async fn get_mesh_object_topology(
         (status = 200, description = "Binary per-part FEM topology (FMMT)", content_type = "application/octet-stream"),
         (status = 206, description = "Partial per-part FEM topology range (FMMT)", content_type = "application/octet-stream"),
         (status = 304, description = "Per-part topology not modified for the supplied ETag"),
+        (status = 409, description = "FMMT v1 cannot represent the selected mixed or malformed FEM topology"),
         (status = 416, description = "Requested topology byte range is not satisfiable"),
         (status = 204, description = "No FEM mesh available"),
         (status = 404, description = "No active workspace or mesh part"),
@@ -4605,7 +4611,7 @@ mod tests {
                 nodes: vec![0, 1, 2],
                 global_ordinals: vec![0],
             },
-            boundary_markers: Vec::new(),
+            boundary_markers: vec![1],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
             object_segments: Vec::new(),

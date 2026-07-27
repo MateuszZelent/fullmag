@@ -5094,3 +5094,77 @@ fn mixed_mesh_validation_rejects_each_csr_invariant_and_periodicity() {
     assert!(errors.contains("mixed topology"));
     assert!(errors.contains("periodic"));
 }
+
+#[test]
+fn fixed_family_extractors_reject_malformed_csr_instead_of_shortening_output() {
+    let mut mesh = MeshIR::from_legacy_tet4(
+        "strict-extractors".into(),
+        vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        vec![[0, 1, 2, 3]],
+        vec![7],
+        vec![[0, 1, 2]],
+        vec![9],
+        Vec::new(),
+        Vec::new(),
+        HashMap::new(),
+    );
+
+    mesh.cells.global_ordinals.clear();
+    assert!(mesh
+        .require_tet4_elements()
+        .unwrap_err()
+        .contains("global_ordinals"));
+
+    mesh = MeshIR::from_legacy_tet4(
+        "strict-extractors".into(),
+        mesh.nodes.clone(),
+        vec![[0, 1, 2, 3]],
+        vec![7],
+        vec![[0, 1, 2]],
+        vec![9],
+        Vec::new(),
+        Vec::new(),
+        HashMap::new(),
+    );
+    mesh.element_markers.clear();
+    assert!(mesh
+        .require_tet4_elements()
+        .unwrap_err()
+        .contains("element_markers"));
+
+    mesh = MeshIR::from_legacy_tet4(
+        "strict-extractors".into(),
+        mesh.nodes.clone(),
+        vec![[0, 1, 2, 3]],
+        vec![7],
+        vec![[0, 1, 2]],
+        vec![9],
+        Vec::new(),
+        Vec::new(),
+        HashMap::new(),
+    );
+    mesh.facets.roles.clear();
+    assert!(mesh
+        .require_tri3_boundary_faces()
+        .unwrap_err()
+        .contains("roles"));
+
+    mesh.facets = FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]);
+    mesh.facets.offsets.pop();
+    assert!(mesh
+        .require_tri3_boundary_faces()
+        .unwrap_err()
+        .contains("offsets"));
+
+    mesh.facets = FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]);
+    mesh.boundary_markers.clear();
+    assert!(mesh
+        .require_tri3_boundary_faces()
+        .unwrap_err()
+        .contains("boundary_markers"));
+}

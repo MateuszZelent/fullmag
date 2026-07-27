@@ -320,17 +320,26 @@ impl FemConnectivityIR {
     }
 
     pub fn require_tet4(&self) -> Result<Vec<[u32; 4]>, String> {
-        self.iter()
-            .map(|cell| {
-                if cell.cell_type != FemCellTypeIR::Tet4 || cell.nodes.len() != 4 {
-                    return Err(format!(
-                        "tet4 topology required, but cell {} is {:?}",
-                        cell.global_ordinal, cell.cell_type
-                    ));
-                }
-                Ok([cell.nodes[0], cell.nodes[1], cell.nodes[2], cell.nodes[3]])
-            })
-            .collect()
+        let mut errors = Vec::new();
+        validate_cell_connectivity(self, u32::MAX, &mut errors);
+        if !errors.is_empty() {
+            return Err(errors.join("; "));
+        }
+        let mut elements = Vec::with_capacity(self.types.len());
+        for ordinal in 0..self.types.len() {
+            let cell_type = self.types[ordinal];
+            let global_ordinal = self.global_ordinals[ordinal];
+            let nodes = self.item_nodes(ordinal).ok_or_else(|| {
+                format!("mesh cell {ordinal} global ordinal {global_ordinal} has invalid CSR range")
+            })?;
+            if cell_type != FemCellTypeIR::Tet4 || nodes.len() != 4 {
+                return Err(format!(
+                    "tet4 topology required, but cell {global_ordinal} is {cell_type:?}"
+                ));
+            }
+            elements.push([nodes[0], nodes[1], nodes[2], nodes[3]]);
+        }
+        Ok(elements)
     }
 }
 
@@ -413,17 +422,28 @@ impl FemFacetConnectivityIR {
     }
 
     pub fn require_tri3(&self) -> Result<Vec<[u32; 3]>, String> {
-        self.iter()
-            .map(|facet| {
-                if facet.facet_type != FemFacetTypeIR::Tri3 || facet.nodes.len() != 3 {
-                    return Err(format!(
-                        "tri3 topology required, but facet {} is {:?}",
-                        facet.global_ordinal, facet.facet_type
-                    ));
-                }
-                Ok([facet.nodes[0], facet.nodes[1], facet.nodes[2]])
-            })
-            .collect()
+        let mut errors = Vec::new();
+        validate_facet_connectivity(self, u32::MAX, &mut errors);
+        if !errors.is_empty() {
+            return Err(errors.join("; "));
+        }
+        let mut faces = Vec::with_capacity(self.types.len());
+        for ordinal in 0..self.types.len() {
+            let facet_type = self.types[ordinal];
+            let global_ordinal = self.global_ordinals[ordinal];
+            let nodes = self.item_nodes(ordinal).ok_or_else(|| {
+                format!(
+                    "mesh facet {ordinal} global ordinal {global_ordinal} has invalid CSR range"
+                )
+            })?;
+            if facet_type != FemFacetTypeIR::Tri3 || nodes.len() != 3 {
+                return Err(format!(
+                    "tri3 topology required, but facet {global_ordinal} is {facet_type:?}"
+                ));
+            }
+            faces.push([nodes[0], nodes[1], nodes[2]]);
+        }
+        Ok(faces)
     }
 }
 
@@ -567,10 +587,16 @@ impl MeshIR {
     }
 
     pub fn require_tet4_elements(&self) -> Result<Vec<[u32; 4]>, String> {
+        if self.element_markers.len() != self.cells.len() {
+            return Err("mesh.element_markers length must match mesh.cells.types length".into());
+        }
         self.cells.require_tet4()
     }
 
     pub fn require_tri3_boundary_faces(&self) -> Result<Vec<[u32; 3]>, String> {
+        if self.boundary_markers.len() != self.facets.len() {
+            return Err("mesh.boundary_markers length must match mesh.facets.types length".into());
+        }
         self.facets.require_tri3()
     }
 

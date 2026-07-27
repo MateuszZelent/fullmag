@@ -2253,7 +2253,7 @@ mod tests {
     }
 
     #[test]
-    fn fem_mesh_identity_changes_for_same_count_part_order_change() {
+    fn fem_mesh_identity_ignores_non_topological_part_order_change() {
         let mut current = test_current_snapshot();
         let mut first_mesh = domain_fem_mesh("domain-gen-1");
         first_mesh.mesh_parts = vec![
@@ -2269,8 +2269,8 @@ mod tests {
 
         apply_fem_mesh_update(&mut current, remeshed);
 
-        assert!(current.mesh_revision > mesh_revision);
-        assert!(current.mesh_build_revision > mesh_build_revision);
+        assert_eq!(current.mesh_revision, mesh_revision);
+        assert_eq!(current.mesh_build_revision, mesh_build_revision);
     }
 
     #[test]

@@ -231,6 +231,106 @@ used about 1.7 GiB. Expanding the feature matrix risked `ENOSPC`; no other
 task's cache was deleted. The package gates above cover every changed Rust
 crate and the API compatibility surface.
 
+## Re-review compatibility remediation (2026-07-27)
+
+This separate remediation restores the published API projection without
+reintroducing a second internal topology truth:
+
+- `MeshPartResource.surface_faces` is again the public
+  `Vec<Vec<u32>>` compatibility field. The internal
+  `facet_global_ordinals` field is not part of the API schema or manifest JSON.
+- The sole manifest construction site that owns both the mesh and part resolves
+  each part global facet ID through `mesh.facets.global_ordinals`, then copies
+  the corresponding CSR `item_nodes`. Triangle and quad arity are therefore
+  preserved without storing duplicate face connectivity in the runner payload.
+- `FemConnectivityIR::require_tet4` and
+  `FemFacetConnectivityIR::require_tri3` validate the complete CSR first and
+  then iterate every ordinal exactly. They no longer inherit the lossy
+  `filter_map` / `zip` behavior of the convenience view iterators.
+- `MeshIR` and `FemMeshPayload` fixed-family adapters also require exactly one
+  element marker per cell and one boundary marker per facet.
+- All four FMMT v1 topology route families document HTTP `409`, and the
+  table-driven route regression proves mixed topology conflicts for domain,
+  shared-domain, object, and part topology. Malformed CSR is also rejected with
+  `409` rather than serialized as a shortened `200` payload.
+
+Focused RED evidence was obtained before implementation:
+
+- `fixed_family_extractors_reject_malformed_csr_instead_of_shortening_output`
+  received `Ok([])` after removal of `cells.global_ordinals`, proving the old
+  iterator silently shortened malformed CSR.
+- The quad manifest regression received `surface_faces: null` instead of
+  `[[0, 1, 2, 3]]`.
+- The OpenAPI schema regression found no `surface_faces` property.
+- The malformed-CSR FMMT v1 regression received HTTP `200` instead of `409`.
+
+All four focused regressions are green after the implementation. Additional
+coverage rejects a missing cell global ordinal, missing facet role, incomplete
+facet offsets, missing element markers, and missing boundary markers.
+
+The first full API run reported `684 passed, 7 failed`. Two failures were
+fixture defects exposed directly by the stricter marker contract: the canonical
+interface fixture had a facet but no marker, and the authoring
+missing-boundary-marker scenario had removed the facet geometry as well as the
+markers. The interface fixture now has marker-per-facet. The authoring fixture
+keeps its canonical facet, clears only boundary markers, resolves face index
+`0`, and still ends in the intended controlled `missing_boundary_markers`
+state. Both focused tests pass without weakening validation.
+
+The other five failures were stale expectations or fixtures, not parallel test
+interference and not product-code regressions:
+
+- `display_patch_accepts_partial_update` expected `vector_glyphs=true` while
+  the canonical default has been `false` since pre-slice commit `9bbddd40`.
+  Slice 2 did not change that default; the baseline test was already
+  inconsistent. The test now proves a partial patch preserves the actual false
+  default instead of masking it with an obsolete expectation.
+- `hysteresis_progress_endpoint_averages_only_magnetic_fem_nodes` expected
+  `[0, 1, 0]` but obtained the all-node fallback `[0, 0.5, 0]` because its mesh
+  remained in transitional `latest_step.fem_mesh`. The fixture now publishes
+  the mesh through canonical `snapshot.fem_mesh`.
+- `hysteresis_progress_endpoint_uses_fem_element_volume_weights_for_live_average`
+  expected `x=1/28` but obtained the flat all-node fallback `x=0.5` for the
+  same stale step-mesh placement. It now uses the canonical snapshot mesh and
+  exercises the intended element-volume weighting.
+- `object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_nodes`
+  expected `mx=3` but obtained the global six-node average `mx=11.5` because
+  mesh-part membership was present only on transitional step state. The test
+  promotes that fixture mesh to the canonical snapshot resource and again
+  verifies the explicit part node indices.
+- `fem_mesh_identity_changes_for_same_count_part_order_change` expected a
+  revision increase while the canonical v2 topology fingerprint intentionally
+  excludes non-topological `mesh_parts`; the existing runner contract test
+  already proves this. The session test now asserts stable mesh and build
+  revisions when only part ordering changes. Connectivity changes still have a
+  separate revision-bump regression.
+
+These five tests all failed individually before correction, so they were not
+classified as concurrency flakes. All five then passed individually. No
+product semantics were changed to satisfy them.
+
+Final remediation gates, using
+`CARGO_TARGET_DIR=/tmp/fullmag-mixed-topology-target`,
+`CARGO_INCREMENTAL=0`, and `CARGO_PROFILE_DEV_DEBUG=0`:
+
+- `cargo test -p fullmag-ir --no-fail-fast`: `52` unit plus `148`
+  integration tests passed; doc tests passed.
+- `cargo test -p fullmag-runner --lib fem_mesh --no-fail-fast`: `10 passed`,
+  `598 filtered out`.
+- `cargo check -p fullmag-api`: passed.
+- `cargo test -p fullmag-api --no-fail-fast -- --test-threads=1`:
+  `691 passed, 0 failed`.
+- `cargo test -p fullmag-api --no-fail-fast`: `691 passed, 0 failed` with
+  default parallelism.
+- `git diff --check`: passed.
+
+The API/OpenAPI source annotations and Rust schema were updated, but generated
+OpenAPI artifacts and `apps/control-room` were unchanged. Final scans found no
+public `facet_global_ordinals` in API schemas/OpenAPI registration, confirmed
+`surface_faces` in `MeshPartResource`, and confirmed explicit `409` responses
+for all four FMMT v1 route families. This remediation does not add FMMT v2,
+change the C ABI, or modify UI code.
+
 ## Runtime observations and concerns
 
 - Two earlier combined Python runs terminated with signal 139 around native Gmsh lifecycle transitions. Per repository instructions, five remedies were evaluated: explicit `gmsh.clear()`, centralized initialization ownership, model removal, subprocess isolation, and ABI/package rebuild. No speculative lifecycle change was made because the exact suspected periodic test then passed, the full 64-test `FieldStack` passed, and two complete 281-case combined runs passed. This is recorded as environment/native-library instability, not hidden as a green-only history.

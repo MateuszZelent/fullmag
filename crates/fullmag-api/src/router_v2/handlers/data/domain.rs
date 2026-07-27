@@ -209,6 +209,7 @@ fn value_array3_f64_allow_planar(value: &Value) -> Option<[f64; 3]> {
         (status = 200, description = "Binary FEM topology (FMMT)", content_type = "application/octet-stream"),
         (status = 206, description = "Partial binary FEM topology range (FMMT)", content_type = "application/octet-stream"),
         (status = 304, description = "Domain topology not modified for the supplied ETag"),
+        (status = 409, description = "FMMT v1 cannot represent the active mixed or malformed FEM topology"),
         (status = 416, description = "Requested topology byte range is not satisfiable"),
         (status = 204, description = "Not applicable (FDM)"),
         (status = 404, description = "No active workspace"),

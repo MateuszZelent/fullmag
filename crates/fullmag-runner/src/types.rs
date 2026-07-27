@@ -1725,10 +1725,16 @@ impl FemMeshPayload {
     }
 
     pub fn require_tet4_elements(&self) -> Result<Vec<[u32; 4]>, String> {
+        if self.element_markers.len() != self.cells.len() {
+            return Err("mesh.element_markers length must match mesh.cells.types length".into());
+        }
         self.cells.require_tet4()
     }
 
     pub fn require_tri3_boundary_faces(&self) -> Result<Vec<[u32; 3]>, String> {
+        if self.boundary_markers.len() != self.facets.len() {
+            return Err("mesh.boundary_markers length must match mesh.facets.types length".into());
+        }
         self.facets.require_tri3()
     }
 

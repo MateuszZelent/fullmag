@@ -4671,7 +4671,7 @@ async fn display_patch_accepts_partial_update() {
     assert_eq!(sel.selection.y_chosen_size, 16);
     assert_eq!(sel.revision, 1);
     assert_eq!(presentation.colormap, "viridis");
-    assert!(presentation.vector_glyphs);
+    assert!(!presentation.vector_glyphs);
 }
 
 #[tokio::test]
@@ -6760,10 +6760,10 @@ async fn mesh_shared_domain_topology_returns_binary_fmmt_payload() {
 }
 
 #[tokio::test]
-async fn mesh_shared_domain_topology_rejects_mixed_cells_for_fmmt_v1() {
+async fn all_fmmt_v1_topology_routes_reject_mixed_cells() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        let mut mesh = sample_fem_mesh_payload();
+        let mut mesh = sample_fem_mesh_payload_with_manifest();
         mesh.nodes.extend([[1.0, 1.0, 0.0], [1.0, 0.0, 1.0]]);
         mesh.cells = fullmag_ir::FemConnectivityIR {
             types: vec![fullmag_ir::FemCellTypeIR::Prism6],
@@ -6771,6 +6771,55 @@ async fn mesh_shared_domain_topology_rejects_mixed_cells_for_fmmt_v1() {
             nodes: vec![0, 1, 2, 3, 4, 5],
             global_ordinals: vec![901],
         };
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let app = build_v2_router().with_state(state);
+
+    for uri in [
+        "/v2/sessions/current/data/domain/topology",
+        "/v2/sessions/current/meshing/meshes/shared-domain/topology",
+        "/v2/sessions/current/meshing/meshes/objects/body/topology",
+        "/v2/sessions/current/meshing/meshes/parts/body/topology",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT, "{uri}");
+        let body = body_json(response).await;
+        assert!(
+            body.to_string().contains("FMMT v1 requires tet4 topology"),
+            "{uri}"
+        );
+    }
+}
+
+#[test]
+fn openapi_documents_conflict_for_all_fmmt_v1_topology_routes() {
+    let openapi = crate::openapi_v2::openapi_json();
+    for path in [
+        "/v2/sessions/current/data/domain/topology",
+        "/v2/sessions/current/meshing/meshes/shared-domain/topology",
+        "/v2/sessions/current/meshing/meshes/objects/{object_id}/topology",
+        "/v2/sessions/current/meshing/meshes/parts/{part_id}/topology",
+    ] {
+        assert!(
+            openapi["paths"][path]["get"]["responses"]
+                .as_object()
+                .is_some_and(|responses| responses.contains_key("409")),
+            "missing 409 response for {path}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn fmmt_v1_topology_routes_reject_malformed_csr_instead_of_truncating() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload();
+        mesh.cells.global_ordinals.clear();
         snapshot.fem_mesh = Some(mesh);
     }
     let app = build_v2_router().with_state(state);
@@ -6786,8 +6835,6 @@ async fn mesh_shared_domain_topology_rejects_mixed_cells_for_fmmt_v1() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::CONFLICT);
-    let body = body_json(response).await;
-    assert!(body.to_string().contains("FMMT v1 requires tet4 topology"));
 }
 
 #[tokio::test]
@@ -7149,6 +7196,54 @@ async fn mesh_shared_domain_manifest_includes_derived_surface_node_membership() 
         json["mesh_parts"][1]["surface_node_indices"],
         serde_json::json!([4, 5, 6])
     );
+}
+
+#[tokio::test]
+async fn mesh_shared_domain_manifest_projects_quad_surface_faces_without_internal_ids() {
+    let state = test_app_state_with_live_session().await;
+    let mut mesh = sample_fem_mesh_payload_with_manifest();
+    mesh.facets = fullmag_ir::FemFacetConnectivityIR {
+        types: vec![fullmag_ir::FemFacetTypeIR::Quad4],
+        roles: vec![fullmag_ir::FemFacetRoleIR::MaterialInterface],
+        offsets: vec![0, 4],
+        nodes: vec![0, 1, 2, 3],
+        global_ordinals: vec![700],
+    };
+    mesh.mesh_parts[1].facet_global_ordinals = vec![700];
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/manifest")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(
+        json["mesh_parts"][1]["surface_faces"],
+        serde_json::json!([[0, 1, 2, 3]])
+    );
+    assert!(json["mesh_parts"][1]
+        .as_object()
+        .is_some_and(|part| !part.contains_key("facet_global_ordinals")));
+}
+
+#[test]
+fn openapi_mesh_part_schema_keeps_surface_faces_and_hides_internal_facet_ids() {
+    let openapi = crate::openapi_v2::openapi_json();
+    let properties = openapi["components"]["schemas"]["MeshPartResource"]["properties"]
+        .as_object()
+        .expect("MeshPartResource properties");
+    assert!(properties.contains_key("surface_faces"));
+    assert!(!properties.contains_key("facet_global_ordinals"));
 }
 
 #[tokio::test]
@@ -12858,7 +12953,6 @@ async fn authoring_coupling_resource_blocks_surface_without_boundary_markers() {
     mesh.nodes[0] = [0.0, 0.0, 1.0];
     mesh.nodes[1] = [1.0, 0.0, 1.0];
     mesh.nodes[2] = [0.0, 1.0, 1.0];
-    mesh.facets = fullmag_ir::FemFacetConnectivityIR::empty();
     mesh.boundary_markers.clear();
     if let Some(body_part) = mesh
         .mesh_parts
@@ -12901,7 +12995,7 @@ async fn authoring_coupling_resource_blocks_surface_without_boundary_markers() {
     );
     assert_eq!(
         json["couplings"][0]["source_resolution"]["boundary_face_indices"],
-        serde_json::json!([])
+        serde_json::json!([0])
     );
     assert_eq!(
         json["couplings"][0]["source_resolution"]["boundary_marker_ids"],
@@ -16742,6 +16836,7 @@ async fn hysteresis_progress_endpoint_averages_only_magnetic_fem_nodes() {
     let (app, state, _repo_root) = test_router_with_session_store_state().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         let mesh = sample_scoped_fem_mesh_payload();
+        snapshot.fem_mesh = Some(mesh);
         snapshot.state_version = 16;
         snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
             "entrypoint_kind": "flat_hysteresis",
@@ -16754,7 +16849,7 @@ async fn hysteresis_progress_endpoint_averages_only_magnetic_fem_nodes() {
             "stage_id": "stage-fem-magnetic-average"
         })));
         if let Some(live_state) = snapshot.live_state.as_mut() {
-            live_state.latest_step.fem_mesh = Some(mesh);
+            live_state.latest_step.fem_mesh = None;
             live_state.latest_step.magnetization = Some(vec![
                 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -16827,6 +16922,7 @@ async fn hysteresis_progress_endpoint_uses_fem_element_volume_weights_for_live_a
         mesh.mesh_parts[1].role = "magnetic_object".to_string();
         mesh.mesh_parts[1].object_id = Some("body-large".to_string());
         mesh.mesh_parts[1].material_id = Some("mat-body".to_string());
+        snapshot.fem_mesh = Some(mesh);
         snapshot.state_version = 17;
         snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
             "entrypoint_kind": "flat_hysteresis",
@@ -16839,7 +16935,7 @@ async fn hysteresis_progress_endpoint_uses_fem_element_volume_weights_for_live_a
             "stage_id": "stage-fem-volume-average"
         })));
         if let Some(live_state) = snapshot.live_state.as_mut() {
-            live_state.latest_step.fem_mesh = Some(mesh);
+            live_state.latest_step.fem_mesh = None;
             live_state.latest_step.magnetization = Some(vec![
                 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -18347,6 +18443,10 @@ async fn object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_node
                 finished: false,
             },
         });
+        snapshot.fem_mesh = snapshot
+            .live_state
+            .as_mut()
+            .and_then(|live_state| live_state.latest_step.fem_mesh.take());
         snapshot.scalar_revision = 21;
     }
     let app = build_v2_router().with_state(state);
