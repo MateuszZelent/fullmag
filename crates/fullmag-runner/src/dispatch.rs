@@ -68,6 +68,8 @@ use crate::schedules::{
 use crate::schedules::{collect_field_schedules, OutputSchedule};
 pub(crate) use crate::solver_runtime::engine::{EngineResolution, FdmEngine};
 use crate::solver_runtime::fem_crossover::resolve_auto_fem_plan_device;
+#[cfg(feature = "fem-gpu")]
+use crate::solver_runtime::selection::all_in_gpu_fem_required;
 pub(crate) use crate::solver_runtime::selection::{
     effective_fem_device_request, resolve_fdm_engine, resolve_fdm_engine_with_trail,
 };
@@ -733,8 +735,7 @@ fn resolve_fem_engine_with_effective_request(
     apply_runtime_gpu_index(problem, "fem");
     let ir_policy = runtime_fem_policy(problem);
     let fe_order = runtime_fem_order(problem);
-    let env_override =
-        std::env::var_os("FULLMAG_FEM_EXECUTION").is_some() || all_in_gpu_fem_env_requested();
+    let env_override = policy != ir_policy.replace("cuda", "gpu");
     if env_override && policy != ir_policy.replace("cuda", "gpu") {
         let message = format!(
             "effective FEM device request={} overrides script runtime_selection.device={}",
@@ -1902,29 +1903,6 @@ fn runtime_fem_order(problem: &ProblemIR) -> u32 {
         .and_then(|hints| hints.fem.as_ref())
         .map(|hints| hints.order)
         .unwrap_or(1)
-}
-
-fn env_flag_enabled(value: Option<String>) -> bool {
-    matches!(
-        value
-            .as_deref()
-            .map(str::trim)
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
-        Some("1" | "true" | "on" | "yes")
-    )
-}
-
-fn all_in_gpu_fem_env_requested() -> bool {
-    matches!(
-        std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
-        Some("all_in_gpu")
-    ) || env_flag_enabled(std::env::var("FULLMAG_FEM_ALL_IN_GPU").ok())
-}
-
-#[cfg(feature = "fem-gpu")]
-fn all_in_gpu_fem_required() -> bool {
-    all_in_gpu_fem_env_requested()
 }
 
 fn fem_policy_requires_gpu(policy: &str) -> bool {

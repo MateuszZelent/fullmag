@@ -6,13 +6,6 @@ mod gpu;
 
 impl InteractiveFemPreviewRuntime {
     pub fn create(problem: &ProblemIR) -> Result<Self, RunError> {
-        Self::create_with_preview(problem, false)
-    }
-
-    pub fn create_with_preview(
-        problem: &ProblemIR,
-        preview_enabled: bool,
-    ) -> Result<Self, RunError> {
         let plan = fullmag_plan::plan(problem)?;
         let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
             return Err(RunError {
@@ -21,33 +14,19 @@ impl InteractiveFemPreviewRuntime {
                         .to_string(),
             });
         };
-        let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(
-            problem,
-            fem,
-            preview_enabled,
-        )?;
+        let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?;
         eprintln!(
             "[fullmag-runner] interactive FEM engine: resolved_engine_id={} fallback={:?}",
             dispatch::fem_engine_label(resolution.engine),
             resolution.fallback.as_ref().map(|f| &f.reason),
         );
-        Self::from_fem_plan(
-            fem,
-            resolution.engine,
-            resolution.fallback,
-            resolution.fem_crossover_decision,
-        )
+        Self::from_fem_plan(fem, resolution.engine)
     }
 
-    fn from_fem_plan(
-        plan: &FemPlanIR,
-        engine: FemEngine,
-        fallback: Option<ResolvedFallback>,
-        crossover_decision: Option<crate::types::FemCrossoverDecision>,
-    ) -> Result<Self, RunError> {
+    fn from_fem_plan(plan: &FemPlanIR, engine: FemEngine) -> Result<Self, RunError> {
         #[cfg(not(feature = "fem-gpu"))]
         {
-            let _ = (plan, engine, fallback, crossover_decision);
+            let _ = (plan, engine);
             return Err(RunError {
                 message:
                     "interactive native FEM runtime requested but the runner was built without fem-gpu"
@@ -65,15 +44,12 @@ impl InteractiveFemPreviewRuntime {
             let backend = NativeFemBackend::create(&effective_plan)?;
             let device_info = backend.device_info()?;
             let antenna_field = crate::antenna_fields::compute_antenna_field(&effective_plan)?;
-            let mut provenance = fem_gpu_execution_provenance(&effective_plan, &device_info)?;
-            attach_resolved_fallback_to_provenance(&mut provenance, fallback);
-            attach_fem_crossover_decision_to_provenance(&mut provenance, crossover_decision);
             let inner = InteractiveFemPreviewRuntimeInner::Gpu(GpuInteractiveFemPreviewRuntime {
                 backend,
                 mesh,
                 node_count: effective_plan.mesh.nodes.len(),
                 plan_signature: normalize_fem_plan_signature(&effective_plan),
-                provenance,
+                provenance: fem_gpu_execution_provenance(&effective_plan, &device_info)?,
                 total_steps: 0,
                 total_time: 0.0,
                 antenna_field,

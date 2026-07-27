@@ -62,26 +62,29 @@ fn task15_fem_crossover_resolution_is_pinned_instead_of_reloaded_for_provenance(
 #[test]
 fn task15_persistent_fem_runtime_attaches_the_pinned_crossover_decision() {
     let interactive = source(&crate_root().join("src/interactive_runtime.rs"));
-    let retained_interactive = source(&crate_root().join("src/interactive_runtime/fem/mod.rs"));
-    for source in [&interactive, &retained_interactive] {
-        assert!(
-            source.contains(
+    assert!(
+        interactive.contains(
             "attach_fem_crossover_decision_to_provenance(&mut provenance, crossover_decision);"
-            ),
-            "persistent FEM runtime provenance must retain requested/resolved/reason/calibration/confidence"
-        );
-    }
+        ),
+        "active persistent FEM runtime provenance must retain requested/resolved/reason/calibration/confidence"
+    );
+
+    let dormant_interactive = source(&crate_root().join("src/interactive_runtime/fem/mod.rs"));
+    assert!(
+        !dormant_interactive.contains("fem_crossover_decision")
+            && !dormant_interactive.contains("crossover_decision"),
+        "Task 15 must not claim or wire the uncompiled duplicate persistent FEM facade"
+    );
 }
 
 #[test]
-fn task15_fem_preview_crossover_uses_real_cadence_across_active_and_dormant_paths() {
+fn task15_fem_preview_crossover_uses_real_cadence_across_active_and_retained_resolvers() {
     let root = crate_root();
     let dispatch = production_source(&root.join("src/dispatch.rs"));
     let runner = source(&root.join("src/lib.rs"));
     let compact_runner = runner.split_whitespace().collect::<String>();
-    let dormant_interactive = production_source(&root.join("src/interactive_runtime/fem/mod.rs"));
-    let dormant_selection = production_source(&root.join("src/solver_runtime/fem_selection.rs"));
-    let dormant_registry = production_source(&root.join("src/solver_runtime/registry.rs"));
+    let retained_selection = production_source(&root.join("src/solver_runtime/fem_selection.rs"));
+    let retained_registry = production_source(&root.join("src/solver_runtime/registry.rs"));
 
     assert!(
         !dispatch.contains("selection.get(\"preview_enabled\")"),
@@ -111,18 +114,12 @@ fn task15_fem_preview_crossover_uses_real_cadence_across_active_and_dormant_path
         ),
         "persistent FEM selection must receive the actual preview cadence"
     );
-    for source in [&dormant_selection, &dormant_registry] {
+    for source in [&retained_selection, &retained_registry] {
         assert!(
             !source.contains("resolve_auto_fem_plan_device(plan, false)"),
-            "dormant selection paths must not hard-code preview=false"
+            "compiled retained selection paths must not hard-code preview=false"
         );
     }
-    assert!(
-        dormant_interactive.contains("preview_enabled: bool")
-            && !dormant_interactive
-                .contains("resolve_fem_engine_for_plan_with_trail(problem, fem, false)"),
-        "the dormant persistent FEM constructor must accept explicit preview state"
-    );
 }
 
 #[test]
@@ -163,19 +160,27 @@ fn task15_fem_request_precedence_has_one_canonical_owner() {
     let root = crate_root();
     let selection = production_source(&root.join("src/solver_runtime/selection.rs"));
     let dispatch = production_source(&root.join("src/dispatch.rs"));
-    let dormant_selection = production_source(&root.join("src/solver_runtime/fem_selection.rs"));
+    let retained_selection = production_source(&root.join("src/solver_runtime/fem_selection.rs"));
 
     assert!(
-        selection.contains("pub(crate) fn effective_fem_device_request("),
-        "selection.rs must own the effective script/env/all-in-GPU request"
+        selection.contains("struct FemSelectionEnvSnapshot")
+            && selection.contains("fn capture() -> Self")
+            && selection.matches("FULLMAG_FEM_EXECUTION").count() == 1
+            && selection.matches("FULLMAG_FEM_ALL_IN_GPU").count() == 1,
+        "selection.rs must capture each FEM selection environment input exactly once"
     );
     assert!(
-        !dispatch.contains("fn requested_registry_device_for_fem("),
-        "active dispatch must not duplicate FEM request precedence"
+        !dispatch.contains("std::env::var_os(\"FULLMAG_FEM_EXECUTION\")")
+            && !dispatch.contains("fn all_in_gpu_fem_env_requested("),
+        "active dispatch must consume canonical FEM selection results without rereading selection environment"
     );
     assert!(
-        dormant_selection.contains("effective_fem_device_request"),
-        "dormant FEM selection must use the same canonical request helper"
+        retained_selection.contains("effective_fem_device_request(problem)")
+            && !retained_selection.contains("std::env")
+            && !retained_selection.contains("FULLMAG_FEM_EXECUTION")
+            && !retained_selection.contains("FULLMAG_FEM_ALL_IN_GPU")
+            && !retained_selection.contains("effective_fem_device_request_from_sources"),
+        "retained FEM selection must consume only the canonical effective request"
     );
 }
 
@@ -1593,7 +1598,7 @@ fn interactive_fem_preview_runtime_facade_methods_have_fem_owner() {
     for needle in [
         "impl InteractiveFemPreviewRuntime",
         "interactive FEM preview runtime is supported only for FEM execution plans",
-        "fn from_fem_plan(\n        plan: &FemPlanIR,\n        engine: FemEngine,\n        fallback: Option<ResolvedFallback>,\n        crossover_decision: Option<crate::types::FemCrossoverDecision>,",
+        "fn from_fem_plan(plan: &FemPlanIR, engine: FemEngine)",
         "pub fn matches_plan(&self, plan: &FemPlanIR)",
         "plan: &FemPlanIR,\n        until_seconds: f64,\n        outputs: &[OutputIR],\n        field_every_n: u64,",
     ] {

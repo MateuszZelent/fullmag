@@ -44,11 +44,46 @@ pub(crate) fn requested_registry_device_for_fdm(problem: &ProblemIR) -> String {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FemSelectionEnvSnapshot {
+    execution: Option<String>,
+    all_in_gpu: Option<String>,
+}
+
+impl FemSelectionEnvSnapshot {
+    fn capture() -> Self {
+        Self {
+            execution: std::env::var("FULLMAG_FEM_EXECUTION").ok(),
+            all_in_gpu: std::env::var("FULLMAG_FEM_ALL_IN_GPU").ok(),
+        }
+    }
+
+    fn from_sources(execution: Option<&str>, all_in_gpu: Option<&str>) -> Self {
+        Self {
+            execution: execution.map(str::to_string),
+            all_in_gpu: all_in_gpu.map(str::to_string),
+        }
+    }
+
+    fn all_in_gpu_requested(&self) -> bool {
+        matches!(self.execution.as_deref(), Some("all_in_gpu"))
+            || env_flag_enabled(self.all_in_gpu.as_deref())
+    }
+}
+
 pub(crate) fn effective_fem_device_request(problem: &ProblemIR) -> String {
+    let snapshot = FemSelectionEnvSnapshot::capture();
+    effective_fem_device_request_from_snapshot(runtime_device(problem), &snapshot)
+}
+
+fn effective_fem_device_request_from_snapshot(
+    script_device: Option<&str>,
+    snapshot: &FemSelectionEnvSnapshot,
+) -> String {
     effective_fem_device_request_from_sources(
-        runtime_device(problem),
-        std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
-        all_in_gpu_fem_env_requested(),
+        script_device,
+        snapshot.execution.as_deref(),
+        snapshot.all_in_gpu_requested(),
     )
 }
 
@@ -254,28 +289,22 @@ pub(crate) fn runtime_fem_order(problem: &ProblemIR) -> u32 {
 }
 
 pub(crate) fn fem_gpu_execution_forced() -> bool {
+    let snapshot = FemSelectionEnvSnapshot::capture();
     matches!(
-        std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
+        snapshot.execution.as_deref(),
         Some("gpu") | Some("all_in_gpu")
     )
 }
 
-fn env_flag_enabled(value: Option<String>) -> bool {
+fn env_flag_enabled(value: Option<&str>) -> bool {
     matches!(
-        value
-            .as_deref()
-            .map(str::trim)
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
+        value.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
         Some("1" | "true" | "on" | "yes")
     )
 }
 
 pub(crate) fn all_in_gpu_fem_env_requested() -> bool {
-    matches!(
-        std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
-        Some("all_in_gpu")
-    ) || env_flag_enabled(std::env::var("FULLMAG_FEM_ALL_IN_GPU").ok())
+    FemSelectionEnvSnapshot::capture().all_in_gpu_requested()
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -306,7 +335,10 @@ pub(crate) fn apply_runtime_gpu_index(problem: &ProblemIR, backend: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{effective_fem_device_request_from_sources, resolve_fdm_engine_with_trail};
+    use super::{
+        effective_fem_device_request_from_snapshot, effective_fem_device_request_from_sources,
+        resolve_fdm_engine_with_trail, FemSelectionEnvSnapshot,
+    };
     use fullmag_ir::ProblemIR;
     use serde_json::Value;
     use std::sync::{LazyLock, Mutex};
@@ -341,6 +373,17 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn fem_effective_request_is_derived_from_one_immutable_environment_snapshot() {
+        let snapshot = FemSelectionEnvSnapshot::from_sources(Some("cpu"), Some("true"));
+        assert_eq!(
+            effective_fem_device_request_from_snapshot(Some("auto"), &snapshot),
+            "gpu"
+        );
+        assert_eq!(snapshot.execution.as_deref(), Some("cpu"));
+        assert_eq!(snapshot.all_in_gpu.as_deref(), Some("true"));
     }
 
     #[test]

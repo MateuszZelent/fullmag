@@ -2063,7 +2063,7 @@ verify-fem-preparation-api-contract:
 verify-fem-preview-callback-source-contract:
     docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-runner --features fem-gpu tests::fem_preview_materialization_stays_outside_callback_deadline -- --exact --nocapture'
 
-verify-fem-crossover-retained-contract:
+verify-fem-crossover-selection-persistence-contract:
     docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'set -e; cd /workspace; export FULLMAG_USE_MFEM_STACK=ON; cargo +nightly test -p fullmag-runner --features fem-gpu solver_runtime::fem_selection::tests::retained_resolver_uses_the_canonical_effective_request_collision_matrix -- --exact --nocapture; cargo +nightly test -p fullmag-runner --features fem-gpu interactive_runtime::tests::persistent_fem_runtime_keeps_resolved_crossover_after_profile_mutation_and_removal -- --exact --nocapture; cargo +nightly test -p fullmag-runner --features fem-gpu --test backend_source_layout_contract task15_crossover_capability_json_and_adr_match_the_ignored_identity_input_boundary -- --exact --nocapture'
 
 verify-fem-preview-review-unit-contract:

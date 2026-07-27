@@ -7,8 +7,7 @@ use crate::solver_runtime::diagnostics::{runtime_fallback, runtime_info_once, ru
 use crate::solver_runtime::engine::{fem_engine_id, FemEngine, FemEngineResolution};
 use crate::solver_runtime::fem_crossover::resolve_auto_fem_plan_device;
 use crate::solver_runtime::selection::{
-    all_in_gpu_fem_env_requested, apply_runtime_gpu_index, effective_fem_device_request,
-    effective_fem_device_request_from_sources, fem_policy_requires_gpu, runtime_device,
+    apply_runtime_gpu_index, effective_fem_device_request, fem_policy_requires_gpu,
     runtime_fem_order, runtime_fem_policy,
 };
 use crate::types::RunError;
@@ -39,39 +38,9 @@ pub(crate) fn resolve_fem_engine_with_trail(
     problem: &ProblemIR,
 ) -> Result<FemEngineResolution, RunError> {
     apply_runtime_gpu_index(problem, "fem");
+    let policy = effective_fem_device_request(problem);
     let availability = native_fem::native_availability();
-    resolve_fem_engine_with_sources_and_availability(
-        problem,
-        std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
-        all_in_gpu_fem_env_requested(),
-        &availability,
-    )
-}
-
-fn resolve_fem_engine_with_sources_and_availability(
-    problem: &ProblemIR,
-    execution_env: Option<&str>,
-    all_in_gpu_requested: bool,
-    availability: &native_fem::GpuAvailability,
-) -> Result<FemEngineResolution, RunError> {
-    let script_policy = runtime_fem_policy(problem);
-    let policy = effective_fem_device_request_from_sources(
-        runtime_device(problem),
-        execution_env,
-        all_in_gpu_requested,
-    );
-    if policy != script_policy {
-        let source = if all_in_gpu_requested {
-            "FULLMAG_FEM_ALL_IN_GPU"
-        } else {
-            "FULLMAG_FEM_EXECUTION"
-        };
-        runtime_warn_once(&format!(
-            "{source} resolves FEM device={} over script runtime_selection.device={script_policy}",
-            policy
-        ));
-    }
-    resolve_fem_engine_with_effective_request_and_availability(problem, &policy, availability)
+    resolve_fem_engine_with_effective_request_and_availability(problem, &policy, &availability)
 }
 
 fn resolve_fem_engine_with_effective_request_and_availability(
@@ -79,6 +48,13 @@ fn resolve_fem_engine_with_effective_request_and_availability(
     policy: &str,
     availability: &native_fem::GpuAvailability,
 ) -> Result<FemEngineResolution, RunError> {
+    let script_policy = runtime_fem_policy(problem);
+    if policy != script_policy {
+        runtime_warn_once(&format!(
+            "effective FEM device request={} overrides script runtime_selection.device={script_policy}",
+            policy
+        ));
+    }
     resolve_fem_engine_with_availability(
         problem,
         policy,
@@ -358,10 +334,9 @@ mod tests {
                             execution_env,
                             all_in_gpu,
                         );
-                    let resolution = resolve_fem_engine_with_sources_and_availability(
+                    let resolution = resolve_fem_engine_with_effective_request_and_availability(
                         &fem_policy_problem(script_device),
-                        execution_env,
-                        all_in_gpu,
+                        &expected_request,
                         &availability,
                     )
                     .expect("the retained resolver should select an available FEM lane");
