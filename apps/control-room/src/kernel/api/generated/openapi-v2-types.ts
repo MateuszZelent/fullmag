@@ -10214,6 +10214,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description FMMT v1 cannot represent the active mixed or malformed FEM topology */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Requested topology byte range is not satisfiable */
             416: {
                 headers: {
@@ -12634,6 +12641,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description FMMT v1 cannot represent the selected mixed or malformed FEM topology */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Requested topology byte range is not satisfiable */
             416: {
                 headers: {
@@ -12694,6 +12708,13 @@ export interface operations {
             };
             /** @description No active workspace or mesh part */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description FMMT v1 cannot represent the selected mixed or malformed FEM topology */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13152,6 +13173,13 @@ export interface operations {
             };
             /** @description No active workspace */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description FMMT v1 cannot represent the active mixed or malformed FEM topology */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

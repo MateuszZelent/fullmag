@@ -4,7 +4,7 @@
 
 DONE_WITH_CONCERNS. Canonical variable-arity FEM topology is implemented through Python meshing data, Rust IR, planner transformations, CLI ingestion, runner payloads, artifacts, and mechanically affected API consumers. Review remediation completed complete family-aware Jacobian sampling, immutable global ordinals, canonical facet references, exact fingerprint-domain ownership, ingress facet roles, and fail-closed legacy FMMT v1 consumers. All applicable focused gates pass. The exact CLI command in the brief cannot run because `fullmag-cli` is a binary-only package; the equivalent binary-target filter passes 13 tests.
 
-The controller-owned `.superpowers/sdd/progress.md` and `.superpowers/sdd/task-1-report.md` remain unstaged; their independent dirty contents were not changed by this slice. No SP4 scenario, C ABI, native FEM implementation, FMMT v2 redesign, OpenAPI redesign, or Control Room file was changed. Existing FMMT v1 API callers were migrated only enough to reject mixed cells/facets with HTTP conflict before fixed-width serialization.
+The controller-owned `.superpowers/sdd/progress.md` and `.superpowers/sdd/task-1-report.md` remain unstaged; their independent dirty contents were not changed by this slice. No SP4 scenario, C ABI, native FEM implementation, FMMT v2 redesign, OpenAPI redesign, or Control Room behavior was changed. Existing FMMT v1 API callers were migrated only enough to reject mixed cells/facets with HTTP conflict before fixed-width serialization. The checked-in Control Room OpenAPI JSON and TypeScript response types were regenerated from the canonical backend schema in the final re-review follow-up.
 
 ## Contract implemented
 
@@ -63,6 +63,11 @@ facet-ID resolution, fail-closed FMMT v1/cross-section consumers, schemas, and
 tests) plus `docs/specs/mesh-roundtrip-semantics-v1.md`. These changes do not
 introduce a new API schema or binary format; they keep the already published
 v1 fixed-width lanes honest until their separately scoped v2 redesign.
+
+The final re-review follow-up additionally changes only the generated Control
+Room artifacts `apps/control-room/src/kernel/api/generated/openapi-v2.json`
+and `openapi-v2-types.ts`. The generated client and path wrapper were rerun and
+remained bit-for-bit unchanged.
 
 ## TDD evidence
 
@@ -324,12 +329,94 @@ Final remediation gates, using
   default parallelism.
 - `git diff --check`: passed.
 
-The API/OpenAPI source annotations and Rust schema were updated, but generated
-OpenAPI artifacts and `apps/control-room` were unchanged. Final scans found no
-public `facet_global_ordinals` in API schemas/OpenAPI registration, confirmed
-`surface_faces` in `MeshPartResource`, and confirmed explicit `409` responses
-for all four FMMT v1 route families. This remediation does not add FMMT v2,
-change the C ABI, or modify UI code.
+At that remediation checkpoint the API/OpenAPI source annotations and Rust
+schema were updated, while generated OpenAPI artifacts and
+`apps/control-room` remained unchanged. The follow-up below closes that stale
+generated-contract gap. Final scans found no public `facet_global_ordinals` in
+API schemas/OpenAPI registration, confirmed `surface_faces` in
+`MeshPartResource`, and confirmed explicit `409` responses for all four FMMT
+v1 route families. This remediation does not add FMMT v2, change the C ABI, or
+modify UI behavior.
+
+## Final re-review: generated contract, projection complexity, and scoped errors (2026-07-27)
+
+The manifest projection previously resolved each part facet global ordinal by
+linearly scanning `mesh.facets.global_ordinals`. Across many parts this was
+quadratic in the number of referenced facets. `FacetGlobalOrdinalIndex` now
+builds one `global_ordinal -> facet index` map per mesh before manifest part
+projection. Each part projects `surface_faces` once through that shared map,
+and `surface_node_indices` is derived from the projected faces instead of
+performing a second lookup pass. The focused reordered-ID test proves the map
+returns the canonical CSR ordinal and fails closed for an absent ID.
+
+Scoped object/part topology extraction previously collapsed malformed source
+topology and a genuinely missing resource into the same `Option::None`, so the
+handlers returned HTTP `404` despite the published `409` contract.
+`subset_object_mesh`, `subset_part_mesh`, `subset_part_payload`, and their
+source-node collection now propagate `Result<Option<_>, String>` semantics:
+an absent object or part remains `404`, while missing global ordinals, invalid
+CSR ranges, out-of-range nodes, missing roles/types, or unmapped references
+become `409 Conflict`. Focused RED received `404` for a selected object whose
+cell global ordinals were removed; the final table-driven route test receives
+`409` for malformed object and part topology and `404` for absent object and
+part resources.
+
+Canonical generated API command, run twice:
+
+```text
+env PATH=/tmp/fullmag-corepack-shims.Ky64TQ:$PATH pnpm --dir apps/control-room generate:api
+```
+
+Because `pnpm` was not initially available as a shell command in this worktree,
+a temporary Corepack shim was created under `/tmp`, followed by an offline
+frozen-lockfile install. No dependency or lockfile source changed. Both
+generator runs succeeded. Their SHA-256 values were identical:
+
+- `openapi-v2.json`: `6ef80ea2637a296304c82cd31a4838f75a00d65758c1d69fbf635d2158518232`
+- `openapi-v2-types.ts`: `fa08860890c069f12d06ed9269927ec214e9ae708a370d6d75b836b32ed86d1e`
+- `openapi-v2-client.ts`: `76f8ce6163c912d27a005d039ebae9b098d708ef4ffead3d0ec6f6f598967641`
+- `openapi-v2-paths.ts`: `3ae0b2d1fdf77dba2feaedf61914e0d73ac8fab0643bd800610b627f10e54974`
+
+The generated diff is limited to four `409` responses in OpenAPI JSON and the
+matching four `409` response types for domain, shared-domain, object, and part
+FMMT v1 topology. The generated client and path wrapper are unchanged.
+
+Final backend gates used `CARGO_TARGET_DIR=/tmp/fullmag-mixed-topology-target`,
+`CARGO_INCREMENTAL=0`, and `CARGO_PROFILE_DEV_DEBUG=0`:
+
+- `cargo fmt --package fullmag-api --check`: passed.
+- `cargo check -p fullmag-api`: passed.
+- API `topology_routes` filter: `4 passed`, covering all-route mixed rejection,
+  malformed CSR rejection, OpenAPI `409` declarations, and scoped
+  `404`/`409` distinction.
+- `facet_global_ordinal_index_resolves_reordered_ids`: passed.
+- `mesh_shared_domain_manifest_projects_quad_surface_faces_without_internal_ids`:
+  passed.
+
+Control Room/generated-contract gates, with `TMPDIR=/tmp` where Vitest needed a
+Linux-writable temporary root:
+
+- `pnpm --dir apps/control-room typecheck`: passed.
+- `pnpm --dir apps/control-room lint`: passed with zero warnings.
+- targeted generated API contracts: `2` files passed, `1` skipped; `6` tests
+  passed, `1` skipped.
+- full `pnpm --dir apps/control-room test`: `400` files passed, `1` skipped;
+  `3808` tests passed, `1` skipped.
+- `./scripts/ci-resource-first-gates.sh --strict`: passed.
+- `./scripts/ci/contract_guard.sh --strict`: passed.
+
+`pnpm --dir apps/control-room check:api-hygiene` reports one existing endpoint
+literal at `src/shared/domain/analysis/chartContracts.test.ts:19`. The exact
+`git diff --exit-code cf2d0b3c --` check for that file is empty, proving this
+slice did not introduce it; the unrelated Analysis test was not changed.
+
+The available runtime is Node `v22.8.0`, while the repository declares
+`>=24.18.0 <25`. The generator, typecheck, lint, tests, and strict static gates
+above are factual results under that limited environment. They are not a
+Control Room runtime or browser qualification claim. A full workspace
+`cargo fmt --check` also reports pre-existing formatting drift outside
+`fullmag-api`; the package-scoped formatter gate for every Rust file changed in
+this follow-up passes.
 
 ## Runtime observations and concerns
 

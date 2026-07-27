@@ -24370,6 +24370,9 @@
           "404": {
             "description": "No active workspace"
           },
+          "409": {
+            "description": "FMMT v1 cannot represent the active mixed or malformed FEM topology"
+          },
           "416": {
             "description": "Requested topology byte range is not satisfiable"
           }
@@ -28998,6 +29001,9 @@
           "404": {
             "description": "No active workspace or object mesh"
           },
+          "409": {
+            "description": "FMMT v1 cannot represent the selected mixed or malformed FEM topology"
+          },
           "416": {
             "description": "Requested topology byte range is not satisfiable"
           }
@@ -29066,6 +29072,9 @@
           },
           "404": {
             "description": "No active workspace or mesh part"
+          },
+          "409": {
+            "description": "FMMT v1 cannot represent the selected mixed or malformed FEM topology"
           },
           "416": {
             "description": "Requested topology byte range is not satisfiable"
@@ -29574,6 +29583,9 @@
           },
           "404": {
             "description": "No active workspace"
+          },
+          "409": {
+            "description": "FMMT v1 cannot represent the active mixed or malformed FEM topology"
           },
           "416": {
             "description": "Requested topology byte range is not satisfiable"

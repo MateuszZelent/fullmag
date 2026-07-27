@@ -1639,6 +1639,8 @@ pub async fn get_mesh_shared_domain_manifest(
         Some(mesh) => {
             let provenance = mesh_build_provenance(&snapshot);
             let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
+            let facet_index =
+                crate::router_v2::handlers::shared::FacetGlobalOrdinalIndex::new(&mesh.facets);
             let body = MeshSharedDomainManifestResource {
                 revision: snapshot.mesh_revision,
                 source_scene_revision: provenance.source_scene_revision,
@@ -1658,13 +1660,19 @@ pub async fn get_mesh_shared_domain_manifest(
                     .iter()
                     .map(|part| {
                         let mut resource = MeshPartResource::from(part);
-                        resource.surface_node_indices =
-                            crate::router_v2::handlers::shared::mesh_part_surface_node_indices(
-                                mesh, part,
-                            );
                         resource.surface_faces =
-                            crate::router_v2::handlers::shared::mesh_part_surface_faces(mesh, part)
-                                .unwrap_or_default();
+                            crate::router_v2::handlers::shared::mesh_part_surface_faces(
+                                mesh,
+                                part,
+                                &facet_index,
+                            )
+                            .unwrap_or_default();
+                        resource.surface_node_indices =
+                            (!resource.surface_faces.is_empty()).then(|| {
+                                crate::router_v2::handlers::shared::surface_node_indices_from_faces(
+                                    &resource.surface_faces,
+                                )
+                            });
                         resource
                     })
                     .collect(),
@@ -2019,9 +2027,11 @@ pub async fn get_mesh_object_topology(
     let snapshot = current_snapshot(&state).await?;
     match snapshot.fem_mesh.as_ref() {
         Some(mesh) => {
-            let object_mesh = subset_object_mesh(mesh, &object_id).ok_or_else(|| {
-                ApiError::not_found(format!("object mesh not found: {object_id}"))
-            })?;
+            let object_mesh = subset_object_mesh(mesh, &object_id)
+                .map_err(ApiError::conflict)?
+                .ok_or_else(|| {
+                    ApiError::not_found(format!("object mesh not found: {object_id}"))
+                })?;
             let binary =
                 serialize_fem_mesh_topology_binary_v1(&object_mesh).map_err(ApiError::conflict)?;
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
@@ -2071,6 +2081,7 @@ pub async fn get_mesh_part_topology(
     match snapshot.fem_mesh.as_ref() {
         Some(mesh) => {
             let part_mesh = subset_part_mesh(mesh, &part_id)
+                .map_err(ApiError::conflict)?
                 .ok_or_else(|| ApiError::not_found(format!("mesh part not found: {part_id}")))?;
             let binary =
                 serialize_fem_mesh_topology_binary_v1(&part_mesh).map_err(ApiError::conflict)?;
@@ -4073,7 +4084,10 @@ fn push_region_geometry_aliases(aliases: &mut BTreeSet<String>, value: &str) {
     aliases.insert(trimmed.replace(':', "%3A"));
 }
 
-fn subset_object_mesh(mesh: &FemMeshPayload, object_id: &str) -> Option<FemMeshPayload> {
+fn subset_object_mesh(
+    mesh: &FemMeshPayload,
+    object_id: &str,
+) -> Result<Option<FemMeshPayload>, String> {
     if let Some(part) = mesh.mesh_parts.iter().find(|part| {
         part.role == "magnetic_object"
             && part
@@ -4082,13 +4096,16 @@ fn subset_object_mesh(mesh: &FemMeshPayload, object_id: &str) -> Option<FemMeshP
                 .map(|id| object_ids_match(id, object_id))
                 .unwrap_or(false)
     }) {
-        return subset_part_mesh(mesh, &part.id);
+        return subset_part_payload(mesh, part, object_id).map(Some);
     }
 
-    let segment = mesh
+    let Some(segment) = mesh
         .object_segments
         .iter()
-        .find(|segment| object_ids_match(&segment.object_id, object_id))?;
+        .find(|segment| object_ids_match(&segment.object_id, object_id))
+    else {
+        return Ok(None);
+    };
     let part = FemMeshPartPayload {
         id: object_id.to_string(),
         label: object_id.to_string(),
@@ -4109,7 +4126,7 @@ fn subset_object_mesh(mesh: &FemMeshPayload, object_id: &str) -> Option<FemMeshP
         bounds_max: None,
     };
 
-    subset_part_payload(mesh, &part, object_id)
+    subset_part_payload(mesh, &part, object_id).map(Some)
 }
 
 fn interface_quality(mesh: &FemMeshPayload, interface_id: &str) -> Option<Value> {
@@ -4220,21 +4237,29 @@ fn bounds_for_surface_faces(
     bounds_for_node_indices(mesh, &node_indices)
 }
 
-fn subset_part_mesh(mesh: &FemMeshPayload, part_id: &str) -> Option<FemMeshPayload> {
-    let part = mesh.mesh_parts.iter().find(|part| part.id == part_id)?;
-    subset_part_payload(mesh, part, &format!("part:{part_id}"))
+fn subset_part_mesh(
+    mesh: &FemMeshPayload,
+    part_id: &str,
+) -> Result<Option<FemMeshPayload>, String> {
+    let Some(part) = mesh.mesh_parts.iter().find(|part| part.id == part_id) else {
+        return Ok(None);
+    };
+    subset_part_payload(mesh, part, &format!("part:{part_id}")).map(Some)
 }
 
 fn subset_part_payload(
     mesh: &FemMeshPayload,
     part: &FemMeshPartPayload,
     mesh_suffix: &str,
-) -> Option<FemMeshPayload> {
+) -> Result<FemMeshPayload, String> {
     let source_node_indices = collect_part_source_node_indices(mesh, part)?;
     let mut node_map = HashMap::with_capacity(source_node_indices.len());
     let mut nodes = Vec::with_capacity(source_node_indices.len());
     for source_index in source_node_indices {
-        let node = *mesh.nodes.get(source_index as usize)?;
+        let node = *mesh
+            .nodes
+            .get(source_index as usize)
+            .ok_or_else(|| malformed_part_topology(part, format!("missing node {source_index}")))?;
         let target_index = nodes.len() as u32;
         node_map.insert(source_index, target_index);
         nodes.push(node);
@@ -4248,10 +4273,35 @@ fn subset_part_payload(
     let mut cell_global_ordinals = Vec::new();
     let mut element_markers = Vec::new();
     for source_element_index in element_start..element_end {
-        let cell_type = *mesh.cells.types.get(source_element_index)?;
-        let global_ordinal = *mesh.cells.global_ordinals.get(source_element_index)?;
-        for node in mesh.cells.item_nodes(source_element_index)? {
-            cell_nodes.push(*node_map.get(node)?);
+        let cell_type = *mesh.cells.types.get(source_element_index).ok_or_else(|| {
+            malformed_part_topology(
+                part,
+                format!("missing cell type at index {source_element_index}"),
+            )
+        })?;
+        let global_ordinal = *mesh
+            .cells
+            .global_ordinals
+            .get(source_element_index)
+            .ok_or_else(|| {
+                malformed_part_topology(
+                    part,
+                    format!("missing cell global ordinal at index {source_element_index}"),
+                )
+            })?;
+        let source_nodes = mesh.cells.item_nodes(source_element_index).ok_or_else(|| {
+            malformed_part_topology(
+                part,
+                format!("invalid cell CSR range at index {source_element_index}"),
+            )
+        })?;
+        for node in source_nodes {
+            cell_nodes.push(*node_map.get(node).ok_or_else(|| {
+                malformed_part_topology(
+                    part,
+                    format!("cell {source_element_index} references unmapped node {node}"),
+                )
+            })?);
         }
         cell_types.push(cell_type);
         cell_offsets.push(cell_nodes.len() as u32);
@@ -4279,7 +4329,13 @@ fn subset_part_payload(
             .facets
             .global_ordinals
             .iter()
-            .position(|candidate| candidate == global_ordinal)? as u32;
+            .position(|candidate| candidate == global_ordinal)
+            .ok_or_else(|| {
+                malformed_part_topology(
+                    part,
+                    format!("missing facet global ordinal {global_ordinal}"),
+                )
+            })? as u32;
         if !face_indices.contains(&face_index) {
             face_indices.push(face_index);
         }
@@ -4292,11 +4348,33 @@ fn subset_part_payload(
     let mut boundary_markers = Vec::new();
     for face_index in face_indices {
         let face_index = face_index as usize;
-        facet_types.push(*mesh.facets.types.get(face_index)?);
-        facet_roles.push(*mesh.facets.roles.get(face_index)?);
-        facet_global_ordinals.push(*mesh.facets.global_ordinals.get(face_index)?);
-        for node in mesh.facets.item_nodes(face_index)? {
-            facet_nodes.push(*node_map.get(node)?);
+        facet_types.push(*mesh.facets.types.get(face_index).ok_or_else(|| {
+            malformed_part_topology(part, format!("missing facet type at index {face_index}"))
+        })?);
+        facet_roles.push(*mesh.facets.roles.get(face_index).ok_or_else(|| {
+            malformed_part_topology(part, format!("missing facet role at index {face_index}"))
+        })?);
+        facet_global_ordinals.push(*mesh.facets.global_ordinals.get(face_index).ok_or_else(
+            || {
+                malformed_part_topology(
+                    part,
+                    format!("missing facet global ordinal at index {face_index}"),
+                )
+            },
+        )?);
+        let source_nodes = mesh.facets.item_nodes(face_index).ok_or_else(|| {
+            malformed_part_topology(
+                part,
+                format!("invalid facet CSR range at index {face_index}"),
+            )
+        })?;
+        for node in source_nodes {
+            facet_nodes.push(*node_map.get(node).ok_or_else(|| {
+                malformed_part_topology(
+                    part,
+                    format!("facet {face_index} references unmapped node {node}"),
+                )
+            })?);
         }
         facet_offsets.push(facet_nodes.len() as u32);
         if let Some(marker) = mesh.boundary_markers.get(face_index as usize) {
@@ -4357,7 +4435,7 @@ fn subset_part_payload(
         bounds_max: part.bounds_max,
     };
 
-    Some(FemMeshPayload {
+    Ok(FemMeshPayload {
         mesh_name: format!("{}:{mesh_suffix}", mesh.mesh_name),
         mesh_id: format!("{}:{mesh_suffix}", mesh.mesh_id),
         nodes,
@@ -4377,21 +4455,36 @@ fn subset_part_payload(
     })
 }
 
+fn malformed_part_topology(part: &FemMeshPartPayload, detail: impl AsRef<str>) -> String {
+    format!(
+        "malformed FEM topology for mesh part '{}': {}",
+        part.id,
+        detail.as_ref()
+    )
+}
+
 fn collect_part_source_node_indices(
     mesh: &FemMeshPayload,
     part: &FemMeshPartPayload,
-) -> Option<Vec<u32>> {
+) -> Result<Vec<u32>, String> {
     let mut source_node_indices = BTreeSet::new();
     if part.node_indices.is_empty() {
         let node_start = part.node_start as usize;
         let node_end = node_start.saturating_add(part.node_count as usize);
         if node_start < node_end {
-            mesh.nodes.get(node_start..node_end)?;
+            mesh.nodes.get(node_start..node_end).ok_or_else(|| {
+                malformed_part_topology(
+                    part,
+                    format!("node range {node_start}..{node_end} is out of bounds"),
+                )
+            })?;
             source_node_indices.extend((node_start..node_end).map(|index| index as u32));
         }
     } else {
         for node_index in &part.node_indices {
-            mesh.nodes.get(*node_index as usize)?;
+            mesh.nodes.get(*node_index as usize).ok_or_else(|| {
+                malformed_part_topology(part, format!("missing node {node_index}"))
+            })?;
             source_node_indices.insert(*node_index);
         }
     }
@@ -4400,10 +4493,19 @@ fn collect_part_source_node_indices(
     let element_end = element_start.saturating_add(part.element_count as usize);
     if element_start < element_end {
         if element_end > mesh.cells.len() {
-            return None;
+            return Err(malformed_part_topology(
+                part,
+                format!("cell range {element_start}..{element_end} is out of bounds"),
+            ));
         }
         for element_index in element_start..element_end {
-            source_node_indices.extend(mesh.cells.item_nodes(element_index)?.iter().copied());
+            let nodes = mesh.cells.item_nodes(element_index).ok_or_else(|| {
+                malformed_part_topology(
+                    part,
+                    format!("invalid cell CSR range at index {element_index}"),
+                )
+            })?;
+            source_node_indices.extend(nodes.iter().copied());
         }
     }
 
@@ -4412,15 +4514,32 @@ fn collect_part_source_node_indices(
         let face_end = face_start.saturating_add(part.boundary_face_count as usize);
         if face_start < face_end {
             if face_end > mesh.facets.len() {
-                return None;
+                return Err(malformed_part_topology(
+                    part,
+                    format!("facet range {face_start}..{face_end} is out of bounds"),
+                ));
             }
             for face_index in face_start..face_end {
-                source_node_indices.extend(mesh.facets.item_nodes(face_index)?.iter().copied());
+                let nodes = mesh.facets.item_nodes(face_index).ok_or_else(|| {
+                    malformed_part_topology(
+                        part,
+                        format!("invalid facet CSR range at index {face_index}"),
+                    )
+                })?;
+                source_node_indices.extend(nodes.iter().copied());
             }
         }
     } else {
         for face_index in &part.boundary_face_indices {
-            let face = mesh.facets.item_nodes(*face_index as usize)?;
+            let face = mesh
+                .facets
+                .item_nodes(*face_index as usize)
+                .ok_or_else(|| {
+                    malformed_part_topology(
+                        part,
+                        format!("invalid facet CSR range at index {face_index}"),
+                    )
+                })?;
             source_node_indices.extend(face.iter().copied());
         }
     }
@@ -4430,11 +4549,23 @@ fn collect_part_source_node_indices(
             .facets
             .global_ordinals
             .iter()
-            .position(|candidate| candidate == global_ordinal)?;
-        source_node_indices.extend(mesh.facets.item_nodes(face_index)?.iter().copied());
+            .position(|candidate| candidate == global_ordinal)
+            .ok_or_else(|| {
+                malformed_part_topology(
+                    part,
+                    format!("missing facet global ordinal {global_ordinal}"),
+                )
+            })?;
+        let nodes = mesh.facets.item_nodes(face_index).ok_or_else(|| {
+            malformed_part_topology(
+                part,
+                format!("invalid facet CSR range at index {face_index}"),
+            )
+        })?;
+        source_node_indices.extend(nodes.iter().copied());
     }
 
-    Some(source_node_indices.into_iter().collect())
+    Ok(source_node_indices.into_iter().collect())
 }
 
 #[cfg(test)]
@@ -4580,8 +4711,9 @@ mod tests {
             build_report: None,
         };
 
-        let part_mesh =
-            subset_part_mesh(&mesh, "part:__air__").expect("part topology should remap");
+        let part_mesh = subset_part_mesh(&mesh, "part:__air__")
+            .expect("valid part topology")
+            .expect("part topology should remap");
 
         assert_eq!(part_mesh.nodes.len(), 4);
         assert_eq!(
@@ -4642,6 +4774,7 @@ mod tests {
         };
 
         let part_mesh = subset_part_mesh(&mesh, "part:interface:0:1")
+            .expect("valid part topology")
             .expect("interface topology should remap surface faces");
 
         assert_eq!(part_mesh.nodes.len(), 3);
@@ -4688,7 +4821,9 @@ mod tests {
             build_report: None,
         };
 
-        let object_mesh = subset_object_mesh(&mesh, "body").expect("object topology should remap");
+        let object_mesh = subset_object_mesh(&mesh, "body")
+            .expect("valid object topology")
+            .expect("object topology should remap");
 
         assert_eq!(object_mesh.nodes.len(), 4);
         assert_eq!(

@@ -6838,6 +6838,45 @@ async fn fmmt_v1_topology_routes_reject_malformed_csr_instead_of_truncating() {
 }
 
 #[tokio::test]
+async fn scoped_topology_routes_distinguish_missing_resources_from_malformed_topology() {
+    let valid_state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = valid_state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload_with_manifest());
+    }
+    let valid_app = build_v2_router().with_state(valid_state);
+    for uri in [
+        "/v2/sessions/current/meshing/meshes/objects/missing/topology",
+        "/v2/sessions/current/meshing/meshes/parts/missing/topology",
+    ] {
+        let response = valid_app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+    }
+
+    let malformed_state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = malformed_state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload_with_manifest();
+        mesh.cells.global_ordinals.clear();
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let malformed_app = build_v2_router().with_state(malformed_state);
+    for uri in [
+        "/v2/sessions/current/meshing/meshes/objects/body/topology",
+        "/v2/sessions/current/meshing/meshes/parts/body/topology",
+    ] {
+        let response = malformed_app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT, "{uri}");
+    }
+}
+
+#[tokio::test]
 async fn mesh_shared_domain_cross_section_returns_binary_fmcs_payload() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {

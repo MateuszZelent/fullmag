@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use axum::body::Body;
 use axum::http::header::{
@@ -12,19 +12,37 @@ use serde::Serialize;
 
 use fullmag_runner::{FemMeshPartPayload, FemMeshPayload};
 
+pub(crate) struct FacetGlobalOrdinalIndex {
+    indices: HashMap<u64, usize>,
+}
+
+impl FacetGlobalOrdinalIndex {
+    pub(crate) fn new(facets: &fullmag_ir::FemFacetConnectivityIR) -> Self {
+        Self {
+            indices: facets
+                .global_ordinals
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(index, global_ordinal)| (global_ordinal, index))
+                .collect(),
+        }
+    }
+
+    pub(crate) fn get(&self, global_ordinal: u64) -> Option<usize> {
+        self.indices.get(&global_ordinal).copied()
+    }
+}
+
 pub(crate) fn mesh_part_surface_faces(
     mesh: &FemMeshPayload,
     part: &FemMeshPartPayload,
+    facet_index: &FacetGlobalOrdinalIndex,
 ) -> Option<Vec<Vec<u32>>> {
     let face_indices = if !part.facet_global_ordinals.is_empty() {
         let mut indices = Vec::with_capacity(part.facet_global_ordinals.len());
         for global_ordinal in &part.facet_global_ordinals {
-            indices.push(
-                mesh.facets
-                    .global_ordinals
-                    .iter()
-                    .position(|candidate| candidate == global_ordinal)?,
-            );
+            indices.push(facet_index.get(*global_ordinal)?);
         }
         indices
     } else if !part.boundary_face_indices.is_empty() {
@@ -50,11 +68,17 @@ pub(crate) fn mesh_part_surface_node_indices(
     mesh: &FemMeshPayload,
     part: &FemMeshPartPayload,
 ) -> Option<Vec<u32>> {
+    let facet_index = FacetGlobalOrdinalIndex::new(&mesh.facets);
+    let faces = mesh_part_surface_faces(mesh, part, &facet_index)?;
+    Some(surface_node_indices_from_faces(&faces))
+}
+
+pub(crate) fn surface_node_indices_from_faces(faces: &[Vec<u32>]) -> Vec<u32> {
     let mut node_indices = BTreeSet::new();
-    for face in mesh_part_surface_faces(mesh, part)? {
-        node_indices.extend(face);
+    for face in faces {
+        node_indices.extend(face.iter().copied());
     }
-    Some(node_indices.into_iter().collect())
+    node_indices.into_iter().collect()
 }
 
 pub(crate) fn stable_strong_etag(token: &str) -> String {
@@ -195,4 +219,27 @@ pub(crate) fn conditional_json_response<T: Serialize>(
         .headers_mut()
         .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn facet_global_ordinal_index_resolves_reordered_ids() {
+        let facets = fullmag_ir::FemFacetConnectivityIR {
+            types: vec![fullmag_ir::FemFacetTypeIR::Tri3; 3],
+            roles: vec![fullmag_ir::FemFacetRoleIR::Exterior; 3],
+            offsets: vec![0, 3, 6, 9],
+            nodes: vec![0, 1, 2, 0, 2, 3, 1, 2, 3],
+            global_ordinals: vec![900, 100, 700],
+        };
+
+        let index = FacetGlobalOrdinalIndex::new(&facets);
+
+        assert_eq!(index.get(100), Some(1));
+        assert_eq!(index.get(700), Some(2));
+        assert_eq!(index.get(900), Some(0));
+        assert_eq!(index.get(404), None);
+    }
 }
