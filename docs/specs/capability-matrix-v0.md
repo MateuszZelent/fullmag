@@ -35,6 +35,36 @@ Every product-facing feature should be described with one of these statuses:
 | **`production_executable`** | Executable on the intended production lane. |
 | **`validated`** | Executable and benchmarked with explicit regression coverage for the documented workload. |
 
+## Mixed-P1 shared-domain target vocabulary
+
+The canonical target is defined by
+`docs/physics/0106-fem-mixed-prism-pyramid-shared-domain.md` and ADR 0021.
+These IDs reserve one cross-layer vocabulary without claiming implementation:
+
+| Capability | Current product status | implementation_state | Evidence now | First promotion scope |
+|---|---|---|---|---|
+| `mesh.topology.mixed_p1` | `unsupported` | contract_only | note 0106 and ADR 0021 | one axis-aligned P1 Box in one conforming airbox |
+| `mesh.swept.prism` | `unsupported` as native solver topology | source_visible | existing meshing compatibility still converts for the tet-only solver path | `prism6` magnetic cells with no tet conversion |
+| `mesh.transition.pyramid_tet` | `unsupported` | contract_only | frozen Gmsh feasibility fixture only | `pyramid5` air transition and `tet4` far air |
+| `mesh.exact_layer_count` | `unsupported` as a certified runtime contract | source_visible | authoring intent exists; exact certificate does not | `layers=1` gives exactly two magnetic node planes |
+| `fem.cpu.exchange_demag.mixed_p1` | `unsupported` | absent | no native mixed operator path | MFEM/hypre CPU double, exchange + uniform Zeeman + Poisson Robin/Dirichlet |
+| `fem.gpu.exchange_demag.mixed_p1` | `unsupported` | absent | no native mixed operator path | MFEM/libCEED/CUDA GPU double on the same certified mesh |
+
+The future first-slice legality is strict or extended FEM, CPU/GPU/auto device,
+double precision, one Box, one shared-domain airbox, uniform `Ms`/`Aex`, and
+PG-BB, NCG, or overdamped LLG. `auto` may resolve only to a lane advertising
+the complete capability set and must preserve requested and resolved intent.
+Strict execution requires `fallbacks_triggered=[]`; no prism-to-tet, GPU-to-CPU,
+or mixed-to-free-tetrahedral fallback is legal.
+
+Until separately qualified, all modes reject before backend startup when a
+mixed-P1 request includes FEM/BEM, PBC/Floquet, DMI, STT, thermal,
+magnetoelasticity, regional projections, eigen/frequency-domain studies,
+DG0/material interfaces, order greater than one, arbitrary OCC shapes,
+multiple bodies, or multilayers. FDM and hybrid lanes are unsupported. The
+Gmsh 4.15.2 fixture is topology feasibility evidence and does not promote any
+row to `production_executable` or `validated`.
+
 ### Execution-device cardinality
 
 The public execution vocabulary accepts a device target and `gpu_count`, but

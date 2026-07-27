@@ -2,10 +2,11 @@
 
 - Status: draft
 - Owners: Fullmag core
-- Last updated: 2026-05-29
+- Last updated: 2026-07-27
 - Related notes:
   - `docs/physics/0102-airbox-mesh-grading-geometric.md`
   - `docs/physics/0103-rectangular-waveguide-edge-corner-mesh-refinement.md`
+  - `docs/physics/0106-fem-mixed-prism-pyramid-shared-domain.md`
 
 Production-readiness criteria for thin-film FEM meshing are defined in
 `docs/physics/0105-fem-meshing-production-acceptance.md`.
@@ -56,8 +57,9 @@ spatial discretization used for the same weak forms:
 - In the current shared-domain OCC implementation the realization remains
   tetrahedral. The method is a feature-aware thin-film tetrahedral preset, not a
   swept-prism airbox implementation.
-- A future swept/layered airbox can replace the realization while preserving the
-  same public intent.
+- The canonical future native mixed-P1 realization is specified in note 0106.
+  It preserves the same public intent but remains non-executable until its
+  topology, operator, transport, and managed-runtime gates pass.
 
 ## 3. Numerical interpretation
 
@@ -143,7 +145,8 @@ Poisson-airbox demag remain deferred to the airbox validation program.
 ## 7. Known limits and deferred work
 
 - The first implementation is a feature-aware tetrahedral preset.
-- A true layered airbox with explicit z-slab partitioning is deferred.
+- Native prism/pyramid/tet shared-domain execution is deferred under note 0106;
+  the checked-in Gmsh fixture proves topology feasibility only.
 - Very flat airboxes can still produce low-quality tetrahedra in isolated
   regions; the method reduces uncontrolled refinement but does not replace all
   geometry-quality work.

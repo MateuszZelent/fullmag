@@ -1,7 +1,8 @@
 # FEM Demag Poisson
 
 - Status: partial native FEM CPU module contract
-- Last updated: 2026-05-18
+- Last updated: 2026-07-27
+- Mixed-P1 target: `docs/physics/0106-fem-mixed-prism-pyramid-shared-domain.md`
 - Implementation:
   `backends/fem/cpu/mfem/interactions/demag_poisson.hpp/.cpp`,
   `demag_poisson_ready.hpp/.cpp`, `demag_poisson_lifecycle.hpp/.cpp`,
@@ -65,6 +66,13 @@ integrate energy with nodal lumped weights
 add optional Robin boundary correction
 ```
 
+The equations and signs above are topology-neutral, but the current executable
+mesh/ABI/operator path is tetrahedral. Native `prism6` magnetic plus
+`pyramid5`/`tet4` air assembly is a separate target contract in note 0106 and
+must remain unavailable until basis, quadrature, material masking, recovery,
+energy, CPU/GPU, and managed-runtime gates pass. P1 order alone is not evidence
+that a lane supports every first-order cell topology.
+
 The energy contract, RHS workspace/assembly, Robin/Dirichlet boundary operator
 policy, periodic reduced Poisson operator/solve, non-periodic Hypre solve,
 `H_demag` recovery, field/visual postprocessing, frozen-field cache policy,
@@ -82,6 +90,8 @@ still in `mfem_bridge.cpp`.
 ## Ograniczenia capability
 
 - Current production target: P1 native FEM CPU.
+- Current mixed-P1 status: non-executable target; unsupported requests reject
+  before backend startup and never split prisms silently.
 - Supported boundary modes in the extracted demag module are airbox Dirichlet
   and airbox Robin.
 - Periodic demag uses the extracted algebraic `P^T A P` reduction and lift

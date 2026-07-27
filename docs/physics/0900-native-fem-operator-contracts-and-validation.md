@@ -2,7 +2,7 @@
 
 - Status: canonical numerics standard
 - Owners: Fullmag core
-- Last updated: 2026-05-16
+- Last updated: 2026-07-27
 - Related ADRs:
   - `docs/adr/0014-native-fem-backend-modularization.md`
 - Related specs:
@@ -113,6 +113,14 @@ must state how it is converted to the solver's `gamma_mu0`.
 The current production target is low-order P1 FEM unless a feature-specific
 high-order contract says otherwise.
 
+Polynomial order and cell topology are independent capability dimensions. The
+current executable P1 path is tetrahedral. The native mixed-P1 target in
+`docs/physics/0106-fem-mixed-prism-pyramid-shared-domain.md` adds canonical
+`prism6`, `pyramid5`, `tet4`, `tri3`, and `quad4` contracts; it is not executable
+or validated merely because all cells are first order. Unsupported topology
+must reject before backend startup, without connectivity truncation or hidden
+prism-to-tet conversion.
+
 For each FEM operator, document:
 
 - FE space for input and output;
@@ -213,10 +221,11 @@ hot_loop_compute_d2h_bytes = 0
 hot_loop_compute_host_sync_count = 0
 ```
 
-Initial strict GPU scope is P1, double precision, non-periodic shared-domain
-airbox Poisson with Dirichlet/Robin boundary policy. `fe_order > 1`, periodic
-demag, and Fredkin-Koehler GPU demag must reject with an actionable diagnostic
-until their operator contracts and validation gates are written.
+Initial strict GPU scope is tetrahedral P1, double precision, non-periodic
+shared-domain airbox Poisson with Dirichlet/Robin boundary policy. Mixed-P1,
+`fe_order > 1`, periodic demag, and Fredkin-Koehler GPU demag must reject with
+an actionable diagnostic until their operator contracts and validation gates
+are implemented and passed.
 
 Poisson/airbox/Robin is an executable approximation to open-boundary
 magnetostatics. It is not a blanket proof of full-space demag accuracy. Release
@@ -282,6 +291,8 @@ qualification.
 - [ ] CPU and GPU lanes share physics semantics.
 - [ ] Hot paths have no avoidable heap allocation.
 - [ ] Capability matrix entries distinguish executable from validated.
+- [ ] Mixed-P1 lanes remain gated until topology-specific basis, quadrature,
+  Jacobian, masking, operator, ABI, artifact, and managed-runtime tests pass.
 - [ ] Runtime artifacts preserve operator telemetry and solver provenance.
 
 ## 13. Deferred Work

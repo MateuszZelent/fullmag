@@ -278,6 +278,39 @@ fasadami ABI i orkiestracji. Można je dzielić dla utrzymania kodu, ale ich naz
 i dokumentacja muszą nadal mówić, że implementacja natywnego FEM żyje w
 `backends/fem`.
 
+### 7.0.1 Docelowa topologia mieszana P1
+
+Kanoniczny kontrakt dla dokładnej warstwy cienkiej folii definiują
+`docs/physics/0106-fem-mixed-prism-pyramid-shared-domain.md` i ADR 0021.
+Docelowy wspólny mesh solvera używa `prism6` wyłącznie w magnetycznym Boxie,
+`pyramid5` w przejściu powietrznym, `tet4` w dalekim airboxie oraz
+`tri3 | quad4` na fasetach. `layers=1` oznacza dokładnie dwie magnetyczne
+płaszczyzny węzłów i nadal jest pełnym trójwymiarowym P1, nie modelem 2.5D.
+
+Własność pozostaje backends-first:
+
+- typowany import topologii, bazisy, kwadratura, Jacobiany, exchange, Poisson,
+  recovery, energia, relaksacja i certyfikat mesha należą do `backends/fem`;
+- runner posiada wyłącznie walidację planu przed startem, lowering typowanego
+  ABI, requested/resolved provenance, artefakty i wywołanie backendu;
+- CPU MFEM/hypre i GPU MFEM/libCEED/CUDA realizują jeden kontrakt znaków,
+  jednostek, markerów i ciągłości, ale mają osobne wykonania runtime;
+- strict nigdy nie wywołuje splittera prism-to-tet, nie zmienia mixed P1 na
+  free-tetrahedral i nie wykonuje ukrytego fallbacku GPU->CPU.
+
+Pierwszy cel kwalifikacji to jeden osiowy Box, P1, conforming shared-domain
+airbox, jednorodne `Ms/Aex`, exchange, jednorodny Zeeman, Poisson
+Robin/Dirichlet, double oraz PG-BB/NCG/overdamped LLG. FEM/BEM, PBC/Floquet,
+DMI/STT/thermal/magnetoelastic, regional projections, eigen/frequency-domain,
+DG0/material interfaces, order>1, arbitrary OCC, multi-body i multilayer
+pozostają fail-closed do osobnej kwalifikacji.
+
+Obecny stan to wyłącznie kontrakt dokumentacyjny i fixture wykonalności Gmsh
+4.15.2. Nie jest to `production_executable` ani `validated`. Implementacja
+wymaga wersjonowanego, zmiennego connectivity w ABI i artefaktach oraz FMMT v2
+z aktualizacją OpenAPI, serializera, klienta, dekodera i unified viewport;
+tetrahedralny FMMT v1 nie może maskować albo obcinać komórek mieszanych.
+
 ## 7.1 Architektura FEM Frequency-Domain I Eigenmodes
 
 Produkcyjne FEM frequency-domain obejmuje dwa różne produkty:
