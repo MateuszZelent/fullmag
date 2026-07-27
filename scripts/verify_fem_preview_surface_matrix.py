@@ -66,6 +66,9 @@ ENERGY_DENSITY_TO_SCALAR = {
     "eden_total": "E_total",
 }
 ENERGY_QUALIFICATION = os.environ.get("FULLMAG_TASK5_ENERGY_QUALIFICATION", "")
+PROFILE_PERSIST_ARTIFACT = os.environ.get(
+    "FULLMAG_MATRIX_PROFILE_PERSIST_ARTIFACT", "0"
+).strip().lower() in {"1", "true", "yes", "on"}
 FULL_CACHE_TERMINAL_QUANTITIES = (
     "m",
     "H_ex",
@@ -422,7 +425,7 @@ def enable_solver_profile(base: str, timeout_seconds: float) -> None:
                 "sample_interval_wall_ms": 0,
                 "max_samples": 256,
                 "emit_engine_log": False,
-                "persist_artifact": False,
+                "persist_artifact": PROFILE_PERSIST_ARTIFACT,
             },
             "reason": "fem_preview_surface_matrix_production_callback_proof",
             "requested_at_unix_ms": int(time.time() * 1000),
@@ -440,6 +443,7 @@ def enable_solver_profile(base: str, timeout_seconds: float) -> None:
             and isinstance(config, dict)
             and config.get("enabled") is True
             and config.get("sample_every") == 1
+            and config.get("persist_artifact") is PROFILE_PERSIST_ARTIFACT
         )
 
     poll("enabled production solver profiler", timeout_seconds, enabled)
@@ -729,6 +733,9 @@ def callback_profile_proof(base: str, mode: str) -> dict[str, Any]:
             wall_outliers[0]["total_ns"] if wall_outliers else None
         ),
         "callback_wall_outlier_details": wall_outliers,
+        "solver_profile_artifact_refs": profile.get("artifact_refs", []),
+        "solver_profile_overhead": profile.get("overhead"),
+        "solver_profile_persist_artifact": config.get("persist_artifact") is True,
         "worst_callback_detail": worst_callback_detail,
         "worst_submit_detail": worst_submit_detail,
     }

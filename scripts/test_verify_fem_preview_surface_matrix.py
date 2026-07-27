@@ -138,6 +138,27 @@ class FemPreviewSurfaceMatrixContractTests(unittest.TestCase):
         process.send_signal.assert_called_once_with(MATRIX.signal.SIGTERM)
         process.wait.assert_called_once_with(timeout=10.0)
 
+    def test_solver_profile_command_can_enable_artifact_persistence(self) -> None:
+        active_profile = {
+            "state": "active",
+            "config": {
+                "enabled": True,
+                "sample_every": 1,
+                "persist_artifact": True,
+            },
+        }
+        with (
+            mock.patch.object(MATRIX, "PROFILE_PERSIST_ARTIFACT", True),
+            mock.patch.object(
+                MATRIX, "post_json", return_value={"accepted": True}
+            ) as post_json,
+            mock.patch.object(MATRIX, "get_json", return_value=active_profile),
+        ):
+            MATRIX.enable_solver_profile("http://127.0.0.1:18197", 1.0)
+
+        payload = post_json.call_args.args[2]
+        self.assertTrue(payload["profile"]["persist_artifact"])
+
     def test_matrix_python_path_keeps_virtualenv_symlink_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             python_link = Path(temporary_dir) / "python"
