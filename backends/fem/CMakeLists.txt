@@ -945,6 +945,15 @@ target_include_directories(fem_demag_poisson_contract PRIVATE
 )
 add_test(NAME fem_demag_poisson_contract COMMAND fem_demag_poisson_contract)
 
+add_executable(
+    fem_demag_delta_potential_contract
+    tests/demag_delta_potential_contract.cpp
+)
+add_test(
+    NAME fem_demag_delta_potential_contract
+    COMMAND fem_demag_delta_potential_contract
+)
+
 add_executable(fem_demag_fem_bem_contract tests/demag_fem_bem_contract.cpp)
 target_link_libraries(fem_demag_fem_bem_contract PRIVATE fullmag_fem)
 if(FULLMAG_USE_MFEM_STACK)

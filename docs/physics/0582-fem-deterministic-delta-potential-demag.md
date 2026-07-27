@@ -430,10 +430,26 @@ baseline, or expose an experimental production selector to manufacture a pass.
 - [x] Research API and ProblemIR impact explicitly `none`
 - [x] Planner, runtime, provenance, OpenAPI, and workspace impact specified
 - [x] Manufactured, determinism, mesh, airbox, and performance gates specified
-- [ ] Research prototype implemented and RED/GREEN evidence captured
-- [ ] Managed qualification matrix executed
-- [ ] Promotion or no-go audit published
-- [ ] Production wiring (permitted only after every promotion gate passes)
+- [x] Research prototype implemented and RED/GREEN evidence captured
+- [x] Managed qualification matrix executed
+- [x] No-go audit published
+- [x] Production wiring omitted because the promotion gates did not all pass
+
+### 9.1 Qualification outcome
+
+The 2026-07-27 qualification decision is **no-go**. The paired GPU aggregate
+geometric-mean time-to-tolerance improvement was 15.36%, but NCG regressed in
+multiple mandatory per-case distributions: coarse p50 end-to-end, coarse p95
+demag apply, and fine p50/p95 end-to-end and demag apply. The experiment also
+added one demag solve per fine-mesh repeat. Correctness, accepted/rejected-step
+ownership, full residual, CPU/GPU parity, and strict GPU residency checks passed,
+but performance promotion requires every gate, not an aggregate-only win.
+
+The prototype, runtime selector, feature switches, telemetry, accepted-state
+buffers, and production-library CMake wiring were therefore removed. The
+standalone manufactured oracle/ownership fixture remains solely to reproduce
+the scientific decision. Exact distributions and artifact hashes are recorded
+in `docs/audits/2026-07-20-fem-delta-potential-demag-qualification.md`.
 
 ## 10. Known limits and deferred work
 
