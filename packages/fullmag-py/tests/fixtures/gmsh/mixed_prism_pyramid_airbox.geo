@@ -81,5 +81,6 @@ Physical Volume("film") = {film[1]};
 Physical Volume("air") = {401};
 Physical Surface("film_top_bottom") = {6, film[0]};
 Physical Surface("film_lateral") = {film[2], film[3], film[4], film[5]};
+Physical Surface("airbox_outer") = {211, 212, 213, 214, 215, 216};
 
 Mesh 3;

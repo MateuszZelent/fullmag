@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import sys
+import importlib
 from collections import Counter
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -54,7 +55,9 @@ def _faces(cells):
             yield tuple(sorted(nodes[index] for index in local_face)), (domain, element_tag)
 
 
-def test_gmsh_feasibility_freezes_mixed_p1_topology() -> None:
+def test_gmsh_feasibility_freezes_mixed_p1_topology(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     assert FIXTURE.is_file(), f"missing frozen Gmsh feasibility fixture: {FIXTURE}"
 
     gmsh = pytest.importorskip("gmsh")
@@ -63,8 +66,11 @@ def test_gmsh_feasibility_freezes_mixed_p1_topology() -> None:
         f"mixed-P1 fixture requires Gmsh 4.15.2; detected {version}"
     )
 
-    splitter_module = "fullmag.meshing._gmsh_swept"
-    assert splitter_module not in sys.modules
+    splitter_module = importlib.import_module("fullmag.meshing._gmsh_swept")
+    prism_splitter = Mock(
+        side_effect=AssertionError("feasibility fixture called production tet splitter")
+    )
+    monkeypatch.setattr(splitter_module, "_split_prism_to_tets", prism_splitter)
 
     gmsh.initialize()
     try:
@@ -134,10 +140,18 @@ def test_gmsh_feasibility_freezes_mixed_p1_topology() -> None:
                 entities=_physical_entities(gmsh, dim=2, name="film_lateral"),
             )
         )
+        airbox_outer = list(
+            _elements(
+                gmsh,
+                dim=2,
+                entities=_physical_entities(gmsh, dim=2, name="airbox_outer"),
+            )
+        )
         assert {face[0] for face in top_bottom} == {"Triangle 3"}, diagnostics
         assert {face[0] for face in lateral} == {"Quadrilateral 4"}, diagnostics
         film_boundary_faces = {tuple(sorted(face[2])) for face in top_bottom + lateral}
         film_lateral_faces = {tuple(sorted(face[2])) for face in lateral}
+        outer_airbox_faces = {tuple(sorted(face[2])) for face in airbox_outer}
 
         pyramid_bases = {
             tuple(
@@ -185,11 +199,14 @@ def test_gmsh_feasibility_freezes_mixed_p1_topology() -> None:
         assert all(face in face_owners for face in explicit_faces), (
             f"{diagnostics}; orphan explicit face detected"
         )
-        assert all(
-            face in explicit_faces
-            for face, owners in face_owners.items()
-            if len(owners) == 1
-        ), f"{diagnostics}; orphan volume-boundary face detected"
+        one_owner_faces = {
+            face for face, owners in face_owners.items() if len(owners) == 1
+        }
+        assert one_owner_faces == outer_airbox_faces, (
+            f"{diagnostics}; one-owner faces differ from named outer airbox; "
+            f"unexpected={one_owner_faces - outer_airbox_faces}; "
+            f"missing={outer_airbox_faces - one_owner_faces}"
+        )
 
         assert film_boundary_faces, f"{diagnostics}; missing film boundary facets"
         assert all(
@@ -197,6 +214,6 @@ def test_gmsh_feasibility_freezes_mixed_p1_topology() -> None:
             and {domain for domain, _ in face_owners[face]} == {"film", "air"}
             for face in film_boundary_faces
         ), f"{diagnostics}; film is not fully enclosed by conforming air"
-        assert splitter_module not in sys.modules
+        prism_splitter.assert_not_called()
     finally:
         gmsh.finalize()
