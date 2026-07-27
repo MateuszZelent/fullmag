@@ -136,7 +136,7 @@ def build_exchange_study(*, label: str, hmax: float):
     study.build_domain_mesh()
     study.exchange(enabled=True)
     study.demag(enabled=False)
-    study.solver(max_error=1e-8, integrator="rk45")
+    study.solver(max_error=1e-8, integrator="rk45", dt_max=DT)
     study.save("E_ex", every=1.0)
     return study, body
 
