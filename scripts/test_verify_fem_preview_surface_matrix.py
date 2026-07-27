@@ -87,6 +87,57 @@ class FemPreviewSurfaceMatrixContractTests(unittest.TestCase):
         self.assertNotIn("clock-retry", source)
         self.assertNotIn("is_startup_clock_regression", source)
 
+    def test_api_batches_bound_each_lifecycle_to_one_variant(self) -> None:
+        batches = list(
+            MATRIX.matrix_api_batches(
+                modes=("disabled", "m"),
+                cadences=(10, 25),
+                surfaces=("headless", "control_room"),
+                repeats=5,
+            )
+        )
+
+        self.assertEqual(len(batches), 8)
+        self.assertTrue(all(len(batch) == 6 for batch in batches))
+        for batch in batches:
+            variants = {(mode, cadence, surface) for mode, cadence, surface, _ in batch}
+            self.assertEqual(len(variants), 1)
+            self.assertEqual([repeat for *_, repeat in batch], list(range(6)))
+
+    def test_browser_cleanup_reaps_after_forced_kill(self) -> None:
+        process = mock.Mock()
+        process.wait.side_effect = [subprocess.TimeoutExpired("browser", 10), 0]
+
+        MATRIX.stop_browser_process(process)
+
+        process.terminate.assert_called_once_with()
+        process.kill.assert_called_once_with()
+        self.assertEqual(process.wait.call_count, 2)
+
+    def test_api_lifecycle_waits_for_readiness_and_reaps(self) -> None:
+        process = mock.Mock()
+        process.poll.return_value = None
+        process.wait.return_value = 0
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            log_path = Path(temporary_dir) / "api.log"
+            with (
+                mock.patch.object(MATRIX.subprocess, "Popen", return_value=process),
+                mock.patch.object(MATRIX, "wait_api") as wait_api,
+                MATRIX.api_lifecycle(
+                    api_base="http://127.0.0.1:18197",
+                    api_env={},
+                    api_log_path=log_path,
+                    label="m-c10-control_room",
+                    timeout_seconds=30.0,
+                ),
+            ):
+                wait_api.assert_called_once_with(
+                    "http://127.0.0.1:18197", process, 30.0
+                )
+
+        process.send_signal.assert_called_once_with(MATRIX.signal.SIGTERM)
+        process.wait.assert_called_once_with(timeout=10.0)
+
     def test_matrix_python_path_keeps_virtualenv_symlink_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             python_link = Path(temporary_dir) / "python"
