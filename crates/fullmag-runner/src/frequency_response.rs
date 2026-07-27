@@ -1764,7 +1764,7 @@ fn try_execute_fem_frequency_response_native_production_cpu(
             "[fullmag-runner] frequency-response payload: building requested_gpu={} nodes={} elements={} magnetic_bc={:?} magnetostatic_bc={:?}",
             requested_gpu,
             plan.mesh.nodes.len(),
-            plan.mesh.elements.len(),
+            plan.mesh.cell_count(),
             frequency_response_effective_spin_wave_bc_kind(plan),
             plan.magnetostatic_bc
         );
@@ -2307,7 +2307,7 @@ impl NativeBackendDemagTangentProvider {
             eprintln!(
                 "[fullmag-runner] frequency-response demag tangent provider: creating backend nodes={} elements={} demag={} exchange={} periodic_node_pairs={} source_exchange={} source_periodic_node_pairs={}",
                 plan.mesh.nodes.len(),
-                plan.mesh.elements.len(),
+                plan.mesh.cell_count(),
                 plan.enable_demag,
                 backend_plan.enable_exchange,
                 backend_plan.mesh.periodic_node_pairs.len(),
@@ -4309,7 +4309,7 @@ fn build_dmi_payload(
     }
     if plan.mesh.nodes.len() != plan.equilibrium_magnetization.len()
         || plan.mesh.nodes.len() != node_index_map.len()
-        || plan.mesh.elements.is_empty()
+        || plan.mesh.cells.is_empty()
     {
         return None;
     }
@@ -4337,7 +4337,7 @@ fn build_dmi_payload(
         None => None,
     };
     if !plan.mesh.element_markers.is_empty()
-        && plan.mesh.element_markers.len() != plan.mesh.elements.len()
+        && plan.mesh.element_markers.len() != plan.mesh.cell_count()
     {
         return None;
     }
@@ -4353,7 +4353,8 @@ fn build_dmi_payload(
     let mut lumped_mass = vec![0.0; node_count];
     let mut elements = Vec::new();
 
-    for (element_index, element) in plan.mesh.elements.iter().enumerate() {
+    let elements = plan.mesh.require_tet4_elements().ok()?;
+    for (element_index, element) in elements.iter().enumerate() {
         if plan
             .mesh
             .element_markers
@@ -4517,12 +4518,13 @@ fn build_exchange_edges(
         return None;
     }
     if !plan.mesh.element_markers.is_empty()
-        && plan.mesh.element_markers.len() != plan.mesh.elements.len()
+        && plan.mesh.element_markers.len() != plan.mesh.cell_count()
     {
         return None;
     }
     let mut pairs = std::collections::BTreeSet::<(usize, usize)>::new();
-    for (element_index, element) in plan.mesh.elements.iter().enumerate() {
+    let elements = plan.mesh.require_tet4_elements().ok()?;
+    for (element_index, element) in elements.iter().enumerate() {
         if plan
             .mesh
             .element_markers
@@ -5842,7 +5844,7 @@ mod tests {
         plan.enable_exchange = true;
         plan.mesh.nodes.push([1.0, 1.0, 0.0]);
         plan.mesh.nodes.push([2.0, 1.0, 0.0]);
-        plan.mesh.elements = vec![[0, 1, 2, 3]];
+        plan.mesh.set_tet4_cells(vec![[0, 1, 2, 3]]);
         plan.equilibrium_magnetization.push([1.0, 0.0, 0.0]);
         plan.equilibrium_magnetization.push([0.0, 0.0, 0.0]);
         plan.object_segments = vec![
@@ -5984,9 +5986,9 @@ mod tests {
             mesh: fullmag_ir::MeshIR {
                 mesh_name: "unit".to_string(),
                 nodes: vec![[0.0, 0.0, 0.0]],
-                elements: Vec::new(),
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(Vec::new()),
                 element_markers: Vec::new(),
-                boundary_faces: Vec::new(),
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
                 boundary_markers: Vec::new(),
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -6572,7 +6574,7 @@ mod tests {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ];
-        supported.mesh.elements = vec![[0, 1, 2, 3]];
+        supported.mesh.set_tet4_cells(vec![[0, 1, 2, 3]]);
         supported.equilibrium_magnetization = vec![[0.0, 0.0, 1.0]; 4];
         assert!(super::production_gpu_frequency_response_rejection_reason(&supported).is_none());
         #[cfg(feature = "fem-gpu")]
@@ -6592,7 +6594,9 @@ mod tests {
             [0.0, 0.0, -1.0],
             [1.0, 0.0, -1.0],
         ];
-        shared_domain_static_periodic.mesh.elements = vec![[0, 1, 2, 3], [0, 1, 4, 5]];
+        shared_domain_static_periodic
+            .mesh
+            .set_tet4_cells(vec![[0, 1, 2, 3], [0, 1, 4, 5]]);
         shared_domain_static_periodic.mesh.element_markers = vec![1, 0];
         shared_domain_static_periodic.equilibrium_magnetization = vec![
             [0.0, 0.0, 1.0],
@@ -6865,7 +6869,9 @@ mod tests {
                 [1.0, 0.0, 1.0],
                 [1.0, 1.0, 1.0],
             ];
-            floquet_boundary_exchange.mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7]];
+            floquet_boundary_exchange
+                .mesh
+                .set_tet4_cells(vec![[0, 1, 2, 3], [4, 5, 6, 7]]);
             floquet_boundary_exchange.equilibrium_magnetization = vec![[0.0, 0.0, 1.0]; 8];
             floquet_boundary_exchange.mesh.periodic_node_pairs =
                 vec![fullmag_ir::MeshPeriodicNodePairIR {
@@ -6900,7 +6906,9 @@ mod tests {
                 [1.0, 1.0, 0.0],
             ];
             periodic_airbox_exchange.equilibrium_magnetization = vec![[1.0, 0.0, 0.0]; 5];
-            periodic_airbox_exchange.mesh.elements = vec![[0, 1, 2, 3], [0, 1, 2, 4]];
+            periodic_airbox_exchange
+                .mesh
+                .set_tet4_cells(vec![[0, 1, 2, 3], [0, 1, 2, 4]]);
             periodic_airbox_exchange.mesh.element_markers = vec![1, 0];
 
             let payload = super::build_native_production_cpu_payload(&periodic_airbox_exchange)
@@ -7069,7 +7077,7 @@ mod tests {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ];
-        plan.mesh.elements = vec![[0, 1, 2, 3]];
+        plan.mesh.set_tet4_cells(vec![[0, 1, 2, 3]]);
         plan.equilibrium_magnetization = vec![[0.0, 0.0, 1.0]; 4];
         plan.external_field = None;
 
@@ -7088,7 +7096,7 @@ mod tests {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ];
-        plan.mesh.elements = vec![[0, 1, 2, 3]];
+        plan.mesh.set_tet4_cells(vec![[0, 1, 2, 3]]);
         plan.mesh.element_markers = vec![1];
         plan.equilibrium_magnetization = vec![[0.0, 0.0, 1.0]; 4];
         plan.excitation.field_au_per_m = [1.0, 0.5, 0.0];
@@ -7136,7 +7144,7 @@ mod tests {
             [3.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ];
-        plan.mesh.elements = vec![[0, 2, 3, 5], [1, 2, 4, 5]];
+        plan.mesh.set_tet4_cells(vec![[0, 2, 3, 5], [1, 2, 4, 5]]);
         plan.mesh.element_markers = vec![1, 0];
         plan.equilibrium_magnetization = vec![
             [0.0, 0.0, 1.0],

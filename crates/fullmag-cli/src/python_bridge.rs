@@ -217,40 +217,186 @@ pub(crate) struct RemeshQualityDataArtifactRef {
     pub metrics: Vec<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub(crate) struct RemeshCliResponse {
     pub mesh_name: String,
     pub nodes: Vec<[f64; 3]>,
-    pub elements: Vec<[u32; 4]>,
+    pub cells: fullmag_ir::FemConnectivityIR,
     pub element_markers: Vec<u32>,
-    pub boundary_faces: Vec<[u32; 3]>,
+    pub facets: fullmag_ir::FemFacetConnectivityIR,
     pub boundary_markers: Vec<u32>,
-    #[serde(default)]
     pub periodic_boundary_pairs: Vec<fullmag_ir::MeshPeriodicBoundaryPairIR>,
-    #[serde(default)]
     pub periodic_node_pairs: Vec<fullmag_ir::MeshPeriodicNodePairIR>,
-    #[serde(default)]
     pub periodic_mesh_certificate: Option<serde_json::Value>,
     pub quality: Option<RemeshQualitySummary>,
-    #[serde(default)]
     pub generation_mode: Option<String>,
-    #[serde(default)]
     pub mesh_provenance: Option<serde_json::Value>,
-    #[serde(default)]
     pub mesh_statistics: Option<serde_json::Value>,
-    #[serde(default)]
     pub size_field_stats: Option<serde_json::Value>,
-    #[serde(default)]
     pub region_markers: Vec<fullmag_ir::FemDomainRegionMarkerIR>,
-    #[serde(default)]
     pub object_region_markers: Vec<fullmag_ir::FemDomainRegionMarkerIR>,
     /// Per-domain element quality, keyed by domain marker string (from Python).
-    #[serde(default)]
     pub per_domain_quality: HashMap<String, RemeshPerDomainQuality>,
-    #[serde(default)]
     pub quality_data_artifact: Option<RemeshQualityDataArtifactRef>,
+    topology_artifact: Option<RemeshTopologyArtifactRef>,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+struct RemeshTopologyWire {
+    #[serde(default)]
+    cell_types: Option<Vec<fullmag_ir::FemCellTypeIR>>,
+    #[serde(default)]
+    cell_offsets: Option<Vec<u32>>,
+    #[serde(default)]
+    cell_nodes: Option<Vec<u32>>,
+    #[serde(default)]
+    facet_types: Option<Vec<fullmag_ir::FemFacetTypeIR>>,
+    #[serde(default)]
+    facet_roles: Option<Vec<fullmag_ir::FemFacetRoleIR>>,
+    #[serde(default)]
+    facet_offsets: Option<Vec<u32>>,
+    #[serde(default)]
+    facet_nodes: Option<Vec<u32>>,
+    #[serde(default)]
+    elements: Option<Vec<[u32; 4]>>,
+    #[serde(default)]
+    boundary_faces: Option<Vec<[u32; 3]>>,
+}
+
+impl RemeshTopologyWire {
+    fn normalize(
+        self,
+    ) -> std::result::Result<
+        (
+            fullmag_ir::FemConnectivityIR,
+            fullmag_ir::FemFacetConnectivityIR,
+        ),
+        String,
+    > {
+        let has_v2 = self.cell_types.is_some()
+            || self.cell_offsets.is_some()
+            || self.cell_nodes.is_some()
+            || self.facet_types.is_some()
+            || self.facet_roles.is_some()
+            || self.facet_offsets.is_some()
+            || self.facet_nodes.is_some();
+        let has_legacy = self.elements.is_some() || self.boundary_faces.is_some();
+        if has_v2 && has_legacy {
+            return Err("remesh payload contains both legacy and v2 topology".to_string());
+        }
+        if has_v2 {
+            return Ok((
+                fullmag_ir::FemConnectivityIR {
+                    types: self
+                        .cell_types
+                        .ok_or_else(|| "v2 remesh topology requires cell_types".to_string())?,
+                    offsets: self
+                        .cell_offsets
+                        .ok_or_else(|| "v2 remesh topology requires cell_offsets".to_string())?,
+                    nodes: self
+                        .cell_nodes
+                        .ok_or_else(|| "v2 remesh topology requires cell_nodes".to_string())?,
+                },
+                fullmag_ir::FemFacetConnectivityIR {
+                    types: self
+                        .facet_types
+                        .ok_or_else(|| "v2 remesh topology requires facet_types".to_string())?,
+                    roles: self
+                        .facet_roles
+                        .ok_or_else(|| "v2 remesh topology requires facet_roles".to_string())?,
+                    offsets: self
+                        .facet_offsets
+                        .ok_or_else(|| "v2 remesh topology requires facet_offsets".to_string())?,
+                    nodes: self
+                        .facet_nodes
+                        .ok_or_else(|| "v2 remesh topology requires facet_nodes".to_string())?,
+                },
+            ));
+        }
+        if has_legacy {
+            return Ok((
+                fullmag_ir::FemConnectivityIR::from_tet4(
+                    self.elements
+                        .ok_or_else(|| "legacy remesh topology requires elements".to_string())?,
+                ),
+                fullmag_ir::FemFacetConnectivityIR::from_tri3(
+                    self.boundary_faces.ok_or_else(|| {
+                        "legacy remesh topology requires boundary_faces".to_string()
+                    })?,
+                ),
+            ));
+        }
+        Err("remesh payload must provide either v2 or legacy topology".to_string())
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RemeshCliResponseWire {
+    mesh_name: String,
+    nodes: Vec<[f64; 3]>,
+    #[serde(flatten)]
+    topology: RemeshTopologyWire,
+    element_markers: Vec<u32>,
+    boundary_markers: Vec<u32>,
+    #[serde(default)]
+    periodic_boundary_pairs: Vec<fullmag_ir::MeshPeriodicBoundaryPairIR>,
+    #[serde(default)]
+    periodic_node_pairs: Vec<fullmag_ir::MeshPeriodicNodePairIR>,
+    #[serde(default)]
+    periodic_mesh_certificate: Option<serde_json::Value>,
+    quality: Option<RemeshQualitySummary>,
+    #[serde(default)]
+    generation_mode: Option<String>,
+    #[serde(default)]
+    mesh_provenance: Option<serde_json::Value>,
+    #[serde(default)]
+    mesh_statistics: Option<serde_json::Value>,
+    #[serde(default)]
+    size_field_stats: Option<serde_json::Value>,
+    #[serde(default)]
+    region_markers: Vec<fullmag_ir::FemDomainRegionMarkerIR>,
+    #[serde(default)]
+    object_region_markers: Vec<fullmag_ir::FemDomainRegionMarkerIR>,
+    #[serde(default)]
+    per_domain_quality: HashMap<String, RemeshPerDomainQuality>,
+    #[serde(default)]
+    quality_data_artifact: Option<RemeshQualityDataArtifactRef>,
     #[serde(default)]
     topology_artifact: Option<RemeshTopologyArtifactRef>,
+}
+
+impl<'de> serde::Deserialize<'de> for RemeshCliResponse {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = RemeshCliResponseWire::deserialize(deserializer)?;
+        let (cells, facets) = wire
+            .topology
+            .normalize()
+            .map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            mesh_name: wire.mesh_name,
+            nodes: wire.nodes,
+            cells,
+            element_markers: wire.element_markers,
+            facets,
+            boundary_markers: wire.boundary_markers,
+            periodic_boundary_pairs: wire.periodic_boundary_pairs,
+            periodic_node_pairs: wire.periodic_node_pairs,
+            periodic_mesh_certificate: wire.periodic_mesh_certificate,
+            quality: wire.quality,
+            generation_mode: wire.generation_mode,
+            mesh_provenance: wire.mesh_provenance,
+            mesh_statistics: wire.mesh_statistics,
+            size_field_stats: wire.size_field_stats,
+            region_markers: wire.region_markers,
+            object_region_markers: wire.object_region_markers,
+            per_domain_quality: wire.per_domain_quality,
+            quality_data_artifact: wire.quality_data_artifact,
+            topology_artifact: wire.topology_artifact,
+        })
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -261,9 +407,9 @@ struct RemeshTopologyArtifactRef {
 #[derive(Debug, Clone, serde::Deserialize)]
 struct RemeshTopologyArtifactPayload {
     nodes: Vec<[f64; 3]>,
-    elements: Vec<[u32; 4]>,
+    #[serde(flatten)]
+    topology: RemeshTopologyWire,
     element_markers: Vec<u32>,
-    boundary_faces: Vec<[u32; 3]>,
     boundary_markers: Vec<u32>,
     #[serde(default)]
     periodic_boundary_pairs: Vec<fullmag_ir::MeshPeriodicBoundaryPairIR>,
@@ -291,10 +437,11 @@ impl RemeshCliResponse {
                     artifact.path.display()
                 )
             })?;
+        let (cells, facets) = topology.topology.normalize().map_err(anyhow::Error::msg)?;
         self.nodes = topology.nodes;
-        self.elements = topology.elements;
+        self.cells = cells;
         self.element_markers = topology.element_markers;
-        self.boundary_faces = topology.boundary_faces;
+        self.facets = facets;
         self.boundary_markers = topology.boundary_markers;
         self.periodic_boundary_pairs = topology.periodic_boundary_pairs;
         self.periodic_node_pairs = topology.periodic_node_pairs;
@@ -323,9 +470,9 @@ impl RemeshCliResponse {
         fullmag_ir::MeshIR {
             mesh_name: self.mesh_name,
             nodes: self.nodes,
-            elements: self.elements,
+            cells: self.cells,
             element_markers: self.element_markers,
-            boundary_faces: self.boundary_faces,
+            facets: self.facets,
             boundary_markers: self.boundary_markers,
             periodic_boundary_pairs: self.periodic_boundary_pairs,
             periodic_node_pairs: self.periodic_node_pairs,
@@ -464,9 +611,9 @@ fn parse_fem_surface_preview_mesh(
         mesh_name,
         mesh_id,
         nodes: preview.nodes,
-        elements: preview.elements,
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(preview.elements),
         element_markers,
-        boundary_faces: preview.boundary_faces,
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(preview.boundary_faces),
         boundary_markers,
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -1225,8 +1372,8 @@ mod tests {
             } => {
                 assert_eq!(geometry_name, "nanoflower");
                 assert_eq!(fem_mesh.nodes.len(), 3);
-                assert_eq!(fem_mesh.boundary_faces.len(), 1);
-                assert!(fem_mesh.elements.is_empty());
+                assert_eq!(fem_mesh.facet_count(), 1);
+                assert!(fem_mesh.cells.is_empty());
                 assert_eq!(message.as_deref(), Some("Surface preview ready"));
             }
             other => panic!("expected fem surface preview event, got {:?}", other),
@@ -1505,9 +1652,9 @@ mod tests {
         let parsed = parse_remesh_cli_response(stdout.as_bytes(), "test remesh output").unwrap();
 
         assert_eq!(parsed.nodes.len(), 4);
-        assert_eq!(parsed.elements, vec![[0, 1, 2, 3]]);
+        assert_eq!(parsed.cells.require_tet4().unwrap(), vec![[0, 1, 2, 3]]);
         assert_eq!(parsed.element_markers, vec![7]);
-        assert_eq!(parsed.boundary_faces, vec![[0, 1, 2]]);
+        assert_eq!(parsed.facets.require_tri3().unwrap(), vec![[0, 1, 2]]);
         assert_eq!(parsed.boundary_markers, vec![11]);
         assert_eq!(
             parsed
@@ -1517,6 +1664,58 @@ mod tests {
             Some(&serde_json::json!("sha256:test"))
         );
         let _ = std::fs::remove_file(artifact_path);
+    }
+
+    #[test]
+    fn parse_remesh_cli_response_accepts_v2_mixed_topology_and_rejects_dual_encoding() {
+        let mut payload = serde_json::json!({
+            "mesh_name": "mixed_mesh",
+            "nodes": [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [1.0, 1.0, 0.0],
+                [1.0, 0.0, 1.0],
+                [0.0, 1.0, 1.0],
+                [1.0, 1.0, 1.0]
+            ],
+            "cell_types": ["tet4", "prism6"],
+            "cell_offsets": [0, 4, 10],
+            "cell_nodes": [0, 1, 2, 3, 0, 1, 2, 4, 5, 6],
+            "element_markers": [1, 2],
+            "facet_types": ["tri3", "quad4"],
+            "facet_roles": ["exterior", "material_interface"],
+            "facet_offsets": [0, 3, 7],
+            "facet_nodes": [0, 1, 2, 0, 1, 5, 4],
+            "boundary_markers": [7, 8],
+            "quality": null
+        });
+        let parsed =
+            parse_remesh_cli_response(payload.to_string().as_bytes(), "mixed remesh output")
+                .unwrap();
+        assert_eq!(
+            parsed.cells.types,
+            vec![
+                fullmag_ir::FemCellTypeIR::Tet4,
+                fullmag_ir::FemCellTypeIR::Prism6
+            ]
+        );
+        assert_eq!(
+            parsed.facets.types,
+            vec![
+                fullmag_ir::FemFacetTypeIR::Tri3,
+                fullmag_ir::FemFacetTypeIR::Quad4
+            ]
+        );
+
+        payload
+            .as_object_mut()
+            .unwrap()
+            .insert("elements".to_string(), serde_json::json!([[0, 1, 2, 3]]));
+        let error = parse_remesh_cli_response(payload.to_string().as_bytes(), "dual remesh output")
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("both legacy and v2 topology"));
     }
 
     #[test]

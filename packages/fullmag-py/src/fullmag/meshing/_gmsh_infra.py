@@ -79,10 +79,20 @@ def _scale_mesh_nodes(mesh: MeshData, scale_xyz: NDArray[np.float64]) -> MeshDat
         return mesh
     return MeshData(
         nodes=np.asarray(mesh.nodes, dtype=np.float64) * scale_xyz.reshape(1, 3),
-        elements=mesh.elements,
+        cell_types=mesh.cell_types,
+        cell_offsets=mesh.cell_offsets,
+        cell_nodes=mesh.cell_nodes,
         element_markers=mesh.element_markers,
-        boundary_faces=mesh.boundary_faces,
+        facet_types=mesh.facet_types,
+        facet_roles=mesh.facet_roles,
+        facet_offsets=mesh.facet_offsets,
+        facet_nodes=mesh.facet_nodes,
         boundary_markers=mesh.boundary_markers,
+        periodic_boundary_pairs=mesh.periodic_boundary_pairs,
+        periodic_node_pairs=mesh.periodic_node_pairs,
+        periodic_mesh_certificate=mesh.periodic_mesh_certificate,
+        quality=mesh.quality,
+        per_domain_quality=mesh.per_domain_quality,
     )
 
 
@@ -273,4 +283,3 @@ class _GmshProgressLogger:
                 emitted_any = True
                 self._last_emit_at = time.monotonic()
         return emitted_any
-

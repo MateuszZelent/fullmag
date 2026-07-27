@@ -342,7 +342,7 @@ def generate_mesh(
                 ox, oy, oz = offset
                 if ox != 0.0 or oy != 0.0 or oz != 0.0:
                     shift = np.array([ox, oy, oz], dtype=np.float64)
-                    mesh = MeshData(
+                    mesh = MeshData.from_legacy_tet4(
                         nodes=mesh.nodes + shift,
                         elements=mesh.elements,
                         element_markers=mesh.element_markers,
@@ -417,7 +417,7 @@ def generate_box_mesh(
         emit_progress(
             f"Gmsh: mesh ready — {mesh.n_nodes} nodes, {mesh.n_elements} elements, {mesh.n_boundary_faces} boundary faces"
         )
-        return MeshData(
+        return MeshData.from_legacy_tet4(
             nodes=mesh.nodes / SCALE,
             elements=mesh.elements,
             element_markers=mesh.element_markers,
@@ -482,7 +482,7 @@ def generate_cylinder_mesh(
         emit_progress(
             f"Gmsh: mesh ready — {mesh.n_nodes} nodes, {mesh.n_elements} elements, {mesh.n_boundary_faces} boundary faces"
         )
-        return MeshData(
+        return MeshData.from_legacy_tet4(
             nodes=mesh.nodes / SCALE,
             elements=mesh.elements,
             element_markers=mesh.element_markers,
@@ -547,7 +547,7 @@ def generate_difference_mesh(
             f"Gmsh: mesh ready — {mesh.n_nodes} nodes, {mesh.n_elements} elements, {mesh.n_boundary_faces} boundary faces"
         )
         # Scale nodes back to SI metres
-        return MeshData(
+        return MeshData.from_legacy_tet4(
             nodes=mesh.nodes / SCALE,
             elements=mesh.elements,
             element_markers=mesh.element_markers,
@@ -650,7 +650,7 @@ def _generate_csg_mesh(
         emit_progress(
             f"Gmsh: mesh ready — {mesh.n_nodes} nodes, {mesh.n_elements} elements, {mesh.n_boundary_faces} boundary faces"
         )
-        return MeshData(
+        return MeshData.from_legacy_tet4(
             nodes=mesh.nodes / SCALE,
             elements=mesh.elements,
             element_markers=mesh.element_markers,

@@ -269,7 +269,7 @@ fn infer_native_runtime_element_markers(
         return Ok(None);
     }
 
-    let element_count = plan.mesh.elements.len();
+    let element_count = plan.mesh.cell_count();
     if element_count == 0 {
         return Ok(Some(Vec::new()));
     }
@@ -1090,12 +1090,17 @@ fn project_element_scalars_to_nodes(
     mesh: &fullmag_ir::MeshIR,
     element_values: &[f64],
 ) -> Result<Vec<f64>, RunError> {
-    if element_values.len() != mesh.elements.len() {
+    let elements = mesh.require_tet4_elements().map_err(|error| RunError {
+        message: format!(
+            "native FEM DG0 projection requires tet4 cells; mixed-cell execution is unavailable: {error}"
+        ),
+    })?;
+    if element_values.len() != elements.len() {
         return Err(RunError {
             message: format!(
                 "native FEM DG0 projection received {} coefficients for {} elements",
                 element_values.len(),
-                mesh.elements.len()
+                elements.len()
             ),
         });
     }
@@ -1103,7 +1108,7 @@ fn project_element_scalars_to_nodes(
         && mesh.element_markers.iter().any(|marker| *marker != 0);
     let mut weighted_values = vec![0.0; mesh.nodes.len()];
     let mut lumped_volumes = vec![0.0; mesh.nodes.len()];
-    for (element_index, (element, value)) in mesh.elements.iter().zip(element_values).enumerate() {
+    for (element_index, (element, value)) in elements.iter().zip(element_values).enumerate() {
         if mixed_air_domain
             && mesh
                 .element_markers
@@ -1581,13 +1586,26 @@ impl NativeFemBackend {
                 message: single_precision_rejection(plan).to_string(),
             });
         }
+        let elements = plan.mesh.require_tet4_elements().map_err(|error| RunError {
+            message: format!(
+                "native FEM runtime requires tet4 cells; mixed-cell execution is unavailable: {error}"
+            ),
+        })?;
+        let boundary_faces =
+            plan.mesh
+                .require_tri3_boundary_faces()
+                .map_err(|error| RunError {
+                    message: format!(
+                        "native FEM runtime requires tri3 facets; mixed-facet execution is unavailable: {error}"
+                    ),
+                })?;
         let saturation_magnetisation_by_node = resolved_saturation_magnetisation_by_node(plan)?;
         let dg0_energy_projection =
             if plan.enable_exchange && plan.use_consistent_mass == Some(true) {
                 plan.ms_element_field.as_ref().map(|values| {
                     Arc::new(Dg0EnergyProjection {
                         nodes: plan.mesh.nodes.clone().into(),
-                        elements: plan.mesh.elements.clone().into(),
+                        elements: elements.clone().into(),
                         magnetic_elements: plan
                             .mesh
                             .element_markers
@@ -1608,15 +1626,8 @@ impl NativeFemBackend {
             .iter()
             .flat_map(|v| v.iter().copied())
             .collect();
-        let elements_flat: Vec<u32> = plan
-            .mesh
-            .elements
-            .iter()
-            .flat_map(|v| v.iter().copied())
-            .collect();
-        let boundary_flat: Vec<u32> = plan
-            .mesh
-            .boundary_faces
+        let elements_flat: Vec<u32> = elements.iter().flat_map(|v| v.iter().copied()).collect();
+        let boundary_flat: Vec<u32> = boundary_faces
             .iter()
             .flat_map(|v| v.iter().copied())
             .collect();
@@ -1649,10 +1660,10 @@ impl NativeFemBackend {
             nodes_xyz: nodes_flat.as_ptr(),
             n_nodes: plan.mesh.nodes.len() as u32,
             elements: elements_flat.as_ptr(),
-            n_elements: plan.mesh.elements.len() as u32,
+            n_elements: elements.len() as u32,
             element_markers: optional_slice_ptr(&plan.mesh.element_markers),
             boundary_faces: optional_slice_ptr(&boundary_flat),
-            n_boundary_faces: plan.mesh.boundary_faces.len() as u32,
+            n_boundary_faces: boundary_faces.len() as u32,
             boundary_markers: optional_slice_ptr(&plan.mesh.boundary_markers),
             periodic_node_pairs: optional_slice_ptr(&periodic_pairs_flat),
             n_periodic_node_pairs: plan.mesh.periodic_node_pairs.len() as u32,
@@ -3945,9 +3956,9 @@ mod task5_energy_density_tests {
                 [0.0, 0.0, 1.0],
                 [0.0, 0.0, 2.0],
             ],
-            elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 1, 2, 4]]),
             element_markers: vec![1, 2],
-            boundary_faces: Vec::new(),
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
             boundary_markers: Vec::new(),
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -4301,7 +4312,7 @@ mod tests {
     #[test]
     fn native_fem_rejects_corrupt_mesh_before_ffi_packaging() {
         let mut plan = make_test_plan();
-        plan.mesh.elements = vec![[0, 1, 3, 2]];
+        plan.mesh.set_tet4_cells(vec![[0, 1, 3, 2]]);
 
         let error = match NativeFemBackend::create_with_initial_effective_field(&plan, false) {
             Ok(_) => panic!("inverted mesh must fail before native ABI packaging"),
@@ -4383,9 +4394,9 @@ mod tests {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -4582,7 +4593,7 @@ mod tests {
         let mut plan = make_test_plan();
         plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
         plan.mesh.nodes.push([2.0, 0.0, 0.0]);
-        plan.mesh.elements = vec![[0, 1, 2, 3], [1, 2, 3, 4]];
+        plan.mesh.set_tet4_cells(vec![[0, 1, 2, 3], [1, 2, 3, 4]]);
         plan.mesh.element_markers.clear();
         plan.object_segments.clear();
         plan.mesh_parts = vec![
@@ -4640,7 +4651,8 @@ mod tests {
         let mut plan = make_test_plan();
         plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
         plan.mesh.nodes.push([2.0, 0.0, 0.0]);
-        plan.mesh.elements = vec![[0, 1, 2, 3], [0, 1, 2, 4], [1, 2, 3, 4]];
+        plan.mesh
+            .set_tet4_cells(vec![[0, 1, 2, 3], [0, 1, 2, 4], [1, 2, 3, 4]]);
         plan.mesh.element_markers = vec![1, 2, 0];
         plan.object_segments = vec![
             FemObjectSegmentIR {
@@ -4685,7 +4697,8 @@ mod tests {
     #[test]
     fn native_runtime_markers_reject_unexplained_multiple_nonzero_markers() {
         let mut plan = make_test_plan();
-        plan.mesh.elements = vec![[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]];
+        plan.mesh
+            .set_tet4_cells(vec![[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]]);
         plan.mesh.element_markers = vec![1, 2, 0];
         plan.object_segments.clear();
         plan.mesh_parts.clear();
@@ -4700,7 +4713,8 @@ mod tests {
     #[test]
     fn native_runtime_markers_reject_region_materials_missing_mesh_marker() {
         let mut plan = make_test_plan();
-        plan.mesh.elements = vec![[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]];
+        plan.mesh
+            .set_tet4_cells(vec![[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]]);
         plan.mesh.element_markers = vec![1, 2, 0];
         plan.region_materials = vec![fullmag_ir::FemRegionMaterialIR {
             object_id: "film".to_string(),
@@ -5382,7 +5396,8 @@ mod tests {
         plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler);
         plan.air_box_config = None;
         plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh;
-        plan.mesh.boundary_faces = vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]];
+        plan.mesh
+            .set_tri3_facets(vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]]);
         plan.mesh.boundary_markers = vec![1, 1, 1, 1];
         plan.relaxation = Some(RelaxationControlIR {
             algorithm: RelaxationAlgorithmIR::TangentPlaneImplicit,
@@ -5619,7 +5634,8 @@ mod tests {
         plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler);
         plan.air_box_config = None;
         plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh;
-        plan.mesh.boundary_faces = vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]];
+        plan.mesh
+            .set_tri3_facets(vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]]);
         plan.mesh.boundary_markers = vec![1, 1, 1, 1];
 
         if let Err(err) = NativeFemBackend::create_with_initial_effective_field(&plan, false) {
@@ -5743,16 +5759,16 @@ mod tests {
                     [0.0, 0.0, 1.0],
                     [1.0, 1.0, 0.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [1, 4, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [1, 4, 2, 3]]),
                 element_markers: vec![1, 1],
-                boundary_faces: vec![
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
                     [0, 1, 2],
                     [0, 1, 3],
                     [0, 2, 3],
                     [1, 4, 2],
                     [1, 4, 3],
                     [4, 2, 3],
-                ],
+                ]),
                 boundary_markers: vec![1; 6],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -6023,7 +6039,7 @@ mod tests {
     fn assert_same_parity_mesh(cpu_plan: &FemPlanIR, gpu_plan: &FemPlanIR) {
         assert_eq!(cpu_plan.mesh.mesh_name, gpu_plan.mesh.mesh_name);
         assert_eq!(cpu_plan.mesh.nodes, gpu_plan.mesh.nodes);
-        assert_eq!(cpu_plan.mesh.elements, gpu_plan.mesh.elements);
+        assert_eq!(cpu_plan.mesh.cells, gpu_plan.mesh.cells);
         assert_eq!(cpu_plan.precision, ExecutionPrecision::Double);
         assert_eq!(gpu_plan.precision, ExecutionPrecision::Double);
     }

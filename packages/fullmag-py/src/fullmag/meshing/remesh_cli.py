@@ -257,9 +257,14 @@ def _resolve_quality_artifact_dir(explicit: str | Path | None) -> Path:
 def _topology_byte_count(mesh_data: Any) -> int:
     return int(
         mesh_data.nodes.nbytes
-        + mesh_data.elements.nbytes
+        + mesh_data.cell_types.nbytes
+        + mesh_data.cell_offsets.nbytes
+        + mesh_data.cell_nodes.nbytes
         + mesh_data.element_markers.nbytes
-        + mesh_data.boundary_faces.nbytes
+        + mesh_data.facet_types.nbytes
+        + mesh_data.facet_roles.nbytes
+        + mesh_data.facet_offsets.nbytes
+        + mesh_data.facet_nodes.nbytes
         + mesh_data.boundary_markers.nbytes
     )
 
@@ -293,12 +298,17 @@ def _write_topology_artifact_if_needed(
     )
     artifact_path = Path(path)
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "mesh_name": mesh_name,
         "nodes": mesh_data.nodes.tolist(),
-        "elements": mesh_data.elements.tolist(),
+        "cell_types": mesh_data.cell_types.tolist(),
+        "cell_offsets": mesh_data.cell_offsets.tolist(),
+        "cell_nodes": mesh_data.cell_nodes.tolist(),
         "element_markers": mesh_data.element_markers.tolist(),
-        "boundary_faces": mesh_data.boundary_faces.tolist(),
+        "facet_types": mesh_data.facet_types.tolist(),
+        "facet_roles": mesh_data.facet_roles.tolist(),
+        "facet_offsets": mesh_data.facet_offsets.tolist(),
+        "facet_nodes": mesh_data.facet_nodes.tolist(),
         "boundary_markers": mesh_data.boundary_markers.tolist(),
         "periodic_boundary_pairs": list(mesh_data.periodic_boundary_pairs),
         "periodic_node_pairs": list(mesh_data.periodic_node_pairs),
@@ -311,7 +321,7 @@ def _write_topology_artifact_if_needed(
 
     return {
         "kind": "remesh_topology_json",
-        "schema_version": 1,
+        "schema_version": 2,
         "path": str(artifact_path),
         "byte_size": artifact_path.stat().st_size,
         "topology_nbytes": topology_bytes,
@@ -401,8 +411,11 @@ def _mesh_result_payload(
 ) -> dict[str, Any]:
     mesh = mesh_data.oriented_copy()
     mesh.validate_strict(require_positive_orientation=True)
-    mesh_statistics = _mesh_statistics_report_to_ir(
-        _build_mesh_statistics_report(mesh, mesh_name)
+    tet4_only = bool(np.all(mesh.cell_types == "tet4") and np.all(mesh.facet_types == "tri3"))
+    mesh_statistics = (
+        _mesh_statistics_report_to_ir(_build_mesh_statistics_report(mesh, mesh_name))
+        if tet4_only
+        else None
     )
     topology_artifact = _write_topology_artifact_if_needed(
         mesh,
@@ -419,17 +432,24 @@ def _mesh_result_payload(
     result: dict[str, Any] = {
         "mesh_name": mesh_name,
         "nodes": mesh.nodes.tolist() if inline_topology else [],
-        "elements": mesh.elements.tolist() if inline_topology else [],
+        "cell_types": mesh.cell_types.tolist() if inline_topology else [],
+        "cell_offsets": mesh.cell_offsets.tolist() if inline_topology else [0],
+        "cell_nodes": mesh.cell_nodes.tolist() if inline_topology else [],
         "element_markers": mesh.element_markers.tolist() if inline_topology else [],
-        "boundary_faces": mesh.boundary_faces.tolist() if inline_topology else [],
+        "facet_types": mesh.facet_types.tolist() if inline_topology else [],
+        "facet_roles": mesh.facet_roles.tolist() if inline_topology else [],
+        "facet_offsets": mesh.facet_offsets.tolist() if inline_topology else [0],
+        "facet_nodes": mesh.facet_nodes.tolist() if inline_topology else [],
         "boundary_markers": mesh.boundary_markers.tolist() if inline_topology else [],
         "periodic_boundary_pairs": list(mesh.periodic_boundary_pairs) if inline_topology else [],
         "periodic_node_pairs": list(mesh.periodic_node_pairs) if inline_topology else [],
         "periodic_mesh_certificate": mesh.periodic_mesh_certificate,
-        "mesh_statistics": mesh_statistics,
         "generation_mode": generation_mode,
         "mesh_provenance": mesh_provenance,
     }
+
+    if mesh_statistics is not None:
+        result["mesh_statistics"] = mesh_statistics
 
     if topology_artifact is not None:
         result["topology_artifact"] = topology_artifact

@@ -4031,9 +4031,9 @@ fn mesh_periodic_pair_validation_allows_shared_boundary_marker_pairs() {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 1, 2], [0, 1, 3]],
+        facets: FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [0, 1, 3]]),
         boundary_markers: vec![99, 99],
         periodic_boundary_pairs: vec![MeshPeriodicBoundaryPairIR {
             pair_id: "x_faces".to_string(),
@@ -4072,9 +4072,9 @@ fn mesh_periodic_pair_validation_allows_fragmented_boundary_pairs_with_same_pair
             [0.0, 1.0, 1.0],
             [1.0, 1.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 4], [3, 5, 6, 7]],
+        cells: FemConnectivityIR::from_tet4(vec![[0, 1, 2, 4], [3, 5, 6, 7]]),
         element_markers: vec![1, 1],
-        boundary_faces: vec![[0, 2, 4], [1, 3, 5], [2, 4, 6], [3, 5, 7]],
+        facets: FemFacetConnectivityIR::from_tri3(vec![[0, 2, 4], [1, 3, 5], [2, 4, 6], [3, 5, 7]]),
         boundary_markers: vec![10, 11, 12, 13],
         periodic_boundary_pairs: vec![
             MeshPeriodicBoundaryPairIR {
@@ -4169,9 +4169,9 @@ fn mesh_periodic_pair_validation_rejects_bad_translation_residual() {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 2, 3], [1, 2, 3]],
+        facets: FemFacetConnectivityIR::from_tri3(vec![[0, 2, 3], [1, 2, 3]]),
         boundary_markers: vec![10, 11],
         periodic_boundary_pairs: vec![MeshPeriodicBoundaryPairIR {
             pair_id: "x_faces".to_string(),
@@ -4211,9 +4211,9 @@ fn mesh_periodic_pair_validation_rejects_duplicate_destination_nodes() {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 2, 3], [1, 2, 3]],
+        facets: FemFacetConnectivityIR::from_tri3(vec![[0, 2, 3], [1, 2, 3]]),
         boundary_markers: vec![10, 11],
         periodic_boundary_pairs: vec![MeshPeriodicBoundaryPairIR {
             pair_id: "x_faces".to_string(),
@@ -4884,4 +4884,181 @@ fn preset_texture_backward_compat_params_alias() {
         }
         other => panic!("expected PresetTexture, got {:?}", other),
     }
+}
+
+fn mixed_topology_mesh() -> MeshIR {
+    MeshIR {
+        mesh_name: "mixed".into(),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [0.0, 1.0, 1.0],
+            [1.0, 1.0, 0.0],
+            [1.0, 1.0, 1.0],
+        ],
+        cells: FemConnectivityIR {
+            types: vec![
+                FemCellTypeIR::Prism6,
+                FemCellTypeIR::Pyramid5,
+                FemCellTypeIR::Tet4,
+            ],
+            offsets: vec![0, 6, 11, 15],
+            nodes: vec![0, 1, 2, 3, 4, 5, 0, 1, 6, 2, 7, 0, 1, 2, 3],
+        },
+        element_markers: vec![11, 12, 13],
+        facets: FemFacetConnectivityIR {
+            types: vec![FemFacetTypeIR::Tri3, FemFacetTypeIR::Quad4],
+            roles: vec![FemFacetRoleIR::Exterior, FemFacetRoleIR::MaterialInterface],
+            offsets: vec![0, 3, 7],
+            nodes: vec![0, 1, 2, 0, 1, 4, 3],
+        },
+        boundary_markers: vec![21, 22],
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: HashMap::new(),
+    }
+}
+
+#[test]
+fn fem_topology_enum_wire_strings_are_canonical() {
+    let cases = [
+        (serde_json::to_value(FemCellTypeIR::Tet4).unwrap(), "tet4"),
+        (
+            serde_json::to_value(FemCellTypeIR::Prism6).unwrap(),
+            "prism6",
+        ),
+        (
+            serde_json::to_value(FemCellTypeIR::Pyramid5).unwrap(),
+            "pyramid5",
+        ),
+        (serde_json::to_value(FemCellTypeIR::Hex8).unwrap(), "hex8"),
+        (serde_json::to_value(FemFacetTypeIR::Tri3).unwrap(), "tri3"),
+        (
+            serde_json::to_value(FemFacetTypeIR::Quad4).unwrap(),
+            "quad4",
+        ),
+        (
+            serde_json::to_value(FemFacetRoleIR::Exterior).unwrap(),
+            "exterior",
+        ),
+        (
+            serde_json::to_value(FemFacetRoleIR::MaterialInterface).unwrap(),
+            "material_interface",
+        ),
+        (
+            serde_json::to_value(FemFacetRoleIR::PeriodicSeam).unwrap(),
+            "periodic_seam",
+        ),
+    ];
+    for (actual, expected) in cases {
+        assert_eq!(actual, serde_json::Value::String(expected.into()));
+    }
+}
+
+#[test]
+fn mixed_mesh_serde_round_trip_is_v2_only() {
+    let mesh = mixed_topology_mesh();
+    mesh.validate().expect("valid mixed topology");
+    let value = serde_json::to_value(&mesh).unwrap();
+    assert!(value.get("cells").is_some());
+    assert!(value.get("facets").is_some());
+    assert!(value.get("elements").is_none());
+    assert!(value.get("boundary_faces").is_none());
+    assert_eq!(serde_json::from_value::<MeshIR>(value).unwrap(), mesh);
+}
+
+#[test]
+fn legacy_tet_mesh_normalizes_and_dual_truth_rejects() {
+    let legacy = serde_json::json!({
+        "mesh_name": "legacy",
+        "nodes": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        "elements": [[0, 1, 2, 3]],
+        "element_markers": [7],
+        "boundary_faces": [[0, 1, 2]],
+        "boundary_markers": [9]
+    });
+    let mesh: MeshIR = serde_json::from_value(legacy.clone()).unwrap();
+    assert_eq!(mesh.cells.types, vec![FemCellTypeIR::Tet4]);
+    assert_eq!(mesh.cells.offsets, vec![0, 4]);
+    assert_eq!(mesh.facets.roles, vec![FemFacetRoleIR::Exterior]);
+    let canonical = serde_json::to_value(mesh).unwrap();
+    assert!(canonical.get("elements").is_none());
+    assert!(canonical.get("boundary_faces").is_none());
+
+    let mut dual = legacy;
+    dual.as_object_mut().unwrap().insert(
+        "cells".into(),
+        serde_json::json!({"types": ["tet4"], "offsets": [0, 4], "nodes": [0, 1, 2, 3]}),
+    );
+    dual.as_object_mut().unwrap().insert(
+        "facets".into(),
+        serde_json::json!({"types": ["tri3"], "roles": ["exterior"], "offsets": [0, 3], "nodes": [0, 1, 2]}),
+    );
+    let error = serde_json::from_value::<MeshIR>(dual).unwrap_err();
+    assert!(error.to_string().contains("both legacy and v2 topology"));
+}
+
+#[test]
+fn mixed_mesh_validation_rejects_each_csr_invariant_and_periodicity() {
+    let mutations: Vec<(&str, Box<dyn Fn(&mut MeshIR)>)> = vec![
+        (
+            "cell offsets",
+            Box::new(|mesh| mesh.cells.offsets = vec![0, 6, 5, 15]),
+        ),
+        ("cell arity", Box::new(|mesh| mesh.cells.offsets[1] = 5)),
+        ("cell index", Box::new(|mesh| mesh.cells.nodes[0] = 99)),
+        (
+            "cell duplicate",
+            Box::new(|mesh| mesh.cells.nodes[1] = mesh.cells.nodes[0]),
+        ),
+        (
+            "cell markers",
+            Box::new(|mesh| mesh.element_markers.pop().map(|_| ()).unwrap()),
+        ),
+        (
+            "facet offsets",
+            Box::new(|mesh| mesh.facets.offsets = vec![0, 4, 7]),
+        ),
+        ("facet arity", Box::new(|mesh| mesh.facets.offsets[1] = 2)),
+        ("facet index", Box::new(|mesh| mesh.facets.nodes[0] = 99)),
+        (
+            "facet duplicate",
+            Box::new(|mesh| mesh.facets.nodes[1] = mesh.facets.nodes[0]),
+        ),
+        (
+            "facet roles",
+            Box::new(|mesh| mesh.facets.roles.pop().map(|_| ()).unwrap()),
+        ),
+        (
+            "facet markers",
+            Box::new(|mesh| mesh.boundary_markers.pop().map(|_| ()).unwrap()),
+        ),
+    ];
+    for (label, mutate) in mutations {
+        let mut mesh = mixed_topology_mesh();
+        mutate(&mut mesh);
+        assert!(mesh.validate().is_err(), "{label} mutation must reject");
+    }
+
+    let mut periodic = mixed_topology_mesh();
+    periodic
+        .periodic_boundary_pairs
+        .push(MeshPeriodicBoundaryPairIR {
+            pair_id: "x".into(),
+            source_marker: None,
+            destination_marker: None,
+            marker_a: 21,
+            marker_b: 22,
+            axis_hint: Some("x".into()),
+            translation: Some([1.0, 0.0, 0.0]),
+            tolerance: Some(1e-9),
+            orientation: None,
+            pairing_policy: None,
+        });
+    let errors = periodic.validate().unwrap_err().join("\n");
+    assert!(errors.contains("mixed topology"));
+    assert!(errors.contains("periodic"));
 }

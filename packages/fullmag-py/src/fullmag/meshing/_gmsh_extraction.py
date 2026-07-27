@@ -218,18 +218,25 @@ def _read_mesh_file(path: Path) -> MeshData:
     meshio = _import_meshio()
     mesh = meshio.read(path)
     _reject_unsupported_meshio_elements(mesh)
-    tetra = _cell_blocks(mesh, {"tetra"})
-    triangles = _cell_blocks(mesh, {"triangle"}, allow_empty=True)
     nodes = np.asarray(mesh.points[:, :3], dtype=np.float64)
-    elements = np.asarray(tetra, dtype=np.int32)
-    boundary_faces = np.asarray(triangles, dtype=np.int32)
-    element_markers = _meshio_cell_markers(mesh, cell_type="tetra")
-    boundary_markers = _meshio_cell_markers(mesh, cell_type="triangle")
+    cell_types, cell_offsets, cell_nodes, element_markers = _meshio_typed_topology(
+        mesh,
+        _MESHIO_VOLUME_TYPES,
+    )
+    facet_types, facet_offsets, facet_nodes, boundary_markers = _meshio_typed_topology(
+        mesh,
+        _MESHIO_FACET_TYPES,
+    )
     mesh = MeshData(
         nodes=nodes,
-        elements=elements,
+        cell_types=cell_types,
+        cell_offsets=cell_offsets,
+        cell_nodes=cell_nodes,
         element_markers=element_markers,
-        boundary_faces=boundary_faces,
+        facet_types=facet_types,
+        facet_roles=["exterior"] * len(facet_types),
+        facet_offsets=facet_offsets,
+        facet_nodes=facet_nodes,
         boundary_markers=boundary_markers,
     )
     return mesh
@@ -237,8 +244,21 @@ def _read_mesh_file(path: Path) -> MeshData:
 
 _MESHIO_SUPPORTED_ELEMENTS: dict[str, tuple[int, int, int]] = {
     "tetra": (3, 1, 4),
+    "wedge": (3, 1, 6),
+    "prism": (3, 1, 6),
+    "pyramid": (3, 1, 5),
+    "hexahedron": (3, 1, 8),
     "triangle": (2, 1, 3),
+    "quad": (2, 1, 4),
 }
+_MESHIO_VOLUME_TYPES = {
+    "tetra": "tet4",
+    "wedge": "prism6",
+    "prism": "prism6",
+    "pyramid": "pyramid5",
+    "hexahedron": "hex8",
+}
+_MESHIO_FACET_TYPES = {"triangle": "tri3", "quad": "quad4"}
 _MESHIO_IGNORED_LOWER_DIM_ELEMENTS: dict[str, tuple[int, int, int]] = {
     "vertex": (0, 1, 1),
     "line": (1, 1, 2),
@@ -270,6 +290,41 @@ def _reject_unsupported_meshio_elements(mesh: Any) -> None:
             primary_arity=arity,
             context="mesh file import",
         )
+
+
+def _meshio_typed_topology(
+    mesh: Any,
+    type_map: dict[str, str],
+) -> tuple[list[str], NDArray[np.int64], NDArray[np.int32], NDArray[np.int32]]:
+    markers_by_type = {
+        source_type: _meshio_cell_markers(mesh, cell_type=source_type)
+        for source_type in type_map
+    }
+    marker_offsets = {source_type: 0 for source_type in type_map}
+    types: list[str] = []
+    offsets = [0]
+    nodes: list[int] = []
+    markers: list[int] = []
+    for block in getattr(mesh, "cells", []):
+        source_type = str(getattr(block, "type", ""))
+        canonical_type = type_map.get(source_type)
+        if canonical_type is None:
+            continue
+        data = np.asarray(block.data, dtype=np.int32)
+        type_markers = markers_by_type[source_type]
+        marker_offset = marker_offsets[source_type]
+        for local_index, row in enumerate(data):
+            types.append(canonical_type)
+            nodes.extend(int(node) for node in row)
+            offsets.append(len(nodes))
+            markers.append(int(type_markers[marker_offset + local_index]))
+        marker_offsets[source_type] += len(data)
+    return (
+        types,
+        np.asarray(offsets, dtype=np.int64),
+        np.asarray(nodes, dtype=np.int32),
+        np.asarray(markers, dtype=np.int32),
+    )
 
 
 def _extract_mesh_data(
@@ -304,7 +359,9 @@ def _extract_mesh_data(
             int(phys_tag): gmsh.model.getPhysicalName(2, int(phys_tag))
             for _dim, phys_tag in gmsh.model.getPhysicalGroups(dim=2)
         }
-        elements_list: list[list[int]] = []
+        cell_types: list[str] = []
+        cell_offsets = [0]
+        cell_nodes: list[int] = []
         markers_list: list[int] = []
         for _dim, phys_tag in gmsh.model.getPhysicalGroups(dim=3):
             semantic_marker = _semantic_marker_from_name(
@@ -315,7 +372,7 @@ def _extract_mesh_data(
             for entity in entities:
                 elem_types, elem_tags, node_ids = gmsh.model.mesh.getElements(3, entity)
                 for etype, tags, nids in zip(elem_types, elem_tags, node_ids):
-                    num_nodes, _kind = _gmsh_element_properties(
+                    num_nodes, kind = _gmsh_element_properties(
                         gmsh,
                         int(etype),
                         dimension=3,
@@ -325,12 +382,16 @@ def _extract_mesh_data(
                     flat = [node_index[int(t)] for t in nids]
                     block_tags = [int(tag) for tag in tags]
                     for element_offset, start in enumerate(range(0, len(flat), num_nodes)):
-                        elements_list.append(flat[start : start + num_nodes])
+                        cell_types.append(kind)
+                        cell_nodes.extend(flat[start : start + num_nodes])
+                        cell_offsets.append(len(cell_nodes))
                         markers_list.append(semantic_marker)
                         if element_offset < len(block_tags):
                             extracted_element_tags.append(block_tags[element_offset])
 
-        bfaces_list: list[list[int]] = []
+        facet_types: list[str] = []
+        facet_offsets = [0]
+        facet_nodes: list[int] = []
         bmarkers_list: list[int] = []
         for _dim, phys_tag in gmsh.model.getPhysicalGroups(dim=2):
             semantic_marker = _semantic_marker_from_name(
@@ -341,7 +402,7 @@ def _extract_mesh_data(
             for entity in entities:
                 elem_types, _elem_tags, node_ids = gmsh.model.mesh.getElements(2, entity)
                 for etype, nids in zip(elem_types, node_ids):
-                    num_nodes, _kind = _gmsh_element_properties(
+                    num_nodes, kind = _gmsh_element_properties(
                         gmsh,
                         int(etype),
                         dimension=2,
@@ -350,24 +411,20 @@ def _extract_mesh_data(
                     )
                     flat = [node_index[int(t)] for t in nids]
                     for start in range(0, len(flat), num_nodes):
-                        bfaces_list.append(flat[start : start + num_nodes])
+                        facet_types.append(kind)
+                        facet_nodes.extend(flat[start : start + num_nodes])
+                        facet_offsets.append(len(facet_nodes))
                         bmarkers_list.append(semantic_marker)
 
-        elements = (
-            np.asarray(elements_list, dtype=np.int32)
-            if elements_list
-            else np.zeros((0, 4), dtype=np.int32)
-        )
+        cell_offsets_array = np.asarray(cell_offsets, dtype=np.int64)
+        cell_nodes_array = np.asarray(cell_nodes, dtype=np.int32)
         element_markers = (
             np.asarray(markers_list, dtype=np.int32)
             if markers_list
             else np.zeros(0, dtype=np.int32)
         )
-        boundary_faces = (
-            np.asarray(bfaces_list, dtype=np.int32)
-            if bfaces_list
-            else np.zeros((0, 3), dtype=np.int32)
-        )
+        facet_offsets_array = np.asarray(facet_offsets, dtype=np.int64)
+        facet_nodes_array = np.asarray(facet_nodes, dtype=np.int32)
         boundary_markers = (
             np.asarray(bmarkers_list, dtype=np.int32)
             if bmarkers_list
@@ -378,22 +435,28 @@ def _extract_mesh_data(
         element_blocks = gmsh.model.mesh.getElements(dim=3)
         for block in element_blocks[1]:
             extracted_element_tags.extend(int(tag) for tag in block)
-        elements = _extract_gmsh_connectivity(
-            gmsh, element_blocks, node_index, nodes_per_element=4
+        cell_types, cell_offsets_array, cell_nodes_array = _extract_gmsh_typed_connectivity(
+            gmsh, element_blocks, node_index, dimension=3
         )
 
         boundary_blocks = gmsh.model.mesh.getElements(dim=2)
-        boundary_faces = _extract_gmsh_connectivity(
-            gmsh, boundary_blocks, node_index, nodes_per_element=3
+        facet_types, facet_offsets_array, facet_nodes_array = _extract_gmsh_typed_connectivity(
+            gmsh, boundary_blocks, node_index, dimension=2
         )
 
-        element_markers = np.ones(elements.shape[0], dtype=np.int32)
-        boundary_markers = np.ones(boundary_faces.shape[0], dtype=np.int32)
+        element_markers = np.ones(len(cell_types), dtype=np.int32)
+        boundary_markers = np.ones(len(facet_types), dtype=np.int32)
         if periodic_pair_specs:
+            if any(kind != "tet4" for kind in cell_types) or any(
+                kind != "tri3" for kind in facet_types
+            ):
+                raise ValueError(
+                    "mixed topology with periodic pairs is not qualified; periodic extraction requires tet4/tri3"
+                )
             boundary_markers = _extract_periodic_surface_markers(
                 gmsh,
                 node_index,
-                boundary_faces,
+                facet_nodes_array.reshape((-1, 3)),
                 periodic_pair_specs,
             )
 
@@ -401,6 +464,12 @@ def _extract_mesh_data(
         quality,
         extracted_element_tags,
     )
+    tet4_only = all(kind == "tet4" for kind in cell_types)
+    if not tet4_only:
+        # Gmsh's historical SICN/gamma report in this path is calibrated for
+        # tetrahedra. Do not relabel it as a mixed-family quality metric.
+        aligned_quality = None
+    elements = cell_nodes_array.reshape((-1, 4)) if tet4_only else None
     aligned_per_domain_quality = (
         build_per_domain_quality_from_mesh_arrays(
             nodes,
@@ -408,14 +477,18 @@ def _extract_mesh_data(
             element_markers,
             aligned_quality,
         )
-        if aligned_quality is not None
+        if aligned_quality is not None and elements is not None
         else per_domain_quality
     )
     if periodic_pair_specs:
+        if not tet4_only or any(kind != "tri3" for kind in facet_types):
+            raise ValueError(
+                "mixed topology with periodic pairs is not qualified; periodic extraction requires tet4/tri3"
+            )
         _orient_periodic_boundary_faces(
             nodes,
             elements,
-            boundary_faces,
+            facet_nodes_array.reshape((-1, 3)),
             boundary_markers,
             periodic_pair_specs,
         )
@@ -427,9 +500,14 @@ def _extract_mesh_data(
 
     return MeshData(
         nodes=nodes,
-        elements=elements,
+        cell_types=cell_types,
+        cell_offsets=cell_offsets_array,
+        cell_nodes=cell_nodes_array,
         element_markers=element_markers,
-        boundary_faces=boundary_faces,
+        facet_types=facet_types,
+        facet_roles=["exterior"] * len(facet_types),
+        facet_offsets=facet_offsets_array,
+        facet_nodes=facet_nodes_array,
         boundary_markers=boundary_markers,
         periodic_boundary_pairs=periodic_boundary_pairs,
         periodic_node_pairs=periodic_node_pairs,
@@ -958,25 +1036,28 @@ def _extract_element_markers_for_tags(
     return np.asarray([tag_to_marker.get(tag, 1) for tag in all_tags], dtype=np.int32)
 
 
-def _extract_gmsh_connectivity(
+def _extract_gmsh_typed_connectivity(
     gmsh: Any,
     element_blocks: tuple[list[int], list[np.ndarray], list[np.ndarray]],
     node_index: dict[int, int],
-    nodes_per_element: int,
-) -> NDArray[np.int32]:
+    *,
+    dimension: int,
+) -> tuple[list[str], NDArray[np.int64], NDArray[np.int32]]:
     element_types, _, node_tags_blocks = element_blocks
-    rows: list[list[int]] = []
+    types: list[str] = []
+    offsets = [0]
+    nodes: list[int] = []
     for element_type, tags in zip(element_types, node_tags_blocks):
-        num_nodes, _kind = _gmsh_element_properties(
+        num_nodes, kind = _gmsh_element_properties(
             gmsh,
             int(element_type),
-            dimension=3 if nodes_per_element == 4 else 2,
+            dimension=dimension,
             supported=(
                 SUPPORTED_VOLUME_ELEMENTS
-                if nodes_per_element == 4
+                if dimension == 3
                 else SUPPORTED_BOUNDARY_ELEMENTS
             ),
-            context=("volume extraction" if nodes_per_element == 4 else "boundary extraction"),
+            context=("volume extraction" if dimension == 3 else "boundary extraction"),
         )
         flat = [node_index[int(tag)] for tag in tags]
         if len(flat) % num_nodes != 0:
@@ -985,11 +1066,36 @@ def _extract_gmsh_connectivity(
                 f"entries, not divisible by {num_nodes}"
             )
         for start in range(0, len(flat), num_nodes):
-            element_nodes = flat[start : start + num_nodes]
-            rows.append(element_nodes)
-    if not rows:
-        return np.zeros((0, nodes_per_element), dtype=np.int32)
-    return np.asarray(rows, dtype=np.int32)
+            types.append(kind)
+            nodes.extend(flat[start : start + num_nodes])
+            offsets.append(len(nodes))
+    return (
+        types,
+        np.asarray(offsets, dtype=np.int64),
+        np.asarray(nodes, dtype=np.int32),
+    )
+
+
+def _extract_gmsh_connectivity(
+    gmsh: Any,
+    element_blocks: tuple[list[int], list[np.ndarray], list[np.ndarray]],
+    node_index: dict[int, int],
+    nodes_per_element: int,
+) -> NDArray[np.int32]:
+    """Derived legacy fixed-arity view used only by tet4/tri3 callers."""
+    dimension = 3 if nodes_per_element == 4 else 2
+    expected = "tet4" if dimension == 3 else "tri3"
+    types, _offsets, nodes = _extract_gmsh_typed_connectivity(
+        gmsh,
+        element_blocks,
+        node_index,
+        dimension=dimension,
+    )
+    if any(kind != expected for kind in types):
+        raise ValueError(
+            f"{expected}-only compatibility extraction cannot represent typed mixed connectivity"
+        )
+    return nodes.reshape((-1, nodes_per_element))
 
 
 # ---------------------------------------------------------------------------

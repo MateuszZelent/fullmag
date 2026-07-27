@@ -423,7 +423,7 @@ def generate_swept_cylinder_mesh(
         periodic_boundary_pairs: list[dict[str, object]] = []
         periodic_node_pairs: list[dict[str, object]] = []
         if opts.periodic_pair_ids:
-            inferred_mesh = MeshData(
+            inferred_mesh = MeshData.from_legacy_tet4(
                 nodes=nodes,
                 elements=elements,
                 element_markers=element_markers,
@@ -442,7 +442,7 @@ def generate_swept_cylinder_mesh(
                 pair for pair in all_node_pairs if pair.get("pair_id") in requested_pair_ids
             ]
 
-        return MeshData(
+        return MeshData.from_legacy_tet4(
             nodes=nodes,
             elements=elements,
             element_markers=element_markers,
@@ -677,7 +677,7 @@ def _extract_swept_mesh_data(
     periodic_boundary_pairs: list[dict[str, object]] = []
     periodic_node_pairs: list[dict[str, object]] = []
     if opts.periodic_pair_ids:
-        inferred_mesh = MeshData(
+        inferred_mesh = MeshData.from_legacy_tet4(
             nodes=nodes,
             elements=elements,
             element_markers=element_markers,
@@ -696,7 +696,7 @@ def _extract_swept_mesh_data(
             pair for pair in all_node_pairs if pair.get("pair_id") in requested_pair_ids
         ]
 
-    return MeshData(
+    return MeshData.from_legacy_tet4(
         nodes=nodes,
         elements=elements,
         element_markers=element_markers,

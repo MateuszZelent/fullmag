@@ -166,9 +166,9 @@ fn fem_top_surface_selector_resolves_bbox_faces() {
             [1.0, 0.0, 1.0],
             [0.0, 1.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 1, 2], [3, 4, 5]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [3, 4, 5]]),
         boundary_markers: vec![10, 20],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -215,9 +215,9 @@ fn fem_surface_selector_rejects_unknown_bbox_face() {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 1, 2]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
         boundary_markers: vec![1],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -245,9 +245,9 @@ fn shared_domain_segmentation_remaps_periodic_node_pairs() {
             [11.0, 1.0, 1.0],
             [0.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 4, 5, 6], [1, 2, 3, 7]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 4, 5, 6], [1, 2, 3, 7]]),
         element_markers: vec![0, 1],
-        boundary_faces: vec![[1, 2, 3], [0, 4, 5]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[1, 2, 3], [0, 4, 5]]),
         boundary_markers: vec![11, 99],
         periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
             pair_id: "x_faces".to_string(),
@@ -299,9 +299,9 @@ fn fem_domain_full_sampled_field_copies_by_global_node_indices() {
             [3.0, 0.0, 0.0],
             [4.0, 0.0, 0.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 1, 2]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
         boundary_markers: vec![1],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -378,9 +378,9 @@ fn fem_domain_preset_texture_samples_final_mesh_node_order() {
             [1.0, 0.0, 0.0],
             [20.0, 20.0, 0.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 1, 2]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
         boundary_markers: vec![1],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -469,9 +469,9 @@ fn mesh_parts_from_shared_domain_produces_air_and_magnetic() {
             [2.0, 0.0, 1.0],
             [3.0, 0.0, 0.0],
         ],
-        elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
         element_markers: vec![1, 0],
-        boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
         boundary_markers: vec![1, 99],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -524,9 +524,9 @@ fn mesh_part_node_indices_cover_air_elements_with_shared_interface_nodes() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 2, 1, 4]]),
         element_markers: vec![1, 0],
-        boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 3], [0, 1, 4]]),
         boundary_markers: vec![10, 99],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -580,9 +580,9 @@ fn mesh_parts_from_merged_magnetic_has_no_air() {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 1, 2]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
         boundary_markers: vec![1],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -622,9 +622,9 @@ fn mesh_parts_bounds_are_correct() {
             [0.5, 1.5, -2.5],
             [9.0, 9.0, 9.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 1, 2]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
         boundary_markers: vec![1],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -662,9 +662,9 @@ fn analyze_detects_interface_between_touching_markers() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 2, 1, 4]]),
         element_markers: vec![1, 2],
-        boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 3], [0, 1, 4]]),
         boundary_markers: vec![10, 20],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -718,9 +718,9 @@ fn reorder_shared_domain_mesh_materializes_interface_and_outer_boundary_parts() 
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 2, 1, 4]]),
         element_markers: vec![1, 0],
-        boundary_faces: vec![
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
             [0, 1, 3],
             [0, 2, 3],
             [1, 2, 3],
@@ -728,7 +728,7 @@ fn reorder_shared_domain_mesh_materializes_interface_and_outer_boundary_parts() 
             [0, 2, 4],
             [1, 2, 4],
             [0, 1, 2],
-        ],
+        ]),
         boundary_markers: vec![10, 10, 10, 99, 99, 99, 77],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -781,9 +781,9 @@ fn analyze_classifies_air_nodes() {
             [3.0, 1.0, 0.0],
             [3.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
         element_markers: vec![1, 0],
-        boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
         boundary_markers: vec![10, 99],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -803,6 +803,267 @@ fn analyze_classifies_air_nodes() {
 }
 
 #[test]
+fn pack_mixed_topology_keeps_each_type_connectivity_role_and_marker_together() {
+    let mesh = MeshIR {
+        mesh_name: "mixed_pack".to_string(),
+        nodes: vec![
+            [3.0, 0.0, 0.0],
+            [4.0, 0.0, 0.0],
+            [3.0, 1.0, 0.0],
+            [3.0, 0.0, 1.0],
+            [4.0, 0.0, 1.0],
+            [3.0, 1.0, 1.0],
+            [6.0, 0.0, 0.0],
+            [7.0, 0.0, 0.0],
+            [7.0, 1.0, 0.0],
+            [6.0, 1.0, 0.0],
+            [6.5, 0.5, 1.0],
+            [9.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [9.0, 1.0, 0.0],
+            [9.0, 0.0, 1.0],
+        ],
+        cells: fullmag_ir::FemConnectivityIR {
+            types: vec![
+                fullmag_ir::FemCellTypeIR::Prism6,
+                fullmag_ir::FemCellTypeIR::Pyramid5,
+                fullmag_ir::FemCellTypeIR::Tet4,
+            ],
+            offsets: vec![0, 6, 11, 15],
+            nodes: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+        },
+        element_markers: vec![2, 1, 0],
+        facets: fullmag_ir::FemFacetConnectivityIR {
+            types: vec![
+                fullmag_ir::FemFacetTypeIR::Quad4,
+                fullmag_ir::FemFacetTypeIR::Quad4,
+                fullmag_ir::FemFacetTypeIR::Tri3,
+            ],
+            roles: vec![
+                fullmag_ir::FemFacetRoleIR::Exterior,
+                fullmag_ir::FemFacetRoleIR::MaterialInterface,
+                fullmag_ir::FemFacetRoleIR::Exterior,
+            ],
+            offsets: vec![0, 4, 8, 11],
+            nodes: vec![0, 1, 4, 3, 6, 9, 8, 7, 11, 13, 12],
+        },
+        boundary_markers: vec![20, 10, 99],
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    };
+    let analysis = crate::mesh::analyze_shared_domain_mesh(
+        &mesh,
+        &[
+            fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "pyramid".to_string(),
+                marker: 1,
+            },
+            fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "prism".to_string(),
+                marker: 2,
+            },
+        ],
+    )
+    .expect("mixed analysis should succeed");
+
+    let (packed, segments, _) =
+        crate::mesh::pack_mesh_by_analysis(&mesh, &analysis).expect("mixed packing should succeed");
+
+    assert_eq!(
+        packed.cells.types,
+        vec![
+            fullmag_ir::FemCellTypeIR::Pyramid5,
+            fullmag_ir::FemCellTypeIR::Prism6,
+            fullmag_ir::FemCellTypeIR::Tet4,
+        ]
+    );
+    assert_eq!(packed.element_markers, vec![1, 2, 0]);
+    assert_eq!(packed.cells.offsets, vec![0, 5, 11, 15]);
+    assert_eq!(
+        packed.facets.types,
+        vec![
+            fullmag_ir::FemFacetTypeIR::Quad4,
+            fullmag_ir::FemFacetTypeIR::Quad4,
+            fullmag_ir::FemFacetTypeIR::Tri3,
+        ]
+    );
+    assert_eq!(
+        packed.facets.roles,
+        vec![
+            fullmag_ir::FemFacetRoleIR::MaterialInterface,
+            fullmag_ir::FemFacetRoleIR::Exterior,
+            fullmag_ir::FemFacetRoleIR::Exterior,
+        ]
+    );
+    assert_eq!(packed.boundary_markers, vec![10, 20, 99]);
+    assert_eq!(segments[0].element_start, 0);
+    assert_eq!(segments[1].element_start, 1);
+}
+
+#[test]
+fn mixed_mesh_part_slice_retains_global_ordinals_and_variable_arity() {
+    let mesh = MeshIR {
+        mesh_name: "mixed_slice".to_string(),
+        nodes: vec![[0.0, 0.0, 0.0]; 15],
+        cells: fullmag_ir::FemConnectivityIR {
+            types: vec![
+                fullmag_ir::FemCellTypeIR::Prism6,
+                fullmag_ir::FemCellTypeIR::Tet4,
+                fullmag_ir::FemCellTypeIR::Pyramid5,
+            ],
+            offsets: vec![0, 6, 10, 15],
+            nodes: (0..15).collect(),
+        },
+        element_markers: vec![1, 0, 0],
+        facets: fullmag_ir::FemFacetConnectivityIR::empty(),
+        boundary_markers: Vec::new(),
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    };
+    let segment = fullmag_ir::FemObjectSegmentIR {
+        object_id: "__air__".to_string(),
+        geometry_id: None,
+        node_start: 6,
+        node_count: 9,
+        element_start: 1,
+        element_count: 2,
+        boundary_face_start: 0,
+        boundary_face_count: 0,
+    };
+    let parts = crate::mesh::build_mesh_parts_from_segments(
+        &mesh,
+        std::slice::from_ref(&segment),
+        fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir,
+    );
+    let part = &parts[0];
+    let fullmag_ir::FemMeshPartSelector::ElementRange { start, count } = part.element_selector
+    else {
+        panic!("mesh part should retain an element range")
+    };
+    let sliced = mesh
+        .cells
+        .iter()
+        .skip(start as usize)
+        .take(count as usize)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sliced
+            .iter()
+            .map(|cell| cell.global_ordinal)
+            .collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+    assert_eq!(
+        sliced.iter().map(|cell| cell.cell_type).collect::<Vec<_>>(),
+        vec![
+            fullmag_ir::FemCellTypeIR::Tet4,
+            fullmag_ir::FemCellTypeIR::Pyramid5,
+        ]
+    );
+    assert_eq!(sliced[0].nodes, &[6, 7, 8, 9]);
+    assert_eq!(sliced[1].nodes, &[10, 11, 12, 13, 14]);
+    assert!(part.node_indices.is_empty());
+    assert_eq!(
+        part.node_selector,
+        fullmag_ir::FemMeshPartSelector::NodeRange { start: 6, count: 9 }
+    );
+}
+
+#[test]
+fn merge_mixed_meshes_preserves_input_order_and_typed_offsets() {
+    let prism = MeshIR {
+        mesh_name: "prism".to_string(),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [0.0, 1.0, 1.0],
+        ],
+        cells: fullmag_ir::FemConnectivityIR {
+            types: vec![fullmag_ir::FemCellTypeIR::Prism6],
+            offsets: vec![0, 6],
+            nodes: vec![0, 1, 2, 3, 4, 5],
+        },
+        element_markers: vec![1],
+        facets: fullmag_ir::FemFacetConnectivityIR {
+            types: vec![fullmag_ir::FemFacetTypeIR::Quad4],
+            roles: vec![fullmag_ir::FemFacetRoleIR::Exterior],
+            offsets: vec![0, 4],
+            nodes: vec![0, 1, 4, 3],
+        },
+        boundary_markers: vec![3],
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    };
+    let pyramid = MeshIR {
+        mesh_name: "pyramid".to_string(),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.5, 0.5, 1.0],
+        ],
+        cells: fullmag_ir::FemConnectivityIR {
+            types: vec![fullmag_ir::FemCellTypeIR::Pyramid5],
+            offsets: vec![0, 5],
+            nodes: vec![0, 1, 2, 3, 4],
+        },
+        element_markers: vec![1],
+        facets: fullmag_ir::FemFacetConnectivityIR {
+            types: vec![fullmag_ir::FemFacetTypeIR::Tri3],
+            roles: vec![fullmag_ir::FemFacetRoleIR::MaterialInterface],
+            offsets: vec![0, 3],
+            nodes: vec![0, 1, 4],
+        },
+        boundary_markers: vec![4],
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    };
+
+    let (merged, segments) = crate::mesh::merge_fem_meshes(&[
+        ("left".to_string(), prism),
+        ("right".to_string(), pyramid),
+    ])
+    .expect("mixed merge should succeed");
+
+    assert_eq!(
+        merged.cells.types,
+        vec![
+            fullmag_ir::FemCellTypeIR::Prism6,
+            fullmag_ir::FemCellTypeIR::Pyramid5,
+        ]
+    );
+    assert_eq!(merged.cells.offsets, vec![0, 6, 11]);
+    assert_eq!(merged.cells.item_nodes(0), Some(&[0, 1, 2, 3, 4, 5][..]));
+    assert_eq!(merged.cells.item_nodes(1), Some(&[6, 7, 8, 9, 10][..]));
+    assert_eq!(
+        merged.facets.types,
+        vec![
+            fullmag_ir::FemFacetTypeIR::Quad4,
+            fullmag_ir::FemFacetTypeIR::Tri3,
+        ]
+    );
+    assert_eq!(
+        merged.facets.roles,
+        vec![
+            fullmag_ir::FemFacetRoleIR::Exterior,
+            fullmag_ir::FemFacetRoleIR::MaterialInterface,
+        ]
+    );
+    assert_eq!(merged.boundary_markers, vec![3, 4]);
+    assert_eq!(segments[0].element_start, 0);
+    assert_eq!(segments[1].element_start, 1);
+    assert_eq!(segments[1].node_start, 6);
+}
+
+#[test]
 fn validate_rejects_shared_nodes_for_now() {
     let mesh = MeshIR {
         mesh_name: "touching".to_string(),
@@ -813,9 +1074,9 @@ fn validate_rejects_shared_nodes_for_now() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 2, 1, 4]]),
         element_markers: vec![1, 2],
-        boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 3], [0, 1, 4]]),
         boundary_markers: vec![10, 20],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -852,9 +1113,9 @@ fn validate_accepts_shared_nodes_when_solver_supports_conformal() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 2, 1, 4]]),
         element_markers: vec![1, 2],
-        boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 3], [0, 1, 4]]),
         boundary_markers: vec![10, 20],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -890,9 +1151,9 @@ fn pack_duplicates_shared_interface_nodes_per_region() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 2, 1, 4]]),
         element_markers: vec![1, 2],
-        boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 3], [0, 1, 4]]),
         boundary_markers: vec![10, 20],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -915,7 +1176,10 @@ fn pack_duplicates_shared_interface_nodes_per_region() {
         .expect("packing should duplicate shared interface nodes");
 
     assert_eq!(packed.nodes.len(), 8);
-    assert_eq!(packed.elements, vec![[0, 1, 2, 3], [4, 6, 5, 7]]);
+    assert_eq!(
+        packed.require_tet4_elements().unwrap(),
+        vec![[0, 1, 2, 3], [4, 6, 5, 7]]
+    );
     assert_eq!(segments.len(), 2);
     assert_eq!(segments[0].object_id, "left");
     assert_eq!(segments[0].node_count, 4);
@@ -940,9 +1204,9 @@ fn pack_preserves_shared_interface_nodes_within_one_object() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 2, 1, 4]]),
         element_markers: vec![1, 2],
-        boundary_faces: Vec::new(),
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
         boundary_markers: Vec::new(),
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -974,7 +1238,10 @@ fn pack_preserves_shared_interface_nodes_within_one_object() {
         .expect("packing should preserve one H1 field within an object");
 
     assert_eq!(packed.nodes.len(), 5);
-    assert_eq!(packed.elements, vec![[0, 1, 2, 3], [0, 2, 1, 4]]);
+    assert_eq!(
+        packed.require_tet4_elements().unwrap(),
+        vec![[0, 1, 2, 3], [0, 2, 1, 4]]
+    );
     assert_eq!(segments.len(), 2);
     assert_eq!(segments[0].object_id, "body");
     assert_eq!(segments[1].object_id, "body");
@@ -1066,9 +1333,9 @@ fn pack_merges_coincident_interface_nodes_within_one_object() {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [4, 6, 5, 7]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 6, 5, 7]]),
         element_markers: vec![1, 2],
-        boundary_faces: Vec::new(),
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
         boundary_markers: Vec::new(),
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -1097,7 +1364,10 @@ fn pack_merges_coincident_interface_nodes_within_one_object() {
         .expect("same-object coincident region nodes should merge");
 
     assert_eq!(packed.nodes.len(), 5);
-    assert_eq!(packed.elements, vec![[0, 1, 2, 3], [0, 2, 1, 4]]);
+    assert_eq!(
+        packed.require_tet4_elements().unwrap(),
+        vec![[0, 1, 2, 3], [0, 2, 1, 4]]
+    );
     assert_eq!(segments.len(), 2);
     assert_eq!(segments[0].object_id, "body");
     assert_eq!(segments[1].object_id, "body");
@@ -1147,9 +1417,9 @@ fn fem_plan_maps_geometry_and_object_region_to_one_continuous_object() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 2, 1, 4]]),
         element_markers: vec![1, 2],
-        boundary_faces: Vec::new(),
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
         boundary_markers: Vec::new(),
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -1169,7 +1439,10 @@ fn fem_plan_maps_geometry_and_object_region_to_one_continuous_object() {
     };
 
     assert_eq!(fem.mesh.nodes.len(), 5);
-    assert_eq!(fem.mesh.elements, vec![[0, 1, 2, 3], [0, 2, 1, 4]]);
+    assert_eq!(
+        fem.mesh.require_tet4_elements().unwrap(),
+        vec![[0, 1, 2, 3], [0, 2, 1, 4]]
+    );
     assert_eq!(fem.initial_magnetization.len(), 5);
     assert_eq!(fem.object_segments.len(), 2);
     assert!(fem
@@ -1282,9 +1555,17 @@ fn pack_produces_same_result_as_before() {
             [8.0, 1.0, 0.0],
             [8.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![
+            [0, 1, 2, 3],
+            [4, 5, 6, 7],
+            [8, 9, 10, 11],
+        ]),
         element_markers: vec![1, 2, 0],
-        boundary_faces: vec![[0, 1, 2], [4, 5, 6], [8, 9, 10]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
+            [0, 1, 2],
+            [4, 5, 6],
+            [8, 9, 10],
+        ]),
         boundary_markers: vec![10, 20, 99],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -2269,9 +2550,9 @@ fn fem_shared_domain_ir_for_magnetoelastic() -> ProblemIR {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![1, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -2526,9 +2807,9 @@ fn fem_backend_with_mesh_asset_plans_successfully() {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![1, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -2617,9 +2898,13 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [3, 5, 4, 0], [6, 7, 8, 9]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![
+                    [0, 1, 2, 3],
+                    [3, 5, 4, 0],
+                    [6, 7, 8, 9],
+                ]),
                 element_markers: vec![1, 1, 0],
-                boundary_faces: vec![[0, 1, 2], [3, 5, 4]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [3, 5, 4]]),
                 boundary_markers: vec![10, 11],
                 periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                     pair_id: "x_periodic".to_string(),
@@ -2796,9 +3081,11 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
     for point in &mut mesh.nodes {
         *point = [point[2], point[1], point[0]];
     }
-    for element in &mut mesh.elements {
+    let mut elements = mesh.require_tet4_elements().unwrap();
+    for element in &mut elements {
         element.swap(1, 2);
     }
+    mesh.set_tet4_cells(elements);
     mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
         pair_id: "z_periodic".to_string(),
         source_marker: None,
@@ -2867,7 +3154,7 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
         .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
         .and_then(|asset| asset.mesh.as_mut())
         .expect("test problem should carry an inline FEM domain mesh");
-    mesh.element_markers = vec![1; mesh.elements.len()];
+    mesh.element_markers = vec![1; mesh.cell_count()];
     let err = plan(&missing_air).expect_err("periodic FEM demag without air should reject");
     assert!(
         err.reasons.iter().any(|reason| {
@@ -2969,9 +3256,9 @@ fn fem_backend_interfacial_dmi_defaults_interface_normal_to_z_in_strict_mode() {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![1, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -3042,9 +3329,9 @@ fn fem_plan_serializes_mesh_parts() {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![1, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -3080,9 +3367,9 @@ fn certified_airbox_test_mesh(outer_marker: u32) -> fullmag_ir::MeshIR {
             [0.0, 0.0, 1.0],
             [1.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [1, 2, 3, 4]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [1, 2, 3, 4]]),
         element_markers: vec![1, 0],
-        boundary_faces: vec![
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
             [0, 1, 2],
             [0, 1, 3],
             [0, 2, 3],
@@ -3090,7 +3377,7 @@ fn certified_airbox_test_mesh(outer_marker: u32) -> fullmag_ir::MeshIR {
             [1, 3, 4],
             [2, 3, 4],
             [1, 2, 3],
-        ],
+        ]),
         boundary_markers: vec![1, 1, 1, outer_marker, outer_marker, outer_marker, 10],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -3102,7 +3389,7 @@ fn complete_test_airbox_boundaries(mesh: &mut fullmag_ir::MeshIR) {
     use std::collections::BTreeMap;
 
     let mut topology: BTreeMap<[u32; 3], Vec<bool>> = BTreeMap::new();
-    for (index, element) in mesh.elements.iter().enumerate() {
+    for (index, element) in mesh.require_tet4_elements().unwrap().iter().enumerate() {
         let is_air = mesh.element_markers.get(index).copied().unwrap_or(1) == 0;
         for mut face in [
             [element[0], element[1], element[2]],
@@ -3115,7 +3402,8 @@ fn complete_test_airbox_boundaries(mesh: &mut fullmag_ir::MeshIR) {
         }
     }
     let existing = mesh
-        .boundary_faces
+        .require_tri3_boundary_faces()
+        .unwrap()
         .iter()
         .map(|face| {
             let mut key = *face;
@@ -3150,7 +3438,7 @@ fn complete_test_airbox_boundaries(mesh: &mut fullmag_ir::MeshIR) {
             [first, second] if first != second => interface_marker,
             _ => continue,
         };
-        mesh.boundary_faces.push(face);
+        mesh.push_tri3_facet(face).unwrap();
         mesh.boundary_markers.push(marker);
     }
 }
@@ -3212,9 +3500,9 @@ fn fem_backend_with_air_elements_lowers_study_universe_to_air_box_config() {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![1, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -3235,14 +3523,15 @@ fn fem_backend_with_air_elements_lowers_study_universe_to_air_box_config() {
         .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
         .and_then(|asset| asset.mesh.as_mut())
         .expect("airbox fixture mesh");
-    mesh.boundary_faces.extend([
+    mesh.extend_tri3_facets([
         [0, 1, 3],
         [0, 2, 3],
         [1, 2, 3],
         [4, 5, 7],
         [4, 6, 7],
         [5, 6, 7],
-    ]);
+    ])
+    .unwrap();
     mesh.boundary_markers.extend([1, 1, 1, 99, 99, 99]);
     let plan = plan(&ir).expect("FEM air-box mesh asset should produce an air-box config");
     match plan.backend_plan {
@@ -3324,9 +3613,9 @@ fn fem_backend_with_air_elements_accepts_marker_99_in_strict_mode() {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![1, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -3347,14 +3636,15 @@ fn fem_backend_with_air_elements_accepts_marker_99_in_strict_mode() {
         .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
         .and_then(|asset| asset.mesh.as_mut())
         .expect("airbox fixture mesh");
-    mesh.boundary_faces.extend([
+    mesh.extend_tri3_facets([
         [0, 1, 3],
         [0, 2, 3],
         [1, 2, 3],
         [4, 5, 7],
         [4, 6, 7],
         [5, 6, 7],
-    ]);
+    ])
+    .unwrap();
     mesh.boundary_markers.extend([1, 1, 1, 99, 99, 99]);
     let result = plan(&ir).expect(
         "strict mode should accept marker 99 (well-known gmsh convention) without explicit air_box_policy",
@@ -3492,9 +3782,9 @@ fn fem_backend_without_air_elements_rejects_missing_shared_airbox_mesh() {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![10, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -3558,9 +3848,14 @@ fn fem_backend_fredkin_koehler_demag_plans_on_body_only_mesh_without_airbox() {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
+                    [0, 2, 1],
+                    [0, 1, 3],
+                    [0, 3, 2],
+                    [1, 2, 3],
+                ]),
                 boundary_markers: vec![1, 1, 1, 1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -3649,9 +3944,9 @@ fn fem_backend_rejects_requested_shared_domain_without_air_elements() {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![10, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -3719,9 +4014,9 @@ fn fem_backend_populates_domain_frame_and_domain_mesh_mode() {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -3815,9 +4110,9 @@ fn fem_backend_prefers_domain_frame_declared_universe_over_legacy_study_universe
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -3901,7 +4196,7 @@ fn fem_backend_with_mesh_source_json_plans_successfully() {
         BackendPlanIR::Fem(fem) => {
             assert_eq!(fem.mesh.mesh_name, "strip");
             assert_eq!(fem.mesh.nodes.len(), 4);
-            assert_eq!(fem.mesh.elements.len(), 1);
+            assert_eq!(fem.mesh.cell_count(), 1);
         }
         _ => panic!("expected FEM plan"),
     }
@@ -3984,9 +4279,9 @@ fn fem_backend_multibody_merges_disjoint_mesh_assets() {
                         [0.0, 1.0, 0.0],
                         [0.0, 0.0, 1.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                     element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                     boundary_markers: vec![1],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -4004,9 +4299,9 @@ fn fem_backend_multibody_merges_disjoint_mesh_assets() {
                         [0.0, 1.0, 2.0],
                         [0.0, 0.0, 3.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                     element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                     boundary_markers: vec![1],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -4021,7 +4316,7 @@ fn fem_backend_multibody_merges_disjoint_mesh_assets() {
     match plan.backend_plan {
         BackendPlanIR::Fem(fem) => {
             assert_eq!(fem.mesh.nodes.len(), 8);
-            assert_eq!(fem.mesh.elements.len(), 2);
+            assert_eq!(fem.mesh.cell_count(), 2);
             assert_eq!(fem.initial_magnetization.len(), 8);
             assert_eq!(fem.object_segments.len(), 2);
             assert_eq!(fem.object_segments[0].object_id, "free");
@@ -4116,9 +4411,9 @@ fn fem_backend_multibody_rejects_incompatible_cubic_anisotropy_axes() {
                         [0.0, 1.0, 0.0],
                         [0.0, 0.0, 1.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                     element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                     boundary_markers: vec![1],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -4136,9 +4431,9 @@ fn fem_backend_multibody_rejects_incompatible_cubic_anisotropy_axes() {
                         [0.0, 1.0, 2.0],
                         [0.0, 0.0, 3.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                     element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                     boundary_markers: vec![1],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -4179,9 +4474,9 @@ fn fem_plan_rejects_invalid_cubic_anisotropy_axes() {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -4273,9 +4568,9 @@ fn fem_plan_heterogeneous_materials_populates_region_materials_for_cuda() {
                         [0.0, 1.0, 0.0],
                         [0.0, 0.0, 1.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                     element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                     boundary_markers: vec![1],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -4293,9 +4588,9 @@ fn fem_plan_heterogeneous_materials_populates_region_materials_for_cuda() {
                         [0.0, 1.0, 2.0],
                         [0.0, 0.0, 3.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                     element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                     boundary_markers: vec![1],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -4396,9 +4691,9 @@ fn fem_plan_promotes_active_anisotropy_axis_material_for_heterogeneous_regions()
                         [0.0, 1.0, 0.0],
                         [0.0, 0.0, 1.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                     element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                     boundary_markers: vec![1],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -4416,9 +4711,9 @@ fn fem_plan_promotes_active_anisotropy_axis_material_for_heterogeneous_regions()
                         [0.0, 1.0, 2.0],
                         [0.0, 0.0, 3.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                     element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                     boundary_markers: vec![1],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -4508,9 +4803,9 @@ fn fem_plan_conformal_shared_domain_duplicates_interface_nodes_for_cuda() {
                     [0.0, 0.0, 1.0],
                     [0.0, 0.0, -1.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 2, 1, 4]]),
                 element_markers: vec![1, 2],
-                boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 3], [0, 1, 4]]),
                 boundary_markers: vec![10, 20],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -4621,9 +4916,9 @@ fn fem_plan_four_body_shared_domain_populates_region_materials_on_cuda() {
             mesh: Some(fullmag_ir::MeshIR {
                 mesh_name: "study_domain".to_string(),
                 nodes,
-                elements,
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(elements),
                 element_markers,
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -4721,9 +5016,9 @@ fn attach_unit_fem_domain_mesh(ir: &mut ProblemIR) {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -5394,9 +5689,9 @@ fn single_precision_is_rejected_for_phase_one_cpu_execution() {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![1, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -5465,9 +5760,9 @@ fn single_precision_is_rejected_with_gpu_specific_reason_when_cuda_device_reques
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![1, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -6388,9 +6683,9 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -6542,9 +6837,9 @@ fn fem_eigen_carries_k0_kittel_validation_from_runtime_metadata() {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -6678,9 +6973,9 @@ fn fem_eigen_allows_k0_kittel_synthetic_demag_factor_floquet_path() {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![10, 99],
                 periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                     pair_id: "x_faces".to_string(),
@@ -6828,9 +7123,9 @@ fn fem_eigen_allows_k0_kittel_periodic_airbox_shared_domain_path() {
                     [2.0, 1.0, 0.0],
                     [2.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![10, 99],
                 periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                     pair_id: "x_faces".to_string(),
@@ -7017,9 +7312,9 @@ fn fem_eigen_shared_domain_region_samples_equilibrium_once_per_object() {
                     [0.0, 0.0, 1.0],
                     [1.0, 1.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 1, 2, 4]]),
                 element_markers: vec![1, 2],
-                boundary_faces: vec![[0, 1, 3], [1, 2, 4]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 3], [1, 2, 4]]),
                 boundary_markers: vec![10, 10],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -7132,9 +7427,9 @@ fn fem_eigen_backend_interfacial_dmi_defaults_interface_normal_to_z_in_strict_mo
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -7224,9 +7519,9 @@ fn fem_eigen_auto_demag_resolves_to_poisson_robin_on_shared_domain_mesh_with_air
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![10, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -7338,9 +7633,9 @@ fn fem_eigen_periodic_bc_requires_periodic_node_pairs() {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: vec![],
                 periodic_node_pairs: vec![],
@@ -7410,9 +7705,9 @@ fn fem_eigen_periodic_bc_with_pairs_plans_successfully() {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                     pair_id: "x_faces".to_string(),
@@ -7501,9 +7796,9 @@ fn fem_eigen_floquet_bc_with_pairs_and_k_sampling_plans_successfully() {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                     pair_id: "x_faces".to_string(),
@@ -7597,9 +7892,9 @@ fn fem_eigen_floquet_dynamic_demag_is_rejected() {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![10, 11],
                 periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                     pair_id: "x_faces".to_string(),
@@ -7770,9 +8065,9 @@ fn fem_eigen_surface_anisotropy_requires_positive_ks_and_axis() {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: vec![],
                 periodic_node_pairs: vec![],
@@ -7985,7 +8280,7 @@ fn fem_frequency_response_rejects_unsupported_production_slice_cases() {
         [-2.0, 2.0, -2.0],
         [-2.0, -2.0, 2.0],
     ]);
-    domain_mesh.elements.push([4, 5, 6, 7]);
+    domain_mesh.push_tet4_cell([4, 5, 6, 7]).unwrap();
     domain_mesh.element_markers.push(0);
     geometry_assets.fem_domain_mesh_asset = Some(fullmag_ir::FemDomainMeshAssetIR {
         mesh_source: None,
@@ -8645,9 +8940,9 @@ fn fem_frequency_response_mesh_asset_problem() -> ProblemIR {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -8710,9 +9005,13 @@ fn fem_frequency_response_periodic_airbox_domain_problem() -> ProblemIR {
                 [-1.0, 2.0, -1.0],
                 [-1.0, -1.0, 2.0],
             ],
-            elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
             element_markers: vec![1, 0],
-            boundary_faces: vec![[0, 1, 2], [1, 2, 3], [4, 5, 6]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
+                [0, 1, 2],
+                [1, 2, 3],
+                [4, 5, 6],
+            ]),
             boundary_markers: vec![10, 11, 99],
             periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                 pair_id: "x_faces".to_string(),
@@ -8996,9 +9295,9 @@ fn fem_plan_fails_when_shared_domain_requested_but_no_domain_mesh_asset() {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -9081,9 +9380,9 @@ fn fem_plan_succeeds_when_shared_domain_has_domain_mesh_asset() {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -9104,9 +9403,9 @@ fn fem_plan_succeeds_when_shared_domain_has_domain_mesh_asset() {
                     [-2.0, 2.0, -2.0],
                     [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![1, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -9194,9 +9493,9 @@ fn fem_plan_homogeneous_multi_body_populates_region_materials() {
                         [0.0, 1.0, 0.0],
                         [0.0, 0.0, 1.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                     element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                     boundary_markers: vec![1],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -9214,9 +9513,9 @@ fn fem_plan_homogeneous_multi_body_populates_region_materials() {
                         [0.0, 1.0, 2.0],
                         [0.0, 0.0, 3.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                     element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                     boundary_markers: vec![1],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -9278,9 +9577,9 @@ fn reorder_shared_domain_mesh_preserves_per_domain_quality() {
             [-2.0, 2.0, -2.0],
             [-2.0, -2.0, 2.0],
         ],
-        elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
         element_markers: vec![1, 0],
-        boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
         boundary_markers: vec![1, 99],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -9340,9 +9639,9 @@ fn merge_multibody_mesh_preserves_per_domain_quality() {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 1, 2]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
         boundary_markers: vec![1],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -9356,9 +9655,9 @@ fn merge_multibody_mesh_preserves_per_domain_quality() {
             [0.0, 1.0, 2.0],
             [0.0, 0.0, 3.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 1, 2]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
         boundary_markers: vec![1],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -9390,9 +9689,9 @@ fn fem_domain_mesh_asset_accepts_optional_build_report() {
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0],
             ],
-            elements: vec![[0, 1, 2, 3]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
             element_markers: vec![1],
-            boundary_faces: vec![[0, 1, 2]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
             boundary_markers: vec![1],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -9438,9 +9737,9 @@ fn fem_domain_mesh_asset_accepts_optional_build_report() {
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0],
             ],
-            elements: vec![[0, 1, 2, 3]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
             element_markers: vec![1],
-            boundary_faces: vec![[0, 1, 2]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
             boundary_markers: vec![1],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -10088,7 +10387,8 @@ fn fdm_bulk_dmi_rejects_open_boundaries_until_natural_boundary_is_qualified() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.energy_terms.push(EnergyTermIR::BulkDmi { d: 1.0e-3 });
 
-    let error = plan(&ir).expect_err("open-boundary BulkDmi must not plan without its natural boundary condition");
+    let error = plan(&ir)
+        .expect_err("open-boundary BulkDmi must not plan without its natural boundary condition");
     assert!(
         error.reasons.iter().any(|reason| {
             reason.contains("BulkDmi")
@@ -10478,9 +10778,9 @@ fn fem_minimal_test_ir() -> ProblemIR {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -10536,11 +10836,7 @@ fn fem_planner_elementwise_material_legality_distinguishes_a_from_ms() {
             include_a: false,
             gpu: false,
             configure: |fem| fem.use_consistent_mass = None,
-            expected: Some((
-                "Ms_element_field",
-                "lumped-mass exchange projection",
-                "cpu",
-            )),
+            expected: Some(("Ms_element_field", "lumped-mass exchange projection", "cpu")),
         },
         Case {
             name: "CPU Ms Zeeman-only",
@@ -10893,9 +11189,9 @@ fn fem_cpu_exchange_preserves_nodal_ms_and_conformal_element_a_payloads() {
         if let Some(domain_asset) = assets.fem_domain_mesh_asset.as_mut() {
             if let Some(mesh) = domain_asset.mesh.as_mut() {
                 mesh.nodes.push([0.0, 0.0, -1.0]);
-                mesh.elements = vec![[0, 2, 1, 4], [0, 1, 2, 3]];
+                mesh.set_tet4_cells(vec![[0, 2, 1, 4], [0, 1, 2, 3]]);
                 mesh.element_markers = vec![1, 2];
-                mesh.boundary_faces = vec![[0, 1, 3], [0, 2, 4]];
+                mesh.set_tri3_facets(vec![[0, 1, 3], [0, 2, 4]]);
                 mesh.boundary_markers = vec![1, 2];
             }
             domain_asset
@@ -10966,9 +11262,9 @@ fn fem_cpu_exchange_and_zeeman_plan_preserves_conformal_dg0_ms() {
         .expect("inline FEM domain asset");
     let mesh = domain_asset.mesh.as_mut().expect("inline FEM mesh");
     mesh.nodes.push([0.0, 0.0, -1.0]);
-    mesh.elements = vec![[0, 2, 1, 4], [0, 1, 2, 3]];
+    mesh.set_tet4_cells(vec![[0, 2, 1, 4], [0, 1, 2, 3]]);
     mesh.element_markers = vec![1, 2];
-    mesh.boundary_faces = vec![[0, 1, 3], [0, 2, 4]];
+    mesh.set_tri3_facets(vec![[0, 1, 3], [0, 2, 4]]);
     mesh.boundary_markers = vec![1, 2];
     domain_asset
         .object_region_markers
@@ -11337,9 +11633,9 @@ fn fem_sharp_conformal_ms_and_aex_use_exclusive_cpu_dg0_realizations() {
                     [0.0, 0.0, -1.0],
                 ];
                 // The two region markers meet at the shared face (0, 1, 2).
-                mesh.elements = vec![[0, 2, 1, 4], [0, 1, 2, 3]];
+                mesh.set_tet4_cells(vec![[0, 2, 1, 4], [0, 1, 2, 3]]);
                 mesh.element_markers = vec![1, 2];
-                mesh.boundary_faces = vec![[0, 1, 3], [0, 2, 4]];
+                mesh.set_tri3_facets(vec![[0, 1, 3], [0, 2, 4]]);
                 mesh.boundary_markers = vec![1, 2];
             }
             domain_asset
@@ -11368,8 +11664,7 @@ fn fem_sharp_conformal_ms_and_aex_use_exclusive_cpu_dg0_realizations() {
     let err = plan(&ir).expect_err("GPU requests must still fail closed for DG0 material upload");
     assert!(
         err.reasons.iter().any(|reason| {
-            reason.contains("Ms_element_field")
-                && reason.contains("GPU material-state upload")
+            reason.contains("Ms_element_field") && reason.contains("GPU material-state upload")
         }),
         "unexpected planner errors: {:?}",
         err.reasons
@@ -11455,9 +11750,9 @@ fn fem_planner_rejects_conflicting_nodal_and_element_coefficient_realizations() 
             .as_mut()
             .expect("conflicting-realization test mesh is inline");
         mesh.nodes.push([0.0, 0.0, -1.0]);
-        mesh.elements.push([0, 2, 1, 4]);
+        mesh.push_tet4_cell([0, 2, 1, 4]).unwrap();
         mesh.element_markers.push(2);
-        mesh.boundary_faces.push([0, 2, 4]);
+        mesh.push_tri3_facet([0, 2, 4]).unwrap();
         mesh.boundary_markers.push(2);
         domain_asset
             .object_region_markers
@@ -11580,13 +11875,13 @@ fn fem_cpu_relaxation_rejects_conflicting_nodal_and_element_ms_before_native_cre
         [0.0, 1.0, 4.0],
         [0.0, 0.0, 5.0],
     ]);
-    mesh.elements.push([4, 5, 6, 7]);
+    mesh.push_tet4_cell([4, 5, 6, 7]).unwrap();
     mesh.element_markers.push(2);
-    mesh.boundary_faces.push([4, 5, 6]);
+    mesh.push_tri3_facet([4, 5, 6]).unwrap();
     mesh.boundary_markers.push(2);
-    mesh.elements.push([8, 9, 10, 11]);
+    mesh.push_tet4_cell([8, 9, 10, 11]).unwrap();
     mesh.element_markers.push(3);
-    mesh.boundary_faces.push([8, 9, 10]);
+    mesh.push_tri3_facet([8, 9, 10]).unwrap();
     mesh.boundary_markers.push(3);
     domain_asset
         .region_markers
@@ -11830,9 +12125,9 @@ fn fem_sharp_aex_project_policy_with_real_marker_still_uses_projection_warning()
                     [0.0, 0.05, 0.0],
                     [0.0, 0.0, 0.05],
                 ];
-                mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7]];
+                mesh.set_tet4_cells(vec![[0, 1, 2, 3], [4, 5, 6, 7]]);
                 mesh.element_markers = vec![1, 2];
-                mesh.boundary_faces = vec![[0, 1, 2], [4, 5, 6]];
+                mesh.set_tri3_facets(vec![[0, 1, 2], [4, 5, 6]]);
                 mesh.boundary_markers = vec![1, 2];
             }
             domain_asset

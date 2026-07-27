@@ -4,7 +4,7 @@ use crate::{
     FemLinearSolverPolicy, FieldRefreshPolicyIR, HybridHintsIR, IntegratorChoice,
     RelaxationControlIR,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
@@ -210,13 +210,223 @@ pub struct MeshQualityIR {
     pub avg_quality: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum FemCellTypeIR {
+    Tet4,
+    Prism6,
+    Pyramid5,
+    Hex8,
+}
+
+impl FemCellTypeIR {
+    pub const fn arity(self) -> usize {
+        match self {
+            Self::Tet4 => 4,
+            Self::Prism6 => 6,
+            Self::Pyramid5 => 5,
+            Self::Hex8 => 8,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum FemFacetTypeIR {
+    Tri3,
+    Quad4,
+}
+
+impl FemFacetTypeIR {
+    pub const fn arity(self) -> usize {
+        match self {
+            Self::Tri3 => 3,
+            Self::Quad4 => 4,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum FemFacetRoleIR {
+    Exterior,
+    MaterialInterface,
+    PeriodicSeam,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FemConnectivityIR {
+    pub types: Vec<FemCellTypeIR>,
+    pub offsets: Vec<u32>,
+    pub nodes: Vec<u32>,
+}
+
+impl FemConnectivityIR {
+    pub fn empty() -> Self {
+        Self {
+            types: Vec::new(),
+            offsets: vec![0],
+            nodes: Vec::new(),
+        }
+    }
+
+    pub fn from_tet4(elements: Vec<[u32; 4]>) -> Self {
+        let mut nodes = Vec::with_capacity(elements.len() * 4);
+        for element in &elements {
+            nodes.extend(element);
+        }
+        Self {
+            types: vec![FemCellTypeIR::Tet4; elements.len()],
+            offsets: (0..=elements.len())
+                .map(|index| (index * 4) as u32)
+                .collect(),
+            nodes,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.types.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.types.is_empty()
+    }
+
+    pub fn item_nodes(&self, ordinal: usize) -> Option<&[u32]> {
+        let start = *self.offsets.get(ordinal)? as usize;
+        let end = *self.offsets.get(ordinal + 1)? as usize;
+        self.nodes.get(start..end)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = FemCellView<'_>> {
+        self.types
+            .iter()
+            .copied()
+            .enumerate()
+            .filter_map(|(ordinal, cell_type)| {
+                self.item_nodes(ordinal).map(|nodes| FemCellView {
+                    global_ordinal: ordinal,
+                    cell_type,
+                    nodes,
+                })
+            })
+    }
+
+    pub fn require_tet4(&self) -> Result<Vec<[u32; 4]>, String> {
+        self.iter()
+            .map(|cell| {
+                if cell.cell_type != FemCellTypeIR::Tet4 || cell.nodes.len() != 4 {
+                    return Err(format!(
+                        "tet4 topology required, but cell {} is {:?}",
+                        cell.global_ordinal, cell.cell_type
+                    ));
+                }
+                Ok([cell.nodes[0], cell.nodes[1], cell.nodes[2], cell.nodes[3]])
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FemCellView<'a> {
+    pub global_ordinal: usize,
+    pub cell_type: FemCellTypeIR,
+    pub nodes: &'a [u32],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FemFacetConnectivityIR {
+    pub types: Vec<FemFacetTypeIR>,
+    pub roles: Vec<FemFacetRoleIR>,
+    pub offsets: Vec<u32>,
+    pub nodes: Vec<u32>,
+}
+
+impl FemFacetConnectivityIR {
+    pub fn empty() -> Self {
+        Self {
+            types: Vec::new(),
+            roles: Vec::new(),
+            offsets: vec![0],
+            nodes: Vec::new(),
+        }
+    }
+
+    pub fn from_tri3(boundary_faces: Vec<[u32; 3]>) -> Self {
+        let mut nodes = Vec::with_capacity(boundary_faces.len() * 3);
+        for face in &boundary_faces {
+            nodes.extend(face);
+        }
+        Self {
+            types: vec![FemFacetTypeIR::Tri3; boundary_faces.len()],
+            roles: vec![FemFacetRoleIR::Exterior; boundary_faces.len()],
+            offsets: (0..=boundary_faces.len())
+                .map(|index| (index * 3) as u32)
+                .collect(),
+            nodes,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.types.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.types.is_empty()
+    }
+
+    pub fn item_nodes(&self, ordinal: usize) -> Option<&[u32]> {
+        let start = *self.offsets.get(ordinal)? as usize;
+        let end = *self.offsets.get(ordinal + 1)? as usize;
+        self.nodes.get(start..end)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = FemFacetView<'_>> {
+        self.types
+            .iter()
+            .copied()
+            .zip(self.roles.iter().copied())
+            .enumerate()
+            .filter_map(|(global_ordinal, (facet_type, role))| {
+                self.item_nodes(global_ordinal).map(|nodes| FemFacetView {
+                    global_ordinal,
+                    facet_type,
+                    role,
+                    nodes,
+                })
+            })
+    }
+
+    pub fn require_tri3(&self) -> Result<Vec<[u32; 3]>, String> {
+        self.iter()
+            .map(|facet| {
+                if facet.facet_type != FemFacetTypeIR::Tri3 || facet.nodes.len() != 3 {
+                    return Err(format!(
+                        "tri3 topology required, but facet {} is {:?}",
+                        facet.global_ordinal, facet.facet_type
+                    ));
+                }
+                Ok([facet.nodes[0], facet.nodes[1], facet.nodes[2]])
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FemFacetView<'a> {
+    pub global_ordinal: usize,
+    pub facet_type: FemFacetTypeIR,
+    pub role: FemFacetRoleIR,
+    pub nodes: &'a [u32],
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct MeshIR {
     pub mesh_name: String,
     pub nodes: Vec<[f64; 3]>,
-    pub elements: Vec<[u32; 4]>,
+    pub cells: FemConnectivityIR,
     pub element_markers: Vec<u32>,
-    pub boundary_faces: Vec<[u32; 3]>,
+    pub facets: FemFacetConnectivityIR,
     pub boundary_markers: Vec<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub periodic_boundary_pairs: Vec<MeshPeriodicBoundaryPairIR>,
@@ -224,6 +434,152 @@ pub struct MeshIR {
     pub periodic_node_pairs: Vec<MeshPeriodicNodePairIR>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub per_domain_quality: HashMap<u32, MeshQualityIR>,
+}
+
+#[derive(Deserialize)]
+struct MeshIRWire {
+    mesh_name: String,
+    nodes: Vec<[f64; 3]>,
+    #[serde(default)]
+    cells: Option<FemConnectivityIR>,
+    #[serde(default)]
+    facets: Option<FemFacetConnectivityIR>,
+    #[serde(default)]
+    elements: Option<Vec<[u32; 4]>>,
+    #[serde(default)]
+    boundary_faces: Option<Vec<[u32; 3]>>,
+    element_markers: Vec<u32>,
+    boundary_markers: Vec<u32>,
+    #[serde(default)]
+    periodic_boundary_pairs: Vec<MeshPeriodicBoundaryPairIR>,
+    #[serde(default)]
+    periodic_node_pairs: Vec<MeshPeriodicNodePairIR>,
+    #[serde(default)]
+    per_domain_quality: HashMap<u32, MeshQualityIR>,
+}
+
+impl<'de> Deserialize<'de> for MeshIR {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = MeshIRWire::deserialize(deserializer)?;
+        let has_v2 = wire.cells.is_some() || wire.facets.is_some();
+        let has_legacy = wire.elements.is_some() || wire.boundary_faces.is_some();
+        if has_v2 && has_legacy {
+            return Err(D::Error::custom(
+                "mesh payload contains both legacy and v2 topology",
+            ));
+        }
+        let (cells, facets) =
+            if has_v2 {
+                (
+                    wire.cells
+                        .ok_or_else(|| D::Error::custom("v2 mesh topology requires cells"))?,
+                    wire.facets
+                        .ok_or_else(|| D::Error::custom("v2 mesh topology requires facets"))?,
+                )
+            } else if has_legacy {
+                (
+                    FemConnectivityIR::from_tet4(wire.elements.ok_or_else(|| {
+                        D::Error::custom("legacy mesh topology requires elements")
+                    })?),
+                    FemFacetConnectivityIR::from_tri3(wire.boundary_faces.ok_or_else(|| {
+                        D::Error::custom("legacy mesh topology requires boundary_faces")
+                    })?),
+                )
+            } else {
+                return Err(D::Error::custom(
+                    "mesh payload must provide either v2 or legacy topology",
+                ));
+            };
+        Ok(Self {
+            mesh_name: wire.mesh_name,
+            nodes: wire.nodes,
+            cells,
+            element_markers: wire.element_markers,
+            facets,
+            boundary_markers: wire.boundary_markers,
+            periodic_boundary_pairs: wire.periodic_boundary_pairs,
+            periodic_node_pairs: wire.periodic_node_pairs,
+            per_domain_quality: wire.per_domain_quality,
+        })
+    }
+}
+
+impl MeshIR {
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_legacy_tet4(
+        mesh_name: String,
+        nodes: Vec<[f64; 3]>,
+        elements: Vec<[u32; 4]>,
+        element_markers: Vec<u32>,
+        boundary_faces: Vec<[u32; 3]>,
+        boundary_markers: Vec<u32>,
+        periodic_boundary_pairs: Vec<MeshPeriodicBoundaryPairIR>,
+        periodic_node_pairs: Vec<MeshPeriodicNodePairIR>,
+        per_domain_quality: HashMap<u32, MeshQualityIR>,
+    ) -> Self {
+        Self {
+            mesh_name,
+            nodes,
+            cells: FemConnectivityIR::from_tet4(elements),
+            element_markers,
+            facets: FemFacetConnectivityIR::from_tri3(boundary_faces),
+            boundary_markers,
+            periodic_boundary_pairs,
+            periodic_node_pairs,
+            per_domain_quality,
+        }
+    }
+
+    pub fn cell_count(&self) -> usize {
+        self.cells.len()
+    }
+
+    pub fn facet_count(&self) -> usize {
+        self.facets.len()
+    }
+
+    pub fn require_tet4_elements(&self) -> Result<Vec<[u32; 4]>, String> {
+        self.cells.require_tet4()
+    }
+
+    pub fn require_tri3_boundary_faces(&self) -> Result<Vec<[u32; 3]>, String> {
+        self.facets.require_tri3()
+    }
+
+    pub fn set_tet4_cells(&mut self, elements: Vec<[u32; 4]>) {
+        self.cells = FemConnectivityIR::from_tet4(elements);
+    }
+
+    pub fn push_tet4_cell(&mut self, element: [u32; 4]) -> Result<(), String> {
+        let mut elements = self.require_tet4_elements()?;
+        elements.push(element);
+        self.set_tet4_cells(elements);
+        Ok(())
+    }
+
+    pub fn set_tri3_facets(&mut self, faces: Vec<[u32; 3]>) {
+        self.facets = FemFacetConnectivityIR::from_tri3(faces);
+    }
+
+    pub fn push_tri3_facet(&mut self, face: [u32; 3]) -> Result<(), String> {
+        let mut faces = self.require_tri3_boundary_faces()?;
+        faces.push(face);
+        self.set_tri3_facets(faces);
+        Ok(())
+    }
+
+    pub fn extend_tri3_facets(
+        &mut self,
+        faces: impl IntoIterator<Item = [u32; 3]>,
+    ) -> Result<(), String> {
+        let mut existing = self.require_tri3_boundary_faces()?;
+        existing.extend(faces);
+        self.set_tri3_facets(existing);
+        Ok(())
+    }
 }
 
 /// Production v6 evidence for a mirrored FEM periodic mesh.
@@ -313,9 +669,9 @@ fn sorted_face(face: [u32; 3]) -> [u32; 3] {
 fn mesh_topology_fingerprint(mesh: &MeshIR) -> String {
     let payload = serde_json::json!({
         "nodes": mesh.nodes,
-        "elements": mesh.elements,
+        "cells": mesh.cells,
         "element_markers": mesh.element_markers,
-        "boundary_faces": mesh.boundary_faces,
+        "facets": mesh.facets,
         "boundary_markers": mesh.boundary_markers,
         "periodic_boundary_pairs": mesh.periodic_boundary_pairs,
         "periodic_node_pairs": mesh.periodic_node_pairs,
@@ -326,7 +682,10 @@ fn mesh_topology_fingerprint(mesh: &MeshIR) -> String {
 
 fn mesh_face_element_markers(mesh: &MeshIR) -> BTreeMap<[u32; 3], BTreeSet<u32>> {
     let mut result = BTreeMap::new();
-    for (index, element) in mesh.elements.iter().enumerate() {
+    let Ok(elements) = mesh.require_tet4_elements() else {
+        return result;
+    };
+    for (index, element) in elements.iter().enumerate() {
         let marker = mesh.element_markers.get(index).copied().unwrap_or(0);
         for face in [
             [element[0], element[1], element[2]],
@@ -345,7 +704,10 @@ fn mesh_face_element_markers(mesh: &MeshIR) -> BTreeMap<[u32; 3], BTreeSet<u32>>
 
 fn mesh_face_element_indices(mesh: &MeshIR) -> BTreeMap<[u32; 3], Vec<usize>> {
     let mut result = BTreeMap::<[u32; 3], Vec<usize>>::new();
-    for (index, element) in mesh.elements.iter().enumerate() {
+    let Ok(elements) = mesh.require_tet4_elements() else {
+        return result;
+    };
+    for (index, element) in elements.iter().enumerate() {
         for face in [
             [element[0], element[1], element[2]],
             [element[0], element[1], element[3]],
@@ -411,18 +773,21 @@ fn seam_material_residual(
     ms_element_field: Option<&[f64]>,
     a_element_field: Option<&[f64]>,
 ) -> Result<f64, Vec<String>> {
+    let boundary_faces = mesh.require_tri3_boundary_faces().map_err(|error| {
+        vec![format!(
+            "periodic material certification is tri3-only: {error}"
+        )]
+    })?;
     let face_elements = mesh_face_element_indices(mesh);
     let mut residual = 0.0_f64;
     let mut errors = Vec::new();
     for axis in &certificate.axis_pairs {
         for face in &axis.face_pairs {
-            let source_face = mesh
-                .boundary_faces
+            let source_face = boundary_faces
                 .get(face.face_a as usize)
                 .copied()
                 .map(sorted_face);
-            let destination_face = mesh
-                .boundary_faces
+            let destination_face = boundary_faces
                 .get(face.face_b as usize)
                 .copied()
                 .map(sorted_face);
@@ -828,6 +1193,16 @@ impl MeshIR {
     /// closed multi-axis equivalence classes is not a certificate.
     pub fn periodic_mesh_certificate_v6(&self) -> Result<PeriodicMeshCertificateV6IR, Vec<String>> {
         let mut errors = Vec::new();
+        let boundary_faces = match self.require_tri3_boundary_faces() {
+            Ok(faces) => faces,
+            Err(error) => {
+                errors.push(format!("periodic v6 certification is tri3-only: {error}"));
+                Vec::new()
+            }
+        };
+        if let Err(error) = self.require_tet4_elements() {
+            errors.push(format!("periodic v6 certification is tet4-only: {error}"));
+        }
         if self.periodic_boundary_pairs.is_empty() {
             errors.push("periodic v6 certificate requires boundary pair metadata".to_string());
         }
@@ -853,8 +1228,7 @@ impl MeshIR {
                 continue;
             };
             let tolerance = boundary_pair.tolerance.unwrap_or(1.0e-9).max(0.0);
-            let source_faces = self
-                .boundary_faces
+            let source_faces = boundary_faces
                 .iter()
                 .zip(self.boundary_markers.iter())
                 .enumerate()
@@ -862,8 +1236,7 @@ impl MeshIR {
                     (*marker == boundary_pair.marker_a).then_some((index, *face))
                 })
                 .collect::<Vec<_>>();
-            let destination_faces = self
-                .boundary_faces
+            let destination_faces = boundary_faces
                 .iter()
                 .zip(self.boundary_markers.iter())
                 .enumerate()
@@ -1198,10 +1571,20 @@ impl MeshIR {
         if !has_air {
             return Ok(Vec::new());
         }
+        let elements = self.require_tet4_elements().map_err(|error| {
+            vec![format!(
+                "airbox boundary-role certification is tet4-only: {error}"
+            )]
+        })?;
+        let boundary_faces = self.require_tri3_boundary_faces().map_err(|error| {
+            vec![format!(
+                "airbox boundary-role certification is tri3-only: {error}"
+            )]
+        })?;
 
         type FaceKey = [u32; 3];
         let mut topology: BTreeMap<FaceKey, Vec<bool>> = BTreeMap::new();
-        for (index, element) in self.elements.iter().enumerate() {
+        for (index, element) in elements.iter().enumerate() {
             let marker = self.element_markers.get(index).copied().unwrap_or(1);
             let is_air = marker == 0;
             let faces = [
@@ -1217,7 +1600,7 @@ impl MeshIR {
         }
 
         let mut physical: BTreeMap<FaceKey, Vec<u32>> = BTreeMap::new();
-        for (index, face) in self.boundary_faces.iter().enumerate() {
+        for (index, face) in boundary_faces.iter().enumerate() {
             let mut key = *face;
             key.sort_unstable();
             let marker = self.boundary_markers.get(index).copied().unwrap_or(0);
@@ -1416,30 +1799,37 @@ impl MeshIR {
         if self.nodes.is_empty() {
             errors.push("mesh.nodes must not be empty".to_string());
         }
-        if self.elements.is_empty() {
-            errors.push("mesh.elements must not be empty".to_string());
+        if self.cells.is_empty() {
+            errors.push("mesh.cells must not be empty".to_string());
         }
-        if self.element_markers.len() != self.elements.len() {
-            errors.push("mesh.element_markers length must match mesh.elements length".to_string());
+        if self.element_markers.len() != self.cells.len() {
+            errors.push("mesh.element_markers length must match mesh.cells length".to_string());
         }
-        if self.boundary_markers.len() != self.boundary_faces.len() {
-            errors.push(
-                "mesh.boundary_markers length must match mesh.boundary_faces length".to_string(),
-            );
+        if self.boundary_markers.len() != self.facets.len() {
+            errors.push("mesh.boundary_markers length must match mesh.facets length".to_string());
         }
 
         let node_count = self.nodes.len() as u32;
-        for (index, element) in self.elements.iter().enumerate() {
-            if element.iter().any(|node| *node >= node_count) {
-                errors.push(format!("mesh element {index} contains invalid node index"));
-            }
-        }
-        for (index, face) in self.boundary_faces.iter().enumerate() {
-            if face.iter().any(|node| *node >= node_count) {
-                errors.push(format!(
-                    "mesh boundary face {index} contains invalid node index"
-                ));
-            }
+        validate_cell_connectivity(&self.cells, node_count, &mut errors);
+        validate_facet_connectivity(&self.facets, node_count, &mut errors);
+        let has_mixed_cells = self
+            .cells
+            .types
+            .iter()
+            .any(|cell_type| *cell_type != FemCellTypeIR::Tet4);
+        if has_mixed_cells
+            && (!self.periodic_boundary_pairs.is_empty()
+                || !self.periodic_node_pairs.is_empty()
+                || self
+                    .facets
+                    .roles
+                    .iter()
+                    .any(|role| *role == FemFacetRoleIR::PeriodicSeam))
+        {
+            errors.push(
+                "mixed topology with periodic pairs or periodic_seam facets is not qualified; use tet4 or remove periodic topology"
+                    .to_string(),
+            );
         }
 
         let mut periodic_pair_ids = BTreeSet::new();
@@ -1549,8 +1939,8 @@ impl MeshIR {
             }
         }
 
-        if self.element_markers.len() != self.elements.len() {
-            errors.push("mesh.element_markers must cover every tetrahedral element".to_string());
+        if self.element_markers.len() != self.cells.len() {
+            errors.push("mesh.element_markers must cover every FEM cell".to_string());
         }
 
         let bbox_scale = self
@@ -1581,37 +1971,49 @@ impl MeshIR {
             })
             .max(f64::MIN_POSITIVE);
 
-        for (index, element) in self.elements.iter().enumerate() {
-            let mut unique = BTreeSet::new();
-            for node in element {
-                unique.insert(*node);
+        for cell in self.cells.iter() {
+            let Some(coordinates) = cell
+                .nodes
+                .iter()
+                .map(|node| self.nodes.get(*node as usize).copied())
+                .collect::<Option<Vec<_>>>()
+            else {
+                continue;
+            };
+            let determinants = cell_jacobian_determinants(cell.cell_type, &coordinates);
+            if cell.cell_type == FemCellTypeIR::Tet4 {
+                let determinant = determinants[0];
+                let volume = determinant / 6.0;
+                if volume.abs() <= eps {
+                    errors.push(format!(
+                        "mesh element {} has degenerate tetra volume {volume:.6e} <= eps {eps:.6e}",
+                        cell.global_ordinal
+                    ));
+                } else if policy.require_positive_orientation && volume < 0.0 {
+                    errors.push(format!(
+                        "mesh element {} has negative tetra orientation {volume:.6e}",
+                        cell.global_ordinal
+                    ));
+                }
+                continue;
             }
-            if unique.len() != 4 {
+            let determinant_eps = eps * 6.0;
+            let minimum_abs = determinants
+                .iter()
+                .map(|value| value.abs())
+                .fold(f64::INFINITY, f64::min);
+            if minimum_abs <= determinant_eps {
                 errors.push(format!(
-                    "mesh element {index} contains duplicate node indices"
+                    "mesh cell {} has degenerate {:?} Jacobian {minimum_abs:.6e} <= eps {determinant_eps:.6e}",
+                    cell.global_ordinal, cell.cell_type
                 ));
-                continue;
-            }
-            let Some(a) = self.nodes.get(element[0] as usize) else {
-                continue;
-            };
-            let Some(b) = self.nodes.get(element[1] as usize) else {
-                continue;
-            };
-            let Some(c) = self.nodes.get(element[2] as usize) else {
-                continue;
-            };
-            let Some(d) = self.nodes.get(element[3] as usize) else {
-                continue;
-            };
-            let volume = tet_signed_volume(*a, *b, *c, *d);
-            if volume.abs() <= eps {
+            } else if policy.require_positive_orientation
+                && determinants.iter().any(|determinant| *determinant < 0.0)
+            {
+                let minimum = determinants.iter().copied().fold(f64::INFINITY, f64::min);
                 errors.push(format!(
-                    "mesh element {index} has degenerate tetra volume {volume:.6e} <= eps {eps:.6e}"
-                ));
-            } else if policy.require_positive_orientation && volume < 0.0 {
-                errors.push(format!(
-                    "mesh element {index} has negative tetra orientation {volume:.6e}"
+                    "mesh cell {} has negative {:?} Jacobian {minimum:.6e}",
+                    cell.global_ordinal, cell.cell_type
                 ));
             }
         }
@@ -1635,16 +2037,219 @@ pub fn validate_mesh_for_execution(mesh: &MeshIR) -> Result<(), Vec<String>> {
     mesh.validate_strict(&MeshValidationPolicy::default())
 }
 
-fn tet_signed_volume(a: [f64; 3], b: [f64; 3], c: [f64; 3], d: [f64; 3]) -> f64 {
-    let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-    let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
-    let ad = [d[0] - a[0], d[1] - a[1], d[2] - a[2]];
-    let cross = [
-        ac[1] * ad[2] - ac[2] * ad[1],
-        ac[2] * ad[0] - ac[0] * ad[2],
-        ac[0] * ad[1] - ac[1] * ad[0],
-    ];
-    (ab[0] * cross[0] + ab[1] * cross[1] + ab[2] * cross[2]) / 6.0
+fn validate_cell_connectivity(
+    cells: &FemConnectivityIR,
+    node_count: u32,
+    errors: &mut Vec<String>,
+) {
+    validate_offsets(
+        "cell",
+        cells.types.len(),
+        &cells.offsets,
+        cells.nodes.len(),
+        errors,
+    );
+    for (index, cell_type) in cells.types.iter().copied().enumerate() {
+        validate_item_nodes(
+            "cell",
+            index,
+            cell_type.arity(),
+            cells.item_nodes(index),
+            node_count,
+            errors,
+        );
+    }
+}
+
+fn validate_facet_connectivity(
+    facets: &FemFacetConnectivityIR,
+    node_count: u32,
+    errors: &mut Vec<String>,
+) {
+    validate_offsets(
+        "facet",
+        facets.types.len(),
+        &facets.offsets,
+        facets.nodes.len(),
+        errors,
+    );
+    if facets.roles.len() != facets.types.len() {
+        errors.push("mesh.facets.roles length must match mesh.facets.types length".to_string());
+    }
+    for (index, facet_type) in facets.types.iter().copied().enumerate() {
+        validate_item_nodes(
+            "facet",
+            index,
+            facet_type.arity(),
+            facets.item_nodes(index),
+            node_count,
+            errors,
+        );
+    }
+}
+
+fn validate_offsets(
+    kind: &str,
+    item_count: usize,
+    offsets: &[u32],
+    connectivity_len: usize,
+    errors: &mut Vec<String>,
+) {
+    if offsets.len() != item_count + 1 {
+        errors.push(format!(
+            "mesh.{kind}s.offsets length must equal {kind} count + 1"
+        ));
+        return;
+    }
+    if offsets.first().copied() != Some(0) {
+        errors.push(format!("mesh.{kind}s.offsets must start at 0"));
+    }
+    if offsets.windows(2).any(|pair| pair[1] < pair[0]) {
+        errors.push(format!("mesh.{kind}s.offsets must be monotone"));
+    }
+    if offsets.last().copied().map(|value| value as usize) != Some(connectivity_len) {
+        errors.push(format!(
+            "mesh.{kind}s.offsets must end at mesh.{kind}s.nodes length"
+        ));
+    }
+}
+
+fn validate_item_nodes(
+    kind: &str,
+    index: usize,
+    expected_arity: usize,
+    nodes: Option<&[u32]>,
+    node_count: u32,
+    errors: &mut Vec<String>,
+) {
+    let Some(nodes) = nodes else {
+        errors.push(format!("mesh {kind} {index} has invalid CSR range"));
+        return;
+    };
+    if nodes.len() != expected_arity {
+        errors.push(format!(
+            "mesh {kind} {index} has wrong arity {}; expected {expected_arity}",
+            nodes.len()
+        ));
+    }
+    if nodes.iter().any(|node| *node >= node_count) {
+        errors.push(format!("mesh {kind} {index} contains invalid node index"));
+    }
+    if nodes.iter().copied().collect::<BTreeSet<_>>().len() != nodes.len() {
+        errors.push(format!(
+            "mesh {kind} {index} contains duplicate node indices"
+        ));
+    }
+}
+
+fn determinant3(matrix: [[f64; 3]; 3]) -> f64 {
+    matrix[0][0] * (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1])
+        - matrix[0][1] * (matrix[1][0] * matrix[2][2] - matrix[1][2] * matrix[2][0])
+        + matrix[0][2] * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0])
+}
+
+fn mapped_jacobian_determinant(coordinates: &[[f64; 3]], derivatives: &[[f64; 3]]) -> f64 {
+    let mut jacobian = [[0.0; 3]; 3];
+    for (coordinate, derivative) in coordinates.iter().zip(derivatives) {
+        for physical_axis in 0..3 {
+            for reference_axis in 0..3 {
+                jacobian[physical_axis][reference_axis] +=
+                    coordinate[physical_axis] * derivative[reference_axis];
+            }
+        }
+    }
+    determinant3(jacobian)
+}
+
+fn cell_jacobian_determinants(cell_type: FemCellTypeIR, coordinates: &[[f64; 3]]) -> Vec<f64> {
+    let q = 1.0 / 3.0_f64.sqrt();
+    match cell_type {
+        FemCellTypeIR::Tet4 => vec![determinant3([
+            [
+                coordinates[1][0] - coordinates[0][0],
+                coordinates[2][0] - coordinates[0][0],
+                coordinates[3][0] - coordinates[0][0],
+            ],
+            [
+                coordinates[1][1] - coordinates[0][1],
+                coordinates[2][1] - coordinates[0][1],
+                coordinates[3][1] - coordinates[0][1],
+            ],
+            [
+                coordinates[1][2] - coordinates[0][2],
+                coordinates[2][2] - coordinates[0][2],
+                coordinates[3][2] - coordinates[0][2],
+            ],
+        ])],
+        FemCellTypeIR::Prism6 => [(1.0 / 6.0, 1.0 / 6.0, -q), (2.0 / 3.0, 1.0 / 6.0, q)]
+            .into_iter()
+            .map(|(r, s, t)| {
+                let derivatives = [
+                    [-(1.0 - t) / 2.0, -(1.0 - t) / 2.0, -(1.0 - r - s) / 2.0],
+                    [(1.0 - t) / 2.0, 0.0, -r / 2.0],
+                    [0.0, (1.0 - t) / 2.0, -s / 2.0],
+                    [-(1.0 + t) / 2.0, -(1.0 + t) / 2.0, (1.0 - r - s) / 2.0],
+                    [(1.0 + t) / 2.0, 0.0, r / 2.0],
+                    [0.0, (1.0 + t) / 2.0, s / 2.0],
+                ];
+                mapped_jacobian_determinant(coordinates, &derivatives)
+            })
+            .collect(),
+        FemCellTypeIR::Pyramid5 => [(-q, -q, 0.5 - q / 2.0), (q, q, 0.5 + q / 2.0)]
+            .into_iter()
+            .map(|(r, s, t)| {
+                let derivatives = [
+                    [
+                        -(1.0 - s) * (1.0 - t) / 4.0,
+                        -(1.0 - r) * (1.0 - t) / 4.0,
+                        -(1.0 - r) * (1.0 - s) / 4.0,
+                    ],
+                    [
+                        (1.0 - s) * (1.0 - t) / 4.0,
+                        -(1.0 + r) * (1.0 - t) / 4.0,
+                        -(1.0 + r) * (1.0 - s) / 4.0,
+                    ],
+                    [
+                        (1.0 + s) * (1.0 - t) / 4.0,
+                        (1.0 + r) * (1.0 - t) / 4.0,
+                        -(1.0 + r) * (1.0 + s) / 4.0,
+                    ],
+                    [
+                        -(1.0 + s) * (1.0 - t) / 4.0,
+                        (1.0 - r) * (1.0 - t) / 4.0,
+                        -(1.0 - r) * (1.0 + s) / 4.0,
+                    ],
+                    [0.0, 0.0, 1.0],
+                ];
+                mapped_jacobian_determinant(coordinates, &derivatives)
+            })
+            .collect(),
+        FemCellTypeIR::Hex8 => {
+            let signs = [
+                [-1.0, -1.0, -1.0],
+                [1.0, -1.0, -1.0],
+                [1.0, 1.0, -1.0],
+                [-1.0, 1.0, -1.0],
+                [-1.0, -1.0, 1.0],
+                [1.0, -1.0, 1.0],
+                [1.0, 1.0, 1.0],
+                [-1.0, 1.0, 1.0],
+            ];
+            [(-q, -q, -q), (q, q, q)]
+                .into_iter()
+                .map(|(r, s, t)| {
+                    let derivatives = signs.map(|sign| {
+                        [
+                            sign[0] * (1.0 + sign[1] * s) * (1.0 + sign[2] * t) / 8.0,
+                            sign[1] * (1.0 + sign[0] * r) * (1.0 + sign[2] * t) / 8.0,
+                            sign[2] * (1.0 + sign[0] * r) * (1.0 + sign[1] * s) / 8.0,
+                        ]
+                    });
+                    mapped_jacobian_determinant(coordinates, &derivatives)
+                })
+                .collect()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1661,9 +2266,9 @@ mod mesh_validation_tests {
                 [0.0, 0.0, 1.0],
                 [0.0, 0.0, 2.0],
             ],
-            elements: vec![[0, 1, 2, 3], [1, 3, 2, 4]],
+            cells: FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [1, 3, 2, 4]]),
             element_markers: vec![1, 0],
-            boundary_faces: vec![
+            facets: FemFacetConnectivityIR::from_tri3(vec![
                 [0, 1, 2],
                 [0, 1, 3],
                 [0, 2, 3],
@@ -1671,7 +2276,7 @@ mod mesh_validation_tests {
                 [1, 3, 4],
                 [2, 3, 4],
                 [1, 2, 3],
-            ],
+            ]),
             boundary_markers: vec![99, 98, 97, 7, 7, 7, 10],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -1692,7 +2297,9 @@ mod mesh_validation_tests {
     #[test]
     fn airbox_roles_reject_incomplete_outer_boundary() {
         let mut mesh = certified_airbox_mesh();
-        mesh.boundary_faces.remove(5);
+        let mut faces = mesh.require_tri3_boundary_faces().unwrap();
+        faces.remove(5);
+        mesh.facets = FemFacetConnectivityIR::from_tri3(faces);
         mesh.boundary_markers.remove(5);
         let errors = mesh
             .certify_airbox_boundary_roles()
@@ -1724,8 +2331,8 @@ mod mesh_validation_tests {
                 [0.0, 0.0, 1.0],
             ],
             element_markers: vec![1; elements.len()],
-            elements,
-            boundary_faces: Vec::new(),
+            cells: FemConnectivityIR::from_tet4(elements),
+            facets: FemFacetConnectivityIR::empty(),
             boundary_markers: Vec::new(),
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -1771,9 +2378,9 @@ mod mesh_validation_tests {
                 [1.0, 1.0, 0.0],
                 [1.0, 0.0, 1.0],
             ],
-            elements: vec![[0, 1, 2, 3], [3, 5, 4, 0]],
+            cells: FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [3, 5, 4, 0]]),
             element_markers: vec![1, 1],
-            boundary_faces: vec![[0, 1, 2], [3, 5, 4]],
+            facets: FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [3, 5, 4]]),
             boundary_markers: vec![10, 11],
             periodic_boundary_pairs: vec![MeshPeriodicBoundaryPairIR {
                 pair_id: "x_faces".to_string(),
@@ -1821,9 +2428,9 @@ mod mesh_validation_tests {
                 [1.0, 0.0, 1.0],
                 [1.0, 1.0, 1.0],
             ],
-            elements: Vec::new(),
+            cells: FemConnectivityIR::empty(),
             element_markers: Vec::new(),
-            boundary_faces: Vec::new(),
+            facets: FemFacetConnectivityIR::empty(),
             boundary_markers: Vec::new(),
             periodic_boundary_pairs: vec![
                 MeshPeriodicBoundaryPairIR {
@@ -2007,7 +2614,9 @@ mod mesh_validation_tests {
             [1.0, 2.0, 1.0],
             [1.0, 3.0, 0.0],
         ]);
-        mesh.boundary_faces.extend([[6, 8, 7], [9, 10, 11]]);
+        let mut faces = mesh.require_tri3_boundary_faces().unwrap();
+        faces.extend([[6, 8, 7], [9, 10, 11]]);
+        mesh.facets = FemFacetConnectivityIR::from_tri3(faces);
         mesh.boundary_markers.extend([12, 13]);
         mesh.periodic_boundary_pairs
             .push(MeshPeriodicBoundaryPairIR {
@@ -2143,7 +2752,9 @@ mod mesh_validation_tests {
     #[test]
     fn periodic_certificate_v6_rejects_mismatched_face_topology() {
         let mut mesh = mirrored_periodic_mesh();
-        mesh.boundary_faces[1] = [3, 4, 5];
+        let mut faces = mesh.require_tri3_boundary_faces().unwrap();
+        faces[1] = [3, 4, 5];
+        mesh.facets = FemFacetConnectivityIR::from_tri3(faces);
         let errors = mesh
             .periodic_mesh_certificate_v6()
             .expect_err("wrong destination face orientation/topology must fail");
@@ -2155,7 +2766,9 @@ mod mesh_validation_tests {
     #[test]
     fn periodic_certificate_v6_rejects_unpaired_boundary_face_node() {
         let mut mesh = mirrored_periodic_mesh();
-        mesh.boundary_faces[0] = [0, 1, 3];
+        let mut faces = mesh.require_tri3_boundary_faces().unwrap();
+        faces[0] = [0, 1, 3];
+        mesh.facets = FemFacetConnectivityIR::from_tri3(faces);
         let errors = mesh
             .periodic_mesh_certificate_v6()
             .expect_err("every periodic boundary node must be represented by a pair");

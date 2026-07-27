@@ -233,16 +233,16 @@ mod tests {
                 [0.0, 0.0, 1.0],
                 [1.0, 1.0, 1.0],
             ],
-            elements: vec![[0, 1, 2, 3], [1, 2, 3, 4]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [1, 2, 3, 4]]),
             element_markers: vec![1, 1],
-            boundary_faces: vec![
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
                 [0, 1, 3],
                 [0, 2, 3],
                 [0, 1, 2],
                 [1, 3, 4],
                 [2, 3, 4],
                 [1, 2, 4],
-            ],
+            ]),
             boundary_markers: vec![1, 1, 1, 1, 1, 1],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -250,9 +250,9 @@ mod tests {
         };
         let topo = MeshTopology::from_ir(&mesh).unwrap();
         let faces = FaceTopology::build(
-            &mesh.elements,
-            &mesh.nodes,
-            &mesh.boundary_faces,
+            &topo.elements,
+            &topo.coords,
+            &topo.boundary_faces,
             &mesh.boundary_markers,
         );
         (topo, faces)

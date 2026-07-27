@@ -591,15 +591,17 @@ fn estimate_live_payload_bytes(payload: &CurrentLiveSnapshotPayload) -> u64 {
             )
             .saturating_add(
                 (mesh
-                    .elements
+                    .cells
+                    .nodes
                     .len()
-                    .saturating_mul(4 * std::mem::size_of::<u32>())) as u64,
+                    .saturating_mul(std::mem::size_of::<u32>())) as u64,
             )
             .saturating_add(
                 (mesh
-                    .boundary_faces
+                    .facets
+                    .nodes
                     .len()
-                    .saturating_mul(3 * std::mem::size_of::<u32>())) as u64,
+                    .saturating_mul(std::mem::size_of::<u32>())) as u64,
             );
     }
     bytes
@@ -977,7 +979,7 @@ struct FemMeshPointCounts {
 fn fem_mesh_point_counts(mesh: &fullmag_runner::FemMeshPayload) -> FemMeshPointCounts {
     FemMeshPointCounts {
         node_count: mesh.nodes.len(),
-        element_count: mesh.elements.len(),
+        element_count: mesh.cell_count(),
         magnetic_node_count: fem_magnetic_node_count(mesh),
     }
 }
@@ -1056,16 +1058,16 @@ fn mark_nonzero_marker_elements(
     mesh: &fullmag_runner::FemMeshPayload,
     active: &mut [bool],
 ) -> bool {
-    if mesh.element_markers.len() != mesh.elements.len() || mesh.elements.is_empty() {
+    if mesh.element_markers.len() != mesh.cell_count() || mesh.cells.is_empty() {
         return false;
     }
     let mut marked = false;
-    for (element_index, element) in mesh.elements.iter().enumerate() {
-        if mesh.element_markers[element_index] == 0 {
+    for cell in mesh.cells.iter() {
+        if mesh.element_markers[cell.global_ordinal] == 0 {
             continue;
         }
         marked = true;
-        for node_index in element {
+        for node_index in cell.nodes {
             if let Some(slot) = active.get_mut(*node_index as usize) {
                 *slot = true;
             }
@@ -1447,9 +1449,9 @@ mod tests {
             mesh_name: "mesh".to_string(),
             mesh_id: "mesh-id".to_string(),
             nodes: vec![[0.0, 0.0, 0.0]],
-            elements: vec![[0, 0, 0, 0]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 0, 0, 0]]),
             element_markers: Vec::new(),
-            boundary_faces: Vec::new(),
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
             boundary_markers: Vec::new(),
             object_segments: Vec::new(),
             mesh_parts: Vec::new(),
@@ -1468,9 +1470,9 @@ mod tests {
             mesh_name: "surface-preview".to_string(),
             mesh_id: "surface-preview-id".to_string(),
             nodes: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-            elements: Vec::new(),
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(Vec::new()),
             element_markers: Vec::new(),
-            boundary_faces: vec![[0, 1, 2]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
             boundary_markers: vec![1],
             object_segments: Vec::new(),
             mesh_parts: Vec::new(),
@@ -3925,7 +3927,7 @@ pub(crate) fn apply_python_progress_event(
                             "Surface preview ready for '{}' ({} vertices, {} faces)",
                             geometry_name,
                             fem_mesh.nodes.len(),
-                            fem_mesh.boundary_faces.len()
+                            fem_mesh.facet_count()
                         ),
                     );
                 }

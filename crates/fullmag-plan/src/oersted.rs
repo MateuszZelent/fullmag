@@ -459,7 +459,7 @@ fn source_element_indices(
             let start = segment.element_start as usize;
             let end = start
                 .saturating_add(segment.element_count as usize)
-                .min(mesh.elements.len());
+                .min(mesh.cell_count());
             for element_index in start..end {
                 selected.insert(element_index);
             }
@@ -516,12 +516,34 @@ fn midpoint_biot_savart_field(
     let mut field_xyz = vec![0.0; mesh.nodes.len() * 3];
 
     for &element_index in source_elements {
-        let element = mesh.elements.get(element_index).ok_or_else(|| PlanError {
-            reasons: vec![format!(
-                "midpoint Biot-Savart lowering referenced missing FEM element index {}",
-                element_index
-            )],
-        })?;
+        let cell_type = mesh
+            .cells
+            .types
+            .get(element_index)
+            .copied()
+            .ok_or_else(|| PlanError {
+                reasons: vec![format!(
+                    "midpoint Biot-Savart lowering referenced missing FEM element index {}",
+                    element_index
+                )],
+            })?;
+        if cell_type != fullmag_ir::FemCellTypeIR::Tet4 {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "midpoint Biot-Savart Oersted lowering is tet4-only; FEM cell {} is {:?}",
+                    element_index, cell_type
+                )],
+            });
+        }
+        let element = mesh
+            .cells
+            .item_nodes(element_index)
+            .ok_or_else(|| PlanError {
+                reasons: vec![format!(
+                    "midpoint Biot-Savart lowering referenced invalid FEM cell CSR index {}",
+                    element_index
+                )],
+            })?;
 
         let p0 = node(mesh, element[0])?;
         let p1 = node(mesh, element[1])?;
@@ -786,9 +808,9 @@ mod tests {
                 [0.0, 0.0, 1.0],
                 [2.0, 0.0, 0.0],
             ],
-            elements: vec![[0, 1, 2, 3]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
             element_markers: vec![7],
-            boundary_faces: vec![],
+            facets: fullmag_ir::FemFacetConnectivityIR::empty(),
             boundary_markers: vec![],
             periodic_boundary_pairs: vec![],
             periodic_node_pairs: vec![],

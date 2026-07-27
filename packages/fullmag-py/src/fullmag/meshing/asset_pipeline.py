@@ -103,8 +103,35 @@ def _is_stl_imported_geometry(geometry: Geometry) -> bool:
 class FrozenMagneticSubmeshPayload:
     mesh: MeshData
     region_markers: list[dict[str, object]]
-    interface_boundary_faces: np.ndarray
+    interface_facet_ordinals: np.ndarray
     magnetic_submesh_signatures: list[dict[str, object]]
+
+
+def _select_csr_items(
+    types: np.ndarray,
+    offsets: np.ndarray,
+    nodes: np.ndarray,
+    ordinals: np.ndarray,
+    *,
+    node_remap: dict[int, int] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    selected_types = np.asarray(types[ordinals], dtype=np.str_)
+    selected_offsets = [0]
+    selected_nodes: list[int] = []
+    for ordinal in ordinals:
+        start = int(offsets[int(ordinal)])
+        stop = int(offsets[int(ordinal) + 1])
+        for node in nodes[start:stop]:
+            node_id = int(node)
+            selected_nodes.append(
+                node_remap[node_id] if node_remap is not None else node_id
+            )
+        selected_offsets.append(len(selected_nodes))
+    return (
+        selected_types,
+        np.asarray(selected_offsets, dtype=np.int64),
+        np.asarray(selected_nodes, dtype=np.int32),
+    )
 
 
 def _domain_mesh_mode_from_workflow(mesh_workflow: Mapping[str, object] | None) -> str | None:
@@ -185,15 +212,15 @@ def _load_frozen_magnetic_submesh_source(raw_source: object) -> FrozenMagneticSu
             candidate,
             context=str(report_path),
         )
-    interface_boundary_faces = np.asarray(mesh.boundary_faces, dtype=np.int32)
-    if interface_boundary_faces.size == 0:
+    interface_facet_ordinals = np.arange(mesh.n_boundary_faces, dtype=np.int64)
+    if interface_facet_ordinals.size == 0:
         raise ValueError(
-            "frozen_magnetic_submesh_source mesh must expose magnetic interface boundary_faces"
+            "frozen_magnetic_submesh_source mesh must expose magnetic interface facets"
         )
     return FrozenMagneticSubmeshPayload(
         mesh=mesh,
         region_markers=region_markers,
-        interface_boundary_faces=interface_boundary_faces,
+        interface_facet_ordinals=interface_facet_ordinals,
         magnetic_submesh_signatures=_magnetic_submesh_signatures(mesh, region_markers),
     )
 
@@ -222,38 +249,52 @@ def _extract_frozen_magnetic_submesh(
     if not np.any(magnetic_element_mask):
         raise ValueError(f"shared mesh contains no elements for magnetic marker {marker_int}")
 
-    magnetic_elements = np.asarray(shared_mesh.elements[magnetic_element_mask], dtype=np.int32)
-    used_nodes = np.unique(magnetic_elements.reshape(-1))
+    magnetic_ordinals = np.flatnonzero(magnetic_element_mask).astype(np.int64)
+    used_nodes = np.unique(
+        np.concatenate(
+            [shared_mesh.cell_node_ids(int(index)) for index in magnetic_ordinals]
+        )
+    )
     node_remap = {int(node_id): index for index, node_id in enumerate(used_nodes)}
-    remapped_elements = np.asarray(
-        [
-            [node_remap[int(node_id)] for node_id in element]
-            for element in magnetic_elements
-        ],
-        dtype=np.int32,
+    cell_types, cell_offsets, cell_nodes = _select_csr_items(
+        shared_mesh.cell_types,
+        shared_mesh.cell_offsets,
+        shared_mesh.cell_nodes,
+        magnetic_ordinals,
+        node_remap=node_remap,
     )
 
-    interface_faces: list[list[int]] = []
-    for face, boundary_marker in zip(
-        np.asarray(shared_mesh.boundary_faces, dtype=np.int32),
-        np.asarray(shared_mesh.boundary_markers, dtype=np.int32),
-        strict=False,
-    ):
+    interface_ordinals: list[int] = []
+    for facet_ordinal, boundary_marker in enumerate(shared_mesh.boundary_markers):
         if int(boundary_marker) != 10:
             continue
+        face = shared_mesh.facet_node_ids(facet_ordinal)
         if all(int(node_id) in node_remap for node_id in face):
-            interface_faces.append([node_remap[int(node_id)] for node_id in face])
-    if not interface_faces:
+            interface_ordinals.append(facet_ordinal)
+    if not interface_ordinals:
         raise ValueError(
-            f"shared mesh exposes no boundary/interface faces for magnetic marker {marker_int}"
+            f"shared mesh exposes no boundary/interface facets for magnetic marker {marker_int}"
         )
+    selected_interface_ordinals = np.asarray(interface_ordinals, dtype=np.int64)
+    facet_types, facet_offsets, facet_nodes = _select_csr_items(
+        shared_mesh.facet_types,
+        shared_mesh.facet_offsets,
+        shared_mesh.facet_nodes,
+        selected_interface_ordinals,
+        node_remap=node_remap,
+    )
 
     frozen_mesh = MeshData(
         nodes=np.asarray(shared_mesh.nodes[used_nodes], dtype=np.float64),
-        elements=remapped_elements,
-        element_markers=np.full(remapped_elements.shape[0], marker_int, dtype=np.int32),
-        boundary_faces=np.asarray(interface_faces, dtype=np.int32),
-        boundary_markers=np.full(len(interface_faces), 10, dtype=np.int32),
+        cell_types=cell_types,
+        cell_offsets=cell_offsets,
+        cell_nodes=cell_nodes,
+        element_markers=np.full(len(magnetic_ordinals), marker_int, dtype=np.int32),
+        facet_types=facet_types,
+        facet_roles=shared_mesh.facet_roles[selected_interface_ordinals],
+        facet_offsets=facet_offsets,
+        facet_nodes=facet_nodes,
+        boundary_markers=np.full(len(interface_ordinals), 10, dtype=np.int32),
         periodic_boundary_pairs=[
             dict(pair) for pair in shared_mesh.periodic_boundary_pairs
         ],
@@ -266,7 +307,10 @@ def _extract_frozen_magnetic_submesh(
     return FrozenMagneticSubmeshPayload(
         mesh=frozen_mesh,
         region_markers=frozen_region_markers,
-        interface_boundary_faces=frozen_mesh.boundary_faces,
+        interface_facet_ordinals=np.arange(
+            frozen_mesh.n_boundary_faces,
+            dtype=np.int64,
+        ),
         magnetic_submesh_signatures=_magnetic_submesh_signatures(
             frozen_mesh,
             frozen_region_markers,
@@ -347,11 +391,13 @@ def _merge_frozen_magnetic_submesh_with_air_mesh(
             merged_nodes.append(np.array(node, copy=True))
         air_node_map[index] = int(merged_index)
 
-    remapped_air_elements = air_node_map[np.asarray(air_mesh.elements, dtype=np.int32)]
-    merged_elements = np.vstack(
+    remapped_air_cell_nodes = air_node_map[air_mesh.cell_nodes]
+    merged_cell_types = np.concatenate([magnetic_mesh.cell_types, air_mesh.cell_types])
+    merged_cell_nodes = np.concatenate([magnetic_mesh.cell_nodes, remapped_air_cell_nodes])
+    merged_cell_offsets = np.concatenate(
         [
-            np.asarray(magnetic_mesh.elements, dtype=np.int32),
-            remapped_air_elements.astype(np.int32, copy=False),
+            magnetic_mesh.cell_offsets,
+            air_mesh.cell_offsets[1:] + len(magnetic_mesh.cell_nodes),
         ]
     )
     merged_element_markers = np.concatenate(
@@ -361,23 +407,34 @@ def _merge_frozen_magnetic_submesh_with_air_mesh(
         ]
     )
     interface_face_keys = {
-        tuple(sorted(int(node) for node in face))
-        for face in np.asarray(frozen.interface_boundary_faces, dtype=np.int32)
+        tuple(sorted(int(node) for node in magnetic_mesh.facet_node_ids(int(ordinal))))
+        for ordinal in frozen.interface_facet_ordinals
     }
-    boundary_faces: list[np.ndarray] = []
+    facet_types: list[str] = []
+    facet_roles: list[str] = []
+    facet_offsets = [0]
+    facet_nodes: list[int] = []
     boundary_markers: list[int] = []
-    for face, marker in zip(air_mesh.boundary_faces, air_mesh.boundary_markers, strict=True):
-        remapped_face = air_node_map[np.asarray(face, dtype=np.int32)]
+    for ordinal, marker in enumerate(air_mesh.boundary_markers):
+        remapped_face = air_node_map[air_mesh.facet_node_ids(ordinal)]
         if tuple(sorted(int(node) for node in remapped_face)) in interface_face_keys:
             continue
-        boundary_faces.append(remapped_face.astype(np.int32, copy=False))
+        facet_types.append(str(air_mesh.facet_types[ordinal]))
+        facet_roles.append(str(air_mesh.facet_roles[ordinal]))
+        facet_nodes.extend(int(node) for node in remapped_face)
+        facet_offsets.append(len(facet_nodes))
         boundary_markers.append(int(marker))
 
     # Preserve the shared magnetic-air interface as an explicit certified
     # boundary role.  It is not an exterior air face, but the planner needs
     # the physical interface marker to prove role disjointness and coverage.
-    for face in np.asarray(frozen.interface_boundary_faces, dtype=np.int32):
-        boundary_faces.append(np.asarray(face, dtype=np.int32))
+    for ordinal in frozen.interface_facet_ordinals:
+        facet_types.append(str(magnetic_mesh.facet_types[int(ordinal)]))
+        facet_roles.append("material_interface")
+        facet_nodes.extend(
+            int(node) for node in magnetic_mesh.facet_node_ids(int(ordinal))
+        )
+        facet_offsets.append(len(facet_nodes))
         boundary_markers.append(10)
 
     periodic_boundary_pairs = [dict(pair) for pair in air_mesh.periodic_boundary_pairs]
@@ -397,13 +454,14 @@ def _merge_frozen_magnetic_submesh_with_air_mesh(
 
     return MeshData(
         nodes=np.asarray(merged_nodes, dtype=np.float64),
-        elements=merged_elements.astype(np.int32, copy=False),
+        cell_types=merged_cell_types,
+        cell_offsets=merged_cell_offsets,
+        cell_nodes=merged_cell_nodes,
         element_markers=merged_element_markers.astype(np.int32, copy=False),
-        boundary_faces=(
-            np.vstack(boundary_faces).astype(np.int32, copy=False)
-            if boundary_faces
-            else np.empty((0, 3), dtype=np.int32)
-        ),
+        facet_types=facet_types,
+        facet_roles=facet_roles,
+        facet_offsets=facet_offsets,
+        facet_nodes=facet_nodes,
         boundary_markers=np.asarray(boundary_markers, dtype=np.int32),
         periodic_boundary_pairs=periodic_boundary_pairs,
         periodic_node_pairs=periodic_node_pairs,
@@ -414,7 +472,14 @@ def _write_frozen_boundary_ascii_stl(mesh: MeshData, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="ascii") as handle:
         handle.write("solid frozen_magnetic_boundary\n")
-        for face in np.asarray(mesh.boundary_faces, dtype=np.int32):
+        triangles: list[np.ndarray] = []
+        for ordinal, facet_type in enumerate(mesh.facet_types):
+            facet = mesh.facet_node_ids(ordinal)
+            if facet_type == "tri3":
+                triangles.append(facet)
+            else:
+                triangles.extend((facet[[0, 1, 2]], facet[[0, 2, 3]]))
+        for face in triangles:
             v0, v1, v2 = np.asarray(mesh.nodes[face], dtype=np.float64)
             normal = np.cross(v1 - v0, v2 - v0)
             norm = float(np.linalg.norm(normal))
@@ -749,7 +814,7 @@ def _generate_air_mesh_for_frozen_magnetic_submesh(
         {node_id: node_id for node_id in kept_air_nodes},
     )
     retained_pair_ids = {str(pair.get("pair_id")) for pair in periodic_node_pairs}
-    return MeshData(
+    return MeshData.from_legacy_tet4(
         nodes=np.asarray(generated.nodes, dtype=np.float64),
         elements=np.asarray(generated.elements[air_mask], dtype=np.int32),
         element_markers=np.zeros(int(np.count_nonzero(air_mask)), dtype=np.int32),
@@ -774,6 +839,10 @@ def _drop_degenerate_tetrahedra(
 ) -> MeshData:
     if mesh.n_elements == 0:
         return mesh
+    if np.any(mesh.cell_types != "tet4"):
+        raise ValueError(
+            "tetrahedral degenerate-cell cleanup is unavailable for mixed topology"
+        )
     volumes = _tetra_signed_volumes(mesh)
     bbox = np.ptp(mesh.nodes, axis=0) if mesh.nodes.size else np.zeros(3, dtype=np.float64)
     scale = float(np.max(bbox))
@@ -795,7 +864,7 @@ def _drop_degenerate_tetrahedra(
         f"{context}: removed {removed} degenerate tetrahedra below strict volume threshold"
     )
     boundary_faces, boundary_markers = _boundary_faces_for_kept_elements(mesh, keep)
-    return MeshData(
+    return MeshData.from_legacy_tet4(
         nodes=mesh.nodes,
         elements=mesh.elements[keep],
         element_markers=mesh.element_markers[keep],
@@ -916,17 +985,22 @@ def _sanitize_surface_mesh_for_stl_export(surface: object) -> object:
 
 def _surface_preview_to_mesh_data(preview: dict[str, object]) -> MeshData:
     nodes = np.asarray(preview.get("nodes", []), dtype=np.float64)
-    boundary_faces = np.asarray(preview.get("boundary_faces", []), dtype=np.int32)
     if nodes.ndim != 2 or nodes.shape[1] != 3:
         raise ValueError("surface preview nodes must have shape (N, 3)")
-    if boundary_faces.ndim != 2 or (boundary_faces.size and boundary_faces.shape[1] != 3):
-        raise ValueError("surface preview boundary_faces must have shape (F, 3)")
     return MeshData(
         nodes=nodes,
-        elements=np.zeros((0, 4), dtype=np.int32),
+        cell_types=preview.get("cell_types", []),
+        cell_offsets=preview.get("cell_offsets", [0]),
+        cell_nodes=preview.get("cell_nodes", []),
         element_markers=np.zeros((0,), dtype=np.int32),
-        boundary_faces=boundary_faces,
-        boundary_markers=np.ones((boundary_faces.shape[0],), dtype=np.int32),
+        facet_types=preview.get("facet_types", []),
+        facet_roles=preview.get("facet_roles", []),
+        facet_offsets=preview.get("facet_offsets", [0]),
+        facet_nodes=preview.get("facet_nodes", []),
+        boundary_markers=np.ones(
+            (len(preview.get("facet_types", [])),),
+            dtype=np.int32,
+        ),
     )
 
 
@@ -968,7 +1042,7 @@ def realize_fem_mesh_asset(
                 "is_preview": True,
                 "message": (
                     f"Surface preview ready for '{geometry.geometry_name}': "
-                    f"{len(preview['nodes'])} vertices, {len(preview['boundary_faces'])} faces"
+                    f"{len(preview['nodes'])} vertices, {len(preview['facet_types'])} faces"
                 ),
             }
         )
@@ -2404,7 +2478,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                                         mesh_options,
                                         attempted_algorithms,
                                     )
-                                    if "degenerate tetra volume" in str(exc)
+                                    if "degenerate" in str(exc) and "Jacobian" in str(exc)
                                     else None
                                 )
                                 if retry is None:
@@ -2626,7 +2700,13 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                         {"geometry_name": geometry.geometry_name, "marker": used_marker}
                     )
             else:
-                element_centroids = mesh.nodes[mesh.elements].mean(axis=1)
+                element_centroids = np.asarray(
+                    [
+                        mesh.nodes[mesh.cell_node_ids(index)].mean(axis=0)
+                        for index in range(mesh.n_elements)
+                    ],
+                    dtype=np.float64,
+                )
                 used_marker = 1
                 for geometry in geometries:
                     inside = _contains_points_in_geometry(geometry, element_centroids)
@@ -2649,20 +2729,30 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                     "back to any geometry"
                 )
 
+        tet4_only = bool(np.all(mesh.cell_types == "tet4"))
         classified_mesh = MeshData(
             nodes=mesh.nodes,
-            elements=mesh.elements,
+            cell_types=mesh.cell_types,
+            cell_offsets=mesh.cell_offsets,
+            cell_nodes=mesh.cell_nodes,
             element_markers=assigned_markers,
-            boundary_faces=mesh.boundary_faces,
+            facet_types=mesh.facet_types,
+            facet_roles=mesh.facet_roles,
+            facet_offsets=mesh.facet_offsets,
+            facet_nodes=mesh.facet_nodes,
             boundary_markers=mesh.boundary_markers,
             periodic_boundary_pairs=mesh.periodic_boundary_pairs,
             periodic_node_pairs=mesh.periodic_node_pairs,
             quality=mesh.quality,
-            per_domain_quality=build_per_domain_quality_from_mesh_arrays(
-                mesh.nodes,
-                mesh.elements,
-                assigned_markers,
-                mesh.quality,
+            per_domain_quality=(
+                build_per_domain_quality_from_mesh_arrays(
+                    mesh.nodes,
+                    mesh.elements,
+                    assigned_markers,
+                    mesh.quality,
+                )
+                if tet4_only
+                else None
             ) or mesh.per_domain_quality,
         )
         requested_airbox_hmax, requested_hmax_by_geometry = _resolve_requested_partition_hmaxs(

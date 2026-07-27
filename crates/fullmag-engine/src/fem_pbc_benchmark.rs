@@ -287,9 +287,9 @@ fn build_nonperiodic_structured_box_tet_mesh(box_size_m: [f64; 3], cells: [usize
     MeshIR {
         mesh_name: format!("nonperiodic_structured_box_{}_{}_{}", nx, ny, nz),
         nodes,
-        elements,
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(elements),
         element_markers: vec![1; element_count],
-        boundary_faces,
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(boundary_faces),
         boundary_markers: vec![1; boundary_face_count],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),

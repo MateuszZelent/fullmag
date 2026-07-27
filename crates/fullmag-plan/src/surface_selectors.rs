@@ -68,10 +68,20 @@ pub fn resolve_fem_surface_selector(
     let mut boundary_face_indices = Vec::new();
     let mut surface_faces = Vec::new();
     let mut seen_faces = BTreeSet::new();
-    for face_index in candidate_boundary_face_indices(part, mesh.boundary_faces.len()) {
-        let Some(triangle) = mesh.boundary_faces.get(face_index as usize).copied() else {
+    for face_index in candidate_boundary_face_indices(part, mesh.facet_count()) {
+        let Some(facet_type) = mesh.facets.types.get(face_index as usize).copied() else {
             continue;
         };
+        if facet_type != fullmag_ir::FemFacetTypeIR::Tri3 {
+            return Err(format!(
+                "surface selector '{}' requires tri3 facets; facet {} is {:?}",
+                selector, face_index, facet_type
+            ));
+        }
+        let Some(nodes) = mesh.facets.item_nodes(face_index as usize) else {
+            continue;
+        };
+        let triangle = [nodes[0], nodes[1], nodes[2]];
         if triangle_is_on_bbox_face(mesh, triangle, face.axis, target, tolerance)
             && seen_faces.insert(sorted_triangle(triangle))
         {

@@ -852,7 +852,7 @@ def _extract_airbox_mesh_data(
         boundary_faces = np.zeros((0, 3), dtype=np.int32)
         boundary_markers_arr = np.zeros(0, dtype=np.int32)
 
-    return MeshData(
+    return MeshData.from_legacy_tet4(
         nodes=nodes,
         elements=elements,
         element_markers=element_markers,

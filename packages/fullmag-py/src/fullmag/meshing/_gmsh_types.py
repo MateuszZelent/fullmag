@@ -13,11 +13,23 @@ from numpy.typing import NDArray
 FEM_TOPOLOGY_DETERMINANT_EPS = 1.0e-30
 FEM_TOPOLOGY_VOLUME_EPS = FEM_TOPOLOGY_DETERMINANT_EPS / 6.0
 
-# The native FEM MeshData contract is linear tetrahedra with triangular
-# boundary faces.  Keep this dispatch table keyed by Gmsh's element type
-# instead of accepting a compatible-looking prefix of arbitrary connectivity.
-SUPPORTED_VOLUME_ELEMENTS: dict[int, tuple[str, int]] = {4: ("tet4", 4)}
-SUPPORTED_BOUNDARY_ELEMENTS: dict[int, tuple[str, int]] = {2: ("tri3", 3)}
+FEM_CELL_ARITIES = {"tet4": 4, "prism6": 6, "pyramid5": 5, "hex8": 8}
+FEM_FACET_ARITIES = {"tri3": 3, "quad4": 4}
+FEM_FACET_ROLES = {"exterior", "material_interface", "periodic_seam"}
+VTK_CELL_TYPES = {"tet4": 10, "hex8": 12, "prism6": 13, "pyramid5": 14}
+
+# Keep this dispatch table keyed by Gmsh's exact linear element IDs instead of
+# accepting a compatible-looking prefix of higher-order connectivity.
+SUPPORTED_VOLUME_ELEMENTS: dict[int, tuple[str, int]] = {
+    4: ("tet4", 4),
+    5: ("hex8", 8),
+    6: ("prism6", 6),
+    7: ("pyramid5", 5),
+}
+SUPPORTED_BOUNDARY_ELEMENTS: dict[int, tuple[str, int]] = {
+    2: ("tri3", 3),
+    3: ("quad4", 4),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -459,13 +471,39 @@ class SizeFieldData:
 
 
 @dataclass(frozen=True, slots=True)
+class MeshCellBlockView:
+    """One typed cell block with stable source ordinals and markers."""
+
+    cell_type: str
+    nodes: NDArray[np.int32]
+    markers: NDArray[np.int32]
+    global_ordinals: NDArray[np.int64]
+
+
+@dataclass(frozen=True, slots=True)
+class MeshFacetBlockView:
+    """One typed/role facet block with stable source ordinals and markers."""
+
+    facet_type: str
+    role: str
+    nodes: NDArray[np.int32]
+    markers: NDArray[np.int32]
+    global_ordinals: NDArray[np.int64]
+
+
+@dataclass(frozen=True, slots=True)
 class MeshData:
-    """Tetrahedral mesh data ready for FEM lowering."""
+    """Canonical typed variable-arity FEM topology in CSR layout."""
 
     nodes: NDArray[np.float64]
-    elements: NDArray[np.int32]
+    cell_types: NDArray[np.str_]
+    cell_offsets: NDArray[np.int64]
+    cell_nodes: NDArray[np.int32]
     element_markers: NDArray[np.int32]
-    boundary_faces: NDArray[np.int32]
+    facet_types: NDArray[np.str_]
+    facet_roles: NDArray[np.str_]
+    facet_offsets: NDArray[np.int64]
+    facet_nodes: NDArray[np.int32]
     boundary_markers: NDArray[np.int32]
     periodic_boundary_pairs: list[dict[str, object]] = field(default_factory=list)
     periodic_node_pairs: list[dict[str, object]] = field(default_factory=list)
@@ -475,9 +513,14 @@ class MeshData:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "nodes", np.asarray(self.nodes, dtype=np.float64))
-        object.__setattr__(self, "elements", np.asarray(self.elements, dtype=np.int32))
+        object.__setattr__(self, "cell_types", np.asarray(self.cell_types, dtype=np.str_))
+        object.__setattr__(self, "cell_offsets", np.asarray(self.cell_offsets, dtype=np.int64))
+        object.__setattr__(self, "cell_nodes", np.asarray(self.cell_nodes, dtype=np.int32))
         object.__setattr__(self, "element_markers", np.asarray(self.element_markers, dtype=np.int32))
-        object.__setattr__(self, "boundary_faces", np.asarray(self.boundary_faces, dtype=np.int32))
+        object.__setattr__(self, "facet_types", np.asarray(self.facet_types, dtype=np.str_))
+        object.__setattr__(self, "facet_roles", np.asarray(self.facet_roles, dtype=np.str_))
+        object.__setattr__(self, "facet_offsets", np.asarray(self.facet_offsets, dtype=np.int64))
+        object.__setattr__(self, "facet_nodes", np.asarray(self.facet_nodes, dtype=np.int32))
         object.__setattr__(self, "boundary_markers", np.asarray(self.boundary_markers, dtype=np.int32))
         object.__setattr__(
             self,
@@ -498,37 +541,157 @@ class MeshData:
             object.__setattr__(self, "periodic_mesh_certificate", certificate)
         self.validate()
 
+    @classmethod
+    def from_legacy_tet4(
+        cls,
+        *,
+        nodes: NDArray[np.float64] | list[list[float]],
+        elements: NDArray[np.int32] | list[list[int]],
+        element_markers: NDArray[np.int32] | list[int],
+        boundary_faces: NDArray[np.int32] | list[list[int]],
+        boundary_markers: NDArray[np.int32] | list[int],
+        periodic_boundary_pairs: list[dict[str, object]] | None = None,
+        periodic_node_pairs: list[dict[str, object]] | None = None,
+        periodic_mesh_certificate: dict[str, object] | None = None,
+        quality: MeshQualityReport | None = None,
+        per_domain_quality: dict[int, MeshQualityReport] | None = None,
+    ) -> "MeshData":
+        """Normalize the explicit legacy tet4/tri3 boundary into canonical CSR."""
+        tet = np.asarray(elements, dtype=np.int32)
+        tri = np.asarray(boundary_faces, dtype=np.int32)
+        if tet.size == 0:
+            tet = np.zeros((0, 4), dtype=np.int32)
+        if tri.size == 0:
+            tri = np.zeros((0, 3), dtype=np.int32)
+        if tet.ndim != 2 or tet.shape[1] != 4:
+            raise ValueError("legacy elements must have shape (M, 4)")
+        if tri.ndim != 2 or tri.shape[1] != 3:
+            raise ValueError("legacy boundary_faces must have shape (F, 3)")
+        return cls(
+            nodes=nodes,
+            cell_types=["tet4"] * len(tet),
+            cell_offsets=np.arange(0, 4 * len(tet) + 1, 4, dtype=np.int64),
+            cell_nodes=tet.reshape(-1),
+            element_markers=element_markers,
+            facet_types=["tri3"] * len(tri),
+            facet_roles=["exterior"] * len(tri),
+            facet_offsets=np.arange(0, 3 * len(tri) + 1, 3, dtype=np.int64),
+            facet_nodes=tri.reshape(-1),
+            boundary_markers=boundary_markers,
+            periodic_boundary_pairs=periodic_boundary_pairs or [],
+            periodic_node_pairs=periodic_node_pairs or [],
+            periodic_mesh_certificate=periodic_mesh_certificate,
+            quality=quality,
+            per_domain_quality=per_domain_quality,
+        )
+
     @property
     def n_nodes(self) -> int:
         return int(self.nodes.shape[0])
 
     @property
     def n_elements(self) -> int:
-        return int(self.elements.shape[0])
+        return int(self.cell_types.shape[0])
 
     @property
     def n_boundary_faces(self) -> int:
-        return int(self.boundary_faces.shape[0])
+        return int(self.facet_types.shape[0])
+
+    @property
+    def elements(self) -> NDArray[np.int32]:
+        """Derived tet4 compatibility matrix; mixed topology fails explicitly."""
+        if np.any(self.cell_types != "tet4"):
+            raise ValueError("elements is a tet4-only compatibility view")
+        return self.cell_nodes.reshape((-1, 4))
+
+    @property
+    def boundary_faces(self) -> NDArray[np.int32]:
+        """Derived tri3 compatibility matrix; mixed facets fail explicitly."""
+        if np.any(self.facet_types != "tri3"):
+            raise ValueError("boundary_faces is a tri3-only compatibility view")
+        return self.facet_nodes.reshape((-1, 3))
+
+    def cell_node_ids(self, index: int) -> NDArray[np.int32]:
+        return self.cell_nodes[self.cell_offsets[index] : self.cell_offsets[index + 1]]
+
+    def facet_node_ids(self, index: int) -> NDArray[np.int32]:
+        return self.facet_nodes[self.facet_offsets[index] : self.facet_offsets[index + 1]]
+
+    def cell_blocks(self) -> list[MeshCellBlockView]:
+        blocks: list[MeshCellBlockView] = []
+        for cell_type in FEM_CELL_ARITIES:
+            ordinals = np.flatnonzero(self.cell_types == cell_type).astype(np.int64)
+            if not len(ordinals):
+                continue
+            blocks.append(
+                MeshCellBlockView(
+                    cell_type=cell_type,
+                    nodes=np.stack([self.cell_node_ids(int(i)) for i in ordinals]).astype(np.int32),
+                    markers=self.element_markers[ordinals],
+                    global_ordinals=ordinals,
+                )
+            )
+        return blocks
+
+    def facet_blocks(self) -> list[MeshFacetBlockView]:
+        blocks: list[MeshFacetBlockView] = []
+        for facet_type in FEM_FACET_ARITIES:
+            for role in ("exterior", "material_interface", "periodic_seam"):
+                ordinals = np.flatnonzero(
+                    (self.facet_types == facet_type) & (self.facet_roles == role)
+                ).astype(np.int64)
+                if not len(ordinals):
+                    continue
+                blocks.append(
+                    MeshFacetBlockView(
+                        facet_type=facet_type,
+                        role=role,
+                        nodes=np.stack([self.facet_node_ids(int(i)) for i in ordinals]).astype(np.int32),
+                        markers=self.boundary_markers[ordinals],
+                        global_ordinals=ordinals,
+                    )
+                )
+        return blocks
 
     def validate(self) -> None:
         if self.nodes.ndim != 2 or self.nodes.shape[1] != 3:
             raise ValueError("nodes must have shape (N, 3)")
-        if self.elements.ndim != 2 or self.elements.shape[1] != 4:
-            raise ValueError("elements must have shape (M, 4)")
+        _validate_typed_csr(
+            types=self.cell_types,
+            offsets=self.cell_offsets,
+            nodes=self.cell_nodes,
+            arities=FEM_CELL_ARITIES,
+            kind="cell",
+            node_count=self.n_nodes,
+        )
         if self.element_markers.shape != (self.n_elements,):
-            raise ValueError("element_markers must have shape (M,)")
-        if self.boundary_faces.ndim != 2 or (
-            self.boundary_faces.size != 0 and self.boundary_faces.shape[1] != 3
-        ):
-            raise ValueError("boundary_faces must have shape (F, 3)")
+            raise ValueError("element_markers must have shape (cell count,)")
+        _validate_typed_csr(
+            types=self.facet_types,
+            offsets=self.facet_offsets,
+            nodes=self.facet_nodes,
+            arities=FEM_FACET_ARITIES,
+            kind="facet",
+            node_count=self.n_nodes,
+        )
+        if self.facet_roles.shape != (self.n_boundary_faces,):
+            raise ValueError("facet_roles must have shape (facet count,)")
+        unknown_roles = sorted(set(self.facet_roles.tolist()) - FEM_FACET_ROLES)
+        if unknown_roles:
+            raise ValueError(f"unknown facet role: {unknown_roles[0]}")
         if self.boundary_markers.shape != (self.n_boundary_faces,):
-            raise ValueError("boundary_markers must have shape (F,)")
-        if self.elements.size and (self.elements.min() < 0 or self.elements.max() >= self.n_nodes):
-            raise ValueError("elements contain invalid node indices")
-        if self.boundary_faces.size and (
-            self.boundary_faces.min() < 0 or self.boundary_faces.max() >= self.n_nodes
+            raise ValueError("boundary_markers must have shape (facet count,)")
+        mixed_cells = np.any(self.cell_types != "tet4")
+        if mixed_cells and (
+            self.periodic_boundary_pairs
+            or self.periodic_node_pairs
+            or self.periodic_mesh_certificate is not None
+            or np.any(self.facet_roles == "periodic_seam")
         ):
-            raise ValueError("boundary_faces contain invalid node indices")
+            raise ValueError(
+                "mixed topology with periodic pairs/certificate is not qualified; "
+                "use tet4 or remove periodic topology"
+            )
         for index, pair in enumerate(self.periodic_boundary_pairs):
             if not isinstance(pair.get("pair_id"), str) or not str(pair.get("pair_id")).strip():
                 raise ValueError(f"periodic_boundary_pairs[{index}] must define a non-empty pair_id")
@@ -552,58 +715,69 @@ class MeshData:
         self.validate()
         if not np.all(np.isfinite(self.nodes)):
             raise ValueError("mesh nodes must be finite")
-        if self.elements.size == 0:
-            raise ValueError("mesh must contain at least one tetrahedral element")
+        if self.n_elements == 0:
+            raise ValueError("mesh must contain at least one FEM cell")
         if self.element_markers.shape != (self.n_elements,):
-            raise ValueError("element_markers must cover every tetrahedral element")
+            raise ValueError("element_markers must cover every FEM cell")
 
-        for index, element in enumerate(self.elements):
-            if len({int(node) for node in element}) != 4:
-                raise ValueError(f"mesh element {index} contains duplicate node indices")
-
-        volumes = _tetra_signed_volumes(self)
         bbox = np.ptp(self.nodes, axis=0) if self.nodes.size else np.zeros(3, dtype=np.float64)
         scale = float(np.max(bbox))
         resolved_eps = (
-            float(eps_volume)
+            float(eps_volume) * 6.0
             if eps_volume is not None
             else max(
                 np.finfo(np.float64).tiny,
-                FEM_TOPOLOGY_VOLUME_EPS,
+                FEM_TOPOLOGY_DETERMINANT_EPS,
                 (scale if scale > 0.0 else 1.0) ** 3 * 1e-18,
             )
         )
-        bad_volume = np.flatnonzero(np.abs(volumes) <= resolved_eps)
-        if bad_volume.size:
-            first = int(bad_volume[0])
-            raise ValueError(
-                f"mesh element {first} has degenerate tetra volume "
-                f"{volumes[first]:.6e} <= eps {resolved_eps:.6e}"
-            )
-        if require_positive_orientation:
-            inverted = np.flatnonzero(volumes < 0.0)
-            if inverted.size:
-                first = int(inverted[0])
+        for index, cell_type in enumerate(self.cell_types.tolist()):
+            coordinates = self.nodes[self.cell_node_ids(index)]
+            determinants = _cell_jacobian_determinants(cell_type, coordinates)
+            minimum_abs = float(np.min(np.abs(determinants)))
+            if minimum_abs <= resolved_eps:
                 raise ValueError(
-                    f"mesh element {first} has negative tetra orientation "
-                    f"{volumes[first]:.6e}"
+                    f"mesh cell {index} has degenerate {cell_type} Jacobian "
+                    f"{minimum_abs:.6e} <= eps {resolved_eps:.6e}"
+                )
+            if require_positive_orientation and np.any(determinants < 0.0):
+                raise ValueError(
+                    f"mesh cell {index} has negative {cell_type} Jacobian "
+                    f"{float(np.min(determinants)):.6e}"
                 )
 
     def oriented_copy(self) -> "MeshData":
-        volumes = _tetra_signed_volumes(self)
-        if volumes.size == 0 or not np.any(volumes < 0.0):
+        if self.n_elements == 0:
             return self
-        elements = np.array(self.elements, copy=True)
-        inverted = volumes < 0.0
-        elements[inverted, 2], elements[inverted, 3] = (
-            elements[inverted, 3].copy(),
-            elements[inverted, 2].copy(),
-        )
+        cell_nodes = np.array(self.cell_nodes, copy=True)
+        reverse = {
+            "tet4": [0, 1, 3, 2],
+            "prism6": [0, 2, 1, 3, 5, 4],
+            "pyramid5": [0, 3, 2, 1, 4],
+            "hex8": [1, 0, 3, 2, 5, 4, 7, 6],
+        }
+        changed = False
+        for index, cell_type in enumerate(self.cell_types.tolist()):
+            start, stop = int(self.cell_offsets[index]), int(self.cell_offsets[index + 1])
+            determinant = _cell_jacobian_determinants(
+                cell_type,
+                self.nodes[cell_nodes[start:stop]],
+            )
+            if np.all(determinant < 0.0):
+                cell_nodes[start:stop] = cell_nodes[start:stop][reverse[cell_type]]
+                changed = True
+        if not changed:
+            return self
         return MeshData(
             nodes=np.array(self.nodes, copy=True),
-            elements=elements,
+            cell_types=np.array(self.cell_types, copy=True),
+            cell_offsets=np.array(self.cell_offsets, copy=True),
+            cell_nodes=cell_nodes,
             element_markers=np.array(self.element_markers, copy=True),
-            boundary_faces=np.array(self.boundary_faces, copy=True),
+            facet_types=np.array(self.facet_types, copy=True),
+            facet_roles=np.array(self.facet_roles, copy=True),
+            facet_offsets=np.array(self.facet_offsets, copy=True),
+            facet_nodes=np.array(self.facet_nodes, copy=True),
             boundary_markers=np.array(self.boundary_markers, copy=True),
             periodic_boundary_pairs=[dict(pair) for pair in self.periodic_boundary_pairs],
             periodic_node_pairs=[dict(pair) for pair in self.periodic_node_pairs],
@@ -625,9 +799,14 @@ class MeshData:
                     {
                         "mesh_name": target.stem,
                         "nodes": self.nodes.tolist(),
-                        "elements": self.elements.tolist(),
+                        "cell_types": self.cell_types.tolist(),
+                        "cell_offsets": self.cell_offsets.tolist(),
+                        "cell_nodes": self.cell_nodes.tolist(),
                         "element_markers": self.element_markers.tolist(),
-                        "boundary_faces": self.boundary_faces.tolist(),
+                        "facet_types": self.facet_types.tolist(),
+                        "facet_roles": self.facet_roles.tolist(),
+                        "facet_offsets": self.facet_offsets.tolist(),
+                        "facet_nodes": self.facet_nodes.tolist(),
                         "boundary_markers": self.boundary_markers.tolist(),
                         "periodic_boundary_pairs": self.periodic_boundary_pairs,
                         "periodic_node_pairs": self.periodic_node_pairs,
@@ -641,9 +820,14 @@ class MeshData:
         np.savez_compressed(
             target,
             nodes=self.nodes,
-            elements=self.elements,
+            cell_types=self.cell_types,
+            cell_offsets=self.cell_offsets,
+            cell_nodes=self.cell_nodes,
             element_markers=self.element_markers,
-            boundary_faces=self.boundary_faces,
+            facet_types=self.facet_types,
+            facet_roles=self.facet_roles,
+            facet_offsets=self.facet_offsets,
+            facet_nodes=self.facet_nodes,
             boundary_markers=self.boundary_markers,
             periodic_boundary_pairs_json=np.asarray(
                 json.dumps(self.periodic_boundary_pairs),
@@ -661,12 +845,19 @@ class MeshData:
         import struct
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        n_faces = self.n_boundary_faces
+        triangles: list[NDArray[np.int32]] = []
+        for index, facet_type in enumerate(self.facet_types.tolist()):
+            facet = self.facet_node_ids(index)
+            if facet_type == "tri3":
+                triangles.append(facet)
+            else:
+                triangles.extend((facet[[0, 1, 2]], facet[[0, 2, 3]]))
+        n_faces = len(triangles)
         with open(target, "wb") as fp:
             fp.write(b"\0" * 80)  # header
             fp.write(struct.pack("<I", n_faces))
-            for fi in range(n_faces):
-                v0, v1, v2 = self.nodes[self.boundary_faces[fi]]
+            for triangle in triangles:
+                v0, v1, v2 = self.nodes[triangle]
                 e1 = v1 - v0
                 e2 = v2 - v0
                 normal = np.cross(e1, e2)
@@ -685,7 +876,7 @@ class MeshData:
         path: str | Path,
         fields: dict[str, NDArray] | None = None,
     ) -> Path:
-        """Export full tetrahedral mesh as VTK legacy file.
+        """Export typed FEM cells as VTK legacy or VTU XML.
 
         Args:
             path: Destination file path.
@@ -696,22 +887,26 @@ class MeshData:
         """
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
+        if target.suffix.lower() == ".vtu":
+            return self._export_vtu(target, fields)
         n = self.n_nodes
         m = self.n_elements
         with open(target, "w", encoding="utf-8") as fp:
             fp.write("# vtk DataFile Version 3.0\n")
-            fp.write("fullmag tetrahedral mesh\n")
+            fp.write("fullmag typed FEM mesh\n")
             fp.write("ASCII\n")
             fp.write("DATASET UNSTRUCTURED_GRID\n")
             fp.write(f"POINTS {n} double\n")
             for node in self.nodes:
                 fp.write(f"{node[0]:.15e} {node[1]:.15e} {node[2]:.15e}\n")
-            fp.write(f"\nCELLS {m} {m * 5}\n")
-            for tet in self.elements:
-                fp.write(f"4 {tet[0]} {tet[1]} {tet[2]} {tet[3]}\n")
+            total = int(len(self.cell_nodes) + m)
+            fp.write(f"\nCELLS {m} {total}\n")
+            for index in range(m):
+                cell = self.cell_node_ids(index)
+                fp.write(f"{len(cell)} {' '.join(str(int(node)) for node in cell)}\n")
             fp.write(f"\nCELL_TYPES {m}\n")
-            for _ in range(m):
-                fp.write("10\n")  # VTK_TETRA = 10
+            for cell_type in self.cell_types.tolist():
+                fp.write(f"{VTK_CELL_TYPES[cell_type]}\n")
             fp.write(f"\nCELL_DATA {m}\n")
             fp.write("SCALARS region int 1\n")
             fp.write("LOOKUP_TABLE default\n")
@@ -733,21 +928,51 @@ class MeshData:
                             fp.write(f"{val:.15e}\n")
         return target
 
+    def _export_vtu(
+        self,
+        target: Path,
+        fields: dict[str, NDArray] | None,
+    ) -> Path:
+        point_values = " ".join(
+            f"{value:.15e}" for node in self.nodes for value in node
+        )
+        connectivity = " ".join(str(int(node)) for node in self.cell_nodes)
+        offsets = " ".join(str(int(offset)) for offset in self.cell_offsets[1:])
+        types = " ".join(str(VTK_CELL_TYPES[kind]) for kind in self.cell_types.tolist())
+        markers = " ".join(str(int(marker)) for marker in self.element_markers)
+        point_data = ""
+        if fields:
+            arrays: list[str] = []
+            for name, data in fields.items():
+                values = np.asarray(data)
+                components = 3 if values.ndim == 2 else 1
+                flattened = " ".join(f"{float(value):.15e}" for value in values.reshape(-1))
+                arrays.append(
+                    f'<DataArray type="Float64" Name="{name}" NumberOfComponents="{components}" '
+                    f'format="ascii">{flattened}</DataArray>'
+                )
+            point_data = f"<PointData>{''.join(arrays)}</PointData>"
+        target.write_text(
+            '<?xml version="1.0"?>\n'
+            '<VTKFile type="UnstructuredGrid" version="0.1" byte_order="LittleEndian">\n'
+            f'<UnstructuredGrid><Piece NumberOfPoints="{self.n_nodes}" NumberOfCells="{self.n_elements}">\n'
+            f'{point_data}<CellData Scalars="region"><DataArray type="Int32" Name="region" format="ascii">{markers}</DataArray></CellData>\n'
+            f'<Points><DataArray type="Float64" NumberOfComponents="3" format="ascii">{point_values}</DataArray></Points>\n'
+            '<Cells>'
+            f'<DataArray type="Int32" Name="connectivity" format="ascii">{connectivity}</DataArray>'
+            f'<DataArray type="Int64" Name="offsets" format="ascii">{offsets}</DataArray>'
+            f'<DataArray type="UInt8" Name="types" format="ascii">{types}</DataArray>'
+            '</Cells></Piece></UnstructuredGrid></VTKFile>\n',
+            encoding="utf-8",
+        )
+        return target
+
     @classmethod
     def load(cls, path: str | Path) -> "MeshData":
         source = Path(path)
         if source.suffix.lower() == ".json":
             payload = json.loads(source.read_text(encoding="utf-8"))
-            return cls(
-                nodes=np.asarray(payload["nodes"], dtype=np.float64),
-                elements=np.asarray(payload["elements"], dtype=np.int32),
-                element_markers=np.asarray(payload["element_markers"], dtype=np.int32),
-                boundary_faces=np.asarray(payload["boundary_faces"], dtype=np.int32),
-                boundary_markers=np.asarray(payload["boundary_markers"], dtype=np.int32),
-                periodic_boundary_pairs=[dict(pair) for pair in payload.get("periodic_boundary_pairs", [])],
-                periodic_node_pairs=[dict(pair) for pair in payload.get("periodic_node_pairs", [])],
-                periodic_mesh_certificate=payload.get("periodic_mesh_certificate"),
-            )
+            return cls._from_serialized_mapping(payload)
 
         data = np.load(source)
         periodic_boundary_pairs: list[dict[str, object]] = []
@@ -765,15 +990,52 @@ class MeshData:
         periodic_mesh_certificate = None
         if "periodic_mesh_certificate_json" in data.files:
             periodic_mesh_certificate = json.loads(str(data["periodic_mesh_certificate_json"]))
-        return cls(
-            nodes=data["nodes"],
-            elements=data["elements"],
-            element_markers=data["element_markers"],
-            boundary_faces=data["boundary_faces"],
-            boundary_markers=data["boundary_markers"],
+        payload = {name: data[name] for name in data.files if not name.endswith("_json")}
+        payload.update(
             periodic_boundary_pairs=periodic_boundary_pairs,
             periodic_node_pairs=periodic_node_pairs,
             periodic_mesh_certificate=periodic_mesh_certificate,
+        )
+        return cls._from_serialized_mapping(payload)
+
+    @classmethod
+    def _from_serialized_mapping(cls, payload: dict[str, object]) -> "MeshData":
+        legacy = "elements" in payload or "boundary_faces" in payload
+        v2_names = {
+            "cell_types", "cell_offsets", "cell_nodes",
+            "facet_types", "facet_roles", "facet_offsets", "facet_nodes",
+        }
+        v2 = any(name in payload for name in v2_names)
+        if legacy and v2:
+            raise ValueError("mesh payload contains both legacy and v2 topology")
+        common = dict(
+            nodes=payload["nodes"],
+            element_markers=payload["element_markers"],
+            boundary_markers=payload["boundary_markers"],
+            periodic_boundary_pairs=[dict(pair) for pair in payload.get("periodic_boundary_pairs", [])],
+            periodic_node_pairs=[dict(pair) for pair in payload.get("periodic_node_pairs", [])],
+            periodic_mesh_certificate=payload.get("periodic_mesh_certificate"),
+        )
+        if legacy:
+            if "elements" not in payload or "boundary_faces" not in payload:
+                raise ValueError("legacy mesh payload requires elements and boundary_faces")
+            return cls.from_legacy_tet4(
+                **common,
+                elements=payload["elements"],
+                boundary_faces=payload["boundary_faces"],
+            )
+        missing = sorted(v2_names - payload.keys())
+        if missing:
+            raise ValueError(f"v2 mesh payload missing topology fields: {missing}")
+        return cls(
+            **common,
+            cell_types=payload["cell_types"],
+            cell_offsets=payload["cell_offsets"],
+            cell_nodes=payload["cell_nodes"],
+            facet_types=payload["facet_types"],
+            facet_roles=payload["facet_roles"],
+            facet_offsets=payload["facet_offsets"],
+            facet_nodes=payload["facet_nodes"],
         )
 
     def to_ir(self, mesh_name: str) -> dict[str, object]:
@@ -782,9 +1044,18 @@ class MeshData:
         ir: dict[str, object] = {
             "mesh_name": mesh_name,
             "nodes": mesh.nodes.tolist(),
-            "elements": mesh.elements.tolist(),
+            "cells": {
+                "types": mesh.cell_types.tolist(),
+                "offsets": mesh.cell_offsets.tolist(),
+                "nodes": mesh.cell_nodes.tolist(),
+            },
             "element_markers": mesh.element_markers.tolist(),
-            "boundary_faces": mesh.boundary_faces.tolist(),
+            "facets": {
+                "types": mesh.facet_types.tolist(),
+                "roles": mesh.facet_roles.tolist(),
+                "offsets": mesh.facet_offsets.tolist(),
+                "nodes": mesh.facet_nodes.tolist(),
+            },
             "boundary_markers": mesh.boundary_markers.tolist(),
         }
         periodic_boundary_pairs = mesh.periodic_boundary_pairs
@@ -815,10 +1086,108 @@ class MeshData:
                     }
                     for marker, q in mesh.per_domain_quality.items()
             }
-        ir["mesh_statistics"] = _mesh_statistics_report_to_ir(
-            _build_mesh_statistics_report(mesh, mesh_name)
-        )
+        if np.all(mesh.cell_types == "tet4") and np.all(mesh.facet_types == "tri3"):
+            ir["mesh_statistics"] = _mesh_statistics_report_to_ir(
+                _build_mesh_statistics_report(mesh, mesh_name)
+            )
         return ir
+
+
+def _validate_typed_csr(
+    *,
+    types: NDArray[np.str_],
+    offsets: NDArray[np.int64],
+    nodes: NDArray[np.int32],
+    arities: dict[str, int],
+    kind: str,
+    node_count: int,
+) -> None:
+    if types.ndim != 1:
+        raise ValueError(f"{kind}_types must be one-dimensional")
+    if offsets.ndim != 1 or len(offsets) != len(types) + 1:
+        raise ValueError(f"{kind}_offsets length must equal {kind} count plus one")
+    if nodes.ndim != 1:
+        raise ValueError(f"{kind}_nodes must be one-dimensional")
+    if not len(offsets) or int(offsets[0]) != 0:
+        raise ValueError(f"{kind}_offsets must start at zero")
+    if np.any(np.diff(offsets) < 0):
+        raise ValueError(f"{kind}_offsets must be monotone")
+    if int(offsets[-1]) != len(nodes):
+        raise ValueError(f"{kind}_offsets final value must match {kind}_nodes length")
+    for index, item_type in enumerate(types.tolist()):
+        expected = arities.get(item_type)
+        if expected is None:
+            raise ValueError(f"unknown {kind} type: {item_type}")
+        start, stop = int(offsets[index]), int(offsets[index + 1])
+        if stop - start != expected:
+            raise ValueError(
+                f"{kind} {index} type {item_type} has wrong arity {stop - start}; expected {expected}"
+            )
+        item_nodes = nodes[start:stop]
+        if np.any(item_nodes < 0) or np.any(item_nodes >= node_count):
+            raise ValueError(f"{kind} {index} contains invalid node index")
+        if len(set(int(node) for node in item_nodes)) != expected:
+            raise ValueError(f"{kind} {index} contains duplicate node indices")
+
+
+def _cell_jacobian_determinants(
+    cell_type: str,
+    coordinates: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    q = 1.0 / math.sqrt(3.0)
+    if cell_type == "tet4":
+        matrix = np.stack(
+            [coordinates[1] - coordinates[0], coordinates[2] - coordinates[0], coordinates[3] - coordinates[0]],
+            axis=1,
+        )
+        return np.asarray([np.linalg.det(matrix)], dtype=np.float64)
+    if cell_type == "prism6":
+        points = ((1.0 / 6.0, 1.0 / 6.0, -q), (2.0 / 3.0, 1.0 / 6.0, q))
+        rows: list[float] = []
+        for r, s, t in points:
+            derivatives = np.asarray(
+                [
+                    [-(1 - t) / 2, -(1 - t) / 2, -(1 - r - s) / 2],
+                    [(1 - t) / 2, 0.0, -r / 2],
+                    [0.0, (1 - t) / 2, -s / 2],
+                    [-(1 + t) / 2, -(1 + t) / 2, (1 - r - s) / 2],
+                    [(1 + t) / 2, 0.0, r / 2],
+                    [0.0, (1 + t) / 2, s / 2],
+                ]
+            )
+            rows.append(float(np.linalg.det(coordinates.T @ derivatives)))
+        return np.asarray(rows)
+    if cell_type == "pyramid5":
+        rows = []
+        for r, s, t in ((-q, -q, 0.5 - q / 2), (q, q, 0.5 + q / 2)):
+            derivatives = np.asarray(
+                [
+                    [-(1 - s) * (1 - t) / 4, -(1 - r) * (1 - t) / 4, -(1 - r) * (1 - s) / 4],
+                    [(1 - s) * (1 - t) / 4, -(1 + r) * (1 - t) / 4, -(1 + r) * (1 - s) / 4],
+                    [(1 + s) * (1 - t) / 4, (1 + r) * (1 - t) / 4, -(1 + r) * (1 + s) / 4],
+                    [-(1 + s) * (1 - t) / 4, (1 - r) * (1 - t) / 4, -(1 - r) * (1 + s) / 4],
+                    [0.0, 0.0, 1.0],
+                ]
+            )
+            rows.append(float(np.linalg.det(coordinates.T @ derivatives)))
+        return np.asarray(rows)
+    if cell_type == "hex8":
+        signs = np.asarray(
+            [
+                [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+                [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1],
+            ],
+            dtype=np.float64,
+        )
+        rows = []
+        for r, s, t in ((-q, -q, -q), (q, q, q)):
+            derivatives = np.empty((8, 3), dtype=np.float64)
+            derivatives[:, 0] = signs[:, 0] * (1 + signs[:, 1] * s) * (1 + signs[:, 2] * t) / 8
+            derivatives[:, 1] = signs[:, 1] * (1 + signs[:, 0] * r) * (1 + signs[:, 2] * t) / 8
+            derivatives[:, 2] = signs[:, 2] * (1 + signs[:, 0] * r) * (1 + signs[:, 1] * s) / 8
+            rows.append(float(np.linalg.det(coordinates.T @ derivatives)))
+        return np.asarray(rows)
+    raise ValueError(f"unknown cell type: {cell_type}")
 
 
 def _tetra_signed_volumes(mesh: MeshData) -> NDArray[np.float64]:

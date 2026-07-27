@@ -397,7 +397,7 @@ fn assign_runtime_marker_range(
 fn inferred_runtime_markers_without_element_markers(
     plan: &FemPlanIR,
 ) -> Result<Option<Vec<u32>>, RunError> {
-    let element_count = plan.mesh.elements.len();
+    let element_count = plan.mesh.cell_count();
     if element_count == 0 {
         return Ok(Some(Vec::new()));
     }
@@ -594,23 +594,23 @@ fn validate_runtime_initial_magnetization(plan: &FemPlanIR) -> Result<(), RunErr
     }
 
     let mut active_nodes = vec![plan.mesh.element_markers.is_empty(); node_count];
-    for (element_index, element) in plan.mesh.elements.iter().enumerate() {
+    for cell in plan.mesh.cells.iter() {
         let marker = plan
             .mesh
             .element_markers
-            .get(element_index)
+            .get(cell.global_ordinal)
             .copied()
             .unwrap_or(1);
         if marker == 0 {
             continue;
         }
-        for node in element {
+        for node in cell.nodes {
             let node = *node as usize;
             if node >= node_count {
                 return Err(RunError {
                     message: format!(
                         "invalid FEM plan: element {} references node {} outside mesh node count {}",
-                        element_index, node, node_count
+                        cell.global_ordinal, node, node_count
                     ),
                 });
             }
@@ -4492,10 +4492,10 @@ fn eigen_path_airbox_size_m(plan: &FemEigenPlanIR) -> Result<f64, RunError> {
 fn eigen_path_periodic_domain_node_pair_counts(mesh: &fullmag_ir::MeshIR) -> (u64, u64) {
     let mut magnetic_nodes = BTreeSet::new();
     let mut airbox_nodes = BTreeSet::new();
-    for (element_index, element) in mesh.elements.iter().enumerate() {
+    for cell in mesh.cells.iter() {
         let marker = mesh
             .element_markers
-            .get(element_index)
+            .get(cell.global_ordinal)
             .copied()
             .unwrap_or(1);
         let target = if marker == 0 {
@@ -4503,7 +4503,7 @@ fn eigen_path_periodic_domain_node_pair_counts(mesh: &fullmag_ir::MeshIR) -> (u6
         } else {
             &mut magnetic_nodes
         };
-        target.extend(element.iter().copied());
+        target.extend(cell.nodes.iter().copied());
     }
     let mut magnetic_count = 0_u64;
     let mut airbox_count = 0_u64;
@@ -6008,9 +6008,9 @@ mod tests {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -8285,7 +8285,7 @@ mod tests {
             [0.0, 10.0e-9, 20.0e-9],
             [0.0, 0.0, 30.0e-9],
         ];
-        plan.mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7]];
+        plan.mesh.set_tet4_cells(vec![[0, 1, 2, 3], [4, 5, 6, 7]]);
         plan.mesh.element_markers = vec![1, 0];
         plan.mesh.periodic_node_pairs = vec![
             fullmag_ir::MeshPeriodicNodePairIR {
@@ -9296,7 +9296,8 @@ mod tests {
     #[test]
     fn normalized_runtime_markers_fallback_to_object_segments_when_region_materials_missing() {
         let mut plan = tiny_fem_plan();
-        plan.mesh.elements = vec![[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]];
+        plan.mesh
+            .set_tet4_cells(vec![[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]]);
         plan.mesh.element_markers = vec![1, 2, 0];
         plan.object_segments = vec![
             FemObjectSegmentIR {
@@ -9339,7 +9340,8 @@ mod tests {
     #[test]
     fn normalized_runtime_markers_reject_incomplete_object_segment_inference() {
         let mut plan = tiny_fem_plan();
-        plan.mesh.elements = vec![[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]];
+        plan.mesh
+            .set_tet4_cells(vec![[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]]);
         plan.mesh.element_markers = vec![1, 2, 0];
         plan.object_segments = vec![FemObjectSegmentIR {
             object_id: "nanoflower_0".to_string(),
@@ -9362,7 +9364,8 @@ mod tests {
     #[test]
     fn normalized_runtime_markers_fallback_to_mesh_parts_when_segments_missing() {
         let mut plan = tiny_fem_plan();
-        plan.mesh.elements = vec![[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]];
+        plan.mesh
+            .set_tet4_cells(vec![[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]]);
         plan.mesh.element_markers = vec![1, 2, 0];
         plan.object_segments.clear();
         plan.mesh_parts = vec![
@@ -9438,7 +9441,7 @@ mod tests {
         let mut plan = tiny_fem_plan();
         plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
         plan.mesh.nodes.push([2.0, 0.0, 0.0]);
-        plan.mesh.elements = vec![[0, 1, 2, 3], [1, 2, 3, 4]];
+        plan.mesh.set_tet4_cells(vec![[0, 1, 2, 3], [1, 2, 3, 4]]);
         plan.mesh.element_markers.clear();
         plan.object_segments.clear();
         plan.mesh_parts = vec![
@@ -9501,7 +9504,7 @@ mod tests {
     fn normalized_fem_plan_rejects_zero_initial_on_active_magnetic_node() {
         let mut plan = tiny_fem_plan();
         plan.mesh.nodes.push([2.0, 0.0, 0.0]);
-        plan.mesh.elements = vec![[0, 1, 2, 3], [1, 2, 3, 4]];
+        plan.mesh.set_tet4_cells(vec![[0, 1, 2, 3], [1, 2, 3, 4]]);
         plan.mesh.element_markers = vec![1, 0];
         plan.initial_magnetization = vec![
             [1.0, 0.0, 0.0],

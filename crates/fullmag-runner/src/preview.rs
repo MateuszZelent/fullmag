@@ -338,15 +338,15 @@ pub(crate) fn mesh_quantity_active_mask(quantity: &str, mesh: &MeshIR) -> Option
     }
     let magnetic_element_mask = magnetic_element_mask_from_markers(&mesh.element_markers);
     let mut active_mask = vec![false; mesh.nodes.len()];
-    for (element_index, element) in mesh.elements.iter().enumerate() {
+    for cell in mesh.cells.iter() {
         if !magnetic_element_mask
-            .get(element_index)
+            .get(cell.global_ordinal)
             .copied()
             .unwrap_or(true)
         {
             continue;
         }
-        for &node_index in element {
+        for &node_index in cell.nodes {
             if let Some(active) = active_mask.get_mut(node_index as usize) {
                 *active = true;
             }
@@ -559,9 +559,9 @@ mod tests {
                 [0.0, 0.0, 1.0],
                 [2.0, 0.0, 0.0],
             ],
-            elements: vec![[0, 1, 2, 3], [1, 2, 3, 4]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [1, 2, 3, 4]]),
             element_markers,
-            boundary_faces: vec![[0, 1, 2]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
             boundary_markers: vec![1],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),

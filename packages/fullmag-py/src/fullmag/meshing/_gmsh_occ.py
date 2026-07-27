@@ -984,7 +984,7 @@ def generate_shared_domain_mesh_via_occ(
             periodic_pair_specs=periodic_pair_specs,
         )
 
-        scaled_mesh = MeshData(
+        scaled_mesh = MeshData.from_legacy_tet4(
             nodes=mesh.nodes / SCALE,
             elements=mesh.elements,
             element_markers=mesh.element_markers,

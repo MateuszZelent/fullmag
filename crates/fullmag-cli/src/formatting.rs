@@ -258,8 +258,8 @@ pub(crate) fn execution_plan_log_lines(
             lines.push(format!(
                 "Mesh size: {} nodes, {} elements, {} boundary faces",
                 fem.mesh.nodes.len(),
-                fem.mesh.elements.len(),
-                fem.mesh.boundary_faces.len()
+                fem.mesh.cell_count(),
+                fem.mesh.facet_count()
             ));
             if let Some((min, max)) = fem_mesh_bbox(&fem.mesh) {
                 let extent = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
@@ -274,8 +274,8 @@ pub(crate) fn execution_plan_log_lines(
             lines.push(format!(
                 "Mesh size: {} nodes, {} elements, {} boundary faces",
                 fem.mesh.nodes.len(),
-                fem.mesh.elements.len(),
-                fem.mesh.boundary_faces.len()
+                fem.mesh.cell_count(),
+                fem.mesh.facet_count()
             ));
             if let Some((min, max)) = fem_mesh_bbox(&fem.mesh) {
                 let extent = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
@@ -291,8 +291,8 @@ pub(crate) fn execution_plan_log_lines(
             lines.push(format!(
                 "Mesh size: {} nodes, {} elements, {} boundary faces",
                 fem.mesh.nodes.len(),
-                fem.mesh.elements.len(),
-                fem.mesh.boundary_faces.len()
+                fem.mesh.cell_count(),
+                fem.mesh.facet_count()
             ));
             if let Some((min, max)) = fem_mesh_bbox(&fem.mesh) {
                 let extent = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
@@ -405,8 +405,8 @@ pub(crate) fn current_artifact_layout(
                 "fe_order": fem.fe_order,
                 "hmax": fem.hmax,
                 "n_nodes": fem.mesh.nodes.len(),
-                "n_elements": fem.mesh.elements.len(),
-                "boundary_face_count": fem.mesh.boundary_faces.len(),
+                "n_elements": fem.mesh.cell_count(),
+                "boundary_face_count": fem.mesh.facet_count(),
                 "bounds_min": bounds_min,
                 "bounds_max": bounds_max,
                 "mesh_extent": mesh_extent,
@@ -449,8 +449,8 @@ pub(crate) fn current_artifact_layout(
                 "fe_order": fem.fe_order,
                 "hmax": fem.hmax,
                 "n_nodes": fem.mesh.nodes.len(),
-                "n_elements": fem.mesh.elements.len(),
-                "boundary_face_count": fem.mesh.boundary_faces.len(),
+                "n_elements": fem.mesh.cell_count(),
+                "boundary_face_count": fem.mesh.facet_count(),
                 "bounds_min": bounds_min,
                 "bounds_max": bounds_max,
                 "mesh_extent": mesh_extent,
@@ -494,8 +494,8 @@ pub(crate) fn current_artifact_layout(
                 "fe_order": fem.fe_order,
                 "hmax": fem.hmax,
                 "n_nodes": fem.mesh.nodes.len(),
-                "n_elements": fem.mesh.elements.len(),
-                "boundary_face_count": fem.mesh.boundary_faces.len(),
+                "n_elements": fem.mesh.cell_count(),
+                "boundary_face_count": fem.mesh.facet_count(),
                 "bounds_min": bounds_min,
                 "bounds_max": bounds_max,
                 "mesh_extent": mesh_extent,

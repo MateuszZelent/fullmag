@@ -899,20 +899,20 @@ fn segment_element_node_indices(
 ) -> Result<Vec<usize>, PlanError> {
     let element_start = segment.element_start as usize;
     let element_end = element_start.saturating_add(segment.element_count as usize);
-    if element_end > mesh.elements.len() {
+    if element_end > mesh.cell_count() {
         return Err(PlanError {
             reasons: vec![format!(
                 "FEM object segment '{}' element range {}..{} exceeds mesh element count {}",
                 segment.object_id,
                 element_start,
                 element_end,
-                mesh.elements.len()
+                mesh.cell_count()
             )],
         });
     }
 
-    let mut indices = mesh.elements[element_start..element_end]
-        .iter()
+    let mut indices = (element_start..element_end)
+        .filter_map(|index| mesh.cells.item_nodes(index))
         .flat_map(|element| element.iter().copied())
         .map(|index| index as usize)
         .collect::<Vec<_>>();
@@ -1510,7 +1510,7 @@ fn build_conformal_region_element_fields(
     object_segments: &[fullmag_ir::FemObjectSegmentIR],
     magnet_materials: &BTreeMap<String, fullmag_ir::MaterialIR>,
 ) -> Result<(Option<Vec<f64>>, Option<Vec<f64>>), PlanError> {
-    let element_count = mesh.elements.len();
+    let element_count = mesh.cell_count();
     if element_count == 0 || mesh.element_markers.len() != element_count {
         return Ok((None, None));
     }
@@ -2210,7 +2210,7 @@ pub(crate) fn plan_fem(
         .as_ref()
         .and_then(|asset| asset.build_report.clone());
     let n_nodes = mesh.nodes.len();
-    let n_elements = mesh.elements.len();
+    let n_elements = mesh.cell_count();
     let mesh_name = mesh.mesh_name.clone();
     let domain_mesh_mode = resolved_domain_mesh_mode(&mesh);
     let mut periodic_mesh_certificate_v6 = None;
@@ -3263,7 +3263,7 @@ pub(crate) fn plan_fem_eigen(
         .and_then(|asset| asset.build_report.clone());
     let mesh_name = mesh.mesh_name.clone();
     let n_nodes = mesh.nodes.len();
-    let n_elements = mesh.elements.len();
+    let n_elements = mesh.cell_count();
     let domain_mesh_mode = resolved_domain_mesh_mode(&mesh);
     if shared_domain_mesh_requested(problem, demag_realization)
         && domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir

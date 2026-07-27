@@ -418,7 +418,10 @@ fn fem_initial_component(plan: &fullmag_ir::FemPlanIR, component: usize) -> Resu
 
 fn fem_lumped_node_volumes(mesh: &fullmag_ir::MeshIR) -> Vec<f64> {
     let mut nodal_volumes = vec![0.0; mesh.nodes.len()];
-    for (element_index, element) in mesh.elements.iter().enumerate() {
+    let elements = mesh.require_tet4_elements().expect(
+        "finite-k FEM response requires tet4 cells; mixed-cell runtime support is unavailable",
+    );
+    for (element_index, element) in elements.iter().enumerate() {
         if !mesh.element_markers.is_empty()
             && mesh
                 .element_markers
@@ -590,9 +593,9 @@ mod tests {
                 [0.0, 0.0, 1.0],
                 [0.0, 0.0, 2.0],
             ],
-            elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 1, 2, 4]]),
             element_markers: vec![1, 0],
-            boundary_faces: vec![],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![]),
             boundary_markers: vec![],
             periodic_boundary_pairs: vec![],
             periodic_node_pairs: vec![],
