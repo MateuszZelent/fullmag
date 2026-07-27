@@ -342,14 +342,7 @@ def generate_mesh(
                 ox, oy, oz = offset
                 if ox != 0.0 or oy != 0.0 or oz != 0.0:
                     shift = np.array([ox, oy, oz], dtype=np.float64)
-                    mesh = MeshData.from_legacy_tet4(
-                        nodes=mesh.nodes + shift,
-                        elements=mesh.elements,
-                        element_markers=mesh.element_markers,
-                        boundary_faces=mesh.boundary_faces,
-                        boundary_markers=mesh.boundary_markers,
-                        quality=mesh.quality,
-                    )
+                    mesh = _dc_replace(mesh, nodes=mesh.nodes + shift)
                 return mesh
         return _generate_csg_mesh(geometry, hmax=resolved_hmax, order=order, airbox=resolved_airbox, options=opts)
     if isinstance(geometry, ImportedGeometry):

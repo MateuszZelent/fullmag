@@ -1613,6 +1613,7 @@ fn object_scoped_fem_field(
     if summary.values.len() / 3 != mesh.nodes.len() {
         return None;
     }
+    let tet_elements = mesh.require_tet4_elements().ok()?;
     let (node_indices, element_indices) = object_mesh_scope(mesh, object_id)?;
     let mut selected_nodes = BTreeSet::new();
     for index in node_indices {
@@ -1621,7 +1622,7 @@ fn object_scoped_fem_field(
         }
     }
     for element_index in &element_indices {
-        if let Some(element) = mesh.elements.get(*element_index) {
+        if let Some(element) = tet_elements.get(*element_index) {
             for node_index in element {
                 selected_nodes.insert(*node_index as usize);
             }
@@ -1645,7 +1646,7 @@ fn object_scoped_fem_field(
     let mut elements = Vec::new();
     let mut element_markers = Vec::new();
     for element_index in element_indices {
-        let element = *mesh.elements.get(element_index)?;
+        let element = *tet_elements.get(element_index)?;
         let Some(remapped) = remap_tetra(element, &node_map) else {
             continue;
         };
@@ -1691,7 +1692,7 @@ fn object_mesh_scope(
         let elements = range_indices(
             part.element_start as usize,
             part.element_count as usize,
-            mesh.elements.len(),
+            mesh.cell_count(),
         );
         return Some((nodes, elements));
     }
@@ -1708,7 +1709,7 @@ fn object_mesh_scope(
         range_indices(
             segment.element_start as usize,
             segment.element_count as usize,
-            mesh.elements.len(),
+            mesh.cell_count(),
         ),
     ))
 }

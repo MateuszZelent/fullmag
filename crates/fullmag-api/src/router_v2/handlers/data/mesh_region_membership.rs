@@ -341,13 +341,15 @@ fn mesh_region_membership_geometry_projection(
         node_indices: Vec::new(),
         boundary_face_indices: Vec::new(),
     };
+    let elements = mesh.require_tet4_elements().ok()?;
+    let boundary_faces = mesh.require_tri3_boundary_faces().ok()?;
 
     for (index, node) in mesh.nodes.iter().enumerate() {
         if point_in_region_shape(region_sample_point(*node, object, region), &region.shape) {
             push_unique(&mut membership.node_indices, index as u32);
         }
     }
-    for (index, element) in mesh.elements.iter().enumerate() {
+    for (index, element) in elements.iter().enumerate() {
         let Some(centroid) = tetra_centroid(mesh, element) else {
             continue;
         };
@@ -355,7 +357,7 @@ fn mesh_region_membership_geometry_projection(
             push_unique(&mut membership.element_indices, index as u32);
         }
     }
-    for (index, face) in mesh.boundary_faces.iter().enumerate() {
+    for (index, face) in boundary_faces.iter().enumerate() {
         let Some(centroid) = triangle_centroid(mesh, face) else {
             continue;
         };

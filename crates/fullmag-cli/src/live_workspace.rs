@@ -1063,7 +1063,7 @@ fn mark_nonzero_marker_elements(
     }
     let mut marked = false;
     for cell in mesh.cells.iter() {
-        if mesh.element_markers[cell.global_ordinal] == 0 {
+        if mesh.element_markers[cell.ordinal] == 0 {
             continue;
         }
         marked = true;

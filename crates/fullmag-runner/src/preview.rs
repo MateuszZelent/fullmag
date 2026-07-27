@@ -340,7 +340,7 @@ pub(crate) fn mesh_quantity_active_mask(quantity: &str, mesh: &MeshIR) -> Option
     let mut active_mask = vec![false; mesh.nodes.len()];
     for cell in mesh.cells.iter() {
         if !magnetic_element_mask
-            .get(cell.global_ordinal)
+            .get(cell.ordinal)
             .copied()
             .unwrap_or(true)
         {

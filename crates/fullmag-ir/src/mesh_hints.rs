@@ -259,6 +259,8 @@ pub struct FemConnectivityIR {
     pub types: Vec<FemCellTypeIR>,
     pub offsets: Vec<u32>,
     pub nodes: Vec<u32>,
+    #[serde(default)]
+    pub global_ordinals: Vec<u64>,
 }
 
 impl FemConnectivityIR {
@@ -267,6 +269,7 @@ impl FemConnectivityIR {
             types: Vec::new(),
             offsets: vec![0],
             nodes: Vec::new(),
+            global_ordinals: Vec::new(),
         }
     }
 
@@ -281,6 +284,7 @@ impl FemConnectivityIR {
                 .map(|index| (index * 4) as u32)
                 .collect(),
             nodes,
+            global_ordinals: (0..elements.len() as u64).collect(),
         }
     }
 
@@ -304,11 +308,14 @@ impl FemConnectivityIR {
             .copied()
             .enumerate()
             .filter_map(|(ordinal, cell_type)| {
-                self.item_nodes(ordinal).map(|nodes| FemCellView {
-                    global_ordinal: ordinal,
-                    cell_type,
-                    nodes,
-                })
+                self.item_nodes(ordinal)
+                    .zip(self.global_ordinals.get(ordinal))
+                    .map(|(nodes, global_ordinal)| FemCellView {
+                        ordinal,
+                        global_ordinal: *global_ordinal,
+                        cell_type,
+                        nodes,
+                    })
             })
     }
 
@@ -329,7 +336,8 @@ impl FemConnectivityIR {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FemCellView<'a> {
-    pub global_ordinal: usize,
+    pub ordinal: usize,
+    pub global_ordinal: u64,
     pub cell_type: FemCellTypeIR,
     pub nodes: &'a [u32],
 }
@@ -340,6 +348,8 @@ pub struct FemFacetConnectivityIR {
     pub roles: Vec<FemFacetRoleIR>,
     pub offsets: Vec<u32>,
     pub nodes: Vec<u32>,
+    #[serde(default)]
+    pub global_ordinals: Vec<u64>,
 }
 
 impl FemFacetConnectivityIR {
@@ -349,6 +359,7 @@ impl FemFacetConnectivityIR {
             roles: Vec::new(),
             offsets: vec![0],
             nodes: Vec::new(),
+            global_ordinals: Vec::new(),
         }
     }
 
@@ -364,6 +375,7 @@ impl FemFacetConnectivityIR {
                 .map(|index| (index * 3) as u32)
                 .collect(),
             nodes,
+            global_ordinals: (0..boundary_faces.len() as u64).collect(),
         }
     }
 
@@ -387,13 +399,16 @@ impl FemFacetConnectivityIR {
             .copied()
             .zip(self.roles.iter().copied())
             .enumerate()
-            .filter_map(|(global_ordinal, (facet_type, role))| {
-                self.item_nodes(global_ordinal).map(|nodes| FemFacetView {
-                    global_ordinal,
-                    facet_type,
-                    role,
-                    nodes,
-                })
+            .filter_map(|(ordinal, (facet_type, role))| {
+                self.item_nodes(ordinal)
+                    .zip(self.global_ordinals.get(ordinal))
+                    .map(|(nodes, global_ordinal)| FemFacetView {
+                        ordinal,
+                        global_ordinal: *global_ordinal,
+                        facet_type,
+                        role,
+                        nodes,
+                    })
             })
     }
 
@@ -414,7 +429,8 @@ impl FemFacetConnectivityIR {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FemFacetView<'a> {
-    pub global_ordinal: usize,
+    pub ordinal: usize,
+    pub global_ordinal: u64,
     pub facet_type: FemFacetTypeIR,
     pub role: FemFacetRoleIR,
     pub nodes: &'a [u32],
@@ -471,7 +487,7 @@ impl<'de> Deserialize<'de> for MeshIR {
                 "mesh payload contains both legacy and v2 topology",
             ));
         }
-        let (cells, facets) =
+        let (mut cells, mut facets) =
             if has_v2 {
                 (
                     wire.cells
@@ -493,6 +509,15 @@ impl<'de> Deserialize<'de> for MeshIR {
                     "mesh payload must provide either v2 or legacy topology",
                 ));
             };
+        // Pre-v2.1 serialized meshes did not carry immutable source ordinals.
+        // Normalize them only at this explicit compatibility boundary; every
+        // newly serialized canonical mesh writes the fields.
+        if cells.global_ordinals.is_empty() && !cells.types.is_empty() {
+            cells.global_ordinals = (0..cells.types.len() as u64).collect();
+        }
+        if facets.global_ordinals.is_empty() && !facets.types.is_empty() {
+            facets.global_ordinals = (0..facets.types.len() as u64).collect();
+        }
         Ok(Self {
             mesh_name: wire.mesh_name,
             nodes: wire.nodes,
@@ -666,18 +691,44 @@ fn sorted_face(face: [u32; 3]) -> [u32; 3] {
     sorted
 }
 
-fn mesh_topology_fingerprint(mesh: &MeshIR) -> String {
+pub const FEM_MESH_TOPOLOGY_FINGERPRINT_V2_DOMAIN: &[u8] =
+    b"fullmag:fem-mesh-topology-fingerprint:v2";
+
+pub fn fem_mesh_topology_fingerprint_v2(
+    nodes: &[[f64; 3]],
+    cells: &FemConnectivityIR,
+    element_markers: &[u32],
+    facets: &FemFacetConnectivityIR,
+    boundary_markers: &[u32],
+    periodic_boundary_pairs: &[MeshPeriodicBoundaryPairIR],
+    periodic_node_pairs: &[MeshPeriodicNodePairIR],
+) -> String {
     let payload = serde_json::json!({
-        "nodes": mesh.nodes,
-        "cells": mesh.cells,
-        "element_markers": mesh.element_markers,
-        "facets": mesh.facets,
-        "boundary_markers": mesh.boundary_markers,
-        "periodic_boundary_pairs": mesh.periodic_boundary_pairs,
-        "periodic_node_pairs": mesh.periodic_node_pairs,
+        "nodes": nodes,
+        "cells": cells,
+        "element_markers": element_markers,
+        "facets": facets,
+        "boundary_markers": boundary_markers,
+        "periodic_boundary_pairs": periodic_boundary_pairs,
+        "periodic_node_pairs": periodic_node_pairs,
     });
     let encoded = serde_json::to_vec(&payload).unwrap_or_default();
-    format!("sha256:{:x}", Sha256::digest(encoded))
+    let mut hasher = Sha256::new();
+    hasher.update(FEM_MESH_TOPOLOGY_FINGERPRINT_V2_DOMAIN);
+    hasher.update(encoded);
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+fn mesh_topology_fingerprint(mesh: &MeshIR) -> String {
+    fem_mesh_topology_fingerprint_v2(
+        &mesh.nodes,
+        &mesh.cells,
+        &mesh.element_markers,
+        &mesh.facets,
+        &mesh.boundary_markers,
+        &mesh.periodic_boundary_pairs,
+        &mesh.periodic_node_pairs,
+    )
 }
 
 fn mesh_face_element_markers(mesh: &MeshIR) -> BTreeMap<[u32; 3], BTreeSet<u32>> {
@@ -1972,6 +2023,9 @@ impl MeshIR {
             .max(f64::MIN_POSITIVE);
 
         for cell in self.cells.iter() {
+            if cell.nodes.len() != cell.cell_type.arity() {
+                continue;
+            }
             let Some(coordinates) = cell
                 .nodes
                 .iter()
@@ -2042,6 +2096,21 @@ fn validate_cell_connectivity(
     node_count: u32,
     errors: &mut Vec<String>,
 ) {
+    if cells.global_ordinals.len() != cells.types.len() {
+        errors.push(
+            "mesh.cells.global_ordinals length must match mesh.cells.types length".to_string(),
+        );
+    }
+    if cells
+        .global_ordinals
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>()
+        .len()
+        != cells.global_ordinals.len()
+    {
+        errors.push("mesh.cells.global_ordinals must be unique".to_string());
+    }
     validate_offsets(
         "cell",
         cells.types.len(),
@@ -2066,6 +2135,21 @@ fn validate_facet_connectivity(
     node_count: u32,
     errors: &mut Vec<String>,
 ) {
+    if facets.global_ordinals.len() != facets.types.len() {
+        errors.push(
+            "mesh.facets.global_ordinals length must match mesh.facets.types length".to_string(),
+        );
+    }
+    if facets
+        .global_ordinals
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>()
+        .len()
+        != facets.global_ordinals.len()
+    {
+        errors.push("mesh.facets.global_ordinals must be unique".to_string());
+    }
     validate_offsets(
         "facet",
         facets.types.len(),
@@ -2181,21 +2265,39 @@ fn cell_jacobian_determinants(cell_type: FemCellTypeIR, coordinates: &[[f64; 3]]
                 coordinates[3][2] - coordinates[0][2],
             ],
         ])],
-        FemCellTypeIR::Prism6 => [(1.0 / 6.0, 1.0 / 6.0, -q), (2.0 / 3.0, 1.0 / 6.0, q)]
-            .into_iter()
-            .map(|(r, s, t)| {
-                let derivatives = [
-                    [-(1.0 - t) / 2.0, -(1.0 - t) / 2.0, -(1.0 - r - s) / 2.0],
-                    [(1.0 - t) / 2.0, 0.0, -r / 2.0],
-                    [0.0, (1.0 - t) / 2.0, -s / 2.0],
-                    [-(1.0 + t) / 2.0, -(1.0 + t) / 2.0, (1.0 - r - s) / 2.0],
-                    [(1.0 + t) / 2.0, 0.0, r / 2.0],
-                    [0.0, (1.0 + t) / 2.0, s / 2.0],
-                ];
-                mapped_jacobian_determinant(coordinates, &derivatives)
-            })
-            .collect(),
-        FemCellTypeIR::Pyramid5 => [(-q, -q, 0.5 - q / 2.0), (q, q, 0.5 + q / 2.0)]
+        FemCellTypeIR::Prism6 => [
+            (1.0 / 6.0, 1.0 / 6.0, -q),
+            (2.0 / 3.0, 1.0 / 6.0, -q),
+            (1.0 / 6.0, 2.0 / 3.0, -q),
+            (1.0 / 6.0, 1.0 / 6.0, q),
+            (2.0 / 3.0, 1.0 / 6.0, q),
+            (1.0 / 6.0, 2.0 / 3.0, q),
+        ]
+        .into_iter()
+        .map(|(r, s, t)| {
+            let derivatives = [
+                [-(1.0 - t) / 2.0, -(1.0 - t) / 2.0, -(1.0 - r - s) / 2.0],
+                [(1.0 - t) / 2.0, 0.0, -r / 2.0],
+                [0.0, (1.0 - t) / 2.0, -s / 2.0],
+                [-(1.0 + t) / 2.0, -(1.0 + t) / 2.0, (1.0 - r - s) / 2.0],
+                [(1.0 + t) / 2.0, 0.0, r / 2.0],
+                [0.0, (1.0 + t) / 2.0, s / 2.0],
+            ];
+            mapped_jacobian_determinant(coordinates, &derivatives)
+        })
+        .collect(),
+        FemCellTypeIR::Pyramid5 => {
+            let qt = 10.0_f64.sqrt() / 15.0;
+            [
+                (-q, -q, 1.0 / 3.0 - qt),
+                (q, -q, 1.0 / 3.0 - qt),
+                (-q, q, 1.0 / 3.0 - qt),
+                (q, q, 1.0 / 3.0 - qt),
+                (-q, -q, 1.0 / 3.0 + qt),
+                (q, -q, 1.0 / 3.0 + qt),
+                (-q, q, 1.0 / 3.0 + qt),
+                (q, q, 1.0 / 3.0 + qt),
+            ]
             .into_iter()
             .map(|(r, s, t)| {
                 let derivatives = [
@@ -2223,7 +2325,8 @@ fn cell_jacobian_determinants(cell_type: FemCellTypeIR, coordinates: &[[f64; 3]]
                 ];
                 mapped_jacobian_determinant(coordinates, &derivatives)
             })
-            .collect(),
+            .collect()
+        }
         FemCellTypeIR::Hex8 => {
             let signs = [
                 [-1.0, -1.0, -1.0],
@@ -2235,8 +2338,13 @@ fn cell_jacobian_determinants(cell_type: FemCellTypeIR, coordinates: &[[f64; 3]]
                 [1.0, 1.0, 1.0],
                 [-1.0, 1.0, 1.0],
             ];
-            [(-q, -q, -q), (q, q, q)]
+            [-q, q]
                 .into_iter()
+                .flat_map(|r| {
+                    [-q, q]
+                        .into_iter()
+                        .flat_map(move |s| [-q, q].into_iter().map(move |t| (r, s, t)))
+                })
                 .map(|(r, s, t)| {
                     let derivatives = signs.map(|sign| {
                         [
@@ -2255,6 +2363,99 @@ fn cell_jacobian_determinants(cell_type: FemCellTypeIR, coordinates: &[[f64; 3]]
 #[cfg(test)]
 mod mesh_validation_tests {
     use super::*;
+
+    #[test]
+    fn topology_fingerprint_uses_the_exact_v2_domain() {
+        let mesh = certified_airbox_mesh();
+        let payload = serde_json::json!({
+            "nodes": mesh.nodes,
+            "cells": mesh.cells,
+            "element_markers": mesh.element_markers,
+            "facets": mesh.facets,
+            "boundary_markers": mesh.boundary_markers,
+            "periodic_boundary_pairs": mesh.periodic_boundary_pairs,
+            "periodic_node_pairs": mesh.periodic_node_pairs,
+        });
+        let mut hasher = Sha256::new();
+        hasher.update(b"fullmag:fem-mesh-topology-fingerprint:v2");
+        hasher.update(serde_json::to_vec(&payload).unwrap());
+        let expected = format!("sha256:{:x}", hasher.finalize());
+        assert_eq!(mesh.topology_fingerprint_v6(), expected);
+    }
+
+    #[test]
+    fn mixed_cells_use_complete_order_two_jacobian_rules() {
+        let cases = [
+            (
+                FemCellTypeIR::Prism6,
+                vec![
+                    [1.0, 1.0, -1.0],
+                    [1.0, 0.0, -1.0],
+                    [0.0, 1.0, -1.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 0.0, 1.0],
+                    [0.0, 1.0, 1.0],
+                ],
+                6,
+            ),
+            (
+                FemCellTypeIR::Pyramid5,
+                vec![
+                    [-1.0, 0.0, 2.0],
+                    [1.0, -1.0, 0.0],
+                    [1.0, 1.0, 0.0],
+                    [-1.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                8,
+            ),
+            (
+                FemCellTypeIR::Hex8,
+                vec![
+                    [-1.0, -1.0, -1.0],
+                    [-1.0, 0.0, 0.0],
+                    [1.0, 1.0, -1.0],
+                    [-1.0, 1.0, -1.0],
+                    [-1.0, -1.0, 1.0],
+                    [1.0, -1.0, 1.0],
+                    [1.0, 1.0, 1.0],
+                    [-1.0, 1.0, 1.0],
+                ],
+                8,
+            ),
+        ];
+        for (cell_type, coordinates, expected_count) in cases {
+            let determinants = cell_jacobian_determinants(cell_type, &coordinates);
+            assert_eq!(determinants.len(), expected_count, "{cell_type:?}");
+            assert!(
+                determinants.iter().any(|determinant| *determinant < 0.0),
+                "locally inverted {cell_type:?} must be detected"
+            );
+        }
+    }
+
+    #[test]
+    fn strict_validation_never_panics_for_malformed_cell_arity() {
+        let mesh = MeshIR {
+            mesh_name: "malformed".to_string(),
+            nodes: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            cells: FemConnectivityIR {
+                types: vec![FemCellTypeIR::Tet4],
+                offsets: vec![0, 3],
+                nodes: vec![0, 1, 2],
+                global_ordinals: vec![73],
+            },
+            element_markers: vec![1],
+            facets: FemFacetConnectivityIR::empty(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: HashMap::new(),
+        };
+        let result = std::panic::catch_unwind(|| mesh.validate_strict(&Default::default()));
+        assert!(result.is_ok(), "strict validation must report, never panic");
+        assert!(result.unwrap().is_err());
+    }
 
     fn certified_airbox_mesh() -> MeshIR {
         MeshIR {

@@ -828,7 +828,7 @@ mod tests {
             node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 0 },
             boundary_face_indices: vec![],
             node_indices: vec![],
-            surface_faces: vec![],
+            facet_global_ordinals: vec![],
             bounds_min: None,
             bounds_max: None,
             parent_id: None,

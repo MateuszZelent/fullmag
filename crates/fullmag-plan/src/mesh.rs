@@ -143,7 +143,7 @@ pub(crate) fn build_mesh_parts_from_segments(
                 },
                 boundary_face_indices: Vec::new(),
                 node_indices,
-                surface_faces: Vec::new(),
+                facet_global_ordinals: Vec::new(),
                 bounds_min: bounds.map(|(min, _)| min),
                 bounds_max: bounds.map(|(_, max)| max),
                 parent_id: None,
@@ -424,7 +424,8 @@ pub(crate) struct SharedDomainRegionEntry {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SharedInterfaceFace {
-    pub face: [u32; 3],
+    pub facet_global_ordinal: u64,
+    pub facet_type: fullmag_ir::FemFacetTypeIR,
     pub markers: Vec<u32>,
 }
 
@@ -471,7 +472,7 @@ fn analyze_shared_domain_mesh_with_entries(
 
     let mut node_marker_sets = vec![BTreeSet::<u32>::new(); mesh.nodes.len()];
     for cell in mesh.cells.iter() {
-        let marker = mesh.element_markers[cell.global_ordinal];
+        let marker = mesh.element_markers[cell.ordinal];
         if marker == AIR_REGION_MARKER {
             continue;
         }
@@ -496,16 +497,14 @@ fn analyze_shared_domain_mesh_with_entries(
 
     let mut face_markers = BTreeMap::<Vec<u32>, BTreeSet<u32>>::new();
     let mut all_face_markers = BTreeMap::<Vec<u32>, BTreeSet<u32>>::new();
-    let mut representative_faces = BTreeMap::<Vec<u32>, Vec<u32>>::new();
     for cell in mesh.cells.iter() {
-        let marker = mesh.element_markers[cell.global_ordinal];
+        let marker = mesh.element_markers[cell.ordinal];
         for face in cell_facets(cell.cell_type, cell.nodes) {
             let key = sorted_face_key(&face);
             all_face_markers
                 .entry(key.clone())
                 .or_default()
                 .insert(marker);
-            representative_faces.entry(key.clone()).or_insert(face);
             if marker == AIR_REGION_MARKER {
                 continue;
             }
@@ -522,22 +521,34 @@ fn analyze_shared_domain_mesh_with_entries(
             );
             continue;
         }
-        face_owner.insert(face_key.clone(), u32::MAX);
+        face_owner.insert(
+            face_key.clone(),
+            markers
+                .iter()
+                .copied()
+                .find(|marker| *marker != AIR_REGION_MARKER)
+                .unwrap_or(AIR_REGION_MARKER),
+        );
     }
 
-    let interface_faces = all_face_markers
+    let interface_faces = mesh
+        .facets
         .iter()
-        .filter_map(|(face_key, markers)| {
+        .filter_map(|facet| {
+            if facet.role != fullmag_ir::FemFacetRoleIR::MaterialInterface {
+                return None;
+            }
+            let face_key = sorted_face_key(facet.nodes);
+            let markers = all_face_markers.get(&face_key)?;
             if markers.len() <= 1 {
                 return None;
             }
             let mut ordered = markers.iter().copied().collect::<Vec<_>>();
             ordered.sort_unstable();
-            representative_faces.get(face_key).and_then(|face| {
-                (face.len() == 3).then(|| SharedInterfaceFace {
-                    face: [face[0], face[1], face[2]],
-                    markers: ordered,
-                })
+            Some(SharedInterfaceFace {
+                facet_global_ordinal: facet.global_ordinal,
+                facet_type: facet.facet_type,
+                markers: ordered,
             })
         })
         .collect::<Vec<_>>();
@@ -693,6 +704,7 @@ pub(crate) fn pack_mesh_by_analysis(
     };
 
     let mut reordered_cell_types = Vec::with_capacity(mesh.cell_count());
+    let mut reordered_cell_global_ordinals = Vec::with_capacity(mesh.cell_count());
     let mut reordered_cell_offsets = vec![0u32];
     let mut reordered_cell_nodes = Vec::with_capacity(mesh.cells.nodes.len());
     let mut reordered_markers = Vec::with_capacity(mesh.element_markers.len());
@@ -702,10 +714,11 @@ pub(crate) fn pack_mesh_by_analysis(
         let marker = entry.marker;
         element_start_by_marker.insert(marker, reordered_cell_types.len() as u32);
         for cell in mesh.cells.iter() {
-            if mesh.element_markers[cell.global_ordinal] != marker {
+            if mesh.element_markers[cell.ordinal] != marker {
                 continue;
             }
             reordered_cell_types.push(cell.cell_type);
+            reordered_cell_global_ordinals.push(cell.global_ordinal);
             for node in cell.nodes {
                 reordered_cell_nodes.push(remap_node(*node, marker)?);
             }
@@ -718,10 +731,11 @@ pub(crate) fn pack_mesh_by_analysis(
         element_count_by_marker.insert(marker, reordered_cell_types.len() as u32 - start);
     }
     for cell in mesh.cells.iter() {
-        if mesh.element_markers[cell.global_ordinal] != 0 {
+        if mesh.element_markers[cell.ordinal] != 0 {
             continue;
         }
         reordered_cell_types.push(cell.cell_type);
+        reordered_cell_global_ordinals.push(cell.global_ordinal);
         for node in cell.nodes {
             reordered_cell_nodes.push(remap_node(*node, 0)?);
         }
@@ -730,6 +744,7 @@ pub(crate) fn pack_mesh_by_analysis(
     }
 
     let mut reordered_facet_types = Vec::with_capacity(mesh.facet_count());
+    let mut reordered_facet_global_ordinals = Vec::with_capacity(mesh.facet_count());
     let mut reordered_facet_roles = Vec::with_capacity(mesh.facet_count());
     let mut reordered_facet_offsets = vec![0u32];
     let mut reordered_facet_nodes = Vec::with_capacity(mesh.facets.nodes.len());
@@ -749,12 +764,13 @@ pub(crate) fn pack_mesh_by_analysis(
                 continue;
             }
             reordered_facet_types.push(facet.facet_type);
+            reordered_facet_global_ordinals.push(facet.global_ordinal);
             reordered_facet_roles.push(facet.role);
             for node in facet.nodes {
                 reordered_facet_nodes.push(remap_node(*node, marker)?);
             }
             reordered_facet_offsets.push(reordered_facet_nodes.len() as u32);
-            reordered_boundary_markers.push(mesh.boundary_markers[facet.global_ordinal]);
+            reordered_boundary_markers.push(mesh.boundary_markers[facet.ordinal]);
         }
         let start = *boundary_start_by_marker
             .get(&marker)
@@ -771,12 +787,13 @@ pub(crate) fn pack_mesh_by_analysis(
             continue;
         }
         reordered_facet_types.push(facet.facet_type);
+        reordered_facet_global_ordinals.push(facet.global_ordinal);
         reordered_facet_roles.push(facet.role);
         for node in facet.nodes {
             reordered_facet_nodes.push(remap_node(*node, 0)?);
         }
         reordered_facet_offsets.push(reordered_facet_nodes.len() as u32);
-        reordered_boundary_markers.push(mesh.boundary_markers[facet.global_ordinal]);
+        reordered_boundary_markers.push(mesh.boundary_markers[facet.ordinal]);
     }
 
     let mut reordered_periodic_node_pairs = Vec::with_capacity(mesh.periodic_node_pairs.len());
@@ -869,6 +886,7 @@ pub(crate) fn pack_mesh_by_analysis(
             types: reordered_cell_types,
             offsets: reordered_cell_offsets,
             nodes: reordered_cell_nodes,
+            global_ordinals: reordered_cell_global_ordinals,
         },
         element_markers: reordered_markers,
         facets: FemFacetConnectivityIR {
@@ -876,6 +894,7 @@ pub(crate) fn pack_mesh_by_analysis(
             roles: reordered_facet_roles,
             offsets: reordered_facet_offsets,
             nodes: reordered_facet_nodes,
+            global_ordinals: reordered_facet_global_ordinals,
         },
         boundary_markers: reordered_boundary_markers,
         periodic_boundary_pairs: mesh.periodic_boundary_pairs.clone(),
@@ -952,7 +971,7 @@ pub(crate) fn pack_mesh_by_analysis(
             node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 0 },
             boundary_face_indices: outer_boundary_face_indices,
             node_indices,
-            surface_faces: Vec::new(),
+            facet_global_ordinals: Vec::new(),
             bounds_min: bounds.map(|(min, _)| min),
             bounds_max: bounds.map(|(_, max)| max),
             parent_id: Some(format!("part:{}", AIR_OBJECT_SEGMENT_ID)),
@@ -969,8 +988,13 @@ pub(crate) fn pack_mesh_by_analysis(
         .iter()
         .map(|entry| (entry.marker, entry.object_id.clone()))
         .collect::<BTreeMap<_, _>>();
-    let mut interface_surface_faces = BTreeMap::<(u32, u32), Vec<[u32; 3]>>::new();
+    let mut interface_facet_global_ordinals = BTreeMap::<(u32, u32), Vec<u64>>::new();
     let mut interface_node_sets = BTreeMap::<(u32, u32), BTreeSet<u32>>::new();
+    let packed_facet_by_global_ordinal = reordered_mesh
+        .facets
+        .iter()
+        .map(|facet| (facet.global_ordinal, facet.ordinal))
+        .collect::<BTreeMap<_, _>>();
     for interface_face in &analysis.interface_faces {
         if interface_face.markers.len() < 2 {
             continue;
@@ -978,28 +1002,34 @@ pub(crate) fn pack_mesh_by_analysis(
         let mut pair = [interface_face.markers[0], interface_face.markers[1]];
         pair.sort_unstable();
         let pair_key = (pair[0], pair[1]);
-        let preferred_marker = pair
-            .iter()
-            .copied()
-            .find(|marker| *marker != AIR_REGION_MARKER)
-            .unwrap_or(pair[0]);
-        let remapped_face = [
-            remap_node(interface_face.face[0], preferred_marker)?,
-            remap_node(interface_face.face[1], preferred_marker)?,
-            remap_node(interface_face.face[2], preferred_marker)?,
-        ];
-        interface_surface_faces
+        let Some(&packed_ordinal) =
+            packed_facet_by_global_ordinal.get(&interface_face.facet_global_ordinal)
+        else {
+            return Err(format!(
+                "shared-domain FEM mesh '{}' lost canonical interface facet {} during packing",
+                mesh.mesh_name, interface_face.facet_global_ordinal
+            ));
+        };
+        if reordered_mesh.facets.types.get(packed_ordinal).copied()
+            != Some(interface_face.facet_type)
+        {
+            return Err(format!(
+                "shared-domain FEM mesh '{}' changed canonical interface facet {} type during packing",
+                mesh.mesh_name, interface_face.facet_global_ordinal
+            ));
+        }
+        interface_facet_global_ordinals
             .entry(pair_key)
             .or_default()
-            .push(remapped_face);
+            .push(interface_face.facet_global_ordinal);
         let node_set = interface_node_sets.entry(pair_key).or_default();
-        node_set.insert(remapped_face[0]);
-        node_set.insert(remapped_face[1]);
-        node_set.insert(remapped_face[2]);
+        if let Some(nodes) = reordered_mesh.facets.item_nodes(packed_ordinal) {
+            node_set.extend(nodes.iter().copied());
+        }
     }
 
-    for ((left_marker, right_marker), surface_faces) in interface_surface_faces {
-        if surface_faces.is_empty() {
+    for ((left_marker, right_marker), facet_global_ordinals) in interface_facet_global_ordinals {
+        if facet_global_ordinals.is_empty() {
             continue;
         }
         let left_label = if left_marker == AIR_REGION_MARKER {
@@ -1035,9 +1065,16 @@ pub(crate) fn pack_mesh_by_analysis(
             element_selector: FemMeshPartSelector::ElementRange { start: 0, count: 0 },
             boundary_face_selector: FemMeshPartSelector::BoundaryFaceRange { start: 0, count: 0 },
             node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 0 },
-            boundary_face_indices: Vec::new(),
+            boundary_face_indices: facet_global_ordinals
+                .iter()
+                .filter_map(|global_ordinal| {
+                    packed_facet_by_global_ordinal
+                        .get(global_ordinal)
+                        .map(|ordinal| *ordinal as u32)
+                })
+                .collect(),
             node_indices,
-            surface_faces,
+            facet_global_ordinals,
             bounds_min: bounds.map(|(min, _)| min),
             bounds_max: bounds.map(|(_, max)| max),
             parent_id: owning_object_id.map(|object_id| format!("part:{object_id}")),
@@ -1265,7 +1302,7 @@ pub(crate) fn magnetic_bounds(mesh: &MeshIR) -> Option<([f64; 3], [f64; 3])> {
 
     for cell in mesh.cells.iter() {
         let is_magnetic = if use_markers {
-            mesh.element_markers[cell.global_ordinal] != 0
+            mesh.element_markers[cell.ordinal] != 0
         } else {
             true
         };
@@ -1589,10 +1626,12 @@ pub(crate) fn merge_fem_meshes(
 
     let mut nodes = Vec::new();
     let mut cell_types = Vec::new();
+    let mut cell_global_ordinals = Vec::new();
     let mut cell_offsets = vec![0u32];
     let mut cell_nodes = Vec::new();
     let mut element_markers = Vec::new();
     let mut facet_types = Vec::new();
+    let mut facet_global_ordinals = Vec::new();
     let mut facet_roles = Vec::new();
     let mut facet_offsets = vec![0u32];
     let mut facet_nodes = Vec::new();
@@ -1608,12 +1647,14 @@ pub(crate) fn merge_fem_meshes(
         nodes.extend(mesh.nodes.iter().copied());
         for cell in mesh.cells.iter() {
             cell_types.push(cell.cell_type);
+            cell_global_ordinals.push(cell_types.len() as u64 - 1);
             cell_nodes.extend(cell.nodes.iter().map(|node| node + node_offset));
             cell_offsets.push(cell_nodes.len() as u32);
         }
         element_markers.extend(remapped_markers);
         for facet in mesh.facets.iter() {
             facet_types.push(facet.facet_type);
+            facet_global_ordinals.push(facet_types.len() as u64 - 1);
             facet_roles.push(facet.role);
             facet_nodes.extend(facet.nodes.iter().map(|node| node + node_offset));
             facet_offsets.push(facet_nodes.len() as u32);
@@ -1655,6 +1696,7 @@ pub(crate) fn merge_fem_meshes(
             types: cell_types,
             offsets: cell_offsets,
             nodes: cell_nodes,
+            global_ordinals: cell_global_ordinals,
         },
         element_markers,
         facets: FemFacetConnectivityIR {
@@ -1662,6 +1704,7 @@ pub(crate) fn merge_fem_meshes(
             roles: facet_roles,
             offsets: facet_offsets,
             nodes: facet_nodes,
+            global_ordinals: facet_global_ordinals,
         },
         boundary_markers,
         periodic_boundary_pairs: Vec::new(),

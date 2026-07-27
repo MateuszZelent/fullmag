@@ -8,7 +8,7 @@ pub struct ResolvedFemSurfaceSelector {
     pub selector: String,
     pub tolerance: f64,
     pub boundary_face_indices: Vec<u32>,
-    pub surface_faces: Vec<[u32; 3]>,
+    pub facet_global_ordinals: Vec<u64>,
     pub node_indices: Vec<u32>,
     pub area: f64,
 }
@@ -66,52 +66,58 @@ pub fn resolve_fem_surface_selector(
     };
 
     let mut boundary_face_indices = Vec::new();
-    let mut surface_faces = Vec::new();
+    let mut facet_global_ordinals = Vec::new();
+    let mut selected_nodes = Vec::<Vec<u32>>::new();
     let mut seen_faces = BTreeSet::new();
     for face_index in candidate_boundary_face_indices(part, mesh.facet_count()) {
-        let Some(facet_type) = mesh.facets.types.get(face_index as usize).copied() else {
-            continue;
-        };
-        if facet_type != fullmag_ir::FemFacetTypeIR::Tri3 {
-            return Err(format!(
-                "surface selector '{}' requires tri3 facets; facet {} is {:?}",
-                selector, face_index, facet_type
-            ));
-        }
         let Some(nodes) = mesh.facets.item_nodes(face_index as usize) else {
             continue;
         };
-        let triangle = [nodes[0], nodes[1], nodes[2]];
-        if triangle_is_on_bbox_face(mesh, triangle, face.axis, target, tolerance)
-            && seen_faces.insert(sorted_triangle(triangle))
+        let key = sorted_facet(nodes);
+        if facet_is_on_bbox_face(mesh, nodes, face.axis, target, tolerance)
+            && seen_faces.insert(key)
         {
             boundary_face_indices.push(face_index);
-            surface_faces.push(triangle);
+            facet_global_ordinals.push(mesh.facets.global_ordinals[face_index as usize]);
+            selected_nodes.push(nodes.to_vec());
         }
     }
-    for triangle in &part.surface_faces {
-        if triangle_is_on_bbox_face(mesh, *triangle, face.axis, target, tolerance)
-            && seen_faces.insert(sorted_triangle(*triangle))
+    for global_ordinal in &part.facet_global_ordinals {
+        let Some(face_index) = mesh
+            .facets
+            .global_ordinals
+            .iter()
+            .position(|candidate| candidate == global_ordinal)
+        else {
+            continue;
+        };
+        let Some(nodes) = mesh.facets.item_nodes(face_index) else {
+            continue;
+        };
+        if facet_is_on_bbox_face(mesh, nodes, face.axis, target, tolerance)
+            && seen_faces.insert(sorted_facet(nodes))
         {
-            surface_faces.push(*triangle);
+            boundary_face_indices.push(face_index as u32);
+            facet_global_ordinals.push(*global_ordinal);
+            selected_nodes.push(nodes.to_vec());
         }
     }
-    if surface_faces.is_empty() {
+    if facet_global_ordinals.is_empty() {
         return Err(format!(
             "surface selector '{}' resolved no FEM faces for object '{}' within tolerance {}",
             normalized, object_id, tolerance
         ));
     }
 
-    let node_indices = surface_faces
+    let node_indices = selected_nodes
         .iter()
-        .flat_map(|triangle| triangle.iter().copied())
+        .flat_map(|nodes| nodes.iter().copied())
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
-    let area = surface_faces
+    let area = selected_nodes
         .iter()
-        .map(|triangle| triangle_area(mesh, *triangle))
+        .map(|nodes| facet_area(mesh, nodes))
         .sum();
 
     Ok(ResolvedFemSurfaceSelector {
@@ -119,7 +125,7 @@ pub fn resolve_fem_surface_selector(
         selector: normalized,
         tolerance,
         boundary_face_indices,
-        surface_faces,
+        facet_global_ordinals,
         node_indices,
         area,
     })
@@ -171,41 +177,50 @@ fn candidate_boundary_face_indices(part: &FemMeshPartIR, face_count: usize) -> V
     }
 }
 
-fn triangle_is_on_bbox_face(
+fn facet_is_on_bbox_face(
     mesh: &MeshIR,
-    triangle: [u32; 3],
+    nodes: &[u32],
     axis: usize,
     target: f64,
     tolerance: f64,
 ) -> bool {
-    triangle.iter().all(|node_index| {
+    nodes.iter().all(|node_index| {
         mesh.nodes
             .get(*node_index as usize)
             .is_some_and(|node| (node[axis] - target).abs() <= tolerance)
     })
 }
 
-fn sorted_triangle(mut triangle: [u32; 3]) -> [u32; 3] {
-    triangle.sort_unstable();
-    triangle
+fn sorted_facet(nodes: &[u32]) -> Vec<u32> {
+    let mut sorted = nodes.to_vec();
+    sorted.sort_unstable();
+    sorted
 }
 
-fn triangle_area(mesh: &MeshIR, triangle: [u32; 3]) -> f64 {
-    let Some(a) = mesh.nodes.get(triangle[0] as usize) else {
+fn facet_area(mesh: &MeshIR, nodes: &[u32]) -> f64 {
+    let Some(a) = nodes
+        .first()
+        .and_then(|node| mesh.nodes.get(*node as usize))
+    else {
         return 0.0;
     };
-    let Some(b) = mesh.nodes.get(triangle[1] as usize) else {
-        return 0.0;
-    };
-    let Some(c) = mesh.nodes.get(triangle[2] as usize) else {
-        return 0.0;
-    };
-    let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-    let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
-    let cross = [
-        ab[1] * ac[2] - ab[2] * ac[1],
-        ab[2] * ac[0] - ab[0] * ac[2],
-        ab[0] * ac[1] - ab[1] * ac[0],
-    ];
-    0.5 * (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt()
+    nodes[1..]
+        .windows(2)
+        .map(|pair| {
+            let Some(b) = mesh.nodes.get(pair[0] as usize) else {
+                return 0.0;
+            };
+            let Some(c) = mesh.nodes.get(pair[1] as usize) else {
+                return 0.0;
+            };
+            let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+            let cross = [
+                ab[1] * ac[2] - ab[2] * ac[1],
+                ab[2] * ac[0] - ab[0] * ac[2],
+                ab[0] * ac[1] - ab[1] * ac[0],
+            ];
+            0.5 * (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt()
+        })
+        .sum()
 }

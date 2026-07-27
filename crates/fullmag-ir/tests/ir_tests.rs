@@ -4907,6 +4907,7 @@ fn mixed_topology_mesh() -> MeshIR {
             ],
             offsets: vec![0, 6, 11, 15],
             nodes: vec![0, 1, 2, 3, 4, 5, 0, 1, 6, 2, 7, 0, 1, 2, 3],
+            global_ordinals: vec![41, 7, 99],
         },
         element_markers: vec![11, 12, 13],
         facets: FemFacetConnectivityIR {
@@ -4914,6 +4915,7 @@ fn mixed_topology_mesh() -> MeshIR {
             roles: vec![FemFacetRoleIR::Exterior, FemFacetRoleIR::MaterialInterface],
             offsets: vec![0, 3, 7],
             nodes: vec![0, 1, 2, 0, 1, 4, 3],
+            global_ordinals: vec![88, 12],
         },
         boundary_markers: vec![21, 22],
         periodic_boundary_pairs: Vec::new(),
@@ -4967,7 +4969,27 @@ fn mixed_mesh_serde_round_trip_is_v2_only() {
     assert!(value.get("facets").is_some());
     assert!(value.get("elements").is_none());
     assert!(value.get("boundary_faces").is_none());
+    assert_eq!(
+        value["cells"]["global_ordinals"],
+        serde_json::json!([41, 7, 99])
+    );
+    assert_eq!(
+        value["facets"]["global_ordinals"],
+        serde_json::json!([88, 12])
+    );
     assert_eq!(serde_json::from_value::<MeshIR>(value).unwrap(), mesh);
+}
+
+#[test]
+fn topology_fingerprint_binds_cell_and_facet_global_ordinals() {
+    let mesh = mixed_topology_mesh();
+    let baseline = mesh.topology_fingerprint_v6();
+    let mut changed_cell = mesh.clone();
+    changed_cell.cells.global_ordinals[0] += 1_000;
+    assert_ne!(changed_cell.topology_fingerprint_v6(), baseline);
+    let mut changed_facet = mesh;
+    changed_facet.facets.global_ordinals[0] += 1_000;
+    assert_ne!(changed_facet.topology_fingerprint_v6(), baseline);
 }
 
 #[test]
@@ -4984,6 +5006,8 @@ fn legacy_tet_mesh_normalizes_and_dual_truth_rejects() {
     assert_eq!(mesh.cells.types, vec![FemCellTypeIR::Tet4]);
     assert_eq!(mesh.cells.offsets, vec![0, 4]);
     assert_eq!(mesh.facets.roles, vec![FemFacetRoleIR::Exterior]);
+    assert_eq!(mesh.cells.global_ordinals, vec![0]);
+    assert_eq!(mesh.facets.global_ordinals, vec![0]);
     let canonical = serde_json::to_value(mesh).unwrap();
     assert!(canonical.get("elements").is_none());
     assert!(canonical.get("boundary_faces").is_none());
@@ -5019,6 +5043,10 @@ fn mixed_mesh_validation_rejects_each_csr_invariant_and_periodicity() {
             Box::new(|mesh| mesh.element_markers.pop().map(|_| ()).unwrap()),
         ),
         (
+            "cell global ordinals",
+            Box::new(|mesh| mesh.cells.global_ordinals[1] = mesh.cells.global_ordinals[0]),
+        ),
+        (
             "facet offsets",
             Box::new(|mesh| mesh.facets.offsets = vec![0, 4, 7]),
         ),
@@ -5035,6 +5063,10 @@ fn mixed_mesh_validation_rejects_each_csr_invariant_and_periodicity() {
         (
             "facet markers",
             Box::new(|mesh| mesh.boundary_markers.pop().map(|_| ()).unwrap()),
+        ),
+        (
+            "facet global ordinals",
+            Box::new(|mesh| mesh.facets.global_ordinals[1] = mesh.facets.global_ordinals[0]),
         ),
     ];
     for (label, mutate) in mutations {

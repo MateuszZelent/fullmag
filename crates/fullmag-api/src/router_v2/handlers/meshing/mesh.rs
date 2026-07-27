@@ -731,6 +731,11 @@ pub async fn get_mesh_shared_domain_cross_section(
     let Some(mesh) = snapshot.fem_mesh.as_ref() else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
+    let elements = mesh.require_tet4_elements().map_err(|error| {
+        ApiError::conflict(format!(
+            "FMMT v1 cross-section requires tet4 topology: {error}"
+        ))
+    })?;
     let cut_norm = query.position_percent / 100.0;
     let resolved = resolve_slice_query(
         &FieldSliceQuery {
@@ -750,7 +755,7 @@ pub async fn get_mesh_shared_domain_cross_section(
     let overlay = collect_fem_slice_overlay(
         FemSliceOverlayInput {
             nodes: &mesh.nodes,
-            elements: &mesh.elements,
+            elements: &elements,
             element_markers: &mesh.element_markers,
         },
         &resolved,
@@ -810,6 +815,11 @@ pub async fn get_mesh_shared_domain_cross_section_image(
     let Some(mesh) = snapshot.fem_mesh.as_ref() else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
+    let elements = mesh.require_tet4_elements().map_err(|error| {
+        ApiError::conflict(format!(
+            "FMMT v1 cross-section image requires tet4 topology: {error}"
+        ))
+    })?;
     let artifact = snapshot
         .mesh_workspace
         .as_ref()
@@ -835,7 +845,7 @@ pub async fn get_mesh_shared_domain_cross_section_image(
     let overlay = collect_fem_slice_overlay(
         FemSliceOverlayInput {
             nodes: &mesh.nodes,
-            elements: &mesh.elements,
+            elements: &elements,
             element_markers: &mesh.element_markers,
         },
         &resolved,
@@ -851,18 +861,15 @@ pub async fn get_mesh_shared_domain_cross_section_image(
                     artifact.path, artifact.byte_size, artifact.element_count
                 ),
             )
-        } else if let Some(values) = cross_section_quality_from_parent_tets(
-            &overlay,
-            &mesh.nodes,
-            &mesh.elements,
-            query.metric,
-        )? {
+        } else if let Some(values) =
+            cross_section_quality_from_parent_tets(&overlay, &mesh.nodes, &elements, query.metric)?
+        {
             (values, "parent-tet-geometry-v1".to_string())
         } else {
             return Ok(StatusCode::NO_CONTENT.into_response());
         }
     } else if let Some(values) =
-        cross_section_quality_from_parent_tets(&overlay, &mesh.nodes, &mesh.elements, query.metric)?
+        cross_section_quality_from_parent_tets(&overlay, &mesh.nodes, &elements, query.metric)?
     {
         (values, "parent-tet-geometry-v1".to_string())
     } else {
@@ -959,6 +966,11 @@ pub async fn get_mesh_shared_domain_cross_section_quality(
     let Some(mesh) = snapshot.fem_mesh.as_ref() else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
+    let elements = mesh.require_tet4_elements().map_err(|error| {
+        ApiError::conflict(format!(
+            "FMMT v1 cross-section quality requires tet4 topology: {error}"
+        ))
+    })?;
     let artifact = snapshot
         .mesh_workspace
         .as_ref()
@@ -984,7 +996,7 @@ pub async fn get_mesh_shared_domain_cross_section_quality(
     let overlay = collect_fem_slice_overlay(
         FemSliceOverlayInput {
             nodes: &mesh.nodes,
-            elements: &mesh.elements,
+            elements: &elements,
             element_markers: &mesh.element_markers,
         },
         &resolved,
@@ -1000,18 +1012,15 @@ pub async fn get_mesh_shared_domain_cross_section_quality(
                     artifact.path, artifact.byte_size, artifact.element_count
                 ),
             )
-        } else if let Some(values) = cross_section_quality_from_parent_tets(
-            &overlay,
-            &mesh.nodes,
-            &mesh.elements,
-            query.metric,
-        )? {
+        } else if let Some(values) =
+            cross_section_quality_from_parent_tets(&overlay, &mesh.nodes, &elements, query.metric)?
+        {
             (values, "parent-tet-geometry-v1".to_string())
         } else {
             return Ok(StatusCode::NO_CONTENT.into_response());
         }
     } else if let Some(values) =
-        cross_section_quality_from_parent_tets(&overlay, &mesh.nodes, &mesh.elements, query.metric)?
+        cross_section_quality_from_parent_tets(&overlay, &mesh.nodes, &elements, query.metric)?
     {
         (values, "parent-tet-geometry-v1".to_string())
     } else {
@@ -1709,7 +1718,7 @@ pub async fn get_mesh_shared_domain_topology(
     let snapshot = current_snapshot(&state).await?;
     match snapshot.fem_mesh.as_ref() {
         Some(mesh) => {
-            let binary = serialize_fem_mesh_topology_binary_v1(mesh);
+            let binary = serialize_fem_mesh_topology_binary_v1(mesh).map_err(ApiError::conflict)?;
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
             let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
             let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
@@ -2008,7 +2017,8 @@ pub async fn get_mesh_object_topology(
             let object_mesh = subset_object_mesh(mesh, &object_id).ok_or_else(|| {
                 ApiError::not_found(format!("object mesh not found: {object_id}"))
             })?;
-            let binary = serialize_fem_mesh_topology_binary_v1(&object_mesh);
+            let binary =
+                serialize_fem_mesh_topology_binary_v1(&object_mesh).map_err(ApiError::conflict)?;
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
             let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(&object_mesh);
             let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
@@ -2056,7 +2066,8 @@ pub async fn get_mesh_part_topology(
         Some(mesh) => {
             let part_mesh = subset_part_mesh(mesh, &part_id)
                 .ok_or_else(|| ApiError::not_found(format!("mesh part not found: {part_id}")))?;
-            let binary = serialize_fem_mesh_topology_binary_v1(&part_mesh);
+            let binary =
+                serialize_fem_mesh_topology_binary_v1(&part_mesh).map_err(ApiError::conflict)?;
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
             let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(&part_mesh);
             let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
@@ -2378,10 +2389,10 @@ fn workspace_mesh_statistics(mesh_workspace: &Value) -> Option<&Value> {
 
 fn derive_mesh_quality_gates(snapshot: &SessionStateResponse, mesh_workspace: &Value) -> Value {
     let mesh = snapshot.fem_mesh.as_ref();
-    let element_count = mesh.map(|mesh| mesh.elements.len()).unwrap_or_default();
+    let element_count = mesh.map(|mesh| mesh.cell_count()).unwrap_or_default();
     let node_count = mesh.map(|mesh| mesh.nodes.len()).unwrap_or_default();
     let marker_coverage = mesh
-        .map(|mesh| mesh.element_markers.len() == mesh.elements.len())
+        .map(|mesh| mesh.element_markers.len() == mesh.cell_count())
         .unwrap_or(false);
     let outer_boundary_present = mesh
         .map(|mesh| mesh.boundary_markers.iter().any(|marker| *marker == 99))
@@ -2722,15 +2733,16 @@ fn merge_mesh_scope_size_statistics(
 }
 
 fn mesh_scope_size_statistics(mesh: &FemMeshPayload, marker: u32) -> Option<Value> {
-    if mesh.element_markers.len() != mesh.elements.len() {
+    if mesh.element_markers.len() != mesh.cell_count() {
         return None;
     }
+    let elements = mesh.require_tet4_elements().ok()?;
 
     let mut volumes = Vec::new();
     let mut characteristic_sizes = Vec::new();
     let mut edge_lengths = Vec::new();
 
-    for (element_index, element) in mesh.elements.iter().enumerate() {
+    for (element_index, element) in elements.iter().enumerate() {
         if mesh.element_markers[element_index] != marker {
             continue;
         }
@@ -2853,11 +2865,14 @@ fn mesh_histogram_bin_elements(
     }
     let mut selected_nodes = BTreeSet::new();
     for element_index in &selected_elements {
-        let element = mesh.elements.get(*element_index as usize).ok_or_else(|| {
-            ApiError::internal(format!(
-                "mesh element index {element_index} is out of range"
-            ))
-        })?;
+        let element = mesh
+            .cells
+            .item_nodes(*element_index as usize)
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "mesh element index {element_index} is out of range"
+                ))
+            })?;
         selected_nodes.extend(element.iter().copied());
     }
 
@@ -2877,7 +2892,7 @@ fn part_source_element_indices(
 ) -> Result<Vec<usize>, ApiError> {
     let start = part.element_start as usize;
     let end = start.saturating_add(part.element_count as usize);
-    if end > mesh.elements.len() {
+    if end > mesh.cell_count() {
         return Err(ApiError::internal(format!(
             "mesh part {} references elements outside the solver mesh",
             part.id
@@ -2892,11 +2907,14 @@ fn mesh_histogram_samples(
     metric: MeshHistogramMetric,
     quality_values: &[f64],
 ) -> Result<Vec<MeshHistogramSample>, ApiError> {
+    let elements = mesh
+        .require_tet4_elements()
+        .map_err(|error| ApiError::conflict(format!("tet4 mesh histogram required: {error}")))?;
     let mut samples = Vec::new();
     for element_index in element_indices {
         match metric {
             MeshHistogramMetric::CharacteristicSize => {
-                let element = mesh.elements.get(*element_index).ok_or_else(|| {
+                let element = elements.get(*element_index).ok_or_else(|| {
                     ApiError::internal(format!(
                         "mesh element index {element_index} is out of range"
                     ))
@@ -2913,7 +2931,7 @@ fn mesh_histogram_samples(
                 }
             }
             MeshHistogramMetric::Volume => {
-                let element = mesh.elements.get(*element_index).ok_or_else(|| {
+                let element = elements.get(*element_index).ok_or_else(|| {
                     ApiError::internal(format!(
                         "mesh element index {element_index} is out of range"
                     ))
@@ -2930,7 +2948,7 @@ fn mesh_histogram_samples(
                 }
             }
             MeshHistogramMetric::EdgeLength => {
-                let element = mesh.elements.get(*element_index).ok_or_else(|| {
+                let element = elements.get(*element_index).ok_or_else(|| {
                     ApiError::internal(format!(
                         "mesh element index {element_index} is out of range"
                     ))
@@ -3311,7 +3329,7 @@ fn normalize_membership_element_indices(
     let mut indices = BTreeSet::new();
     for element_index in element_indices {
         let index = *element_index as usize;
-        if index < mesh.elements.len() {
+        if index < mesh.cell_count() {
             indices.insert(index);
         }
     }
@@ -3323,12 +3341,13 @@ fn mesh_region_size_statistics(
     membership: &MeshRegionMembershipResource,
     element_indices: &[usize],
 ) -> Option<Value> {
+    let elements = mesh.require_tet4_elements().ok()?;
     let mut volumes = Vec::new();
     let mut characteristic_sizes = Vec::new();
     let mut edge_lengths = Vec::new();
 
     for element_index in element_indices {
-        let Some(element) = mesh.elements.get(*element_index) else {
+        let Some(element) = elements.get(*element_index) else {
             continue;
         };
         let Some(tet) = element_nodes(mesh, element) else {
@@ -3652,9 +3671,9 @@ fn periodic_mesh_ir(mesh: &FemMeshPayload) -> fullmag_ir::MeshIR {
     fullmag_ir::MeshIR {
         mesh_name: mesh.mesh_name.clone(),
         nodes: mesh.nodes.clone(),
-        elements: mesh.elements.clone(),
+        cells: mesh.cells.clone(),
         element_markers: mesh.element_markers.clone(),
-        boundary_faces: mesh.boundary_faces.clone(),
+        facets: mesh.facets.clone(),
         boundary_markers: mesh.boundary_markers.clone(),
         periodic_boundary_pairs: mesh.periodic_boundary_pairs.clone(),
         periodic_node_pairs: mesh.periodic_node_pairs.clone(),
@@ -3736,12 +3755,13 @@ fn periodic_pair_residuals(
 
 fn boundary_nodes_by_marker(mesh: &FemMeshPayload) -> HashMap<u32, BTreeSet<u32>> {
     let mut nodes_by_marker = HashMap::<u32, BTreeSet<u32>>::new();
-    for (face_index, face) in mesh.boundary_faces.iter().enumerate() {
+    for face in mesh.facets.iter() {
+        let face_index = face.ordinal;
         let Some(marker) = mesh.boundary_markers.get(face_index).copied() else {
             continue;
         };
         let nodes = nodes_by_marker.entry(marker).or_default();
-        nodes.extend(face.iter().copied());
+        nodes.extend(face.nodes.iter().copied());
     }
     nodes_by_marker
 }
@@ -3770,7 +3790,8 @@ fn periodic_domain_node_pair_counts(
 fn mesh_node_domain_sets(mesh: &FemMeshPayload) -> (BTreeSet<u32>, BTreeSet<u32>) {
     let mut magnetic_nodes = BTreeSet::new();
     let mut airbox_nodes = BTreeSet::new();
-    for (element_index, element) in mesh.elements.iter().enumerate() {
+    for element in mesh.cells.iter() {
+        let element_index = element.ordinal;
         let marker = mesh
             .element_markers
             .get(element_index)
@@ -3781,7 +3802,7 @@ fn mesh_node_domain_sets(mesh: &FemMeshPayload) -> (BTreeSet<u32>, BTreeSet<u32>
         } else {
             &mut magnetic_nodes
         };
-        target.extend(element.iter().copied());
+        target.extend(element.nodes.iter().copied());
     }
     (magnetic_nodes, airbox_nodes)
 }
@@ -4077,7 +4098,7 @@ fn subset_object_mesh(mesh: &FemMeshPayload, object_id: &str) -> Option<FemMeshP
         node_start: segment.node_start,
         node_count: segment.node_count,
         node_indices: Vec::new(),
-        surface_faces: Vec::new(),
+        facet_global_ordinals: Vec::new(),
         bounds_min: None,
         bounds_max: None,
     };
@@ -4101,27 +4122,35 @@ fn interface_quality(mesh: &FemMeshPayload, interface_id: &str) -> Option<Value>
             || (part.label.contains(left) && part.label.contains(right))
     })?;
 
-    let mut interface_faces = Vec::new();
-    if !interface_part.surface_faces.is_empty() {
-        interface_faces.extend(interface_part.surface_faces.iter().copied());
+    let mut interface_faces = Vec::<Vec<u32>>::new();
+    if !interface_part.facet_global_ordinals.is_empty() {
+        for global_ordinal in &interface_part.facet_global_ordinals {
+            let index = mesh
+                .facets
+                .global_ordinals
+                .iter()
+                .position(|candidate| candidate == global_ordinal)?;
+            interface_faces.push(mesh.facets.item_nodes(index)?.to_vec());
+        }
     } else if !interface_part.boundary_face_indices.is_empty() {
         for index in &interface_part.boundary_face_indices {
-            if let Some(face) = mesh.boundary_faces.get(*index as usize) {
-                interface_faces.push(*face);
+            if let Some(face) = mesh.facets.item_nodes(*index as usize) {
+                interface_faces.push(face.to_vec());
             }
         }
     } else {
         let start = interface_part.boundary_face_start as usize;
         let end = start.saturating_add(interface_part.boundary_face_count as usize);
-        interface_faces.extend(mesh.boundary_faces.get(start..end)?.iter().copied());
+        for index in start..end.min(mesh.facets.len()) {
+            interface_faces.push(mesh.facets.item_nodes(index)?.to_vec());
+        }
     }
 
     let mut adjacent_markers = BTreeSet::new();
     for face in &interface_faces {
-        let face_nodes = [face[0], face[1], face[2]];
-        for (element_index, element) in mesh.elements.iter().enumerate() {
-            if face_nodes.iter().all(|node| element.contains(node)) {
-                if let Some(marker) = mesh.element_markers.get(element_index) {
+        for cell in mesh.cells.iter() {
+            if face.iter().all(|node| cell.nodes.contains(node)) {
+                if let Some(marker) = mesh.element_markers.get(cell.ordinal) {
                     adjacent_markers.insert(*marker);
                 }
             }
@@ -4174,7 +4203,7 @@ fn bounds_for_node_indices(
 
 fn bounds_for_surface_faces(
     mesh: &FemMeshPayload,
-    faces: &[[u32; 3]],
+    faces: &[Vec<u32>],
 ) -> Option<([f64; 3], [f64; 3])> {
     let node_indices = faces
         .iter()
@@ -4207,65 +4236,75 @@ fn subset_part_payload(
 
     let element_start = part.element_start as usize;
     let element_end = element_start.saturating_add(part.element_count as usize);
-    let mut elements = Vec::new();
+    let mut cell_types = Vec::new();
+    let mut cell_offsets = vec![0];
+    let mut cell_nodes = Vec::new();
+    let mut cell_global_ordinals = Vec::new();
     let mut element_markers = Vec::new();
-    for (source_element_index, element) in mesh
-        .elements
-        .get(element_start..element_end)?
-        .iter()
-        .enumerate()
-    {
-        let remapped = [
-            *node_map.get(&element[0])?,
-            *node_map.get(&element[1])?,
-            *node_map.get(&element[2])?,
-            *node_map.get(&element[3])?,
-        ];
-        elements.push(remapped);
-        if let Some(marker) = mesh
-            .element_markers
-            .get(element_start + source_element_index)
-        {
+    for source_element_index in element_start..element_end {
+        let cell_type = *mesh.cells.types.get(source_element_index)?;
+        let global_ordinal = *mesh.cells.global_ordinals.get(source_element_index)?;
+        for node in mesh.cells.item_nodes(source_element_index)? {
+            cell_nodes.push(*node_map.get(node)?);
+        }
+        cell_types.push(cell_type);
+        cell_offsets.push(cell_nodes.len() as u32);
+        cell_global_ordinals.push(global_ordinal);
+        if let Some(marker) = mesh.element_markers.get(source_element_index) {
             element_markers.push(*marker);
         }
     }
+    let cells = fullmag_ir::FemConnectivityIR {
+        types: cell_types,
+        offsets: cell_offsets,
+        nodes: cell_nodes,
+        global_ordinals: cell_global_ordinals,
+    };
 
-    let face_indices = if part.boundary_face_indices.is_empty() {
+    let mut face_indices = if part.boundary_face_indices.is_empty() {
         let start = part.boundary_face_start as usize;
         let end = start.saturating_add(part.boundary_face_count as usize);
         (start..end).map(|index| index as u32).collect::<Vec<_>>()
     } else {
         part.boundary_face_indices.clone()
     };
-    let mut boundary_faces = Vec::new();
+    for global_ordinal in &part.facet_global_ordinals {
+        let face_index = mesh
+            .facets
+            .global_ordinals
+            .iter()
+            .position(|candidate| candidate == global_ordinal)? as u32;
+        if !face_indices.contains(&face_index) {
+            face_indices.push(face_index);
+        }
+    }
+    let mut facet_types = Vec::new();
+    let mut facet_roles = Vec::new();
+    let mut facet_offsets = vec![0];
+    let mut facet_nodes = Vec::new();
+    let mut facet_global_ordinals = Vec::new();
     let mut boundary_markers = Vec::new();
     for face_index in face_indices {
-        let face = mesh.boundary_faces.get(face_index as usize)?;
-        let remapped = [
-            *node_map.get(&face[0])?,
-            *node_map.get(&face[1])?,
-            *node_map.get(&face[2])?,
-        ];
-        boundary_faces.push(remapped);
+        let face_index = face_index as usize;
+        facet_types.push(*mesh.facets.types.get(face_index)?);
+        facet_roles.push(*mesh.facets.roles.get(face_index)?);
+        facet_global_ordinals.push(*mesh.facets.global_ordinals.get(face_index)?);
+        for node in mesh.facets.item_nodes(face_index)? {
+            facet_nodes.push(*node_map.get(node)?);
+        }
+        facet_offsets.push(facet_nodes.len() as u32);
         if let Some(marker) = mesh.boundary_markers.get(face_index as usize) {
             boundary_markers.push(*marker);
         }
     }
+    let facets = fullmag_ir::FemFacetConnectivityIR {
+        types: facet_types,
+        roles: facet_roles,
+        offsets: facet_offsets,
+        nodes: facet_nodes,
+        global_ordinals: facet_global_ordinals,
+    };
 
-    let surface_faces = part
-        .surface_faces
-        .iter()
-        .filter_map(|face| {
-            Some([
-                *node_map.get(&face[0])?,
-                *node_map.get(&face[1])?,
-                *node_map.get(&face[2])?,
-            ])
-        })
-        .collect::<Vec<_>>();
-    if boundary_faces.is_empty() && !surface_faces.is_empty() {
-        boundary_faces.extend(surface_faces.iter().copied());
-    }
     let quality_markers = element_markers.iter().copied().collect::<BTreeSet<_>>();
     let per_domain_quality = quality_markers
         .iter()
@@ -4286,9 +4325,9 @@ fn subset_part_payload(
                 node_start: 0,
                 node_count: nodes.len() as u32,
                 element_start: 0,
-                element_count: elements.len() as u32,
+                element_count: cells.len() as u32,
                 boundary_face_start: 0,
-                boundary_face_count: boundary_faces.len() as u32,
+                boundary_face_count: facets.len() as u32,
             }]
         })
         .unwrap_or_default();
@@ -4300,14 +4339,14 @@ fn subset_part_payload(
         geometry_id: part.geometry_id.clone(),
         material_id: part.material_id.clone(),
         element_start: 0,
-        element_count: elements.len() as u32,
+        element_count: cells.len() as u32,
         boundary_face_start: 0,
-        boundary_face_count: boundary_faces.len() as u32,
-        boundary_face_indices: (0..boundary_faces.len() as u32).collect(),
+        boundary_face_count: facets.len() as u32,
+        boundary_face_indices: (0..facets.len() as u32).collect(),
         node_start: 0,
         node_count: nodes.len() as u32,
         node_indices: (0..nodes.len() as u32).collect(),
-        surface_faces,
+        facet_global_ordinals: facets.global_ordinals.clone(),
         bounds_min: part.bounds_min,
         bounds_max: part.bounds_max,
     };
@@ -4316,9 +4355,9 @@ fn subset_part_payload(
         mesh_name: format!("{}:{mesh_suffix}", mesh.mesh_name),
         mesh_id: format!("{}:{mesh_suffix}", mesh.mesh_id),
         nodes,
-        elements,
+        cells,
         element_markers,
-        boundary_faces,
+        facets,
         boundary_markers,
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -4354,8 +4393,11 @@ fn collect_part_source_node_indices(
     let element_start = part.element_start as usize;
     let element_end = element_start.saturating_add(part.element_count as usize);
     if element_start < element_end {
-        for element in mesh.elements.get(element_start..element_end)? {
-            source_node_indices.extend(element.iter().copied());
+        if element_end > mesh.cells.len() {
+            return None;
+        }
+        for element_index in element_start..element_end {
+            source_node_indices.extend(mesh.cells.item_nodes(element_index)?.iter().copied());
         }
     }
 
@@ -4363,19 +4405,27 @@ fn collect_part_source_node_indices(
         let face_start = part.boundary_face_start as usize;
         let face_end = face_start.saturating_add(part.boundary_face_count as usize);
         if face_start < face_end {
-            for face in mesh.boundary_faces.get(face_start..face_end)? {
-                source_node_indices.extend(face.iter().copied());
+            if face_end > mesh.facets.len() {
+                return None;
+            }
+            for face_index in face_start..face_end {
+                source_node_indices.extend(mesh.facets.item_nodes(face_index)?.iter().copied());
             }
         }
     } else {
         for face_index in &part.boundary_face_indices {
-            let face = mesh.boundary_faces.get(*face_index as usize)?;
+            let face = mesh.facets.item_nodes(*face_index as usize)?;
             source_node_indices.extend(face.iter().copied());
         }
     }
 
-    for face in &part.surface_faces {
-        source_node_indices.extend(face.iter().copied());
+    for global_ordinal in &part.facet_global_ordinals {
+        let face_index = mesh
+            .facets
+            .global_ordinals
+            .iter()
+            .position(|candidate| candidate == global_ordinal)?;
+        source_node_indices.extend(mesh.facets.item_nodes(face_index)?.iter().copied());
     }
 
     Some(source_node_indices.into_iter().collect())
@@ -4491,9 +4541,9 @@ mod tests {
                 [0.0, 0.0, 1.0],
                 [0.0, 0.0, -1.0],
             ],
-            elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 1, 2, 4]]),
             element_markers: vec![1, 0],
-            boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 3], [0, 1, 4]]),
             boundary_markers: vec![10, 99],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -4513,7 +4563,7 @@ mod tests {
                 node_start: 4,
                 node_count: 4,
                 node_indices: vec![0, 1, 2, 4],
-                surface_faces: Vec::new(),
+                facet_global_ordinals: Vec::new(),
                 bounds_min: None,
                 bounds_max: None,
             }],
@@ -4528,21 +4578,33 @@ mod tests {
             subset_part_mesh(&mesh, "part:__air__").expect("part topology should remap");
 
         assert_eq!(part_mesh.nodes.len(), 4);
-        assert_eq!(part_mesh.elements, vec![[0, 1, 2, 3]]);
+        assert_eq!(
+            part_mesh.require_tet4_elements().unwrap(),
+            vec![[0, 1, 2, 3]]
+        );
         assert_eq!(part_mesh.element_markers, vec![0]);
-        assert_eq!(part_mesh.boundary_faces, vec![[0, 1, 3]]);
+        assert_eq!(
+            part_mesh.require_tri3_boundary_faces().unwrap(),
+            vec![[0, 1, 3]]
+        );
         assert_eq!(part_mesh.mesh_parts[0].node_count, 4);
     }
 
     #[test]
-    fn subset_part_mesh_promotes_surface_faces_to_binary_boundary_faces() {
+    fn subset_part_mesh_resolves_canonical_facet_ids() {
         let mesh = FemMeshPayload {
             mesh_name: "shared".to_string(),
             mesh_id: "shared:1".to_string(),
             nodes: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-            elements: Vec::new(),
+            cells: fullmag_ir::FemConnectivityIR::empty(),
             element_markers: Vec::new(),
-            boundary_faces: Vec::new(),
+            facets: fullmag_ir::FemFacetConnectivityIR {
+                types: vec![fullmag_ir::FemFacetTypeIR::Tri3],
+                roles: vec![fullmag_ir::FemFacetRoleIR::MaterialInterface],
+                offsets: vec![0, 3],
+                nodes: vec![0, 1, 2],
+                global_ordinals: vec![0],
+            },
             boundary_markers: Vec::new(),
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -4562,7 +4624,7 @@ mod tests {
                 node_start: 0,
                 node_count: 0,
                 node_indices: vec![0, 1, 2],
-                surface_faces: vec![[0, 1, 2]],
+                facet_global_ordinals: vec![0],
                 bounds_min: None,
                 bounds_max: None,
             }],
@@ -4577,8 +4639,11 @@ mod tests {
             .expect("interface topology should remap surface faces");
 
         assert_eq!(part_mesh.nodes.len(), 3);
-        assert_eq!(part_mesh.boundary_faces, vec![[0, 1, 2]]);
-        assert_eq!(part_mesh.mesh_parts[0].surface_faces, vec![[0, 1, 2]]);
+        assert_eq!(
+            part_mesh.require_tri3_boundary_faces().unwrap(),
+            vec![[0, 1, 2]]
+        );
+        assert_eq!(part_mesh.mesh_parts[0].facet_global_ordinals, vec![0]);
     }
 
     #[test]
@@ -4593,9 +4658,9 @@ mod tests {
                 [0.0, 0.0, 1.0],
                 [0.0, 0.0, -1.0],
             ],
-            elements: vec![[0, 1, 2, 4]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 4]]),
             element_markers: vec![1],
-            boundary_faces: vec![[0, 1, 4]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 4]]),
             boundary_markers: vec![10],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -4620,8 +4685,14 @@ mod tests {
         let object_mesh = subset_object_mesh(&mesh, "body").expect("object topology should remap");
 
         assert_eq!(object_mesh.nodes.len(), 4);
-        assert_eq!(object_mesh.elements, vec![[0, 1, 2, 3]]);
-        assert_eq!(object_mesh.boundary_faces, vec![[0, 1, 3]]);
+        assert_eq!(
+            object_mesh.require_tet4_elements().unwrap(),
+            vec![[0, 1, 2, 3]]
+        );
+        assert_eq!(
+            object_mesh.require_tri3_boundary_faces().unwrap(),
+            vec![[0, 1, 3]]
+        );
         assert_eq!(object_mesh.object_segments[0].node_count, 4);
     }
 }

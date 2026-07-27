@@ -3801,7 +3801,7 @@ mod tests {
             *element_marker = 0;
         }
         for cell in mesh.cells.iter() {
-            let element_index = cell.global_ordinal;
+            let element_index = cell.ordinal;
             let element = cell.nodes;
             let centroid = element.iter().fold([0.0; 3], |acc, node| {
                 let coord = mesh.nodes[*node as usize];

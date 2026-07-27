@@ -88,6 +88,8 @@ def _scale_mesh_nodes(mesh: MeshData, scale_xyz: NDArray[np.float64]) -> MeshDat
         facet_offsets=mesh.facet_offsets,
         facet_nodes=mesh.facet_nodes,
         boundary_markers=mesh.boundary_markers,
+        cell_global_ordinals=mesh.cell_global_ordinals,
+        facet_global_ordinals=mesh.facet_global_ordinals,
         periodic_boundary_pairs=mesh.periodic_boundary_pairs,
         periodic_node_pairs=mesh.periodic_node_pairs,
         periodic_mesh_certificate=mesh.periodic_mesh_certificate,

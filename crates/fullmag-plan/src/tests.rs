@@ -189,7 +189,7 @@ fn fem_top_surface_selector_resolves_bbox_faces() {
         node_selector: fullmag_ir::FemMeshPartSelector::NodeRange { start: 0, count: 6 },
         boundary_face_indices: Vec::new(),
         node_indices: Vec::new(),
-        surface_faces: Vec::new(),
+        facet_global_ordinals: Vec::new(),
         bounds_min: Some([0.0, 0.0, 0.0]),
         bounds_max: Some([1.0, 1.0, 1.0]),
         parent_id: None,
@@ -200,7 +200,7 @@ fn fem_top_surface_selector_resolves_bbox_faces() {
 
     assert_eq!(resolved.selector, "top");
     assert_eq!(resolved.boundary_face_indices, vec![1]);
-    assert_eq!(resolved.surface_faces, vec![[3, 4, 5]]);
+    assert_eq!(resolved.facet_global_ordinals, vec![1]);
     assert_eq!(resolved.node_indices, vec![3, 4, 5]);
     assert!((resolved.area - 0.5).abs() < 1e-12);
 }
@@ -332,7 +332,7 @@ fn fem_domain_full_sampled_field_copies_by_global_node_indices() {
         node_selector: fullmag_ir::FemMeshPartSelector::NodeRange { start: 0, count: 2 },
         boundary_face_indices: Vec::new(),
         node_indices: vec![3, 1],
-        surface_faces: Vec::new(),
+        facet_global_ordinals: Vec::new(),
         bounds_min: None,
         bounds_max: None,
         parent_id: None,
@@ -411,7 +411,7 @@ fn fem_domain_preset_texture_samples_final_mesh_node_order() {
         node_selector: fullmag_ir::FemMeshPartSelector::NodeRange { start: 0, count: 2 },
         boundary_face_indices: Vec::new(),
         node_indices: vec![2, 0],
-        surface_faces: Vec::new(),
+        facet_global_ordinals: Vec::new(),
         bounds_min: None,
         bounds_max: None,
         parent_id: None,
@@ -709,7 +709,7 @@ fn analyze_detects_interface_between_touching_markers() {
 
 #[test]
 fn reorder_shared_domain_mesh_materializes_interface_and_outer_boundary_parts() {
-    let mesh = MeshIR {
+    let mut mesh = MeshIR {
         mesh_name: "shared_with_air".to_string(),
         nodes: vec![
             [0.0, 0.0, 0.0],
@@ -734,6 +734,7 @@ fn reorder_shared_domain_mesh_materializes_interface_and_outer_boundary_parts() 
         periodic_node_pairs: Vec::new(),
         per_domain_quality: std::collections::HashMap::new(),
     };
+    mesh.facets.roles[6] = fullmag_ir::FemFacetRoleIR::MaterialInterface;
 
     let (_reordered, _segments, parts) = crate::mesh::reorder_shared_domain_mesh(
         &mesh,
@@ -754,7 +755,7 @@ fn reorder_shared_domain_mesh_materializes_interface_and_outer_boundary_parts() 
     assert_eq!(interface_part.geometry_id.as_deref(), Some("flower"));
     assert_eq!(interface_part.parent_id.as_deref(), Some("part:flower"));
     assert!(!interface_part.node_indices.is_empty());
-    assert_eq!(interface_part.surface_faces.len(), 1);
+    assert_eq!(interface_part.facet_global_ordinals.len(), 1);
     assert!(interface_part.bounds_min.is_some());
 
     let boundary_part = parts
@@ -831,6 +832,7 @@ fn pack_mixed_topology_keeps_each_type_connectivity_role_and_marker_together() {
             ],
             offsets: vec![0, 6, 11, 15],
             nodes: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+            global_ordinals: vec![91, 12, 44],
         },
         element_markers: vec![2, 1, 0],
         facets: fullmag_ir::FemFacetConnectivityIR {
@@ -846,6 +848,7 @@ fn pack_mixed_topology_keeps_each_type_connectivity_role_and_marker_together() {
             ],
             offsets: vec![0, 4, 8, 11],
             nodes: vec![0, 1, 4, 3, 6, 9, 8, 7, 11, 13, 12],
+            global_ordinals: vec![90, 11, 45],
         },
         boundary_markers: vec![20, 10, 99],
         periodic_boundary_pairs: Vec::new(),
@@ -879,6 +882,7 @@ fn pack_mixed_topology_keeps_each_type_connectivity_role_and_marker_together() {
         ]
     );
     assert_eq!(packed.element_markers, vec![1, 2, 0]);
+    assert_eq!(packed.cells.global_ordinals, vec![12, 91, 44]);
     assert_eq!(packed.cells.offsets, vec![0, 5, 11, 15]);
     assert_eq!(
         packed.facets.types,
@@ -897,8 +901,103 @@ fn pack_mixed_topology_keeps_each_type_connectivity_role_and_marker_together() {
         ]
     );
     assert_eq!(packed.boundary_markers, vec![10, 20, 99]);
+    assert_eq!(packed.facets.global_ordinals, vec![11, 90, 45]);
     assert_eq!(segments[0].element_start, 0);
     assert_eq!(segments[1].element_start, 1);
+}
+
+fn adjacent_hex_interface_mesh(right_marker: u32) -> MeshIR {
+    MeshIR {
+        mesh_name: format!("hex_interface_{right_marker}"),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [0.0, 1.0, 1.0],
+            [2.0, 0.0, 0.0],
+            [2.0, 1.0, 0.0],
+            [2.0, 0.0, 1.0],
+            [2.0, 1.0, 1.0],
+        ],
+        cells: fullmag_ir::FemConnectivityIR {
+            types: vec![
+                fullmag_ir::FemCellTypeIR::Hex8,
+                fullmag_ir::FemCellTypeIR::Hex8,
+            ],
+            offsets: vec![0, 8, 16],
+            nodes: vec![0, 1, 2, 3, 4, 5, 6, 7, 1, 8, 9, 2, 5, 10, 11, 6],
+            global_ordinals: vec![501, 902],
+        },
+        element_markers: vec![1, right_marker],
+        facets: fullmag_ir::FemFacetConnectivityIR {
+            types: vec![fullmag_ir::FemFacetTypeIR::Quad4],
+            roles: vec![fullmag_ir::FemFacetRoleIR::MaterialInterface],
+            offsets: vec![0, 4],
+            nodes: vec![1, 2, 6, 5],
+            global_ordinals: vec![700],
+        },
+        boundary_markers: vec![27],
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    }
+}
+
+#[test]
+fn packing_preserves_magnetic_magnetic_quad_interface_once() {
+    let mesh = adjacent_hex_interface_mesh(2);
+    let analysis = crate::mesh::analyze_shared_domain_mesh(
+        &mesh,
+        &[
+            fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "left".into(),
+                marker: 1,
+            },
+            fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "right".into(),
+                marker: 2,
+            },
+        ],
+    )
+    .unwrap();
+    let (packed, _, parts) = crate::mesh::pack_mesh_by_analysis(&mesh, &analysis).unwrap();
+    assert_eq!(packed.facets.types, vec![fullmag_ir::FemFacetTypeIR::Quad4]);
+    assert_eq!(
+        packed.facets.roles,
+        vec![fullmag_ir::FemFacetRoleIR::MaterialInterface]
+    );
+    assert_eq!(packed.facets.global_ordinals, vec![700]);
+    let interface = parts
+        .iter()
+        .find(|part| part.role == fullmag_ir::FemMeshPartRole::Interface)
+        .unwrap();
+    assert_eq!(interface.boundary_face_indices, vec![0]);
+}
+
+#[test]
+fn packing_preserves_air_magnetic_quad_interface_once() {
+    let mesh = adjacent_hex_interface_mesh(0);
+    let analysis = crate::mesh::analyze_shared_domain_mesh(
+        &mesh,
+        &[fullmag_ir::FemDomainRegionMarkerIR {
+            geometry_name: "film".into(),
+            marker: 1,
+        }],
+    )
+    .unwrap();
+    let (packed, _, parts) = crate::mesh::pack_mesh_by_analysis(&mesh, &analysis).unwrap();
+    assert_eq!(packed.facets.types, vec![fullmag_ir::FemFacetTypeIR::Quad4]);
+    assert_eq!(packed.facets.global_ordinals, vec![700]);
+    let interface = parts
+        .iter()
+        .find(|part| part.role == fullmag_ir::FemMeshPartRole::Interface)
+        .unwrap();
+    assert_eq!(interface.boundary_face_indices, vec![0]);
+    assert_eq!(interface.object_id.as_deref(), Some("film"));
 }
 
 #[test]
@@ -914,6 +1013,7 @@ fn mixed_mesh_part_slice_retains_global_ordinals_and_variable_arity() {
             ],
             offsets: vec![0, 6, 10, 15],
             nodes: (0..15).collect(),
+            global_ordinals: vec![80, 12, 44],
         },
         element_markers: vec![1, 0, 0],
         facets: fullmag_ir::FemFacetConnectivityIR::empty(),
@@ -953,7 +1053,7 @@ fn mixed_mesh_part_slice_retains_global_ordinals_and_variable_arity() {
             .iter()
             .map(|cell| cell.global_ordinal)
             .collect::<Vec<_>>(),
-        vec![1, 2]
+        vec![12, 44]
     );
     assert_eq!(
         sliced.iter().map(|cell| cell.cell_type).collect::<Vec<_>>(),
@@ -987,6 +1087,7 @@ fn merge_mixed_meshes_preserves_input_order_and_typed_offsets() {
             types: vec![fullmag_ir::FemCellTypeIR::Prism6],
             offsets: vec![0, 6],
             nodes: vec![0, 1, 2, 3, 4, 5],
+            global_ordinals: vec![40],
         },
         element_markers: vec![1],
         facets: fullmag_ir::FemFacetConnectivityIR {
@@ -994,6 +1095,7 @@ fn merge_mixed_meshes_preserves_input_order_and_typed_offsets() {
             roles: vec![fullmag_ir::FemFacetRoleIR::Exterior],
             offsets: vec![0, 4],
             nodes: vec![0, 1, 4, 3],
+            global_ordinals: vec![70],
         },
         boundary_markers: vec![3],
         periodic_boundary_pairs: Vec::new(),
@@ -1013,6 +1115,7 @@ fn merge_mixed_meshes_preserves_input_order_and_typed_offsets() {
             types: vec![fullmag_ir::FemCellTypeIR::Pyramid5],
             offsets: vec![0, 5],
             nodes: vec![0, 1, 2, 3, 4],
+            global_ordinals: vec![40],
         },
         element_markers: vec![1],
         facets: fullmag_ir::FemFacetConnectivityIR {
@@ -1020,6 +1123,7 @@ fn merge_mixed_meshes_preserves_input_order_and_typed_offsets() {
             roles: vec![fullmag_ir::FemFacetRoleIR::MaterialInterface],
             offsets: vec![0, 3],
             nodes: vec![0, 1, 4],
+            global_ordinals: vec![70],
         },
         boundary_markers: vec![4],
         periodic_boundary_pairs: Vec::new(),
@@ -1041,6 +1145,7 @@ fn merge_mixed_meshes_preserves_input_order_and_typed_offsets() {
         ]
     );
     assert_eq!(merged.cells.offsets, vec![0, 6, 11]);
+    assert_eq!(merged.cells.global_ordinals, vec![0, 1]);
     assert_eq!(merged.cells.item_nodes(0), Some(&[0, 1, 2, 3, 4, 5][..]));
     assert_eq!(merged.cells.item_nodes(1), Some(&[6, 7, 8, 9, 10][..]));
     assert_eq!(
@@ -1058,6 +1163,7 @@ fn merge_mixed_meshes_preserves_input_order_and_typed_offsets() {
         ]
     );
     assert_eq!(merged.boundary_markers, vec![3, 4]);
+    assert_eq!(merged.facets.global_ordinals, vec![0, 1]);
     assert_eq!(segments[0].element_start, 0);
     assert_eq!(segments[1].element_start, 1);
     assert_eq!(segments[1].node_start, 6);
@@ -1142,7 +1248,7 @@ fn validate_accepts_shared_nodes_when_solver_supports_conformal() {
 
 #[test]
 fn pack_duplicates_shared_interface_nodes_per_region() {
-    let mesh = MeshIR {
+    let mut mesh = MeshIR {
         mesh_name: "touching".to_string(),
         nodes: vec![
             [0.0, 0.0, 0.0],
@@ -1153,12 +1259,17 @@ fn pack_duplicates_shared_interface_nodes_per_region() {
         ],
         cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 2, 1, 4]]),
         element_markers: vec![1, 2],
-        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 3], [0, 1, 4]]),
-        boundary_markers: vec![10, 20],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
+            [0, 1, 3],
+            [0, 1, 4],
+            [0, 1, 2],
+        ]),
+        boundary_markers: vec![10, 20, 30],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
         per_domain_quality: std::collections::HashMap::new(),
     };
+    mesh.facets.roles[2] = fullmag_ir::FemFacetRoleIR::MaterialInterface;
     let region_markers = vec![
         fullmag_ir::FemDomainRegionMarkerIR {
             geometry_name: "left".to_string(),
@@ -1195,7 +1306,7 @@ fn pack_duplicates_shared_interface_nodes_per_region() {
 
 #[test]
 fn pack_preserves_shared_interface_nodes_within_one_object() {
-    let mesh = MeshIR {
+    let mut mesh = MeshIR {
         mesh_name: "object_with_region".to_string(),
         nodes: vec![
             [0.0, 0.0, 0.0],
@@ -1206,15 +1317,16 @@ fn pack_preserves_shared_interface_nodes_within_one_object() {
         ],
         cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 2, 1, 4]]),
         element_markers: vec![1, 2],
-        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
-        boundary_markers: Vec::new(),
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
+        boundary_markers: vec![10],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
         per_domain_quality: std::collections::HashMap::new(),
     };
+    mesh.facets.roles[0] = fullmag_ir::FemFacetRoleIR::MaterialInterface;
     let analysis = crate::mesh::SharedDomainAnalysis {
         node_owner: vec![1, 1, 1, 1, 2],
-        face_owner: std::collections::BTreeMap::new(),
+        face_owner: [([0, 1, 2].to_vec(), 1)].into_iter().collect(),
         ordered_regions: vec![
             crate::mesh::SharedDomainRegionEntry {
                 object_id: "body".to_string(),
@@ -1229,7 +1341,8 @@ fn pack_preserves_shared_interface_nodes_within_one_object() {
         ],
         shared_interface_nodes: vec![(0, vec![1, 2]), (1, vec![1, 2]), (2, vec![1, 2])],
         interface_faces: vec![crate::mesh::SharedInterfaceFace {
-            face: [0, 1, 2],
+            facet_global_ordinal: 0,
+            facet_type: fullmag_ir::FemFacetTypeIR::Tri3,
             markers: vec![1, 2],
         }],
     };

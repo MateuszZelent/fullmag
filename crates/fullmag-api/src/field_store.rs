@@ -233,12 +233,18 @@ fn write_f64_values(out: &mut Vec<u8>, values: &[f64]) {
 
 pub(crate) fn serialize_fem_mesh_topology_binary_v1(
     mesh: &fullmag_runner::FemMeshPayload,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, String> {
+    let elements = mesh.require_tet4_elements().map_err(|error| {
+        format!("FMMT v1 requires tet4 topology; mixed topology is deferred to FMMT v2: {error}")
+    })?;
+    let boundary_faces = mesh.require_tri3_boundary_faces().map_err(|error| {
+        format!("FMMT v1 requires tri3 facets; mixed topology is deferred to FMMT v2: {error}")
+    })?;
     let mut out = Vec::with_capacity(
         FEM_MESH_TOPOLOGY_BINARY_HEADER_LEN
             + mesh.nodes.len() * 3 * std::mem::size_of::<f64>()
-            + mesh.elements.len() * 4 * std::mem::size_of::<u32>()
-            + mesh.boundary_faces.len() * 3 * std::mem::size_of::<u32>()
+            + mesh.cell_count() * 4 * std::mem::size_of::<u32>()
+            + mesh.facet_count() * 3 * std::mem::size_of::<u32>()
             + mesh.element_markers.len() * std::mem::size_of::<u32>()
             + mesh.boundary_markers.len() * std::mem::size_of::<u32>(),
     );
@@ -248,8 +254,8 @@ pub(crate) fn serialize_fem_mesh_topology_binary_v1(
     out.push(FEM_MESH_TOPOLOGY_BINARY_KIND_F64_U32);
     out.extend_from_slice(&0u16.to_le_bytes());
     out.extend_from_slice(&(mesh.nodes.len() as u32).to_le_bytes());
-    out.extend_from_slice(&(mesh.elements.len() as u32).to_le_bytes());
-    out.extend_from_slice(&(mesh.boundary_faces.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(mesh.cell_count() as u32).to_le_bytes());
+    out.extend_from_slice(&(mesh.facet_count() as u32).to_le_bytes());
     out.extend_from_slice(&(mesh.element_markers.len() as u32).to_le_bytes());
     out.extend_from_slice(&(mesh.boundary_markers.len() as u32).to_le_bytes());
     out.extend_from_slice(&0u32.to_le_bytes());
@@ -259,13 +265,13 @@ pub(crate) fn serialize_fem_mesh_topology_binary_v1(
         out.extend_from_slice(&node[1].to_le_bytes());
         out.extend_from_slice(&node[2].to_le_bytes());
     }
-    for element in &mesh.elements {
+    for element in &elements {
         out.extend_from_slice(&element[0].to_le_bytes());
         out.extend_from_slice(&element[1].to_le_bytes());
         out.extend_from_slice(&element[2].to_le_bytes());
         out.extend_from_slice(&element[3].to_le_bytes());
     }
-    for face in &mesh.boundary_faces {
+    for face in &boundary_faces {
         out.extend_from_slice(&face[0].to_le_bytes());
         out.extend_from_slice(&face[1].to_le_bytes());
         out.extend_from_slice(&face[2].to_le_bytes());
@@ -277,7 +283,7 @@ pub(crate) fn serialize_fem_mesh_topology_binary_v1(
         out.extend_from_slice(&marker.to_le_bytes());
     }
 
-    out
+    Ok(out)
 }
 
 #[cfg(test)]

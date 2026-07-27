@@ -671,8 +671,7 @@ pub(crate) fn requested_finite_k_artifacts(
         .cells
         .iter()
         .filter(|cell| {
-            fem.mesh.element_markers.is_empty()
-                || fem.mesh.element_markers[cell.global_ordinal] != 0
+            fem.mesh.element_markers.is_empty() || fem.mesh.element_markers[cell.ordinal] != 0
         })
         .flat_map(|cell| cell.nodes.iter().map(|node| *node as usize))
         .collect::<std::collections::BTreeSet<_>>();

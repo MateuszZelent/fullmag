@@ -162,7 +162,7 @@ fn mesh_runtime_metadata(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Valu
         BackendPlanIR::Fem(fem) => serde_json::json!({
             "mesh_name": fem.mesh.mesh_name,
             "mesh_generation_id": solver_mesh_signature(&fem.mesh),
-            "topology_fingerprint": solver_mesh_signature(&fem.mesh),
+            "topology_fingerprint": fem.mesh.topology_fingerprint_v6(),
             "node_count": fem.mesh.nodes.len(),
             "element_count": fem.mesh.cell_count(),
             "boundary_face_count": fem.mesh.facet_count(),
@@ -181,7 +181,7 @@ fn mesh_runtime_metadata(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Valu
         BackendPlanIR::FemEigen(fem) => serde_json::json!({
             "mesh_name": fem.mesh.mesh_name,
             "mesh_generation_id": solver_mesh_signature(&fem.mesh),
-            "topology_fingerprint": solver_mesh_signature(&fem.mesh),
+            "topology_fingerprint": fem.mesh.topology_fingerprint_v6(),
             "node_count": fem.mesh.nodes.len(),
             "element_count": fem.mesh.cell_count(),
             "boundary_face_count": fem.mesh.facet_count(),
@@ -200,7 +200,7 @@ fn mesh_runtime_metadata(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Valu
         BackendPlanIR::FemFrequencyResponse(fem) => serde_json::json!({
             "mesh_name": fem.mesh.mesh_name,
             "mesh_generation_id": solver_mesh_signature(&fem.mesh),
-            "topology_fingerprint": solver_mesh_signature(&fem.mesh),
+            "topology_fingerprint": fem.mesh.topology_fingerprint_v6(),
             "node_count": fem.mesh.nodes.len(),
             "element_count": fem.mesh.cell_count(),
             "boundary_face_count": fem.mesh.facet_count(),
@@ -2196,7 +2196,7 @@ fn mesh_periodic_pair_residuals(
 fn mesh_boundary_nodes_by_marker(mesh: &fullmag_ir::MeshIR) -> HashMap<u32, BTreeSet<u32>> {
     let mut nodes_by_marker = HashMap::<u32, BTreeSet<u32>>::new();
     for facet in mesh.facets.iter() {
-        let Some(marker) = mesh.boundary_markers.get(facet.global_ordinal).copied() else {
+        let Some(marker) = mesh.boundary_markers.get(facet.ordinal).copied() else {
             continue;
         };
         let nodes = nodes_by_marker.entry(marker).or_default();
@@ -2209,11 +2209,7 @@ fn mesh_node_domain_sets(mesh: &fullmag_ir::MeshIR) -> (BTreeSet<u32>, BTreeSet<
     let mut magnetic_nodes = BTreeSet::new();
     let mut airbox_nodes = BTreeSet::new();
     for cell in mesh.cells.iter() {
-        let marker = mesh
-            .element_markers
-            .get(cell.global_ordinal)
-            .copied()
-            .unwrap_or(1);
+        let marker = mesh.element_markers.get(cell.ordinal).copied().unwrap_or(1);
         let target = if marker == 0 {
             &mut airbox_nodes
         } else {
@@ -2570,7 +2566,7 @@ fn fem_part_node_indices_for_artifact(
                 if fem
                     .mesh
                     .element_markers
-                    .get(cell.global_ordinal)
+                    .get(cell.ordinal)
                     .is_some_and(|marker| markers.contains(marker))
                 {
                     nodes.extend(cell.nodes.iter().map(|index| *index as usize));
@@ -2601,8 +2597,18 @@ fn fem_part_node_indices_for_artifact(
         }
         _ => {}
     }
-    for face in &part.surface_faces {
-        nodes.extend(face.iter().map(|index| *index as usize));
+    for global_ordinal in &part.facet_global_ordinals {
+        if let Some(face_index) = fem
+            .mesh
+            .facets
+            .global_ordinals
+            .iter()
+            .position(|candidate| candidate == global_ordinal)
+        {
+            if let Some(face) = fem.mesh.facets.item_nodes(face_index) {
+                nodes.extend(face.iter().map(|index| *index as usize));
+            }
+        }
     }
 
     nodes
@@ -3217,6 +3223,49 @@ pub(crate) fn field_unit(observable: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn artifact_node_selection_resolves_quad_interface_by_global_ordinal() {
+        let mut plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("test plan must be FEM");
+        };
+        fem.mesh.nodes = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ];
+        fem.mesh.facets = fullmag_ir::FemFacetConnectivityIR {
+            types: vec![fullmag_ir::FemFacetTypeIR::Quad4],
+            roles: vec![fullmag_ir::FemFacetRoleIR::MaterialInterface],
+            offsets: vec![0, 4],
+            nodes: vec![0, 1, 2, 3],
+            global_ordinals: vec![700],
+        };
+        fem.mesh.boundary_markers = vec![27];
+        let part = FemMeshPartIR {
+            id: "part:interface:0:1".into(),
+            label: "Air ↔ film".into(),
+            role: FemMeshPartRole::Interface,
+            object_id: Some("film".into()),
+            geometry_id: Some("film".into()),
+            material_id: None,
+            element_selector: FemMeshPartSelector::ElementRange { start: 0, count: 0 },
+            boundary_face_selector: FemMeshPartSelector::BoundaryFaceRange { start: 0, count: 0 },
+            node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 0 },
+            boundary_face_indices: Vec::new(),
+            node_indices: Vec::new(),
+            facet_global_ordinals: vec![700],
+            bounds_min: None,
+            bounds_max: None,
+            parent_id: None,
+        };
+        assert_eq!(
+            fem_part_node_indices_for_artifact(fem, &part),
+            vec![0, 1, 2, 3]
+        );
+    }
     use crate::types::{
         ExecutedRun, ExecutionProvenance, FieldSnapshot, ResolvedFallback, RunResult, RunStatus,
         SolverAttemptRecord,
@@ -3553,12 +3602,21 @@ mod tests {
             panic!("expected FEM plan");
         };
         fem.mesh_build_report = Some(report.clone());
+        let expected_topology_fingerprint = fem.mesh.topology_fingerprint_v6();
 
         let metadata = mesh_runtime_metadata(&plan);
         assert_eq!(metadata["mesh_generation_id"].as_str().unwrap().len(), 64);
         assert_eq!(
             metadata["topology_fingerprint"],
-            metadata["mesh_generation_id"]
+            serde_json::Value::String(expected_topology_fingerprint)
+        );
+        assert!(metadata["topology_fingerprint"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("sha256:")));
+        assert_ne!(
+            metadata["topology_fingerprint"],
+            metadata["mesh_generation_id"],
+            "canonical topology identity and solver-mesh generation identity are distinct contracts"
         );
         assert_eq!(
             metadata["mesh_build_report"],
@@ -4883,7 +4941,7 @@ mod tests {
                     node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 1 },
                     boundary_face_indices: Vec::new(),
                     node_indices: vec![0],
-                    surface_faces: Vec::new(),
+                    facet_global_ordinals: Vec::new(),
                     bounds_min: None,
                     bounds_max: None,
                     parent_id: None,
@@ -4903,7 +4961,7 @@ mod tests {
                     node_selector: FemMeshPartSelector::NodeRange { start: 1, count: 3 },
                     boundary_face_indices: Vec::new(),
                     node_indices: vec![1, 2, 3],
-                    surface_faces: Vec::new(),
+                    facet_global_ordinals: Vec::new(),
                     bounds_min: None,
                     bounds_max: None,
                     parent_id: None,
@@ -5469,7 +5527,7 @@ mod tests {
             node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 3 },
             boundary_face_indices: vec![0],
             node_indices: vec![1, 3, 4, 5],
-            surface_faces: vec![[1, 3, 5]],
+            facet_global_ordinals: vec![0],
             bounds_min: Some([0.0, 0.0, 0.0]),
             bounds_max: Some([1.0, 1.0, 1.0]),
             parent_id: None,

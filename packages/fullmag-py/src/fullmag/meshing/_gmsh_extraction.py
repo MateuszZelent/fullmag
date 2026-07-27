@@ -227,6 +227,15 @@ def _read_mesh_file(path: Path) -> MeshData:
         mesh,
         _MESHIO_FACET_TYPES,
     )
+    facet_roles = _derive_facet_roles(
+        cell_types,
+        cell_offsets,
+        cell_nodes,
+        element_markers,
+        facet_offsets,
+        facet_nodes,
+        boundary_markers,
+    )
     mesh = MeshData(
         nodes=nodes,
         cell_types=cell_types,
@@ -234,10 +243,12 @@ def _read_mesh_file(path: Path) -> MeshData:
         cell_nodes=cell_nodes,
         element_markers=element_markers,
         facet_types=facet_types,
-        facet_roles=["exterior"] * len(facet_types),
+        facet_roles=facet_roles,
         facet_offsets=facet_offsets,
         facet_nodes=facet_nodes,
         boundary_markers=boundary_markers,
+        cell_global_ordinals=np.arange(len(cell_types), dtype=np.int64),
+        facet_global_ordinals=np.arange(len(facet_types), dtype=np.int64),
     )
     return mesh
 
@@ -258,6 +269,57 @@ _MESHIO_VOLUME_TYPES = {
     "pyramid": "pyramid5",
     "hexahedron": "hex8",
 }
+
+_CELL_LOCAL_FACETS: dict[str, tuple[tuple[int, ...], ...]] = {
+    "tet4": ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)),
+    "prism6": ((0, 1, 2), (3, 5, 4), (0, 3, 4, 1), (1, 4, 5, 2), (2, 5, 3, 0)),
+    "pyramid5": ((0, 3, 2, 1), (0, 1, 4), (1, 2, 4), (2, 3, 4), (3, 0, 4)),
+    "hex8": ((0, 3, 2, 1), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)),
+}
+
+
+def _derive_facet_roles(
+    cell_types: object,
+    cell_offsets: object,
+    cell_nodes: object,
+    element_markers: object,
+    facet_offsets: object,
+    facet_nodes: object,
+    boundary_markers: object,
+    *,
+    periodic_markers: set[int] | None = None,
+) -> list[str]:
+    types = np.asarray(cell_types, dtype=np.str_)
+    offsets = np.asarray(cell_offsets, dtype=np.int64)
+    nodes = np.asarray(cell_nodes, dtype=np.int32)
+    markers = np.asarray(element_markers, dtype=np.int32)
+    adjacency: dict[tuple[int, ...], list[int]] = {}
+    for ordinal, cell_type in enumerate(types.tolist()):
+        item = nodes[offsets[ordinal] : offsets[ordinal + 1]]
+        for local_facet in _CELL_LOCAL_FACETS[cell_type]:
+            key = tuple(sorted(int(item[index]) for index in local_facet))
+            adjacency.setdefault(key, []).append(int(markers[ordinal]))
+
+    face_offsets = np.asarray(facet_offsets, dtype=np.int64)
+    face_nodes = np.asarray(facet_nodes, dtype=np.int32)
+    face_markers = np.asarray(boundary_markers, dtype=np.int32)
+    seams = periodic_markers or set()
+    roles: list[str] = []
+    for ordinal in range(len(face_offsets) - 1):
+        if int(face_markers[ordinal]) in seams:
+            roles.append("periodic_seam")
+            continue
+        key = tuple(sorted(int(node) for node in face_nodes[face_offsets[ordinal] : face_offsets[ordinal + 1]]))
+        adjacent = adjacency.get(key, [])
+        if len(adjacent) == 1:
+            roles.append("exterior")
+        elif len(adjacent) == 2 and adjacent[0] != adjacent[1]:
+            roles.append("material_interface")
+        else:
+            raise ValueError(
+                f"facet {ordinal} cannot derive a canonical role from volume adjacency {adjacent}"
+            )
+    return roles
 _MESHIO_FACET_TYPES = {"triangle": "tri3", "quad": "quad4"}
 _MESHIO_IGNORED_LOWER_DIM_ELEMENTS: dict[str, tuple[int, int, int]] = {
     "vertex": (0, 1, 1),
@@ -498,6 +560,21 @@ def _extract_mesh_data(
         periodic_pair_specs or [],
     )
 
+    facet_roles = _derive_facet_roles(
+        cell_types,
+        cell_offsets_array,
+        cell_nodes_array,
+        element_markers,
+        facet_offsets_array,
+        facet_nodes_array,
+        boundary_markers,
+        periodic_markers={
+            int(marker)
+            for spec in (periodic_pair_specs or [])
+            for marker in (spec.get("marker_a"), spec.get("marker_b"))
+            if marker is not None
+        },
+    )
     return MeshData(
         nodes=nodes,
         cell_types=cell_types,
@@ -505,10 +582,12 @@ def _extract_mesh_data(
         cell_nodes=cell_nodes_array,
         element_markers=element_markers,
         facet_types=facet_types,
-        facet_roles=["exterior"] * len(facet_types),
+        facet_roles=facet_roles,
         facet_offsets=facet_offsets_array,
         facet_nodes=facet_nodes_array,
         boundary_markers=boundary_markers,
+        cell_global_ordinals=np.arange(len(cell_types), dtype=np.int64),
+        facet_global_ordinals=np.arange(len(facet_types), dtype=np.int64),
         periodic_boundary_pairs=periodic_boundary_pairs,
         periodic_node_pairs=periodic_node_pairs,
         quality=aligned_quality,

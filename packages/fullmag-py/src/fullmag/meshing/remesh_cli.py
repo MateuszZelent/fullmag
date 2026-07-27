@@ -260,9 +260,11 @@ def _topology_byte_count(mesh_data: Any) -> int:
         + mesh_data.cell_types.nbytes
         + mesh_data.cell_offsets.nbytes
         + mesh_data.cell_nodes.nbytes
+        + mesh_data.cell_global_ordinals.nbytes
         + mesh_data.element_markers.nbytes
         + mesh_data.facet_types.nbytes
         + mesh_data.facet_roles.nbytes
+        + mesh_data.facet_global_ordinals.nbytes
         + mesh_data.facet_offsets.nbytes
         + mesh_data.facet_nodes.nbytes
         + mesh_data.boundary_markers.nbytes
@@ -304,9 +306,11 @@ def _write_topology_artifact_if_needed(
         "cell_types": mesh_data.cell_types.tolist(),
         "cell_offsets": mesh_data.cell_offsets.tolist(),
         "cell_nodes": mesh_data.cell_nodes.tolist(),
+        "cell_global_ordinals": mesh_data.cell_global_ordinals.tolist(),
         "element_markers": mesh_data.element_markers.tolist(),
         "facet_types": mesh_data.facet_types.tolist(),
         "facet_roles": mesh_data.facet_roles.tolist(),
+        "facet_global_ordinals": mesh_data.facet_global_ordinals.tolist(),
         "facet_offsets": mesh_data.facet_offsets.tolist(),
         "facet_nodes": mesh_data.facet_nodes.tolist(),
         "boundary_markers": mesh_data.boundary_markers.tolist(),
@@ -435,9 +439,11 @@ def _mesh_result_payload(
         "cell_types": mesh.cell_types.tolist() if inline_topology else [],
         "cell_offsets": mesh.cell_offsets.tolist() if inline_topology else [0],
         "cell_nodes": mesh.cell_nodes.tolist() if inline_topology else [],
+        "cell_global_ordinals": mesh.cell_global_ordinals.tolist() if inline_topology else [],
         "element_markers": mesh.element_markers.tolist() if inline_topology else [],
         "facet_types": mesh.facet_types.tolist() if inline_topology else [],
         "facet_roles": mesh.facet_roles.tolist() if inline_topology else [],
+        "facet_global_ordinals": mesh.facet_global_ordinals.tolist() if inline_topology else [],
         "facet_offsets": mesh.facet_offsets.tolist() if inline_topology else [0],
         "facet_nodes": mesh.facet_nodes.tolist() if inline_topology else [],
         "boundary_markers": mesh.boundary_markers.tolist() if inline_topology else [],

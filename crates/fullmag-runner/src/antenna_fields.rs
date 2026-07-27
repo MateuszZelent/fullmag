@@ -298,7 +298,7 @@ fn magnetic_bounds(plan: &FemPlanIR) -> Option<([f64; 3], [f64; 3])> {
     let mut found = false;
 
     for cell in plan.mesh.cells.iter() {
-        let marker = plan.mesh.element_markers.get(cell.global_ordinal)?;
+        let marker = plan.mesh.element_markers.get(cell.ordinal)?;
         if *marker == 0 {
             continue;
         }

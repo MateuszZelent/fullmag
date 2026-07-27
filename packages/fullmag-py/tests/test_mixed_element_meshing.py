@@ -9,7 +9,10 @@ from unittest.mock import Mock
 import numpy as np
 import pytest
 
-from fullmag.meshing._gmsh_types import MeshData
+import fullmag as fm
+import fullmag.meshing._gmsh_generators as gmsh_generators
+from fullmag.meshing._gmsh_extraction import _extract_mesh_data
+from fullmag.meshing._gmsh_types import MeshData, _cell_jacobian_determinants
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "gmsh" / "mixed_prism_pyramid_airbox.geo"
@@ -218,6 +221,29 @@ def test_gmsh_feasibility_freezes_mixed_p1_topology(
             and {domain for domain, _ in face_owners[face]} == {"film", "air"}
             for face in film_boundary_faces
         ), f"{diagnostics}; film is not fully enclosed by conforming air"
+
+        extracted = _extract_mesh_data(gmsh, has_physical_groups=True)
+        extracted_node_tags, _, _ = gmsh.model.mesh.getNodes()
+        extracted_node_index = {
+            int(tag): index for index, tag in enumerate(extracted_node_tags)
+        }
+        film_boundary_face_indices = {
+            tuple(sorted(extracted_node_index[node] for node in face))
+            for face in film_boundary_faces
+        }
+        outer_airbox_face_indices = {
+            tuple(sorted(extracted_node_index[node] for node in face))
+            for face in outer_airbox_faces
+        }
+        roles_by_nodes = {
+            tuple(sorted(int(node) for node in extracted.facet_node_ids(index))): str(role)
+            for index, role in enumerate(extracted.facet_roles)
+        }
+        assert all(
+            roles_by_nodes[face] == "material_interface"
+            for face in film_boundary_face_indices
+        )
+        assert all(roles_by_nodes[face] == "exterior" for face in outer_airbox_face_indices)
         prism_splitter.assert_not_called()
     finally:
         gmsh.finalize()
@@ -273,12 +299,14 @@ def _mixed_mesh(*, include_hex: bool = False) -> MeshData:
         cell_types=cell_types,
         cell_offsets=cell_offsets,
         cell_nodes=cell_nodes,
+        cell_global_ordinals=list(range(len(cell_types))),
         element_markers=element_markers,
         facet_types=["tri3", "quad4"],
         facet_roles=["exterior", "material_interface"],
         facet_offsets=[0, 3, 7],
         facet_nodes=[0, 2, 1, 0, 1, 4, 3],
         boundary_markers=[10, 20],
+        facet_global_ordinals=[0, 1],
     )
 
 
@@ -307,6 +335,7 @@ def test_mesh_data_accepts_canonical_mixed_typed_csr() -> None:
         ({"cell_nodes": list(range(14)) + [99]}, "invalid node index"),
         ({"cell_nodes": [0, 1, 2, 3, 4, 4] + list(range(6, 15))}, "duplicate"),
         ({"element_markers": [1, 0]}, "element_markers"),
+        ({"cell_global_ordinals": [1, 1, 2]}, "cell_global_ordinals must be unique"),
         ({"facet_types": ["unknown", "quad4"]}, "unknown facet type"),
         ({"facet_offsets": [0, 3]}, "facet count plus one"),
         ({"facet_offsets": [0, 2, 7]}, "wrong arity"),
@@ -315,6 +344,7 @@ def test_mesh_data_accepts_canonical_mixed_typed_csr() -> None:
         ({"facet_roles": ["exterior"]}, "facet_roles"),
         ({"facet_roles": ["not_a_role", "exterior"]}, "unknown facet role"),
         ({"boundary_markers": [10]}, "boundary_markers"),
+        ({"facet_global_ordinals": [7, 7]}, "facet_global_ordinals must be unique"),
     ],
 )
 def test_mesh_data_rejects_invalid_canonical_csr(
@@ -325,13 +355,15 @@ def test_mesh_data_rejects_invalid_canonical_csr(
         "nodes": _mixed_nodes(),
         "cell_types": ["prism6", "pyramid5", "tet4"],
         "cell_offsets": [0, 6, 11, 15],
-        "cell_nodes": list(range(15)),
+            "cell_nodes": list(range(15)),
+            "cell_global_ordinals": [0, 1, 2],
         "element_markers": [1, 0, 0],
         "facet_types": ["tri3", "quad4"],
         "facet_roles": ["exterior", "material_interface"],
         "facet_offsets": [0, 3, 7],
         "facet_nodes": [0, 2, 1, 0, 1, 4, 3],
-        "boundary_markers": [10, 20],
+            "boundary_markers": [10, 20],
+            "facet_global_ordinals": [0, 1],
     }
     kwargs.update(overrides)
 
@@ -396,12 +428,14 @@ def test_strict_validation_is_family_aware_for_inverted_cells(
         cell_types=[cell_type],
         cell_offsets=[0, len(nodes)],
         cell_nodes=inverted_order,
+        cell_global_ordinals=[0],
         element_markers=[1],
         facet_types=[],
         facet_roles=[],
         facet_offsets=[0],
         facet_nodes=[],
         boundary_markers=[],
+        facet_global_ordinals=[],
     )
 
     with pytest.raises(ValueError, match=f"negative {cell_type} Jacobian"):
@@ -417,15 +451,58 @@ def test_strict_validation_rejects_family_degenerate_cells(cell_type: str) -> No
         cell_types=[cell_type],
         cell_offsets=[0, len(nodes)],
         cell_nodes=list(range(len(nodes))),
+        cell_global_ordinals=[0],
         element_markers=[1],
         facet_types=[],
         facet_roles=[],
         facet_offsets=[0],
         facet_nodes=[],
         boundary_markers=[],
+        facet_global_ordinals=[],
     )
 
     with pytest.raises(ValueError, match=f"degenerate {cell_type} Jacobian"):
+        mesh.validate_strict()
+
+
+@pytest.mark.parametrize(
+    ("cell_type", "warped_node", "warped_coordinate", "sample_count"),
+    [
+        ("prism6", 0, [1.0, 1.0, -1.0], 6),
+        ("pyramid5", 0, [-1.0, 0.0, 2.0], 8),
+        ("hex8", 1, [-1.0, 0.0, 0.0], 8),
+    ],
+)
+def test_order2_jacobian_rule_rejects_locally_inverted_mixed_cells(
+    cell_type: str,
+    warped_node: int,
+    warped_coordinate: list[float],
+    sample_count: int,
+) -> None:
+    nodes = np.array(_REFERENCE_CELLS[cell_type], copy=True)
+    nodes[warped_node] = warped_coordinate
+    determinants = _cell_jacobian_determinants(cell_type, nodes)
+    assert determinants.shape == (sample_count,)
+    assert float(np.min(determinants)) < 0.0
+    mesh = MeshData(
+        nodes=nodes,
+        cell_types=[cell_type],
+        cell_offsets=[0, len(nodes)],
+        cell_nodes=list(range(len(nodes))),
+        cell_global_ordinals=[73],
+        element_markers=[1],
+        facet_types=[],
+        facet_roles=[],
+        facet_offsets=[0],
+        facet_nodes=[],
+        facet_global_ordinals=[],
+        boundary_markers=[],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=rf"cell 0 .*global ordinal 73.*negative {cell_type} Jacobian",
+    ):
         mesh.validate_strict()
 
 
@@ -480,7 +557,26 @@ def test_legacy_json_and_npz_normalize_to_v2_and_dual_truth_rejects(
 
 
 def test_save_load_emits_only_v2_topology(tmp_path: Path) -> None:
-    mesh = _mixed_mesh()
+    base = _mixed_mesh()
+    mesh = MeshData(
+        **{
+            field: getattr(base, field)
+            for field in (
+                "nodes",
+                "cell_types",
+                "cell_offsets",
+                "cell_nodes",
+                "element_markers",
+                "facet_types",
+                "facet_roles",
+                "facet_offsets",
+                "facet_nodes",
+                "boundary_markers",
+            )
+        },
+        cell_global_ordinals=[41, 7, 99],
+        facet_global_ordinals=[88, 12],
+    )
     json_path = tmp_path / "mixed.json"
     npz_path = tmp_path / "mixed.npz"
 
@@ -491,15 +587,21 @@ def test_save_load_emits_only_v2_topology(tmp_path: Path) -> None:
     assert "elements" not in payload
     assert "boundary_faces" not in payload
     assert payload["cell_types"] == ["prism6", "pyramid5", "tet4"]
+    assert payload["cell_global_ordinals"] == [41, 7, 99]
+    assert payload["facet_global_ordinals"] == [88, 12]
     with np.load(npz_path) as data:
         assert "elements" not in data.files
         assert "boundary_faces" not in data.files
         assert data["facet_roles"].tolist() == ["exterior", "material_interface"]
+        assert data["cell_global_ordinals"].tolist() == [41, 7, 99]
+        assert data["facet_global_ordinals"].tolist() == [88, 12]
 
     loaded_json = MeshData.load(json_path)
     loaded_npz = MeshData.load(npz_path)
     np.testing.assert_array_equal(loaded_json.cell_nodes, mesh.cell_nodes)
     np.testing.assert_array_equal(loaded_npz.facet_nodes, mesh.facet_nodes)
+    np.testing.assert_array_equal(loaded_json.cell_global_ordinals, [41, 7, 99])
+    np.testing.assert_array_equal(loaded_npz.facet_global_ordinals, [88, 12])
 
 
 def test_mixed_vtk_and_vtu_export_keep_native_cell_types(tmp_path: Path) -> None:
@@ -522,16 +624,98 @@ def test_typed_cell_blocks_preserve_global_ordinals_and_markers() -> None:
         cell_types=["prism6", "tet4", "prism6"],
         cell_offsets=[0, 6, 10, 16],
         cell_nodes=list(range(6)) + list(range(11, 15)) + list(range(6)),
+        cell_global_ordinals=[90, 12, 44],
         element_markers=[3, 4, 5],
         facet_types=[],
         facet_roles=[],
         facet_offsets=[0],
         facet_nodes=[],
+        facet_global_ordinals=[],
         boundary_markers=[],
     )
 
     blocks = {block.cell_type: block for block in mesh.cell_blocks()}
-    assert blocks["prism6"].global_ordinals.tolist() == [0, 2]
+    assert blocks["prism6"].global_ordinals.tolist() == [90, 44]
     assert blocks["prism6"].markers.tolist() == [3, 5]
     assert blocks["prism6"].nodes.shape == (2, 6)
-    assert blocks["tet4"].global_ordinals.tolist() == [1]
+    assert blocks["tet4"].global_ordinals.tolist() == [12]
+
+
+def test_translate_imported_mixed_mesh_preserves_canonical_topology(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    quality = Mock(name="mixed_quality")
+    per_domain_quality = {1: Mock(name="film_quality"), 0: Mock(name="air_quality")}
+    source = MeshData(
+        nodes=_mixed_nodes(),
+        cell_types=["prism6", "pyramid5"],
+        cell_offsets=[0, 6, 11],
+        cell_nodes=list(range(11)),
+        cell_global_ordinals=[101, 55],
+        element_markers=[1, 0],
+        facet_types=["quad4"],
+        facet_roles=["material_interface"],
+        facet_offsets=[0, 4],
+        facet_nodes=[0, 1, 4, 3],
+        facet_global_ordinals=[700],
+        boundary_markers=[20],
+        quality=quality,
+        per_domain_quality=per_domain_quality,
+    )
+    monkeypatch.setattr(
+        gmsh_generators,
+        "generate_mesh_from_file",
+        lambda *_args, **_kwargs: source,
+    )
+
+    translated = gmsh_generators.generate_mesh(
+        fm.Translate(
+            fm.ImportedGeometry(source="mixed.vtu", name="mixed"),
+            (2.0, -3.0, 4.0),
+        ),
+        hmax=0.25,
+    )
+
+    np.testing.assert_allclose(translated.nodes, source.nodes + [2.0, -3.0, 4.0])
+    for field in (
+        "cell_types",
+        "cell_offsets",
+        "cell_nodes",
+        "cell_global_ordinals",
+        "element_markers",
+        "facet_types",
+        "facet_roles",
+        "facet_offsets",
+        "facet_nodes",
+        "facet_global_ordinals",
+        "boundary_markers",
+    ):
+        np.testing.assert_array_equal(getattr(translated, field), getattr(source, field))
+    assert translated.periodic_boundary_pairs == source.periodic_boundary_pairs
+    assert translated.periodic_node_pairs == source.periodic_node_pairs
+    assert translated.periodic_mesh_certificate == source.periodic_mesh_certificate
+    assert translated.quality is quality
+    assert translated.per_domain_quality is per_domain_quality
+
+
+def test_translate_imported_mixed_mesh_never_enters_tet_compatibility(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _mixed_mesh()
+    monkeypatch.setattr(
+        gmsh_generators,
+        "generate_mesh_from_file",
+        lambda *_args, **_kwargs: source,
+    )
+
+    translated = gmsh_generators.generate_mesh(
+        fm.Translate(
+            fm.ImportedGeometry(source="mixed.vtu", name="mixed"),
+            (1.0, 2.0, 3.0),
+        ),
+        hmax=0.25,
+    )
+
+    assert translated.cell_types.tolist() == ["prism6", "pyramid5", "tet4"]
+    assert translated.facet_types.tolist() == ["tri3", "quad4"]
+    assert translated.facet_roles.tolist() == ["exterior", "material_interface"]

@@ -17,9 +17,14 @@ pub(crate) fn mesh_part_surface_node_indices(
     part: &FemMeshPartPayload,
 ) -> Option<Vec<u32>> {
     let mut node_indices = BTreeSet::new();
-    if !part.surface_faces.is_empty() {
-        for face in &part.surface_faces {
-            node_indices.extend(face);
+    if !part.facet_global_ordinals.is_empty() {
+        for global_ordinal in &part.facet_global_ordinals {
+            let face_index = mesh
+                .facets
+                .global_ordinals
+                .iter()
+                .position(|candidate| candidate == global_ordinal)?;
+            node_indices.extend(mesh.facets.item_nodes(face_index)?);
         }
         return Some(node_indices.into_iter().collect());
     }
@@ -44,7 +49,7 @@ pub(crate) fn mesh_part_surface_node_indices(
     }?;
 
     for face_index in boundary_face_indices {
-        if let Some(face) = mesh.boundary_faces.get(face_index as usize) {
+        if let Some(face) = mesh.facets.item_nodes(face_index as usize) {
             node_indices.extend(face);
         }
     }

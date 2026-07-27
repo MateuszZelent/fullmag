@@ -289,12 +289,14 @@ def _extract_frozen_magnetic_submesh(
         cell_types=cell_types,
         cell_offsets=cell_offsets,
         cell_nodes=cell_nodes,
+        cell_global_ordinals=shared_mesh.cell_global_ordinals[magnetic_ordinals],
         element_markers=np.full(len(magnetic_ordinals), marker_int, dtype=np.int32),
         facet_types=facet_types,
         facet_roles=shared_mesh.facet_roles[selected_interface_ordinals],
         facet_offsets=facet_offsets,
         facet_nodes=facet_nodes,
         boundary_markers=np.full(len(interface_ordinals), 10, dtype=np.int32),
+        facet_global_ordinals=shared_mesh.facet_global_ordinals[selected_interface_ordinals],
         periodic_boundary_pairs=[
             dict(pair) for pair in shared_mesh.periodic_boundary_pairs
         ],
@@ -463,6 +465,8 @@ def _merge_frozen_magnetic_submesh_with_air_mesh(
         facet_offsets=facet_offsets,
         facet_nodes=facet_nodes,
         boundary_markers=np.asarray(boundary_markers, dtype=np.int32),
+        cell_global_ordinals=np.arange(len(merged_cell_types), dtype=np.int64),
+        facet_global_ordinals=np.arange(len(facet_types), dtype=np.int64),
         periodic_boundary_pairs=periodic_boundary_pairs,
         periodic_node_pairs=periodic_node_pairs,
     )
@@ -1001,6 +1005,8 @@ def _surface_preview_to_mesh_data(preview: dict[str, object]) -> MeshData:
             (len(preview.get("facet_types", [])),),
             dtype=np.int32,
         ),
+        cell_global_ordinals=np.arange(len(preview.get("cell_types", [])), dtype=np.int64),
+        facet_global_ordinals=np.arange(len(preview.get("facet_types", [])), dtype=np.int64),
     )
 
 
@@ -2741,6 +2747,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             facet_offsets=mesh.facet_offsets,
             facet_nodes=mesh.facet_nodes,
             boundary_markers=mesh.boundary_markers,
+            cell_global_ordinals=mesh.cell_global_ordinals,
+            facet_global_ordinals=mesh.facet_global_ordinals,
             periodic_boundary_pairs=mesh.periodic_boundary_pairs,
             periodic_node_pairs=mesh.periodic_node_pairs,
             quality=mesh.quality,

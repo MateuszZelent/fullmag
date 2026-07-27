@@ -505,6 +505,8 @@ class MeshData:
     facet_offsets: NDArray[np.int64]
     facet_nodes: NDArray[np.int32]
     boundary_markers: NDArray[np.int32]
+    cell_global_ordinals: NDArray[np.int64]
+    facet_global_ordinals: NDArray[np.int64]
     periodic_boundary_pairs: list[dict[str, object]] = field(default_factory=list)
     periodic_node_pairs: list[dict[str, object]] = field(default_factory=list)
     periodic_mesh_certificate: dict[str, object] | None = None
@@ -522,6 +524,8 @@ class MeshData:
         object.__setattr__(self, "facet_offsets", np.asarray(self.facet_offsets, dtype=np.int64))
         object.__setattr__(self, "facet_nodes", np.asarray(self.facet_nodes, dtype=np.int32))
         object.__setattr__(self, "boundary_markers", np.asarray(self.boundary_markers, dtype=np.int32))
+        object.__setattr__(self, "cell_global_ordinals", np.asarray(self.cell_global_ordinals, dtype=np.int64))
+        object.__setattr__(self, "facet_global_ordinals", np.asarray(self.facet_global_ordinals, dtype=np.int64))
         object.__setattr__(
             self,
             "periodic_boundary_pairs",
@@ -578,6 +582,8 @@ class MeshData:
             facet_offsets=np.arange(0, 3 * len(tri) + 1, 3, dtype=np.int64),
             facet_nodes=tri.reshape(-1),
             boundary_markers=boundary_markers,
+            cell_global_ordinals=np.arange(len(tet), dtype=np.int64),
+            facet_global_ordinals=np.arange(len(tri), dtype=np.int64),
             periodic_boundary_pairs=periodic_boundary_pairs or [],
             periodic_node_pairs=periodic_node_pairs or [],
             periodic_mesh_certificate=periodic_mesh_certificate,
@@ -628,7 +634,7 @@ class MeshData:
                     cell_type=cell_type,
                     nodes=np.stack([self.cell_node_ids(int(i)) for i in ordinals]).astype(np.int32),
                     markers=self.element_markers[ordinals],
-                    global_ordinals=ordinals,
+                    global_ordinals=self.cell_global_ordinals[ordinals],
                 )
             )
         return blocks
@@ -648,7 +654,7 @@ class MeshData:
                         role=role,
                         nodes=np.stack([self.facet_node_ids(int(i)) for i in ordinals]).astype(np.int32),
                         markers=self.boundary_markers[ordinals],
-                        global_ordinals=ordinals,
+                        global_ordinals=self.facet_global_ordinals[ordinals],
                     )
                 )
         return blocks
@@ -666,6 +672,7 @@ class MeshData:
         )
         if self.element_markers.shape != (self.n_elements,):
             raise ValueError("element_markers must have shape (cell count,)")
+        _validate_global_ordinals(self.cell_global_ordinals, self.n_elements, "cell")
         _validate_typed_csr(
             types=self.facet_types,
             offsets=self.facet_offsets,
@@ -681,6 +688,7 @@ class MeshData:
             raise ValueError(f"unknown facet role: {unknown_roles[0]}")
         if self.boundary_markers.shape != (self.n_boundary_faces,):
             raise ValueError("boundary_markers must have shape (facet count,)")
+        _validate_global_ordinals(self.facet_global_ordinals, self.n_boundary_faces, "facet")
         mixed_cells = np.any(self.cell_types != "tet4")
         if mixed_cells and (
             self.periodic_boundary_pairs
@@ -737,12 +745,14 @@ class MeshData:
             minimum_abs = float(np.min(np.abs(determinants)))
             if minimum_abs <= resolved_eps:
                 raise ValueError(
-                    f"mesh cell {index} has degenerate {cell_type} Jacobian "
+                    f"mesh CSR cell {index} global ordinal {int(self.cell_global_ordinals[index])} "
+                    f"has degenerate {cell_type} Jacobian "
                     f"{minimum_abs:.6e} <= eps {resolved_eps:.6e}"
                 )
             if require_positive_orientation and np.any(determinants < 0.0):
                 raise ValueError(
-                    f"mesh cell {index} has negative {cell_type} Jacobian "
+                    f"mesh CSR cell {index} global ordinal {int(self.cell_global_ordinals[index])} "
+                    f"has negative {cell_type} Jacobian "
                     f"{float(np.min(determinants)):.6e}"
                 )
 
@@ -779,6 +789,8 @@ class MeshData:
             facet_offsets=np.array(self.facet_offsets, copy=True),
             facet_nodes=np.array(self.facet_nodes, copy=True),
             boundary_markers=np.array(self.boundary_markers, copy=True),
+            cell_global_ordinals=np.array(self.cell_global_ordinals, copy=True),
+            facet_global_ordinals=np.array(self.facet_global_ordinals, copy=True),
             periodic_boundary_pairs=[dict(pair) for pair in self.periodic_boundary_pairs],
             periodic_node_pairs=[dict(pair) for pair in self.periodic_node_pairs],
             periodic_mesh_certificate=(
@@ -808,6 +820,8 @@ class MeshData:
                         "facet_offsets": self.facet_offsets.tolist(),
                         "facet_nodes": self.facet_nodes.tolist(),
                         "boundary_markers": self.boundary_markers.tolist(),
+                        "cell_global_ordinals": self.cell_global_ordinals.tolist(),
+                        "facet_global_ordinals": self.facet_global_ordinals.tolist(),
                         "periodic_boundary_pairs": self.periodic_boundary_pairs,
                         "periodic_node_pairs": self.periodic_node_pairs,
                         "periodic_mesh_certificate": self.periodic_mesh_certificate,
@@ -829,6 +843,8 @@ class MeshData:
             facet_offsets=self.facet_offsets,
             facet_nodes=self.facet_nodes,
             boundary_markers=self.boundary_markers,
+            cell_global_ordinals=self.cell_global_ordinals,
+            facet_global_ordinals=self.facet_global_ordinals,
             periodic_boundary_pairs_json=np.asarray(
                 json.dumps(self.periodic_boundary_pairs),
             ),
@@ -1036,6 +1052,8 @@ class MeshData:
             facet_roles=payload["facet_roles"],
             facet_offsets=payload["facet_offsets"],
             facet_nodes=payload["facet_nodes"],
+            cell_global_ordinals=payload.get("cell_global_ordinals", np.arange(len(payload["cell_types"]), dtype=np.int64)),
+            facet_global_ordinals=payload.get("facet_global_ordinals", np.arange(len(payload["facet_types"]), dtype=np.int64)),
         )
 
     def to_ir(self, mesh_name: str) -> dict[str, object]:
@@ -1048,6 +1066,7 @@ class MeshData:
                 "types": mesh.cell_types.tolist(),
                 "offsets": mesh.cell_offsets.tolist(),
                 "nodes": mesh.cell_nodes.tolist(),
+                "global_ordinals": mesh.cell_global_ordinals.tolist(),
             },
             "element_markers": mesh.element_markers.tolist(),
             "facets": {
@@ -1055,6 +1074,7 @@ class MeshData:
                 "roles": mesh.facet_roles.tolist(),
                 "offsets": mesh.facet_offsets.tolist(),
                 "nodes": mesh.facet_nodes.tolist(),
+                "global_ordinals": mesh.facet_global_ordinals.tolist(),
             },
             "boundary_markers": mesh.boundary_markers.tolist(),
         }
@@ -1130,6 +1150,19 @@ def _validate_typed_csr(
             raise ValueError(f"{kind} {index} contains duplicate node indices")
 
 
+def _validate_global_ordinals(
+    ordinals: NDArray[np.int64],
+    item_count: int,
+    kind: str,
+) -> None:
+    if ordinals.shape != (item_count,):
+        raise ValueError(f"{kind}_global_ordinals must have shape ({kind} count,)")
+    if np.any(ordinals < 0):
+        raise ValueError(f"{kind}_global_ordinals must be non-negative")
+    if len(set(int(value) for value in ordinals)) != item_count:
+        raise ValueError(f"{kind}_global_ordinals must be unique")
+
+
 def _cell_jacobian_determinants(
     cell_type: str,
     coordinates: NDArray[np.float64],
@@ -1142,7 +1175,8 @@ def _cell_jacobian_determinants(
         )
         return np.asarray([np.linalg.det(matrix)], dtype=np.float64)
     if cell_type == "prism6":
-        points = ((1.0 / 6.0, 1.0 / 6.0, -q), (2.0 / 3.0, 1.0 / 6.0, q))
+        triangle_points = ((1.0 / 6.0, 1.0 / 6.0), (2.0 / 3.0, 1.0 / 6.0), (1.0 / 6.0, 2.0 / 3.0))
+        points = tuple((r, s, t) for t in (-q, q) for r, s in triangle_points)
         rows: list[float] = []
         for r, s, t in points:
             derivatives = np.asarray(
@@ -1159,8 +1193,11 @@ def _cell_jacobian_determinants(
         return np.asarray(rows)
     if cell_type == "pyramid5":
         rows = []
-        for r, s, t in ((-q, -q, 0.5 - q / 2), (q, q, 0.5 + q / 2)):
-            derivatives = np.asarray(
+        qt = math.sqrt(10.0) / 15.0
+        for t in (1.0 / 3.0 - qt, 1.0 / 3.0 + qt):
+            for r in (-q, q):
+                for s in (-q, q):
+                    derivatives = np.asarray(
                 [
                     [-(1 - s) * (1 - t) / 4, -(1 - r) * (1 - t) / 4, -(1 - r) * (1 - s) / 4],
                     [(1 - s) * (1 - t) / 4, -(1 + r) * (1 - t) / 4, -(1 + r) * (1 - s) / 4],
@@ -1169,7 +1206,7 @@ def _cell_jacobian_determinants(
                     [0.0, 0.0, 1.0],
                 ]
             )
-            rows.append(float(np.linalg.det(coordinates.T @ derivatives)))
+                    rows.append(float(np.linalg.det(coordinates.T @ derivatives)))
         return np.asarray(rows)
     if cell_type == "hex8":
         signs = np.asarray(
@@ -1180,12 +1217,14 @@ def _cell_jacobian_determinants(
             dtype=np.float64,
         )
         rows = []
-        for r, s, t in ((-q, -q, -q), (q, q, q)):
-            derivatives = np.empty((8, 3), dtype=np.float64)
-            derivatives[:, 0] = signs[:, 0] * (1 + signs[:, 1] * s) * (1 + signs[:, 2] * t) / 8
-            derivatives[:, 1] = signs[:, 1] * (1 + signs[:, 0] * r) * (1 + signs[:, 2] * t) / 8
-            derivatives[:, 2] = signs[:, 2] * (1 + signs[:, 0] * r) * (1 + signs[:, 1] * s) / 8
-            rows.append(float(np.linalg.det(coordinates.T @ derivatives)))
+        for r in (-q, q):
+            for s in (-q, q):
+                for t in (-q, q):
+                    derivatives = np.empty((8, 3), dtype=np.float64)
+                    derivatives[:, 0] = signs[:, 0] * (1 + signs[:, 1] * s) * (1 + signs[:, 2] * t) / 8
+                    derivatives[:, 1] = signs[:, 1] * (1 + signs[:, 0] * r) * (1 + signs[:, 2] * t) / 8
+                    derivatives[:, 2] = signs[:, 2] * (1 + signs[:, 0] * r) * (1 + signs[:, 1] * s) / 8
+                    rows.append(float(np.linalg.det(coordinates.T @ derivatives)))
         return np.asarray(rows)
     raise ValueError(f"unknown cell type: {cell_type}")
 

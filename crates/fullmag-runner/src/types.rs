@@ -1537,7 +1537,7 @@ pub struct FemMeshPartPayload {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub node_indices: Vec<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub surface_faces: Vec<[u32; 3]>,
+    pub facet_global_ordinals: Vec<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bounds_min: Option<[f64; 3]>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1667,7 +1667,7 @@ impl<'de> Deserialize<'de> for FemMeshPayload {
                 "FEM mesh payload contains both legacy and v2 topology",
             ));
         }
-        let (cells, facets) = if has_v2 {
+        let (mut cells, mut facets) = if has_v2 {
             (
                 wire.cells
                     .ok_or_else(|| D::Error::custom("v2 FEM mesh payload requires cells"))?,
@@ -1688,6 +1688,12 @@ impl<'de> Deserialize<'de> for FemMeshPayload {
                 "FEM mesh payload must provide either v2 or legacy topology",
             ));
         };
+        if cells.global_ordinals.is_empty() && !cells.types.is_empty() {
+            cells.global_ordinals = (0..cells.types.len() as u64).collect();
+        }
+        if facets.global_ordinals.is_empty() && !facets.types.is_empty() {
+            facets.global_ordinals = (0..facets.types.len() as u64).collect();
+        }
         Ok(Self {
             mesh_name: wire.mesh_name,
             mesh_id: wire.mesh_id,
@@ -1812,31 +1818,15 @@ impl FemStageExecutionContext {
 }
 
 pub fn fem_mesh_topology_fingerprint(mesh: &FemMeshPayload) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(b"fullmag:fem-mesh-topology-fingerprint:v2");
-    update_hash_nodes(&mut hasher, "nodes", &mesh.nodes);
-    update_hash_serialized(&mut hasher, "cell_types", &mesh.cells.types);
-    update_hash_u32_slice(&mut hasher, "cell_offsets", &mesh.cells.offsets);
-    update_hash_u32_slice(&mut hasher, "cell_nodes", &mesh.cells.nodes);
-    update_hash_u32_slice(&mut hasher, "element_markers", &mesh.element_markers);
-    update_hash_serialized(&mut hasher, "facet_types", &mesh.facets.types);
-    update_hash_serialized(&mut hasher, "facet_roles", &mesh.facets.roles);
-    update_hash_u32_slice(&mut hasher, "facet_offsets", &mesh.facets.offsets);
-    update_hash_u32_slice(&mut hasher, "facet_nodes", &mesh.facets.nodes);
-    update_hash_u32_slice(&mut hasher, "boundary_markers", &mesh.boundary_markers);
-    update_hash_serialized(
-        &mut hasher,
-        "periodic_boundary_pairs",
+    fullmag_ir::fem_mesh_topology_fingerprint_v2(
+        &mesh.nodes,
+        &mesh.cells,
+        &mesh.element_markers,
+        &mesh.facets,
+        &mesh.boundary_markers,
         &mesh.periodic_boundary_pairs,
-    );
-    update_hash_serialized(
-        &mut hasher,
-        "periodic_node_pairs",
         &mesh.periodic_node_pairs,
-    );
-    update_hash_serialized(&mut hasher, "object_segments", &mesh.object_segments);
-    update_hash_serialized(&mut hasher, "mesh_parts", &mesh.mesh_parts);
-    digest_hex(&hasher.finalize())
+    )
 }
 
 fn digest_hex(bytes: &[u8]) -> String {
@@ -2251,7 +2241,7 @@ impl From<&fullmag_ir::FemMeshPartIR> for FemMeshPartPayload {
                 selector_count(&part.node_selector)
             },
             node_indices: part.node_indices.clone(),
-            surface_faces: part.surface_faces.clone(),
+            facet_global_ordinals: part.facet_global_ordinals.clone(),
             bounds_min: part.bounds_min,
             bounds_max: part.bounds_max,
         }
@@ -3122,7 +3112,7 @@ mod tests {
     }
 
     #[test]
-    fn fem_mesh_topology_fingerprint_changes_for_mesh_part_node_indices() {
+    fn fem_mesh_topology_fingerprint_excludes_non_topological_mesh_parts() {
         let base = FemMeshPayload::from(&tiny_fem_plan());
         let mut repartitioned = base.clone();
         repartitioned.mesh_parts.push(FemMeshPartPayload {
@@ -3140,12 +3130,12 @@ mod tests {
             node_start: 0,
             node_count: 4,
             node_indices: vec![0, 1, 2, 3],
-            surface_faces: Vec::new(),
+            facet_global_ordinals: Vec::new(),
             bounds_min: None,
             bounds_max: None,
         });
 
-        assert_ne!(
+        assert_eq!(
             fem_mesh_topology_fingerprint(&base),
             fem_mesh_topology_fingerprint(&repartitioned)
         );
@@ -3190,7 +3180,7 @@ mod tests {
             node_selector: FemMeshPartSelector::NodeRange { start: 4, count: 1 },
             boundary_face_indices: Vec::new(),
             node_indices: vec![0, 1, 2, 4],
-            surface_faces: Vec::new(),
+            facet_global_ordinals: Vec::new(),
             bounds_min: None,
             bounds_max: None,
             parent_id: None,
@@ -3379,11 +3369,13 @@ mod tests {
             Box::new(|mesh| mesh.cells.types[0] = fullmag_ir::FemCellTypeIR::Prism6),
             Box::new(|mesh| mesh.cells.offsets[1] += 1),
             Box::new(|mesh| mesh.cells.nodes[0] += 1),
+            Box::new(|mesh| mesh.cells.global_ordinals[0] += 1),
             Box::new(|mesh| mesh.element_markers[0] += 1),
             Box::new(|mesh| mesh.facets.types[0] = fullmag_ir::FemFacetTypeIR::Quad4),
             Box::new(|mesh| mesh.facets.roles[0] = fullmag_ir::FemFacetRoleIR::MaterialInterface),
             Box::new(|mesh| mesh.facets.offsets[1] += 1),
             Box::new(|mesh| mesh.facets.nodes[0] += 1),
+            Box::new(|mesh| mesh.facets.global_ordinals[0] += 1),
             Box::new(|mesh| mesh.boundary_markers[0] += 1),
         ];
         for mutate in mutations {
@@ -3412,6 +3404,8 @@ mod tests {
             normalized.facets.types,
             vec![fullmag_ir::FemFacetTypeIR::Tri3]
         );
+        assert_eq!(normalized.cells.global_ordinals, vec![0]);
+        assert_eq!(normalized.facets.global_ordinals, vec![0]);
         let normalized_value = serde_json::to_value(normalized).unwrap();
         assert!(normalized_value.get("elements").is_none());
         assert!(normalized_value.get("boundary_faces").is_none());

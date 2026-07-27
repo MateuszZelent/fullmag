@@ -2189,7 +2189,7 @@ mod tests {
             node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 3 },
             boundary_face_indices: Vec::new(),
             node_indices: vec![1, 3, 5],
-            surface_faces: Vec::new(),
+            facet_global_ordinals: Vec::new(),
             bounds_min: None,
             bounds_max: None,
             parent_id: None,

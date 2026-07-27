@@ -3082,8 +3082,11 @@ fn rebuild_live_scene_magnetization(
         let element_start = segment.element_start as usize;
         let element_end = element_start
             .saturating_add(segment.element_count as usize)
-            .min(mesh.elements.len());
-        for element in &mesh.elements[element_start..element_end] {
+            .min(mesh.cell_count());
+        for element_index in element_start..element_end {
+            let Some(element) = mesh.cells.item_nodes(element_index) else {
+                continue;
+            };
             for node in element {
                 let node = *node as usize;
                 if node < node_count && node_owner[node].is_none() {
@@ -3844,7 +3847,7 @@ fn build_spatial_preview_state(
             preview_grid: [vectors.len(), 1, 1],
             fem_mesh: Some(mesh.clone()),
             original_node_count: Some(mesh.nodes.len()),
-            original_face_count: Some(mesh.boundary_faces.len()),
+            original_face_count: Some(mesh.facet_count()),
             active_mask,
         }));
     }
@@ -4136,7 +4139,7 @@ fn build_preview_state_from_live_field(
             preview_grid,
             fem_mesh: Some(mesh.clone()),
             original_node_count: Some(mesh.nodes.len()),
-            original_face_count: Some(mesh.boundary_faces.len()),
+            original_face_count: Some(mesh.facet_count()),
             active_mask,
         }));
     }

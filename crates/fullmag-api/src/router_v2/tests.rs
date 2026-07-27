@@ -171,9 +171,9 @@ fn sample_fem_mesh_payload() -> FemMeshPayload {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![7],
-        boundary_faces: vec![[0, 1, 2]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
         boundary_markers: vec![3],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -207,9 +207,9 @@ fn regular_tetra_fem_mesh_payload() -> FemMeshPayload {
             [0.5, 3.0_f64.sqrt() / 2.0, 0.0],
             [0.5, 3.0_f64.sqrt() / 6.0, h],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![7],
-        boundary_faces: vec![[0, 1, 2]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
         boundary_markers: vec![3],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -250,7 +250,7 @@ fn sample_fem_mesh_payload_with_manifest() -> FemMeshPayload {
             node_start: 0,
             node_count: 0,
             node_indices: vec![],
-            surface_faces: vec![],
+            facet_global_ordinals: vec![],
             bounds_min: Some([-1.0, -1.0, -1.0]),
             bounds_max: Some([2.0, 2.0, 2.0]),
         },
@@ -269,7 +269,7 @@ fn sample_fem_mesh_payload_with_manifest() -> FemMeshPayload {
             node_start: 0,
             node_count: 4,
             node_indices: vec![0, 1, 2, 3],
-            surface_faces: vec![[0, 1, 2]],
+            facet_global_ordinals: vec![0],
             bounds_min: Some([0.0, 0.0, 0.0]),
             bounds_max: Some([1.0, 1.0, 1.0]),
         },
@@ -287,9 +287,9 @@ fn sample_periodic_fem_mesh_payload() -> FemMeshPayload {
         [0.0, 0.0, 1.0e-6],
         [1.0e-6, 0.0, 1.0e-6],
     ];
-    mesh.elements = vec![[0, 1, 2, 3], [0, 1, 4, 5]];
+    mesh.set_tet4_cells(vec![[0, 1, 2, 3], [0, 1, 4, 5]]);
     mesh.element_markers = vec![7, 0];
-    mesh.boundary_faces = vec![[0, 2, 4], [1, 5, 3]];
+    mesh.set_tri3_facets(vec![[0, 2, 4], [1, 5, 3]]);
     mesh.boundary_markers = vec![10, 11];
     mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
         pair_id: "x_periodic".to_string(),
@@ -337,9 +337,9 @@ fn sample_scoped_fem_mesh_payload() -> FemMeshPayload {
             [-1.0, 2.0, -1.0],
             [-1.0, -1.0, 2.0],
         ],
-        elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
         element_markers: vec![7, 8],
-        boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
         boundary_markers: vec![3, 4],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -381,7 +381,7 @@ fn sample_scoped_fem_mesh_payload() -> FemMeshPayload {
                 node_start: 0,
                 node_count: 4,
                 node_indices: vec![0, 1, 2, 3],
-                surface_faces: vec![[0, 1, 2]],
+                facet_global_ordinals: vec![0],
                 bounds_min: Some([0.0, 0.0, 0.0]),
                 bounds_max: Some([1.0, 1.0, 1.0]),
             },
@@ -400,7 +400,7 @@ fn sample_scoped_fem_mesh_payload() -> FemMeshPayload {
                 node_start: 4,
                 node_count: 4,
                 node_indices: vec![4, 5, 6, 7],
-                surface_faces: vec![[4, 5, 6]],
+                facet_global_ordinals: vec![1],
                 bounds_min: Some([-1.0, -1.0, -1.0]),
                 bounds_max: Some([2.0, 2.0, 2.0]),
             },
@@ -469,9 +469,9 @@ fn sample_fem_neel_skyrmion_mesh_and_values(
         mesh_name: "skyrmion-test-mesh".to_string(),
         mesh_id: "skyrmion-test-mesh:1".to_string(),
         nodes,
-        elements,
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(elements),
         element_markers: vec![1; (grid - 1) * (grid - 1) * 6],
-        boundary_faces: Vec::new(),
+        facets: fullmag_ir::FemFacetConnectivityIR::empty(),
         boundary_markers: Vec::new(),
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -500,7 +500,7 @@ fn sample_fem_neel_skyrmion_mesh_and_values(
             node_start: 0,
             node_count: node_indices.len() as u32,
             node_indices,
-            surface_faces: Vec::new(),
+            facet_global_ordinals: Vec::new(),
             bounds_min: Some([-span * 0.5, -span * 0.5, -half_thickness]),
             bounds_max: Some([span * 0.5, span * 0.5, half_thickness]),
         }],
@@ -535,9 +535,9 @@ fn sample_shared_node_airbox_mesh_payload() -> FemMeshPayload {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 1, 2, 4]]),
         element_markers: vec![7, 0],
-        boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 3], [0, 1, 4]]),
         boundary_markers: vec![3, 4],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -557,7 +557,7 @@ fn sample_shared_node_airbox_mesh_payload() -> FemMeshPayload {
             node_start: 4,
             node_count: 4,
             node_indices: vec![0, 1, 2, 4],
-            surface_faces: vec![[0, 1, 4]],
+            facet_global_ordinals: vec![1],
             bounds_min: Some([0.0, 0.0, -1.0]),
             bounds_max: Some([1.0, 1.0, 0.0]),
         }],
@@ -6760,6 +6760,37 @@ async fn mesh_shared_domain_topology_returns_binary_fmmt_payload() {
 }
 
 #[tokio::test]
+async fn mesh_shared_domain_topology_rejects_mixed_cells_for_fmmt_v1() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload();
+        mesh.nodes.extend([[1.0, 1.0, 0.0], [1.0, 0.0, 1.0]]);
+        mesh.cells = fullmag_ir::FemConnectivityIR {
+            types: vec![fullmag_ir::FemCellTypeIR::Prism6],
+            offsets: vec![0, 6],
+            nodes: vec![0, 1, 2, 3, 4, 5],
+            global_ordinals: vec![901],
+        };
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/topology")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body = body_json(response).await;
+    assert!(body.to_string().contains("FMMT v1 requires tet4 topology"));
+}
+
+#[tokio::test]
 async fn mesh_shared_domain_cross_section_returns_binary_fmcs_payload() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -7096,7 +7127,7 @@ async fn mesh_shared_domain_manifest_includes_topology_fingerprint() {
 async fn mesh_shared_domain_manifest_includes_derived_surface_node_membership() {
     let state = test_app_state_with_live_session().await;
     let mut mesh = sample_scoped_fem_mesh_payload();
-    mesh.mesh_parts[1].surface_faces.clear();
+    mesh.mesh_parts[1].facet_global_ordinals.clear();
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.fem_mesh = Some(mesh);
     }
@@ -7531,9 +7562,9 @@ async fn mesh_periodic_pairs_marks_matching_topology_artifact_stale_after_scene_
     let topology_fingerprint = fullmag_ir::MeshIR {
         mesh_name: mesh.mesh_name.clone(),
         nodes: mesh.nodes.clone(),
-        elements: mesh.elements.clone(),
+        cells: mesh.cells.clone(),
         element_markers: mesh.element_markers.clone(),
-        boundary_faces: mesh.boundary_faces.clone(),
+        facets: mesh.facets.clone(),
         boundary_markers: mesh.boundary_markers.clone(),
         periodic_boundary_pairs: mesh.periodic_boundary_pairs.clone(),
         periodic_node_pairs: mesh.periodic_node_pairs.clone(),
@@ -7618,9 +7649,9 @@ async fn mesh_periodic_pairs_rejects_artifact_with_mismatched_marker_certificate
     let mesh_ir = fullmag_ir::MeshIR {
         mesh_name: mesh.mesh_name.clone(),
         nodes: mesh.nodes.clone(),
-        elements: mesh.elements.clone(),
+        cells: mesh.cells.clone(),
         element_markers: mesh.element_markers.clone(),
-        boundary_faces: mesh.boundary_faces.clone(),
+        facets: mesh.facets.clone(),
         boundary_markers: mesh.boundary_markers.clone(),
         periodic_boundary_pairs: mesh.periodic_boundary_pairs.clone(),
         periodic_node_pairs: mesh.periodic_node_pairs.clone(),
@@ -7691,7 +7722,9 @@ async fn mesh_periodic_pairs_does_not_publish_nearest_face_with_excessive_residu
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         let mut mesh = sample_periodic_fem_mesh_payload();
-        mesh.boundary_faces[1] = [1, 5, 4];
+        let mut faces = mesh.require_tri3_boundary_faces().unwrap();
+        faces[1] = [1, 5, 4];
+        mesh.set_tri3_facets(faces);
         snapshot.fem_mesh = Some(mesh);
         snapshot.mesh_revision = 44;
     }
@@ -8259,7 +8292,7 @@ async fn mesh_shared_domain_manifest_returns_tree_metadata() {
             node_start: 0,
             node_count: 4,
             node_indices: vec![0, 1, 2, 3],
-            surface_faces: vec![[0, 1, 2]],
+            facet_global_ordinals: vec![0],
             bounds_min: Some([0.25, 0.25, 0.25]),
             bounds_max: Some([0.75, 0.75, 0.75]),
         });
@@ -8362,7 +8395,7 @@ async fn mesh_region_membership_returns_indices_for_mesh_backed_region() {
             node_start: 0,
             node_count: 4,
             node_indices: vec![0, 1, 2, 3],
-            surface_faces: vec![[0, 1, 2]],
+            facet_global_ordinals: vec![0],
             bounds_min: Some([0.25, 0.25, 0.25]),
             bounds_max: Some([0.75, 0.75, 0.75]),
         });
@@ -8467,7 +8500,7 @@ async fn mesh_region_quality_returns_scoped_size_and_quality_distributions() {
             node_start: 0,
             node_count: 4,
             node_indices: vec![0, 1, 2, 3],
-            surface_faces: vec![[0, 1, 2]],
+            facet_global_ordinals: vec![0],
             bounds_min: Some([0.25, 0.25, 0.25]),
             bounds_max: Some([0.75, 0.75, 0.75]),
         });
@@ -8860,7 +8893,7 @@ async fn mesh_region_memberships_lists_available_authored_region_memberships() {
             node_start: 0,
             node_count: 4,
             node_indices: vec![0, 1, 2, 3],
-            surface_faces: vec![[0, 1, 2]],
+            facet_global_ordinals: vec![0],
             bounds_min: Some([0.25, 0.25, 0.25]),
             bounds_max: Some([0.75, 0.75, 0.75]),
         });
@@ -12746,13 +12779,13 @@ async fn authoring_coupling_resource_resolves_bbox_surface_from_current_fem_mesh
     mesh.nodes[0] = [0.0, 0.0, 1.0];
     mesh.nodes[1] = [1.0, 0.0, 1.0];
     mesh.nodes[2] = [0.0, 1.0, 1.0];
-    mesh.boundary_faces[0] = [0, 1, 2];
+    mesh.set_tri3_facets(vec![[0, 1, 2]]);
     if let Some(body_part) = mesh
         .mesh_parts
         .iter_mut()
         .find(|part| part.object_id.as_deref() == Some("body"))
     {
-        body_part.surface_faces = vec![[0, 1, 2]];
+        body_part.facet_global_ordinals = vec![0];
     }
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(scene);
@@ -12825,7 +12858,7 @@ async fn authoring_coupling_resource_blocks_surface_without_boundary_markers() {
     mesh.nodes[0] = [0.0, 0.0, 1.0];
     mesh.nodes[1] = [1.0, 0.0, 1.0];
     mesh.nodes[2] = [0.0, 1.0, 1.0];
-    mesh.boundary_faces.clear();
+    mesh.facets = fullmag_ir::FemFacetConnectivityIR::empty();
     mesh.boundary_markers.clear();
     if let Some(body_part) = mesh
         .mesh_parts
@@ -12835,7 +12868,7 @@ async fn authoring_coupling_resource_blocks_surface_without_boundary_markers() {
         body_part.boundary_face_start = 0;
         body_part.boundary_face_count = 0;
         body_part.boundary_face_indices.clear();
-        body_part.surface_faces = vec![[0, 1, 2]];
+        body_part.facet_global_ordinals = vec![0];
     }
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(scene);
@@ -12899,7 +12932,7 @@ async fn authoring_coupling_resource_does_not_treat_unknown_mesh_part_as_magneti
     mesh.nodes[0] = [0.0, 0.0, 1.0];
     mesh.nodes[1] = [1.0, 0.0, 1.0];
     mesh.nodes[2] = [0.0, 1.0, 1.0];
-    mesh.boundary_faces[0] = [0, 1, 2];
+    mesh.set_tri3_facets(vec![[0, 1, 2]]);
     mesh.mesh_parts[1].role = "unsupported_role".to_string();
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(scene);
@@ -18263,9 +18296,9 @@ async fn object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_node
                         [1.0, 1.0, 0.0],
                         [1.0, 0.0, 1.0],
                     ],
-                    elements: vec![[1, 3, 5, 0]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[1, 3, 5, 0]]),
                     element_markers: vec![7],
-                    boundary_faces: vec![[1, 3, 5]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[1, 3, 5]]),
                     boundary_markers: vec![3],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -18294,7 +18327,7 @@ async fn object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_node
                         node_start: 0,
                         node_count: 3,
                         node_indices: vec![1, 3, 5],
-                        surface_faces: vec![[1, 3, 5]],
+                        facet_global_ordinals: vec![0],
                         bounds_min: Some([0.0, 0.0, 0.0]),
                         bounds_max: Some([1.0, 1.0, 1.0]),
                     }],
@@ -20366,9 +20399,9 @@ async fn test_router_with_mock_field_fem_without_topology() -> axum::Router {
             mesh_name: "fem-empty-topology".to_string(),
             mesh_id: "fem-empty-topology:1".to_string(),
             nodes: Vec::new(),
-            elements: Vec::new(),
+            cells: fullmag_ir::FemConnectivityIR::empty(),
             element_markers: Vec::new(),
-            boundary_faces: Vec::new(),
+            facets: fullmag_ir::FemFacetConnectivityIR::empty(),
             boundary_markers: Vec::new(),
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -25116,7 +25149,7 @@ async fn topological_charge_computes_uniform_fem_object_from_native_layer_faces(
     let object_id = scene.objects[0].id.clone();
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         let mut mesh = sample_scoped_fem_mesh_payload();
-        mesh.mesh_parts[0].surface_faces.clear();
+        mesh.mesh_parts[0].facet_global_ordinals.clear();
         snapshot.scene_document = Some(scene);
         snapshot.session.plan_summary = serde_json::json!({ "fe_order": 1 });
         snapshot.mesh_revision = 17;
@@ -25248,7 +25281,7 @@ async fn topological_charge_reports_degenerate_support_when_no_volume_sampler_is
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         let mut mesh = sample_scoped_fem_mesh_payload();
         mesh.mesh_parts[0].element_count = 0;
-        mesh.mesh_parts[0].surface_faces.clear();
+        mesh.mesh_parts[0].facet_global_ordinals.clear();
         snapshot.scene_document = Some(scene);
         snapshot.session.plan_summary = serde_json::json!({ "fe_order": 1 });
         snapshot.fem_mesh = Some(mesh);
@@ -25816,7 +25849,7 @@ async fn v2_field_vector_rejects_airbox_surface_without_surface_membership() {
             .iter_mut()
             .find(|part| part.role == "air")
             .expect("sample mesh should include airbox");
-        airbox.surface_faces.clear();
+        airbox.facet_global_ordinals.clear();
         airbox.boundary_face_indices.clear();
         airbox.boundary_face_count = 0;
         snapshot.fem_mesh = Some(mesh);
@@ -25967,7 +26000,7 @@ async fn v2_field_vector_object_scope_fallback_uses_segment_element_nodes() {
         mesh.mesh_parts.clear();
         mesh.object_segments[0].node_start = 3;
         mesh.object_segments[0].node_count = 1;
-        mesh.elements[0] = [0, 1, 2, 3];
+        mesh.set_tet4_cells(vec![[0, 1, 2, 3]]);
         snapshot.fem_mesh = Some(mesh);
         snapshot.latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
@@ -26118,6 +26151,7 @@ async fn v2_mesh_part_topology_returns_scoped_mesh() {
     let full_len = crate::field_store::serialize_fem_mesh_topology_binary_v1(
         &sample_scoped_fem_mesh_payload(),
     )
+    .unwrap()
     .len();
     assert!(
         bytes.len() < full_len,

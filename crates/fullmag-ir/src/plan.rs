@@ -738,7 +738,7 @@ pub struct FemMeshPartIR {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub node_indices: Vec<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub surface_faces: Vec<[u32; 3]>,
+    pub facet_global_ordinals: Vec<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds_min: Option<[f64; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

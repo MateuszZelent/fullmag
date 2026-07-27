@@ -1389,6 +1389,7 @@ fn average_fem_magnetization_by_element_volume(
     values: &[f64],
     mesh: &fullmag_runner::FemMeshPayload,
 ) -> Option<[f64; 3]> {
+    let tet_elements = mesh.require_tet4_elements().ok()?;
     let point_count = values.len() / 3;
     let mut total = [0.0; 3];
     let mut total_weight = 0.0;
@@ -1399,7 +1400,7 @@ fn average_fem_magnetization_by_element_volume(
         }
         let start = part.element_start as usize;
         let end = start.saturating_add(part.element_count as usize);
-        let Some(elements) = mesh.elements.get(start..end) else {
+        let Some(elements) = tet_elements.get(start..end) else {
             continue;
         };
         for element in elements {

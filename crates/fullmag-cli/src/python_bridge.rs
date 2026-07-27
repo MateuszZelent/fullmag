@@ -250,6 +250,8 @@ struct RemeshTopologyWire {
     #[serde(default)]
     cell_nodes: Option<Vec<u32>>,
     #[serde(default)]
+    cell_global_ordinals: Option<Vec<u64>>,
+    #[serde(default)]
     facet_types: Option<Vec<fullmag_ir::FemFacetTypeIR>>,
     #[serde(default)]
     facet_roles: Option<Vec<fullmag_ir::FemFacetRoleIR>>,
@@ -257,6 +259,8 @@ struct RemeshTopologyWire {
     facet_offsets: Option<Vec<u32>>,
     #[serde(default)]
     facet_nodes: Option<Vec<u32>>,
+    #[serde(default)]
+    facet_global_ordinals: Option<Vec<u64>>,
     #[serde(default)]
     elements: Option<Vec<[u32; 4]>>,
     #[serde(default)]
@@ -276,20 +280,29 @@ impl RemeshTopologyWire {
         let has_v2 = self.cell_types.is_some()
             || self.cell_offsets.is_some()
             || self.cell_nodes.is_some()
+            || self.cell_global_ordinals.is_some()
             || self.facet_types.is_some()
             || self.facet_roles.is_some()
             || self.facet_offsets.is_some()
-            || self.facet_nodes.is_some();
+            || self.facet_nodes.is_some()
+            || self.facet_global_ordinals.is_some();
         let has_legacy = self.elements.is_some() || self.boundary_faces.is_some();
         if has_v2 && has_legacy {
             return Err("remesh payload contains both legacy and v2 topology".to_string());
         }
         if has_v2 {
+            let cell_types = self
+                .cell_types
+                .ok_or_else(|| "v2 remesh topology requires cell_types".to_string())?;
+            let facet_types = self
+                .facet_types
+                .ok_or_else(|| "v2 remesh topology requires facet_types".to_string())?;
             return Ok((
                 fullmag_ir::FemConnectivityIR {
-                    types: self
-                        .cell_types
-                        .ok_or_else(|| "v2 remesh topology requires cell_types".to_string())?,
+                    global_ordinals: self
+                        .cell_global_ordinals
+                        .unwrap_or_else(|| (0..cell_types.len() as u64).collect()),
+                    types: cell_types,
                     offsets: self
                         .cell_offsets
                         .ok_or_else(|| "v2 remesh topology requires cell_offsets".to_string())?,
@@ -298,9 +311,10 @@ impl RemeshTopologyWire {
                         .ok_or_else(|| "v2 remesh topology requires cell_nodes".to_string())?,
                 },
                 fullmag_ir::FemFacetConnectivityIR {
-                    types: self
-                        .facet_types
-                        .ok_or_else(|| "v2 remesh topology requires facet_types".to_string())?,
+                    global_ordinals: self
+                        .facet_global_ordinals
+                        .unwrap_or_else(|| (0..facet_types.len() as u64).collect()),
+                    types: facet_types,
                     roles: self
                         .facet_roles
                         .ok_or_else(|| "v2 remesh topology requires facet_roles".to_string())?,

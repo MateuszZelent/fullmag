@@ -58,8 +58,8 @@ pub async fn get_domain_meta(
         (
             None,
             Some(m.nodes.len() as u64),
-            Some(m.elements.len() as u64),
-            Some(m.boundary_faces.len() as u64),
+            Some(m.cell_count() as u64),
+            Some(m.facet_count() as u64),
         )
     } else {
         (
@@ -226,7 +226,7 @@ pub async fn get_domain_topology(
 
     match snapshot.fem_mesh.as_ref() {
         Some(mesh) => {
-            let binary = serialize_fem_mesh_topology_binary_v1(mesh);
+            let binary = serialize_fem_mesh_topology_binary_v1(mesh).map_err(ApiError::conflict)?;
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
             let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
             let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
@@ -272,6 +272,11 @@ pub async fn get_domain_slice_mesh_overlay(
     let Some(mesh) = snapshot.fem_mesh.as_ref() else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
+    let elements = mesh.require_tet4_elements().map_err(|error| {
+        ApiError::conflict(format!(
+            "FMMT v1 domain slice requires tet4 topology: {error}"
+        ))
+    })?;
 
     let resolved = resolve_slice_query(
         &FieldSliceQuery {
@@ -291,7 +296,7 @@ pub async fn get_domain_slice_mesh_overlay(
     let overlay = collect_fem_slice_overlay(
         FemSliceOverlayInput {
             nodes: &mesh.nodes,
-            elements: &mesh.elements,
+            elements: &elements,
             element_markers: &mesh.element_markers,
         },
         &resolved,

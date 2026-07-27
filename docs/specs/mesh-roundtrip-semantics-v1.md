@@ -37,6 +37,11 @@ Render controls can affect what is displayed in viewport only; they are not allo
 - `solver_mesh` is a derived artifact/reference, not a replacement for authoring intent.
 - `solver_mesh` must expose identity/provenance fields (`mesh_name`, `mesh_id`,
   `generation_id`, `domain_mesh_mode`) and diagnostics/build summary linkage.
+- Canonical v2 cell and facet records carry immutable `global_ordinal` identities.
+  Filtering, grouping, packing, slicing, serialization, and artifact selection preserve those
+  identities. Combining multiple independently authored meshes creates a new canonical mesh
+  namespace, so merge assigns a new unique sequential ordinal set instead of retaining colliding
+  source ordinals; the merged mesh identity and fingerprint therefore describe a new realization.
 
 ## 4. Resource-First API Projection
 

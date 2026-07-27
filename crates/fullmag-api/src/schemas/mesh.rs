@@ -600,7 +600,7 @@ pub struct MeshPartResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub surface_node_indices: Option<Vec<u32>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub surface_faces: Vec<[u32; 3]>,
+    pub facet_global_ordinals: Vec<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bounds_min: Option<[f64; 3]>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -625,7 +625,7 @@ impl From<&FemMeshPartPayload> for MeshPartResource {
             node_count: value.node_count,
             node_indices: value.node_indices.clone(),
             surface_node_indices: None,
-            surface_faces: value.surface_faces.clone(),
+            facet_global_ordinals: value.facet_global_ordinals.clone(),
             bounds_min: value.bounds_min,
             bounds_max: value.bounds_max,
         }

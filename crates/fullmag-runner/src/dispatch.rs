@@ -598,7 +598,7 @@ fn validate_runtime_initial_magnetization(plan: &FemPlanIR) -> Result<(), RunErr
         let marker = plan
             .mesh
             .element_markers
-            .get(cell.global_ordinal)
+            .get(cell.ordinal)
             .copied()
             .unwrap_or(1);
         if marker == 0 {
@@ -4493,11 +4493,7 @@ fn eigen_path_periodic_domain_node_pair_counts(mesh: &fullmag_ir::MeshIR) -> (u6
     let mut magnetic_nodes = BTreeSet::new();
     let mut airbox_nodes = BTreeSet::new();
     for cell in mesh.cells.iter() {
-        let marker = mesh
-            .element_markers
-            .get(cell.global_ordinal)
-            .copied()
-            .unwrap_or(1);
+        let marker = mesh.element_markers.get(cell.ordinal).copied().unwrap_or(1);
         let target = if marker == 0 {
             &mut airbox_nodes
         } else {
@@ -9384,7 +9380,7 @@ mod tests {
                 node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 0 },
                 boundary_face_indices: Vec::new(),
                 node_indices: Vec::new(),
-                surface_faces: Vec::new(),
+                facet_global_ordinals: Vec::new(),
                 bounds_min: None,
                 bounds_max: None,
                 parent_id: None,
@@ -9404,7 +9400,7 @@ mod tests {
                 node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 0 },
                 boundary_face_indices: Vec::new(),
                 node_indices: Vec::new(),
-                surface_faces: Vec::new(),
+                facet_global_ordinals: Vec::new(),
                 bounds_min: None,
                 bounds_max: None,
                 parent_id: None,
@@ -9424,7 +9420,7 @@ mod tests {
                 node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 0 },
                 boundary_face_indices: Vec::new(),
                 node_indices: Vec::new(),
-                surface_faces: Vec::new(),
+                facet_global_ordinals: Vec::new(),
                 bounds_min: None,
                 bounds_max: None,
                 parent_id: None,
@@ -9460,7 +9456,7 @@ mod tests {
                 node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 4 },
                 boundary_face_indices: Vec::new(),
                 node_indices: Vec::new(),
-                surface_faces: Vec::new(),
+                facet_global_ordinals: Vec::new(),
                 bounds_min: None,
                 bounds_max: None,
                 parent_id: None,
@@ -9480,7 +9476,7 @@ mod tests {
                 node_selector: FemMeshPartSelector::NodeRange { start: 1, count: 4 },
                 boundary_face_indices: Vec::new(),
                 node_indices: Vec::new(),
-                surface_faces: Vec::new(),
+                facet_global_ordinals: Vec::new(),
                 bounds_min: None,
                 bounds_max: None,
                 parent_id: None,
