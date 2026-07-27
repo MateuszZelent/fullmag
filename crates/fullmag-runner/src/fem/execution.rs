@@ -36,7 +36,6 @@ use crate::schedules::collect_field_schedules;
 use crate::solver_runtime::diagnostics::runtime_info_once;
 use crate::solver_runtime::diagnostics::runtime_log_once;
 use crate::solver_runtime::engine::FemEngine;
-use crate::solver_runtime::selection::should_fallback_to_cpu_for_small_fem_gpu;
 use crate::types::{ExecutedRun, LiveStepConsumer, RunError};
 #[cfg(feature = "fem-gpu")]
 use crate::types::{ExecutionProvenance, StepStats};
@@ -101,26 +100,6 @@ pub(crate) fn execute_fem<'a>(
             execute_native_fem(&cpu_plan, &fem_mesh_generation_id, until_seconds, outputs, live, artifact_writer)
         }
         FemEngine::NativeGpu => {
-            if let Some(min_nodes) = should_fallback_to_cpu_for_small_fem_gpu(&normalized_plan) {
-                eprintln!(
-                    "warning: FEM plan has {} nodes, below FULLMAG_FEM_GPU_MIN_NODES={} — \
-                     falling back to MFEM/libCEED/hypre CPU FEM engine \
-                     (fallback_reason=fem_gpu_small_mesh_policy; \
-                     set FULLMAG_FEM_EXECUTION=gpu to force GPU or \
-                     FULLMAG_FEM_GPU_MIN_NODES=0 to disable this policy)",
-                    normalized_plan.mesh.nodes.len(),
-                    min_nodes
-                );
-                let cpu_plan = fem_plan_for_cpu_native(&normalized_plan);
-                return execute_native_fem(
-                    &cpu_plan,
-                    &fem_mesh_generation_id,
-                    until_seconds,
-                    outputs,
-                    live,
-                    artifact_writer,
-                );
-            }
             let gpu_plan = fem_plan_for_native_gpu(&normalized_plan);
             execute_native_fem(&gpu_plan, &fem_mesh_generation_id, until_seconds, outputs, live, artifact_writer)
         }

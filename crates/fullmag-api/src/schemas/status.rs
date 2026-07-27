@@ -61,6 +61,13 @@ pub struct RunSummary {
     pub started_at: String,
     pub solver_steps: u64,
     pub solver_time: f64,
+    pub requested_device: String,
+    pub resolved_device: String,
+    pub selection_reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calibration_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_confidence: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

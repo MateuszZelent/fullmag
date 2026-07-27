@@ -2183,6 +2183,7 @@ pub(crate) fn requested_runtime_selection(
         resolved_worker: None,
         resolved_cpu_threads: None,
         resolved_fallback: None,
+        fem_crossover_decision: None,
     }
 }
 
@@ -2221,6 +2222,7 @@ fn session_runtime_selection_for_problem(
             selection.resolved_worker = resolved.resolved_worker;
             selection.resolved_cpu_threads = u32::try_from(resolved.resolved_cpu_threads).ok();
             selection.resolved_fallback = resolved.resolved_fallback;
+            selection.fem_crossover_decision = resolved.fem_crossover_decision;
         }
         Err(_) => {
             selection.requested_backend = fallback_requested_backend.to_string();
@@ -5037,6 +5039,7 @@ pub(crate) fn build_session_manifest(
         resolved_worker: runtime.resolved_worker.clone(),
         resolved_cpu_threads: runtime.resolved_cpu_threads,
         resolved_fallback: runtime.resolved_fallback.clone(),
+        fem_crossover_decision: runtime.fem_crossover_decision.clone(),
         artifact_dir: artifact_dir.display().to_string(),
         started_at_unix_ms,
         finished_at_unix_ms,

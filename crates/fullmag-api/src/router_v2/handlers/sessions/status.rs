@@ -92,6 +92,7 @@ pub(crate) fn build_live_status(
 
     let run = snapshot.run.as_ref().map(|r| {
         let stage_exec = snapshot.stage_execution.as_ref();
+        let crossover = snapshot.session.fem_crossover_decision.as_ref();
         RunSummary {
             run_id: r.run_id.clone(),
             stage_index: stage_exec.and_then(|se| se.active_stage_index).unwrap_or(0) as u32,
@@ -105,6 +106,24 @@ pub(crate) fn build_live_status(
                 .final_time
                 .or_else(|| snapshot.live_state.as_ref().map(|ls| ls.latest_step.time))
                 .unwrap_or(0.0),
+            requested_device: snapshot.session.requested_device.clone(),
+            resolved_device: snapshot
+                .session
+                .resolved_device
+                .clone()
+                .unwrap_or_else(|| snapshot.session.requested_device.clone()),
+            selection_reason: crossover
+                .map(|decision| decision.reason.clone())
+                .or_else(|| {
+                    snapshot
+                        .session
+                        .resolved_fallback
+                        .as_ref()
+                        .map(|fallback| fallback.reason.clone())
+                })
+                .unwrap_or_else(|| "explicit_device_request".to_string()),
+            calibration_id: crossover.and_then(|decision| decision.calibration_id.clone()),
+            selection_confidence: crossover.and_then(|decision| decision.confidence),
         }
     });
 

@@ -113,6 +113,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
         cuda_runtime_version: None,
         lossy_fallback_used: false,
         resolved_fallback: None,
+        fem_crossover_decision: None,
         ignored_terms: Vec::new(),
         random_seed: None,
         requested_integrator: None,

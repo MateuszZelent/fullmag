@@ -6895,7 +6895,13 @@ export interface components {
          */
         RestoreClass: "exact_resume" | "logical_resume" | "initial_condition_import" | "config_only";
         RunSummary: {
+            calibration_id?: string | null;
+            requested_device: string;
+            resolved_device: string;
             run_id: string;
+            /** Format: double */
+            selection_confidence?: number | null;
+            selection_reason: string;
             /** Format: int64 */
             solver_steps: number;
             /** Format: double */

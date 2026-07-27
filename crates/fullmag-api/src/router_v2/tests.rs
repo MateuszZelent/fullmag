@@ -685,6 +685,7 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
         resolved_worker: None,
         resolved_cpu_threads: None,
         resolved_fallback: None,
+        fem_crossover_decision: None,
         artifact_dir: ".".into(),
         started_at_unix_ms: 1_700_000_000_000,
         finished_at_unix_ms: 0,
@@ -1393,6 +1394,7 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
         resolved_worker: None,
         resolved_cpu_threads: None,
         resolved_fallback: None,
+        fem_crossover_decision: None,
         artifact_dir: artifact_dir.display().to_string(),
         started_at_unix_ms: 1_700_000_000_000,
         finished_at_unix_ms: 0,
@@ -1520,6 +1522,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         resolved_worker: None,
         resolved_cpu_threads: None,
         resolved_fallback: None,
+        fem_crossover_decision: None,
         artifact_dir: repo_root.join("artifacts").display().to_string(),
         started_at_unix_ms: 1_700_000_000_000,
         finished_at_unix_ms: 0,
@@ -2040,6 +2043,57 @@ async fn status_returns_200_with_live_session() {
     assert!(json["capabilities"].is_object());
     assert!(json["energies"].is_object());
     assert!(json["metrics"].is_object());
+}
+
+#[tokio::test]
+async fn status_exposes_fem_auto_device_crossover_decision() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.requested_device = "auto".into();
+        snapshot.session.resolved_device = Some("cpu".into());
+        snapshot.session.fem_crossover_decision = Some(fullmag_runner::FemCrossoverDecision {
+            requested: "auto".into(),
+            resolved: "cpu".into(),
+            reason: "calibrated_below_lower_bound".into(),
+            calibration_id: Some("test-calibration".into()),
+            confidence: Some(0.95),
+        });
+        snapshot.run = Some(RunManifest {
+            run_id: "run-crossover".into(),
+            session_id: snapshot.session.session_id.clone(),
+            status: "running".into(),
+            total_steps: 0,
+            final_time: Some(0.0),
+            final_e_ex: None,
+            final_e_demag: None,
+            final_e_ext: None,
+            final_e_ani: None,
+            final_e_dmi: None,
+            final_e_total: None,
+            artifact_dir: "/tmp/fullmag-tests".into(),
+        });
+    }
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["run"]["requested_device"], "auto");
+    assert_eq!(json["run"]["resolved_device"], "cpu");
+    assert_eq!(
+        json["run"]["selection_reason"],
+        "calibrated_below_lower_bound"
+    );
+    assert_eq!(json["run"]["calibration_id"], "test-calibration");
+    assert_eq!(json["run"]["selection_confidence"], 0.95);
 }
 
 #[tokio::test]

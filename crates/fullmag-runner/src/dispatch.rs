@@ -67,6 +67,9 @@ use crate::schedules::{
 #[cfg(all(feature = "fem-gpu", not(feature = "cuda")))]
 use crate::schedules::{collect_field_schedules, OutputSchedule};
 pub(crate) use crate::solver_runtime::engine::{EngineResolution, FdmEngine};
+use crate::solver_runtime::fem_crossover::{
+    features_from_plan, resolve_auto_fem_plan_device, FemCrossoverFeatures,
+};
 pub(crate) use crate::solver_runtime::selection::{
     resolve_fdm_engine, resolve_fdm_engine_with_trail,
 };
@@ -778,6 +781,7 @@ fn fem_gpu_relaxation_cpu_only_error(algorithm: RelaxationAlgorithmIR) -> RunErr
 }
 
 fn apply_fem_gpu_plan_constraints(
+    problem: &ProblemIR,
     plan: &FemPlanIR,
     mut resolution: EngineResolution<FemEngine>,
     forced_gpu: bool,
@@ -802,17 +806,22 @@ fn apply_fem_gpu_plan_constraints(
         return Ok(resolution);
     }
 
-    if let Some(min_nodes) = should_fallback_to_cpu_for_small_fem_gpu(plan) {
+    if !forced_gpu {
+        let decision = fem_crossover_decision_for_plan(problem, plan)
+            .expect("auto FEM plan must produce a crossover decision");
+        if decision.resolved != "cpu" {
+            return Ok(resolution);
+        }
         let message = format!(
-            "FEM plan has {} nodes, below FULLMAG_FEM_GPU_MIN_NODES={} — falling back to MFEM/libCEED/hypre CPU FEM engine",
+            "FEM auto-device policy resolved {} nodes to CPU ({})",
             plan.mesh.nodes.len(),
-            min_nodes
+            decision.reason
         );
         resolution.engine = FemEngine::CpuNative;
         resolution.fallback = Some(runtime_fallback(
             fem_engine_id(FemEngine::NativeGpu),
             fem_engine_id(FemEngine::CpuNative),
-            "fem_gpu_small_mesh_policy",
+            &decision.reason,
             message,
         ));
     }
@@ -823,7 +832,7 @@ fn apply_fem_gpu_plan_constraints(
 fn resolve_fem_engine_with_availability(
     problem: &ProblemIR,
     policy: &str,
-    env_override: bool,
+    _env_override: bool,
     fe_order: u32,
     availability: &native_fem::GpuAvailability,
 ) -> Result<EngineResolution<FemEngine>, RunError> {
@@ -869,35 +878,12 @@ fn resolve_fem_engine_with_availability(
         }
         "gpu" | "all_in_gpu" => {
             if !availability.native_fem_gpu_available {
-                if env_override {
-                    Err(RunError {
-                        message: format!(
-                            "FULLMAG_FEM_EXECUTION=gpu but the native FEM GPU backend is not available: {}",
-                            availability.reason
-                        ),
-                    })
-                } else {
-                    if !availability.native_fem_cpu_available {
-                        return Err(native_fem_cpu_unavailable_error(
-                            availability,
-                            "non-forced FEM GPU fallback",
-                        ));
-                    }
-                    let message = format!(
-                        "script requested FEM GPU execution, but the native FEM GPU backend is not available: {} — falling back to MFEM/libCEED/hypre CPU FEM engine",
+                Err(RunError {
+                    message: format!(
+                        "explicit FEM GPU execution was requested, but the native FEM GPU backend is not available: {}",
                         availability.reason
-                    );
-                    runtime_warn_once(&message);
-                    Ok(EngineResolution {
-                        engine: FemEngine::CpuNative,
-                        fallback: Some(runtime_fallback(
-                            fem_engine_id(FemEngine::NativeGpu),
-                            fem_engine_id(FemEngine::CpuNative),
-                            "native_fem_gpu_unavailable",
-                            message,
-                        )),
-                    })
-                }
+                    ),
+                })
             } else if !availability.native_fem_gpu_full_demag_available
                 && fem_policy_requires_gpu(policy)
             {
@@ -908,37 +894,12 @@ fn resolve_fem_engine_with_availability(
                     ),
                 })
             } else if fe_order != 1 {
-                if env_override {
-                    Err(RunError {
-                        message: format!(
-                            "FULLMAG_FEM_EXECUTION=gpu requested native FEM GPU execution, \
-                             but the current native backend supports fe_order=1 only \
-                             (requested order={}, fallback_reason=fem_gpu_fe_order_unsupported)",
-                            fe_order
-                        ),
-                    })
-                } else {
-                    if !availability.native_fem_cpu_available {
-                        return Err(native_fem_cpu_unavailable_error(
-                            availability,
-                            "FEM GPU fe_order fallback",
-                        ));
-                    }
-                    let message = format!(
-                        "native FEM GPU backend currently supports fe_order=1 only; falling back to MFEM/libCEED/hypre CPU FEM for requested fe_order={} (fallback_reason=fem_gpu_fe_order_unsupported)",
+                Err(RunError {
+                    message: format!(
+                        "explicit FEM GPU execution was requested, but the current native backend supports fe_order=1 only (requested order={}, fallback_reason=fem_gpu_fe_order_unsupported)",
                         fe_order
-                    );
-                    runtime_warn_once(&message);
-                    Ok(EngineResolution {
-                        engine: FemEngine::CpuNative,
-                        fallback: Some(runtime_fallback(
-                            fem_engine_id(FemEngine::NativeGpu),
-                            fem_engine_id(FemEngine::CpuNative),
-                            "fem_gpu_fe_order_unsupported",
-                            message,
-                        )),
-                    })
-                }
+                    ),
+                })
             } else {
                 Ok(EngineResolution {
                     engine: FemEngine::NativeGpu,
@@ -987,16 +948,12 @@ fn resolve_fem_engine_with_availability(
                 runtime_info_once(&message);
                 Ok(EngineResolution {
                     engine: FemEngine::CpuNative,
-                    fallback: runtime_device(problem)
-                        .filter(|device| matches!(*device, "gpu" | "cuda"))
-                        .map(|_| {
-                            runtime_fallback(
-                                fem_engine_id(FemEngine::NativeGpu),
-                                fem_engine_id(FemEngine::CpuNative),
-                                "native_fem_gpu_unavailable",
-                                message,
-                            )
-                        }),
+                    fallback: Some(runtime_fallback(
+                        fem_engine_id(FemEngine::NativeGpu),
+                        fem_engine_id(FemEngine::CpuNative),
+                        "native_fem_gpu_unavailable",
+                        message,
+                    )),
                 })
             }
         }
@@ -1010,11 +967,12 @@ pub(crate) fn resolve_fem_engine(problem: &ProblemIR) -> Result<FemEngine, RunEr
 fn resolve_fem_engine_with_registry(
     problem: &ProblemIR,
     registry: &RuntimeRegistry,
-    explicit_selection: bool,
+    _explicit_selection: bool,
     plan: Option<&FemPlanIR>,
 ) -> Result<DispatchEngineResolution, RunError> {
     apply_runtime_gpu_index(problem, "fem");
     let requested_device = requested_registry_device_for_fem(problem);
+    let forced_device = requested_device != "auto";
     let requested_precision = runtime_precision(problem).to_string();
     let resolved = resolve_registry_runtime_for_backend(
         registry,
@@ -1037,7 +995,7 @@ fn resolve_fem_engine_with_registry(
 
     if engine == FemEngine::NativeGpu {
         if has_any_antenna_field_source(problem) {
-            if explicit_selection {
+            if forced_device {
                 return Err(RunError {
                     message:
                         "FEM GPU execution was requested, but native FEM GPU currently does not support antenna_field_source current_modules (fallback_reason=current_modules_force_cpu)"
@@ -1072,7 +1030,7 @@ fn resolve_fem_engine_with_registry(
 
         let fe_order = runtime_fem_order(problem);
         if fe_order != 1 {
-            if explicit_selection {
+            if forced_device {
                 return Err(RunError {
                     message: format!(
                         "native FEM GPU execution was requested, but the current native backend supports fe_order=1 only (requested order={}, fallback_reason=fem_gpu_fe_order_unsupported)",
@@ -1111,7 +1069,7 @@ fn resolve_fem_engine_with_registry(
 
         if let Some(fem_plan) = plan {
             if let Some(algorithm) = fem_gpu_cpu_only_relaxation_algorithm(fem_plan) {
-                if explicit_selection {
+                if forced_device {
                     return Err(fem_gpu_relaxation_cpu_only_error(algorithm));
                 }
                 let cpu_resolved = resolve_registry_runtime_for_backend(
@@ -1145,47 +1103,44 @@ fn resolve_fem_engine_with_registry(
         }
 
         if let Some(fem_plan) = plan {
-            if let Some(min_nodes) = should_fallback_to_cpu_for_small_fem_gpu(fem_plan) {
-                if explicit_selection {
-                    return Err(RunError {
-                        message: format!(
-                            "native FEM GPU execution was requested, but plan has {} nodes below FULLMAG_FEM_GPU_MIN_NODES={} (fallback_reason=fem_gpu_small_mesh_policy)",
-                            fem_plan.mesh.nodes.len(),
-                            min_nodes
-                        ),
-                    });
-                }
-                let cpu_resolved = resolve_registry_runtime_for_backend(
-                    registry,
-                    "fem",
-                    "cpu",
-                    &requested_precision,
-                )
-                .ok_or_else(|| RunError {
+            if !forced_device {
+                let decision = fem_crossover_decision_for_plan(problem, fem_plan)
+                    .expect("auto FEM plan must produce a crossover decision");
+                if decision.resolved == "cpu" {
+                    let cpu_resolved = resolve_registry_runtime_for_backend(
+                        registry,
+                        "fem",
+                        "cpu",
+                        &requested_precision,
+                    )
+                    .ok_or_else(|| {
+                        RunError {
                     message:
                         "FEM GPU runtime cannot fall back because no CPU FEM runtime is advertised"
                             .to_string(),
-                })?;
-                let message = format!(
-                    "FEM plan has {} nodes, below FULLMAG_FEM_GPU_MIN_NODES={} — falling back to MFEM/libCEED/hypre CPU FEM engine",
-                    fem_plan.mesh.nodes.len(),
-                    min_nodes
-                );
-                fallback = Some(runtime_fallback(
-                    fem_engine_id(FemEngine::NativeGpu),
-                    fem_engine_id(FemEngine::CpuNative),
-                    "fem_gpu_small_mesh_policy",
-                    message,
-                ));
-                return Ok(DispatchEngineResolution {
-                    engine: DispatchEngine::Fem(FemEngine::CpuNative),
-                    fallback,
-                    runtime_family: Some(cpu_resolved.runtime_family),
-                    worker: Some(cpu_resolved.worker),
-                    resolved_backend: "fem".to_string(),
-                    resolved_device: "cpu".to_string(),
-                    resolved_precision: requested_precision,
-                });
+                }
+                    })?;
+                    let message = format!(
+                        "FEM auto-device policy resolved {} nodes to CPU ({})",
+                        fem_plan.mesh.nodes.len(),
+                        decision.reason
+                    );
+                    fallback = Some(runtime_fallback(
+                        fem_engine_id(FemEngine::NativeGpu),
+                        fem_engine_id(FemEngine::CpuNative),
+                        &decision.reason,
+                        message,
+                    ));
+                    return Ok(DispatchEngineResolution {
+                        engine: DispatchEngine::Fem(FemEngine::CpuNative),
+                        fallback,
+                        runtime_family: Some(cpu_resolved.runtime_family),
+                        worker: Some(cpu_resolved.worker),
+                        resolved_backend: "fem".to_string(),
+                        resolved_device: "cpu".to_string(),
+                        resolved_precision: requested_precision,
+                    });
+                }
             }
         }
     }
@@ -1301,9 +1256,10 @@ pub(crate) fn resolve_fem_engine_for_plan_with_trail(
         });
     }
     apply_fem_gpu_plan_constraints(
+        problem,
         plan,
         resolve_fem_engine_with_trail(problem)?,
-        fem_gpu_execution_forced(),
+        requested_registry_device_for_fem(problem) != "auto",
     )
 }
 
@@ -1785,7 +1741,8 @@ pub(crate) fn requested_registry_device_for_fem(problem: &ProblemIR) -> String {
     match std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref() {
         Some("cpu") => "cpu".to_string(),
         Some("gpu") | Some("cuda") | Some("all_in_gpu") => "gpu".to_string(),
-        Some("auto") | None => runtime_device(problem)
+        Some("auto") => "auto".to_string(),
+        None => runtime_device(problem)
             .unwrap_or("auto")
             .replace("cuda", "gpu"),
         Some(other) => other.replace("cuda", "gpu"),
@@ -1883,14 +1840,6 @@ fn runtime_fem_order(problem: &ProblemIR) -> u32 {
         .unwrap_or(1)
 }
 
-fn fem_gpu_execution_forced() -> bool {
-    all_in_gpu_fem_env_requested()
-        || matches!(
-            std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
-            Some("gpu") | Some("cuda") | Some("all_in_gpu")
-        )
-}
-
 fn env_flag_enabled(value: Option<String>) -> bool {
     matches!(
         value
@@ -1918,24 +1867,43 @@ fn fem_policy_requires_gpu(policy: &str) -> bool {
     matches!(policy, "gpu" | "all_in_gpu")
 }
 
-fn fem_gpu_min_nodes_threshold() -> Option<usize> {
-    match std::env::var("FULLMAG_FEM_GPU_MIN_NODES") {
-        Ok(raw) => match raw.trim().parse::<usize>() {
-            Ok(0) => None,
-            Ok(value) => Some(value),
-            Err(_) => None,
-        },
-        Err(_) => None,
-    }
+fn fem_crossover_features(problem: &ProblemIR, plan: &FemPlanIR) -> FemCrossoverFeatures {
+    let preview_enabled = problem
+        .problem_meta
+        .runtime_metadata
+        .get("runtime_selection")
+        .and_then(Value::as_object)
+        .and_then(|selection| selection.get("preview_enabled"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    features_from_plan(plan, preview_enabled)
 }
 
-fn should_fallback_to_cpu_for_small_fem_gpu(plan: &FemPlanIR) -> Option<usize> {
-    if fem_gpu_execution_forced() {
+pub(crate) fn fem_crossover_decision_for_plan(
+    problem: &ProblemIR,
+    plan: &FemPlanIR,
+) -> Option<crate::types::FemCrossoverDecision> {
+    let requested_device = requested_registry_device_for_fem(problem);
+    if requested_device != "auto" {
         return None;
     }
-    let min_nodes = fem_gpu_min_nodes_threshold()?;
-    let node_count = plan.mesh.nodes.len();
-    (node_count < min_nodes).then_some(min_nodes)
+    let features = fem_crossover_features(problem, plan);
+    Some(resolve_auto_fem_plan_device(plan, features.preview_enabled))
+}
+
+pub(crate) fn reconciled_fem_crossover_decision_for_plan(
+    problem: &ProblemIR,
+    plan: &FemPlanIR,
+    resolved_device: &str,
+    fallback: Option<&ResolvedFallback>,
+) -> Option<crate::types::FemCrossoverDecision> {
+    fem_crossover_decision_for_plan(problem, plan).map(|mut decision| {
+        decision.resolved = resolved_device.to_string();
+        if let Some(fallback) = fallback {
+            decision.reason = fallback.reason.clone();
+        }
+        decision
+    })
 }
 
 fn apply_runtime_gpu_index(problem: &ProblemIR, backend: &str) {
@@ -2133,39 +2101,6 @@ pub(crate) fn execute_fem_with_context<'a>(
             )
         }
         FemEngine::NativeGpu => {
-            if let Some(min_nodes) = should_fallback_to_cpu_for_small_fem_gpu(&normalized_plan) {
-                eprintln!(
-                    "warning: FEM plan has {} nodes, below FULLMAG_FEM_GPU_MIN_NODES={} — \
-                     falling back to MFEM/libCEED/hypre CPU FEM engine \
-                     (fallback_reason=fem_gpu_small_mesh_policy; \
-                     set FULLMAG_FEM_EXECUTION=gpu to force GPU or \
-                     FULLMAG_FEM_GPU_MIN_NODES=0 to disable this policy)",
-                    normalized_plan.mesh.nodes.len(),
-                    min_nodes
-                );
-                let cpu_plan = fem_plan_for_cpu_native(&normalized_plan);
-                let mut executed = execute_native_fem(
-                    FemEngine::CpuNative,
-                    &cpu_plan,
-                    stage_context,
-                    until_seconds,
-                    outputs,
-                    live,
-                    artifact_writer,
-                )?;
-                if let Some(artifact) =
-                    crate::regional_field_drive_artifacts::regional_field_drive_artifact(
-                        &normalized_plan.field_drives,
-                        &normalized_plan.time_stage,
-                        until_seconds,
-                        outputs,
-                        &executed.provenance,
-                    )?
-                {
-                    executed.auxiliary_artifacts.push(artifact);
-                }
-                return Ok(executed);
-            }
             let gpu_plan = fem_plan_for_native_gpu(&normalized_plan);
             execute_native_fem(
                 FemEngine::NativeGpu,
@@ -5996,6 +5931,19 @@ mod tests {
         problem
     }
 
+    fn fem_auto_policy_problem() -> ProblemIR {
+        let mut problem = fem_policy_problem();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            Value::Object(
+                [("device".to_string(), Value::String("auto".to_string()))]
+                    .into_iter()
+                    .collect(),
+            ),
+        );
+        problem
+    }
+
     fn tiny_fem_plan() -> FemPlanIR {
         FemPlanIR {
             mesh_name: "unit_tet".to_string(),
@@ -6995,11 +6943,11 @@ mod tests {
     }
 
     #[test]
-    fn requested_fem_gpu_without_backend_records_fallback_trail() {
-        let problem = fem_policy_problem();
+    fn auto_fem_without_gpu_records_availability_fallback_trail() {
+        let problem = fem_auto_policy_problem();
         let resolution = resolve_fem_engine_with_availability(
             &problem,
-            "gpu",
+            "auto",
             false,
             1,
             &native_fem_availability_for_test(
@@ -7008,7 +6956,7 @@ mod tests {
                 "native FEM GPU backend is unavailable in this test",
             ),
         )
-        .expect("resolution should succeed");
+        .expect("auto should use the available CPU lane");
         assert_eq!(resolution.engine, FemEngine::CpuNative);
         let fallback = resolution.fallback.expect("fallback should be present");
         assert!(fallback.occurred);
@@ -7076,7 +7024,7 @@ mod tests {
     }
 
     #[test]
-    fn cpu_availability_gpu_fallback_requires_cpu_probe() {
+    fn explicit_gpu_without_any_native_runtime_fails_for_gpu() {
         let problem = fem_policy_problem();
         let err = resolve_fem_engine_with_availability(
             &problem,
@@ -7089,11 +7037,10 @@ mod tests {
                 "native FEM runtime stack is unavailable",
             ),
         )
-        .expect_err("GPU fallback must not report CPU when CPU is unavailable");
+        .expect_err("explicit GPU must fail without a GPU runtime");
 
-        assert!(err
-            .message
-            .contains("native FEM CPU backend is not available"));
+        assert!(err.message.contains("GPU"));
+        assert!(err.message.contains("not available"));
     }
 
     #[test]
@@ -8970,13 +8917,10 @@ mod tests {
             "gpu",
             false,
             1,
-            &native_fem_availability_for_test(
-                true,
-                false,
-                "native FEM GPU backend is unavailable in this test",
-            ),
+            &native_fem_availability_for_test(true, true, "native FEM GPU backend is available"),
         )
-        .expect("prescribed transport should resolve");
+        .expect("prescribed transport should remain on GPU");
+        assert_eq!(resolution.engine, FemEngine::NativeGpu);
         assert_ne!(
             resolution
                 .fallback
@@ -8993,22 +8937,63 @@ mod tests {
             std::env::remove_var("FULLMAG_FEM_EXECUTION");
             std::env::remove_var("FULLMAG_FEM_GPU_MIN_NODES");
         }
-        assert_eq!(
-            should_fallback_to_cpu_for_small_fem_gpu(&tiny_fem_plan()),
-            None
+        let features = fem_crossover_features(&fem_auto_policy_problem(), &tiny_fem_plan());
+        assert!(
+            crate::solver_runtime::fem_crossover::debug_min_nodes_decision(&features).is_none()
         );
 
         unsafe {
             std::env::set_var("FULLMAG_FEM_GPU_MIN_NODES", "10");
         }
         assert_eq!(
-            should_fallback_to_cpu_for_small_fem_gpu(&tiny_fem_plan()),
-            Some(10)
+            crate::solver_runtime::fem_crossover::debug_min_nodes_decision(&features)
+                .map(|decision| decision.resolved),
+            Some("cpu".to_string())
         );
 
         unsafe {
             std::env::remove_var("FULLMAG_FEM_GPU_MIN_NODES");
         }
+    }
+
+    #[test]
+    fn explicit_script_gpu_unavailable_fails_closed_with_debug_threshold() {
+        let _guard = env_lock().lock().expect("env mutex");
+        unsafe {
+            std::env::set_var("FULLMAG_FEM_GPU_MIN_NODES", "1000000");
+        }
+        let result = resolve_fem_engine_with_availability(
+            &fem_auto_policy_problem(),
+            "gpu",
+            false,
+            1,
+            &native_fem_availability_for_test(
+                true,
+                false,
+                "native FEM GPU backend is unavailable in this test",
+            ),
+        );
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_GPU_MIN_NODES");
+        }
+
+        let error = result.expect_err("explicit script GPU must fail closed");
+        assert!(error.message.contains("GPU"), "{}", error.message);
+        assert!(error.message.contains("not available"), "{}", error.message);
+    }
+
+    #[test]
+    fn environment_auto_overrides_script_gpu_for_crossover_selection() {
+        let _guard = env_lock().lock().expect("env mutex");
+        unsafe {
+            std::env::set_var("FULLMAG_FEM_EXECUTION", "auto");
+        }
+        let requested = requested_registry_device_for_fem(&fem_policy_problem());
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+        }
+
+        assert_eq!(requested, "auto");
     }
 
     #[cfg(feature = "fem-gpu")]
@@ -9033,6 +9018,7 @@ mod tests {
         ));
 
         let resolution = apply_fem_gpu_plan_constraints(
+            &fem_policy_problem(),
             &plan,
             EngineResolution {
                 engine: FemEngine::NativeGpu,
@@ -9196,6 +9182,7 @@ mod tests {
         ));
 
         let err = apply_fem_gpu_plan_constraints(
+            &fem_auto_policy_problem(),
             &plan,
             EngineResolution {
                 engine: FemEngine::NativeGpu,
@@ -9238,6 +9225,7 @@ mod tests {
         plan.relaxation = Some(relaxation_control(RelaxationAlgorithmIR::LlgOverdamped));
 
         let resolution = apply_fem_gpu_plan_constraints(
+            &fem_auto_policy_problem(),
             &plan,
             EngineResolution {
                 engine: FemEngine::NativeGpu,
@@ -9260,6 +9248,7 @@ mod tests {
         ));
 
         let resolution = apply_fem_gpu_plan_constraints(
+            &fem_auto_policy_problem(),
             &plan,
             EngineResolution {
                 engine: FemEngine::NativeGpu,
@@ -9280,6 +9269,7 @@ mod tests {
         plan.relaxation = Some(relaxation_control(RelaxationAlgorithmIR::NonlinearCg));
 
         let resolution = apply_fem_gpu_plan_constraints(
+            &fem_policy_problem(),
             &plan,
             EngineResolution {
                 engine: FemEngine::NativeGpu,

@@ -2484,6 +2484,18 @@ pub struct FdmMultilayerTransferTelemetry {
 }
 
 /// Included in artifact metadata for reproducibility.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FemCrossoverDecision {
+    pub requested: String,
+    pub resolved: String,
+    pub reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calibration_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
+}
+
+/// Included in artifact metadata for reproducibility.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExecutionProvenance {
     /// Engine that executed the run: e.g. "cpu_reference", "cuda_fdm",
@@ -2525,6 +2537,9 @@ pub struct ExecutionProvenance {
     pub random_seed: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_fallback: Option<ResolvedFallback>,
+    /// Qualified FEM auto-device crossover decision, if requested device was auto.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fem_crossover_decision: Option<FemCrossoverDecision>,
     /// Integrator that was requested by the user/plan.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requested_integrator: Option<String>,

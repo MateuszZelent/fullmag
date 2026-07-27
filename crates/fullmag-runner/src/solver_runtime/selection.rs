@@ -1,6 +1,6 @@
 //! Runtime selection helpers for user/env policy, registry lookup, and device hints.
 
-use fullmag_ir::{FemPlanIR, ProblemIR};
+use fullmag_ir::ProblemIR;
 use serde_json::Value;
 
 use crate::fdm::gpu::cuda::native as native_fdm;
@@ -51,7 +51,8 @@ pub(crate) fn requested_registry_device_for_fem(problem: &ProblemIR) -> String {
     match std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref() {
         Some("cpu") => "cpu".to_string(),
         Some("gpu") | Some("cuda") | Some("all_in_gpu") => "gpu".to_string(),
-        Some("auto") | None => runtime_device(problem)
+        Some("auto") => "auto".to_string(),
+        None => runtime_device(problem)
             .unwrap_or("auto")
             .replace("cuda", "gpu"),
         Some(other) => other.replace("cuda", "gpu"),
@@ -274,26 +275,6 @@ pub(crate) fn all_in_gpu_fem_required() -> bool {
 
 pub(crate) fn fem_policy_requires_gpu(policy: &str) -> bool {
     matches!(policy, "gpu" | "all_in_gpu")
-}
-
-fn fem_gpu_min_nodes_threshold() -> Option<usize> {
-    match std::env::var("FULLMAG_FEM_GPU_MIN_NODES") {
-        Ok(raw) => match raw.trim().parse::<usize>() {
-            Ok(0) => None,
-            Ok(value) => Some(value),
-            Err(_) => None,
-        },
-        Err(_) => None,
-    }
-}
-
-pub(crate) fn should_fallback_to_cpu_for_small_fem_gpu(plan: &FemPlanIR) -> Option<usize> {
-    if fem_gpu_execution_forced() {
-        return None;
-    }
-    let min_nodes = fem_gpu_min_nodes_threshold()?;
-    let node_count = plan.mesh.nodes.len();
-    (node_count < min_nodes).then_some(min_nodes)
 }
 
 pub(crate) fn apply_runtime_gpu_index(problem: &ProblemIR, backend: &str) {

@@ -1,0 +1,69 @@
+{
+  "schema_version": "fullmag.fem-crossover.v1",
+  "calibration_id": "rtx4080-sm89-historical-baseline-2026-07-20",
+  "qualified": false,
+  "qualification_notes": [
+    "Historical repeat-5 data predates the native uniaxial-bound correction and is stale for production selection.",
+    "The current crossover baseline is red/noisy and Task 13 host-overhead attribution remains blocked.",
+    "This evidence must not activate runtime crossover selection."
+  ],
+  "evidence_sources": [
+    "benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json",
+    "benchmarks/fem-gpu/accepted/rtx4080-sm89/summary.json"
+  ],
+  "confidence": 0.0,
+  "warmup_runs": 1,
+  "repeat_runs": 5,
+  "runtime": {
+    "bundle_sha256": "65e02cbed5dcd5ab26fb2f6362cc7f78bc11c5ddd8c73ea3fef9fe8d1f48a76a",
+    "library_sha256": {
+      "libHYPRE-3.1.0.so": "44f0d0e6a87b8fffd0040dfab8871cd868dad82fbba5cbb54697bf1fbc44f88a",
+      "libceed.so": "443ad13bff0beb6a0ae34ceb6a8e12d750493cf5086d949fe94526fbe3ae01bc",
+      "libfullmag_fem.so": "5c91c5e63d6f1888c12cf5c610aa6883d9d9b142ccca6c3830117b556c5e7650",
+      "libmfem.so": "1619251a4da3c55e516605d6db32902c6cb21b48bf3eb478f3e32ac735288e93"
+    },
+    "hardware": {
+      "gpu_uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937",
+      "gpu_name": "NVIDIA GeForce RTX 4080 SUPER",
+      "compute_capability": "8.9",
+      "driver_version": "591.86",
+      "cuda_toolkit_version": "12.4",
+      "cpu_identity": "not-recorded-in-historical-baseline"
+    }
+  },
+  "strata": [
+    {
+      "id": "historical-box500-airbox-demag-nonlinear-cg-no-preview",
+      "demag_enabled": true,
+      "relaxation_algorithm": "nonlinear_cg",
+      "preview_enabled": false,
+      "requires_matrix_nnz": false,
+      "minimum_matrix_nnz": null,
+      "maximum_matrix_nnz": null,
+      "lower_node_count": 8,
+      "upper_node_count": 8,
+      "within_band_device": "gpu",
+      "samples": [
+        {
+          "fixture_id": "box500_airbox_exchange_demag:20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
+          "node_count": 8,
+          "matrix_nnz": null,
+          "cpu": {
+            "p50_seconds": 10.407728,
+            "p95_seconds": 11.094684,
+            "stddev_seconds": 0.3178836173881249,
+            "count": 5
+          },
+          "gpu": {
+            "p50_seconds": 5.186222,
+            "p95_seconds": 5.225245,
+            "stddev_seconds": 0.03984309295925713,
+            "count": 5
+          }
+        }
+      ]
+    }
+  ],
+  "signature": null,
+  "profile_sha256": "e7ab244ae6e06ddeff79ffb2e174ad2490e2c4ee71a50169a4cd3f33d439b337"
+}

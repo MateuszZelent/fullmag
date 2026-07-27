@@ -551,6 +551,7 @@ fn resolve_runtime_invocation(raw_args: Vec<OsString>) -> Result<RuntimeResoluti
             resolved_engine_id: None,
             resolved_worker: None,
             resolved_fallback: None,
+            fem_crossover_decision: None,
             local_engine_id: None,
             local_engine_label: None,
             requires_managed_runtime: false,
@@ -632,7 +633,11 @@ fn resolve_runtime_invocation(raw_args: Vec<OsString>) -> Result<RuntimeResoluti
         resolved_worker: resolved_session_runtime
             .as_ref()
             .and_then(|runtime| runtime.resolved_worker.clone()),
-        resolved_fallback: resolved_session_runtime.and_then(|runtime| runtime.resolved_fallback),
+        resolved_fallback: resolved_session_runtime
+            .as_ref()
+            .and_then(|runtime| runtime.resolved_fallback.clone()),
+        fem_crossover_decision: resolved_session_runtime
+            .and_then(|runtime| runtime.fem_crossover_decision),
         local_engine_id,
         local_engine_label,
         requires_managed_runtime,

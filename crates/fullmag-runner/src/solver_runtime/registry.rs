@@ -7,13 +7,14 @@ use crate::solver_runtime::diagnostics::runtime_fallback;
 use crate::solver_runtime::engine::{
     fem_engine_id, DispatchEngine, DispatchEngineResolution, FdmEngine, FemEngine,
 };
+use crate::solver_runtime::fem_crossover::resolve_auto_fem_plan_device;
 use crate::solver_runtime::fem_selection::{
     has_antenna_field_source, resolve_fem_engine_for_plan_with_trail, resolve_fem_engine_with_trail,
 };
 use crate::solver_runtime::selection::{
     apply_runtime_gpu_index, requested_registry_device_for_fdm, requested_registry_device_for_fem,
     resolve_fdm_engine_with_trail, resolve_registry_runtime_for_backend, runtime_fem_order,
-    runtime_precision, should_fallback_to_cpu_for_small_fem_gpu,
+    runtime_precision,
 };
 use crate::types::RunError;
 
@@ -58,11 +59,12 @@ pub(crate) fn resolve_fdm_engine_with_registry(
 pub(crate) fn resolve_fem_engine_with_registry(
     problem: &ProblemIR,
     registry: &RuntimeRegistry,
-    explicit_selection: bool,
+    _explicit_selection: bool,
     plan: Option<&FemPlanIR>,
 ) -> Result<DispatchEngineResolution, RunError> {
     apply_runtime_gpu_index(problem, "fem");
     let requested_device = requested_registry_device_for_fem(problem);
+    let forced_device = requested_device != "auto";
     let requested_precision = runtime_precision(problem).to_string();
     let resolved = resolve_registry_runtime_for_backend(
         registry,
@@ -85,7 +87,7 @@ pub(crate) fn resolve_fem_engine_with_registry(
 
     if engine == FemEngine::NativeGpu {
         if has_antenna_field_source(problem) {
-            if explicit_selection {
+            if forced_device {
                 return Err(RunError {
                     message:
                         "FEM GPU execution was requested, but native FEM GPU currently does not support antenna_field_source current_modules (fallback_reason=current_modules_force_cpu)"
@@ -120,7 +122,7 @@ pub(crate) fn resolve_fem_engine_with_registry(
 
         let fe_order = runtime_fem_order(problem);
         if fe_order != 1 {
-            if explicit_selection {
+            if forced_device {
                 return Err(RunError {
                     message: format!(
                         "native FEM GPU execution was requested, but the current native backend supports fe_order=1 only (requested order={}, fallback_reason=fem_gpu_fe_order_unsupported)",
@@ -158,47 +160,40 @@ pub(crate) fn resolve_fem_engine_with_registry(
         }
 
         if let Some(fem_plan) = plan {
-            if let Some(min_nodes) = should_fallback_to_cpu_for_small_fem_gpu(fem_plan) {
-                if explicit_selection {
-                    return Err(RunError {
-                        message: format!(
-                            "native FEM GPU execution was requested, but plan has {} nodes below FULLMAG_FEM_GPU_MIN_NODES={} (fallback_reason=fem_gpu_small_mesh_policy)",
-                            fem_plan.mesh.nodes.len(),
-                            min_nodes
-                        ),
+            if !forced_device {
+                let decision = resolve_auto_fem_plan_device(fem_plan, false);
+                if decision.resolved == "cpu" {
+                    let cpu_resolved = resolve_registry_runtime_for_backend(
+                        registry,
+                        "fem",
+                        "cpu",
+                        &requested_precision,
+                    )
+                    .ok_or_else(|| RunError {
+                        message: "FEM GPU runtime cannot fall back because no CPU FEM runtime is advertised"
+                            .to_string(),
+                    })?;
+                    let message = format!(
+                        "FEM auto-device policy resolved {} nodes to CPU ({})",
+                        fem_plan.mesh.nodes.len(),
+                        decision.reason
+                    );
+                    fallback = Some(runtime_fallback(
+                        fem_engine_id(FemEngine::NativeGpu),
+                        fem_engine_id(FemEngine::CpuNative),
+                        &decision.reason,
+                        message,
+                    ));
+                    return Ok(DispatchEngineResolution {
+                        engine: DispatchEngine::Fem(FemEngine::CpuNative),
+                        fallback,
+                        runtime_family: Some(cpu_resolved.runtime_family),
+                        worker: Some(cpu_resolved.worker),
+                        resolved_backend: "fem".to_string(),
+                        resolved_device: "cpu".to_string(),
+                        resolved_precision: requested_precision,
                     });
                 }
-                let cpu_resolved = resolve_registry_runtime_for_backend(
-                    registry,
-                    "fem",
-                    "cpu",
-                    &requested_precision,
-                )
-                .ok_or_else(|| RunError {
-                    message:
-                        "FEM GPU runtime cannot fall back because no CPU FEM runtime is advertised"
-                            .to_string(),
-                })?;
-                let message = format!(
-                    "FEM plan has {} nodes, below FULLMAG_FEM_GPU_MIN_NODES={} — falling back to MFEM/libCEED/hypre CPU FEM engine",
-                    fem_plan.mesh.nodes.len(),
-                    min_nodes
-                );
-                fallback = Some(runtime_fallback(
-                    fem_engine_id(FemEngine::NativeGpu),
-                    fem_engine_id(FemEngine::CpuNative),
-                    "fem_gpu_small_mesh_policy",
-                    message,
-                ));
-                return Ok(DispatchEngineResolution {
-                    engine: DispatchEngine::Fem(FemEngine::CpuNative),
-                    fallback,
-                    runtime_family: Some(cpu_resolved.runtime_family),
-                    worker: Some(cpu_resolved.worker),
-                    resolved_backend: "fem".to_string(),
-                    resolved_device: "cpu".to_string(),
-                    resolved_precision: requested_precision,
-                });
             }
         }
     }
