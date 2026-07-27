@@ -413,13 +413,6 @@ void rejected_trial_cannot_become_next_correction_base()
           "rejected trial token never becomes the base token");
     check(!ownership.candidate_valid,
           "rejected trial leaves no promotable candidate");
-    check(!accept_delta_potential_candidate(ownership, 12u, 101u, 13u),
-          "a discarded stale token cannot be promoted later");
-    check(!ownership.base_valid && !ownership.candidate_valid,
-          "stale-token promotion attempt resets ambiguous delta ownership");
-
-    check(initialize_delta_potential_base(ownership, 12u),
-          "ownership can be reinitialized after stale-token rejection");
     record_delta_potential_candidate(ownership, 12u, 202u);
     check(accept_delta_potential_candidate(ownership, 12u, 202u, 13u),
           "accepted-step generation advance promotes the exact accepted token");
@@ -430,6 +423,14 @@ void rejected_trial_cannot_become_next_correction_base()
     check(ownership.accepted_candidate_token != 101u,
           "earlier rejected candidate cannot contaminate the next base");
 
+    record_delta_potential_candidate(ownership, 13u, 303u);
+    check(!accept_delta_potential_candidate(ownership, 13u, 101u, 14u),
+          "a stale rejected token cannot promote the next generation");
+    check(!ownership.base_valid && !ownership.candidate_valid,
+          "stale rejected-token promotion resets ambiguous delta ownership");
+
+    check(initialize_delta_potential_base(ownership, 13u),
+          "ownership can be reinitialized after stale rejected-token reset");
     record_delta_potential_candidate(ownership, 13u, 303u);
     check(!accept_delta_potential_candidate(ownership, 13u, 404u, 14u),
           "a different accepted endpoint cannot promote a cached candidate token");
