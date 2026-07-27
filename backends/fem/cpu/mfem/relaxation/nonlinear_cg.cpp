@@ -19,6 +19,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <iomanip>
+#include <limits>
+#include <sstream>
 #include <vector>
 
 namespace fullmag::fem {
@@ -26,6 +29,13 @@ namespace fullmag::fem {
 namespace {
 
 constexpr uint32_t kNonlinearCgArmijoRecoveryCycles = 1;
+
+std::string format_nonlinear_cg_scalar(double value)
+{
+    std::ostringstream out;
+    out << std::scientific << std::setprecision(17) << value;
+    return out.str();
+}
 
 bool accept_monotone_recovery_step(
     const fullmag_fem_step_stats &current,
@@ -587,15 +597,35 @@ int run_nonlinear_cg_step(
         const double armijo_rhs =
             current_stats.total_energy_joules +
             relaxation::kArmijoCoefficient * trial_step * p_dot_g;
+        const double trial_energy_increment =
+            trial_stats.total_energy_joules - current_stats.total_energy_joules;
+        const double energy_scale = std::max(
+            std::abs(current_stats.total_energy_joules),
+            std::abs(trial_stats.total_energy_joules));
+        const double torque_tolerance =
+            ctx.stage_completion.relax_stop.has_torque_tolerance_apm != 0
+            ? ctx.stage_completion.relax_stop.torque_tolerance_apm
+            : std::numeric_limits<double>::quiet_NaN();
         const std::string diagnostics =
             "current_energy_j=" +
-            std::to_string(current_stats.total_energy_joules) +
+            format_nonlinear_cg_scalar(current_stats.total_energy_joules) +
             " last_trial_energy_j=" +
-            std::to_string(trial_stats.total_energy_joules) +
-            " armijo_rhs_j=" + std::to_string(armijo_rhs) +
-            " last_trial_step=" + std::to_string(trial_step) +
-            " p_dot_g=" + std::to_string(p_dot_g) +
-            " gradient_norm_sq=" + std::to_string(g_norm_sq);
+            format_nonlinear_cg_scalar(trial_stats.total_energy_joules) +
+            " trial_energy_increment_j=" +
+            format_nonlinear_cg_scalar(trial_energy_increment) +
+            " energy_scale_j=" + format_nonlinear_cg_scalar(energy_scale) +
+            " armijo_rhs_j=" + format_nonlinear_cg_scalar(armijo_rhs) +
+            " armijo_increment_rhs_j=" + format_nonlinear_cg_scalar(
+                relaxation::kArmijoCoefficient * trial_step * p_dot_g) +
+            " last_trial_step=" + format_nonlinear_cg_scalar(trial_step) +
+            " p_dot_g=" + format_nonlinear_cg_scalar(p_dot_g) +
+            " gradient_norm_sq=" + format_nonlinear_cg_scalar(g_norm_sq) +
+            " current_torque_apm=" +
+            format_nonlinear_cg_scalar(current_stats.max_torque_Apm) +
+            " torque_tolerance_apm=" +
+            format_nonlinear_cg_scalar(torque_tolerance) +
+            " torque_confirmation_count=" + std::to_string(
+                ctx.stage_completion.relax_torque_confirmation_count);
         return relaxation::restore_after_failed_line_search(
             ctx,
             previous_m,

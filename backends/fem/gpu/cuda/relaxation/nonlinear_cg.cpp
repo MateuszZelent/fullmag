@@ -43,7 +43,9 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <iomanip>
 #include <limits>
+#include <sstream>
 #include <string>
 #endif
 
@@ -70,6 +72,13 @@ static_assert(
 static_assert(
     kFemGpuAcceptedEnergyTermSlots == kGpuFinalScalarSlots,
     "GPU nonlinear-CG accepted endpoint token must store every energy term");
+
+std::string format_gpu_relax_ncg_scalar(double value)
+{
+    std::ostringstream out;
+    out << std::scientific << std::setprecision(17) << value;
+    return out.str();
+}
 
 uint64_t mix_signature(uint64_t seed, uint64_t value) noexcept
 {
@@ -1451,17 +1460,41 @@ int gpu_relax_nonlinear_cg_step(
         }
         const double armijo_rhs =
             current_energy + kArmijoCoefficient * trial_step * p_dot_g;
+        const double trial_energy_increment_j =
+            last_trial_energy_j - current_energy;
+        const double energy_scale_j = std::max(
+            std::abs(current_energy), std::abs(last_trial_energy_j));
+        const double current_torque_apm = current_snapshot.terms_j[
+            static_cast<size_t>(GpuFinalScalarSlot::MaxTorque)];
+        const double torque_tolerance_apm =
+            ctx.stage_completion.relax_stop.has_torque_tolerance_apm != 0
+            ? ctx.stage_completion.relax_stop.torque_tolerance_apm
+            : std::numeric_limits<double>::quiet_NaN();
         const std::string original_error =
             "GPU nonlinear-CG failed Armijo line search after " +
             std::to_string(backtracks) +
             " backtracks; current_energy_j=" +
-            std::to_string(current_energy) +
+            format_gpu_relax_ncg_scalar(current_energy) +
             " last_trial_energy_j=" +
-            std::to_string(last_trial_energy_j) +
-            " armijo_rhs_j=" + std::to_string(armijo_rhs) +
-            " last_trial_step=" + std::to_string(trial_step) +
-            " direction_dot_gradient=" + std::to_string(p_dot_g) +
-            " gradient_norm_sq=" + std::to_string(gradient_norm_sq);
+            format_gpu_relax_ncg_scalar(last_trial_energy_j) +
+            " trial_energy_increment_j=" +
+            format_gpu_relax_ncg_scalar(trial_energy_increment_j) +
+            " energy_scale_j=" +
+            format_gpu_relax_ncg_scalar(energy_scale_j) +
+            " armijo_rhs_j=" + format_gpu_relax_ncg_scalar(armijo_rhs) +
+            " armijo_increment_rhs_j=" + format_gpu_relax_ncg_scalar(
+                kArmijoCoefficient * trial_step * p_dot_g) +
+            " last_trial_step=" + format_gpu_relax_ncg_scalar(trial_step) +
+            " direction_dot_gradient=" +
+            format_gpu_relax_ncg_scalar(p_dot_g) +
+            " gradient_norm_sq=" +
+            format_gpu_relax_ncg_scalar(gradient_norm_sq) +
+            " current_torque_apm=" +
+            format_gpu_relax_ncg_scalar(current_torque_apm) +
+            " torque_tolerance_apm=" +
+            format_gpu_relax_ncg_scalar(torque_tolerance_apm) +
+            " torque_confirmation_count=" + std::to_string(
+                ctx.stage_completion.relax_torque_confirmation_count);
         return gpu_relax_restore_previous_state_after_failure(
             ctx,
             stream,

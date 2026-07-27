@@ -968,6 +968,14 @@ void c_abi_exposes_native_relaxation_step() {
         nonlinear_cg.find("not implemented yet") == std::string::npos,
         "native FEM nonlinear CG must not be an unavailable stub");
     check(
+        nonlinear_cg.find("format_nonlinear_cg_scalar(") != std::string::npos &&
+            nonlinear_cg.find("std::scientific") != std::string::npos &&
+            nonlinear_cg.find("std::setprecision(17)") != std::string::npos &&
+            nonlinear_cg.find("trial_energy_increment_j=") != std::string::npos &&
+            nonlinear_cg.find("current_torque_apm=") != std::string::npos &&
+            nonlinear_cg.find("torque_tolerance_apm=") != std::string::npos,
+        "native FEM CPU nonlinear-CG exhausted Armijo diagnostics must preserve scientific values and the configured convergence criterion");
+    check(
         nonlinear_cg.find("energy_weighted_dot_fields(") != std::string::npos &&
             nonlinear_cg.find("energy_weighted_dot_fields_with_absolute_term_sum(") !=
                 std::string::npos &&
@@ -2322,6 +2330,14 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
             ncg_source.find("direction_dot_gradient=") != std::string::npos &&
             ncg_source.find("gradient_norm_sq=") != std::string::npos,
         "native FEM GPU nonlinear-CG exhausted Armijo failures must include actionable line-search diagnostics");
+    check(
+        ncg_source.find("format_gpu_relax_ncg_scalar(") != std::string::npos &&
+            ncg_source.find("std::scientific") != std::string::npos &&
+            ncg_source.find("std::setprecision(17)") != std::string::npos &&
+            ncg_source.find("trial_energy_increment_j=") != std::string::npos &&
+            ncg_source.find("current_torque_apm=") != std::string::npos &&
+            ncg_source.find("torque_tolerance_apm=") != std::string::npos,
+        "native FEM GPU nonlinear-CG exhausted Armijo diagnostics must preserve scientific values and the configured convergence criterion");
     check(
         ncg_source.find("GPU nonlinear-CG produced non-finite total energy") !=
                 std::string::npos &&
