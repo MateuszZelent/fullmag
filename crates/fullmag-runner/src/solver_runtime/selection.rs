@@ -44,17 +44,27 @@ pub(crate) fn requested_registry_device_for_fdm(problem: &ProblemIR) -> String {
     }
 }
 
-pub(crate) fn requested_registry_device_for_fem(problem: &ProblemIR) -> String {
-    if all_in_gpu_fem_env_requested() {
+pub(crate) fn effective_fem_device_request(problem: &ProblemIR) -> String {
+    effective_fem_device_request_from_sources(
+        runtime_device(problem),
+        std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
+        all_in_gpu_fem_env_requested(),
+    )
+}
+
+fn effective_fem_device_request_from_sources(
+    script_device: Option<&str>,
+    execution_env: Option<&str>,
+    all_in_gpu_requested: bool,
+) -> String {
+    if all_in_gpu_requested {
         return "gpu".to_string();
     }
-    match std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref() {
+    match execution_env {
         Some("cpu") => "cpu".to_string(),
         Some("gpu") | Some("cuda") | Some("all_in_gpu") => "gpu".to_string(),
         Some("auto") => "auto".to_string(),
-        None => runtime_device(problem)
-            .unwrap_or("auto")
-            .replace("cuda", "gpu"),
+        None => script_device.unwrap_or("auto").replace("cuda", "gpu"),
         Some(other) => other.replace("cuda", "gpu"),
     }
 }
@@ -296,12 +306,42 @@ pub(crate) fn apply_runtime_gpu_index(problem: &ProblemIR, backend: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_fdm_engine_with_trail;
+    use super::{effective_fem_device_request_from_sources, resolve_fdm_engine_with_trail};
     use fullmag_ir::ProblemIR;
     use serde_json::Value;
     use std::sync::{LazyLock, Mutex};
 
     static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    #[test]
+    fn fem_effective_request_collision_matrix_is_deterministic() {
+        for script in ["cpu", "auto", "gpu"] {
+            assert_eq!(
+                effective_fem_device_request_from_sources(Some(script), None, false),
+                script
+            );
+            for execution_env in ["cpu", "auto", "gpu"] {
+                assert_eq!(
+                    effective_fem_device_request_from_sources(
+                        Some(script),
+                        Some(execution_env),
+                        false,
+                    ),
+                    execution_env,
+                    "FULLMAG_FEM_EXECUTION must override script device"
+                );
+                assert_eq!(
+                    effective_fem_device_request_from_sources(
+                        Some(script),
+                        Some(execution_env),
+                        true,
+                    ),
+                    "gpu",
+                    "FULLMAG_FEM_ALL_IN_GPU must override both script and execution env"
+                );
+            }
+        }
+    }
 
     #[test]
     fn script_forced_gpu_fails_closed_when_cuda_is_unavailable() {

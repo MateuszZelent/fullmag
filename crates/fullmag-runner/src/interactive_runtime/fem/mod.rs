@@ -6,6 +6,13 @@ mod gpu;
 
 impl InteractiveFemPreviewRuntime {
     pub fn create(problem: &ProblemIR) -> Result<Self, RunError> {
+        Self::create_with_preview(problem, false)
+    }
+
+    pub fn create_with_preview(
+        problem: &ProblemIR,
+        preview_enabled: bool,
+    ) -> Result<Self, RunError> {
         let plan = fullmag_plan::plan(problem)?;
         let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
             return Err(RunError {
@@ -14,7 +21,11 @@ impl InteractiveFemPreviewRuntime {
                         .to_string(),
             });
         };
-        let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?;
+        let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(
+            problem,
+            fem,
+            preview_enabled,
+        )?;
         eprintln!(
             "[fullmag-runner] interactive FEM engine: resolved_engine_id={} fallback={:?}",
             dispatch::fem_engine_label(resolution.engine),

@@ -2,7 +2,7 @@
 
 use crate::artifact_pipeline::ArtifactPipelineSummary;
 use crate::dispatch::{
-    requested_registry_device_for_fdm, requested_registry_device_for_fem, runtime_device,
+    effective_fem_device_request, requested_registry_device_for_fdm, runtime_device,
     runtime_precision,
 };
 use fullmag_ir::BackendPlanIR;
@@ -49,7 +49,7 @@ fn requested_execution_metadata(problem: &fullmag_ir::ProblemIR) -> serde_json::
         fullmag_ir::BackendTarget::Hybrid => "hybrid",
     };
     let device = match backend {
-        "fem" => requested_registry_device_for_fem(problem),
+        "fem" => effective_fem_device_request(problem),
         "fdm" => requested_registry_device_for_fdm(problem),
         _ => runtime_device(problem)
             .unwrap_or("auto")

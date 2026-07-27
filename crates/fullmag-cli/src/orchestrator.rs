@@ -2189,6 +2189,7 @@ pub(crate) fn requested_runtime_selection(
 
 fn session_runtime_selection_for_problem(
     problem: &ProblemIR,
+    field_every_n: u64,
     fallback_requested_backend: &str,
     fallback_requested_mode: &str,
     fallback_requested_precision: &str,
@@ -2207,7 +2208,7 @@ fn session_runtime_selection_for_problem(
         requested_mode,
         requested_cpu_threads,
     );
-    match fullmag_runner::resolve_session_runtime(problem) {
+    match fullmag_runner::resolve_session_runtime_for_preview(problem, field_every_n) {
         Ok(resolved) => {
             selection.requested_cpu_threads = resolved
                 .requested_cpu_threads
@@ -6606,6 +6607,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         .map(|stage| {
             session_runtime_selection_for_problem(
                 &stage.ir,
+                field_every_n,
                 backend_target_name(final_requested_backend),
                 execution_mode_name(final_execution_mode),
                 execution_precision_name(final_precision),
@@ -6625,6 +6627,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let previous_workspace = live_workspace.snapshot();
     let initial_runtime = session_runtime_selection_for_problem(
         &stages[0].ir,
+        field_every_n,
         backend_target_name(final_requested_backend),
         execution_mode_name(final_execution_mode),
         execution_precision_name(final_precision),
@@ -7771,6 +7774,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         live_workspace.update(|state| {
             let stage_runtime = session_runtime_selection_for_problem(
                 &stage.ir,
+                field_every_n,
                 backend_target_name(stage.ir.backend_policy.requested_backend),
                 execution_mode_name(stage.ir.validation_profile.execution_mode),
                 execution_precision_name(stage.ir.backend_policy.execution_precision),
@@ -7832,6 +7836,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     let mut snapshot = live_workspace.snapshot();
                     let failed_runtime = session_runtime_selection_for_problem(
                         &stage.ir,
+                        field_every_n,
                         backend_target_name(final_requested_backend),
                         execution_mode_name(final_execution_mode),
                         execution_precision_name(final_precision),
@@ -8148,6 +8153,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 let mut snapshot = live_workspace.snapshot();
                 let failed_runtime = session_runtime_selection_for_problem(
                     &stage.ir,
+                    field_every_n,
                     backend_target_name(final_requested_backend),
                     execution_mode_name(final_execution_mode),
                     execution_precision_name(final_precision),
@@ -9280,6 +9286,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             &stage.ir,
                             &execution_plan,
                             stage_fem_mesh_asset.as_ref(),
+                            field_every_n,
                             continuation_magnetization.as_deref(),
                             &live_workspace,
                         ) {
@@ -10833,6 +10840,7 @@ mod tests {
                 resolved_worker: None,
                 resolved_cpu_threads: None,
                 resolved_fallback: None,
+                fem_crossover_decision: None,
                 artifact_dir: "/tmp/artifacts".to_string(),
                 started_at_unix_ms: 0,
                 finished_at_unix_ms: 0,
@@ -12063,12 +12071,16 @@ mod tests {
         let runner = include_str!("../../fullmag-runner/src/lib.rs");
 
         assert!(orchestrator.contains(
-            "ensure_runtime_for_problem(\n                            &stage.ir,\n                            &execution_plan,\n                            stage_fem_mesh_asset.as_ref(),"
+            "ensure_runtime_for_problem(\n                            &stage.ir,\n                            &execution_plan,\n                            stage_fem_mesh_asset.as_ref(),\n                            field_every_n,"
         ));
         assert!(host.contains("stage_fem_mesh_asset: Option<&fullmag_runner::StageFemMeshAsset>"));
-        assert!(host.contains("create_planned_interactive_runtime_with_stage_fem_mesh_asset("));
+        assert!(host.contains(
+            "create_planned_interactive_runtime_with_stage_fem_mesh_asset_and_preview_cadence("
+        ));
         assert!(
-            runner.contains("pub fn create_planned_interactive_runtime_with_stage_fem_mesh_asset(")
+            runner.contains(
+                "pub fn create_planned_interactive_runtime_with_stage_fem_mesh_asset_and_preview_cadence("
+            )
         );
     }
 

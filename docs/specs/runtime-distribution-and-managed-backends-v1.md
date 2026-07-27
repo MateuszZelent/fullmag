@@ -365,6 +365,16 @@ qualified, schema-versioned crossover profile whose profile hash, runtime and
 native-library hashes, and exact hardware identity match. With no matching
 profile, FEM `auto` uses availability-first GPU preference. See ADR 0021.
 
+The match must use identity derived from the selected managed-runtime
+manifest, libraries actually loaded, and detected GPU. Caller-supplied profile
+and identity files are not a trust source. Until the runtime registry exposes
+that joined identity, production crossover profiles are unactivatable and
+`auto` stays availability-first. Schema v1 also has no signature trust policy:
+the unsigned hash omits `signature` and `profile_sha256`, and a non-null
+signature is rejected rather than accepted without verification. The one
+selection decision is pinned through engine/session resolution and provenance;
+later surfaces must not reload the profile.
+
 ### 9.1 Example
 
 If the user explicitly requests FEM GPU but the managed `fem-gpu` runtime is

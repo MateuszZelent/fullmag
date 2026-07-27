@@ -85,7 +85,7 @@ pub(crate) struct FemCrossoverProfileV1 {
     pub repeat_runs: u32,
     pub runtime: FemCrossoverRuntimeIdentity,
     pub strata: Vec<FemCrossoverStratum>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<String>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub profile_sha256: String,
@@ -93,6 +93,7 @@ pub(crate) struct FemCrossoverProfileV1 {
 
 pub(crate) fn profile_payload_sha256(profile: &FemCrossoverProfileV1) -> String {
     let mut payload = profile.clone();
+    payload.signature = None;
     payload.profile_sha256.clear();
     let encoded = serde_json::to_vec(&payload).expect("FEM crossover profile must serialize");
     format!("{:x}", Sha256::digest(encoded))
@@ -113,6 +114,11 @@ pub(crate) fn validate_fem_crossover_profile(
     }
     if profile.calibration_id.trim().is_empty() {
         return Err("FEM crossover calibration_id is empty".to_string());
+    }
+    if profile.signature.is_some() {
+        return Err(
+            "FEM crossover schema v1 signatures are unsupported and must be null".to_string(),
+        );
     }
     if !profile.confidence.is_finite() || !(0.0..=1.0).contains(&profile.confidence) {
         return Err("FEM crossover confidence must be finite and in [0, 1]".to_string());
@@ -237,32 +243,28 @@ fn availability_first_gpu_decision(reason: &str) -> FemCrossoverDecision {
 }
 
 pub(crate) fn load_qualified_profile_from_env() -> Option<FemCrossoverProfileV1> {
+    load_qualified_profile_from_env_with_identity(None)
+}
+
+fn load_qualified_profile_from_env_with_identity(
+    authoritative_runtime: Option<&FemCrossoverRuntimeIdentity>,
+) -> Option<FemCrossoverProfileV1> {
     let profile_path = std::env::var_os("FULLMAG_FEM_CROSSOVER_PROFILE")?;
-    let identity_path = match std::env::var_os("FULLMAG_FEM_CROSSOVER_RUNTIME_IDENTITY") {
-        Some(path) => path,
-        None => {
-            eprintln!(
-                "warning: FULLMAG_FEM_CROSSOVER_PROFILE is set without \
-                 FULLMAG_FEM_CROSSOVER_RUNTIME_IDENTITY; rejecting calibration profile"
-            );
-            return None;
-        }
+    let Some(authoritative_runtime) = authoritative_runtime else {
+        eprintln!(
+            "warning: rejecting FEM crossover profile because the selected managed runtime, loaded \
+             native libraries, and detected GPU do not yet expose one authoritative crossover identity"
+        );
+        return None;
     };
     let profile = std::fs::read(&profile_path)
         .map_err(|error| format!("cannot read profile: {error}"))
         .and_then(|bytes| {
             serde_json::from_slice::<FemCrossoverProfileV1>(&bytes)
                 .map_err(|error| format!("cannot parse profile: {error}"))
-        });
-    let runtime = std::fs::read(&identity_path)
-        .map_err(|error| format!("cannot read runtime identity: {error}"))
-        .and_then(|bytes| {
-            serde_json::from_slice::<FemCrossoverRuntimeIdentity>(&bytes)
-                .map_err(|error| format!("cannot parse runtime identity: {error}"))
-        });
-    match profile.and_then(|profile| {
-        runtime.and_then(|runtime| validate_fem_crossover_profile(profile, &runtime))
-    }) {
+        })
+        .and_then(|profile| validate_fem_crossover_profile(profile, authoritative_runtime));
+    match profile {
         Ok(profile) => Some(profile),
         Err(error) => {
             eprintln!("warning: rejecting FEM crossover profile: {error}");
@@ -328,6 +330,37 @@ pub(crate) fn resolve_auto_fem_plan_device(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+    use std::sync::{LazyLock, Mutex};
+
+    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    struct EnvRestore {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvRestore {
+        fn set(key: &'static str, value: &std::path::Path) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            unsafe {
+                if let Some(previous) = &self.previous {
+                    std::env::set_var(self.key, previous);
+                } else {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
 
     fn identity() -> FemCrossoverRuntimeIdentity {
         FemCrossoverRuntimeIdentity {
@@ -388,7 +421,7 @@ mod tests {
                 within_band_device: "gpu".to_string(),
                 samples: vec![sample],
             }],
-            signature: Some("test-signature".to_string()),
+            signature: None,
             profile_sha256: String::new(),
         };
         profile.profile_sha256 = profile_payload_sha256(&profile);
@@ -421,6 +454,40 @@ mod tests {
     }
 
     #[test]
+    fn preview_mode_selects_only_the_matching_calibration_stratum() {
+        let mut profile = profile();
+        let mut preview_stratum = profile.strata[0].clone();
+        preview_stratum.id = "exchange-preview".to_string();
+        preview_stratum.preview_enabled = true;
+        preview_stratum.within_band_device = "cpu".to_string();
+        profile.strata.push(preview_stratum);
+
+        let no_preview = resolve_auto_fem_device(&features(100), Some(&profile));
+        let mut preview_features = features(100);
+        preview_features.preview_enabled = true;
+        let preview = resolve_auto_fem_device(&preview_features, Some(&profile));
+
+        assert_eq!(no_preview.resolved, "gpu");
+        assert_eq!(preview.resolved, "cpu");
+    }
+
+    #[test]
+    fn pinned_decision_survives_profile_mutation_and_removal() {
+        let mut mutable_profile = profile();
+        let pinned = resolve_auto_fem_device(&features(79), Some(&mutable_profile));
+
+        mutable_profile.strata[0].lower_node_count = 0;
+        mutable_profile.strata[0].within_band_device = "gpu".to_string();
+        drop(mutable_profile);
+
+        assert_eq!(pinned.requested, "auto");
+        assert_eq!(pinned.resolved, "cpu");
+        assert_eq!(pinned.reason, "calibrated_below_lower_bound");
+        assert_eq!(pinned.calibration_id.as_deref(), Some("test-calibration"));
+        assert_eq!(pinned.confidence, Some(0.95));
+    }
+
+    #[test]
     fn invalid_profile_sha_is_rejected() {
         let runtime = identity();
         let mut profile = profile();
@@ -434,6 +501,26 @@ mod tests {
         payload.profile_sha256.clear();
         let json = serde_json::to_value(payload).expect("profile payload JSON");
         assert!(json.get("profile_sha256").is_none());
+    }
+
+    #[test]
+    fn signature_is_omitted_from_the_unsigned_profile_hash() {
+        let mut unsigned = profile();
+        unsigned.signature = None;
+        let unsigned_hash = profile_payload_sha256(&unsigned);
+        unsigned.signature = Some("unverified-signature".to_string());
+        assert_eq!(profile_payload_sha256(&unsigned), unsigned_hash);
+    }
+
+    #[test]
+    fn non_null_signature_is_rejected_without_a_signing_policy() {
+        let runtime = identity();
+        let mut signed = profile();
+        signed.signature = Some("unverified-signature".to_string());
+        signed.profile_sha256 = profile_payload_sha256(&signed);
+        let error = validate_fem_crossover_profile(signed, &runtime)
+            .expect_err("schema v1 must reject unsupported signatures");
+        assert!(error.contains("signature"));
     }
 
     #[test]
@@ -465,6 +552,74 @@ mod tests {
             .library_sha256
             .insert("libmfem.so".to_string(), "mfem-other".to_string());
         assert!(validate_fem_crossover_profile(profile(), &runtime).is_err());
+    }
+
+    #[test]
+    fn matching_caller_json_cannot_activate_without_authoritative_runtime_identity() {
+        let _lock = ENV_LOCK.lock().expect("lock crossover profile environment");
+        let directory = std::env::temp_dir().join(format!(
+            "fullmag-fem-crossover-identity-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&directory).expect("create crossover identity test directory");
+        let profile_path = directory.join("profile.json");
+        let identity_path = directory.join("identity.json");
+        std::fs::write(
+            &profile_path,
+            serde_json::to_vec(&profile()).expect("serialize crossover profile"),
+        )
+        .expect("write crossover profile");
+        std::fs::write(
+            &identity_path,
+            serde_json::to_vec(&identity()).expect("serialize runtime identity"),
+        )
+        .expect("write runtime identity");
+        let _profile_env = EnvRestore::set("FULLMAG_FEM_CROSSOVER_PROFILE", &profile_path);
+        let _identity_env =
+            EnvRestore::set("FULLMAG_FEM_CROSSOVER_RUNTIME_IDENTITY", &identity_path);
+
+        assert!(
+            load_qualified_profile_from_env().is_none(),
+            "two matching caller-controlled JSON files must not establish runtime identity"
+        );
+
+        std::fs::remove_dir_all(directory).expect("remove crossover identity test directory");
+    }
+
+    #[test]
+    fn caller_identity_cannot_override_a_different_authoritative_runtime() {
+        let _lock = ENV_LOCK.lock().expect("lock crossover profile environment");
+        let directory = std::env::temp_dir().join(format!(
+            "fullmag-fem-crossover-authority-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&directory).expect("create crossover identity test directory");
+        let profile_path = directory.join("profile.json");
+        let identity_path = directory.join("identity.json");
+        std::fs::write(
+            &profile_path,
+            serde_json::to_vec(&profile()).expect("serialize crossover profile"),
+        )
+        .expect("write crossover profile");
+        std::fs::write(
+            &identity_path,
+            serde_json::to_vec(&identity()).expect("serialize caller runtime identity"),
+        )
+        .expect("write caller runtime identity");
+        let _profile_env = EnvRestore::set("FULLMAG_FEM_CROSSOVER_PROFILE", &profile_path);
+        let _identity_env =
+            EnvRestore::set("FULLMAG_FEM_CROSSOVER_RUNTIME_IDENTITY", &identity_path);
+        let mut authoritative_runtime = identity();
+        authoritative_runtime.hardware.gpu_uuid = "GPU-actually-detected".to_string();
+
+        assert!(
+            load_qualified_profile_from_env_with_identity(Some(&authoritative_runtime)).is_none(),
+            "caller identity must not replace identity derived from the executing runtime"
+        );
+
+        std::fs::remove_dir_all(directory).expect("remove crossover identity test directory");
     }
 
     #[test]

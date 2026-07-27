@@ -7,8 +7,8 @@ use crate::solver_runtime::diagnostics::{runtime_fallback, runtime_info_once, ru
 use crate::solver_runtime::engine::{fem_engine_id, EngineResolution, FemEngine};
 use crate::solver_runtime::fem_crossover::resolve_auto_fem_plan_device;
 use crate::solver_runtime::selection::{
-    all_in_gpu_fem_env_requested, apply_runtime_gpu_index, fem_policy_requires_gpu,
-    requested_registry_device_for_fem, runtime_fem_order, runtime_fem_policy,
+    all_in_gpu_fem_env_requested, apply_runtime_gpu_index, effective_fem_device_request,
+    fem_policy_requires_gpu, runtime_fem_order, runtime_fem_policy,
 };
 use crate::types::RunError;
 
@@ -197,6 +197,7 @@ pub(crate) fn resolve_fem_engine(problem: &ProblemIR) -> Result<FemEngine, RunEr
 pub(crate) fn resolve_fem_engine_for_plan_with_trail(
     problem: &ProblemIR,
     plan: &FemPlanIR,
+    preview_enabled: bool,
 ) -> Result<EngineResolution<FemEngine>, RunError> {
     if !native_fem::is_cpu_available() {
         return Err(RunError {
@@ -208,10 +209,9 @@ pub(crate) fn resolve_fem_engine_for_plan_with_trail(
         });
     }
     let mut resolution = resolve_fem_engine_with_trail(problem)?;
-    if resolution.engine == FemEngine::NativeGpu
-        && requested_registry_device_for_fem(problem) == "auto"
+    if resolution.engine == FemEngine::NativeGpu && effective_fem_device_request(problem) == "auto"
     {
-        let decision = resolve_auto_fem_plan_device(plan, false);
+        let decision = resolve_auto_fem_plan_device(plan, preview_enabled);
         if decision.resolved == "cpu" {
             let message = format!(
                 "FEM auto-device policy resolved {} nodes to CPU ({})",

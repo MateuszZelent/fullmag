@@ -193,12 +193,22 @@ fn attach_resolved_fallback_to_provenance(
     }
 }
 
+#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
+fn attach_fem_crossover_decision_to_provenance(
+    provenance: &mut ExecutionProvenance,
+    crossover_decision: Option<crate::types::FemCrossoverDecision>,
+) {
+    if provenance.fem_crossover_decision.is_none() {
+        provenance.fem_crossover_decision = crossover_decision;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        attach_resolved_fallback_to_provenance, cached_display_refresh_due,
-        cpu_execution_provenance, display_refresh_due, InteractiveFdmPreviewRuntime,
-        InteractiveFdmPreviewRuntimeInner,
+        attach_fem_crossover_decision_to_provenance, attach_resolved_fallback_to_provenance,
+        cached_display_refresh_due, cpu_execution_provenance, display_refresh_due,
+        InteractiveFdmPreviewRuntime, InteractiveFdmPreviewRuntimeInner,
     };
     use crate::dispatch::FdmEngine;
     use crate::fdm::cpu::reference::{
@@ -312,6 +322,33 @@ mod tests {
         assert_eq!(fallback.original_engine, "fem_native_gpu");
         assert_eq!(fallback.fallback_engine, "fem_cpu_native");
         assert_eq!(fallback.reason, "native_fem_gpu_unavailable");
+    }
+
+    #[test]
+    fn persistent_interactive_fem_provenance_keeps_the_pinned_crossover_decision() {
+        let decision = crate::FemCrossoverDecision {
+            requested: "auto".to_string(),
+            resolved: "cpu".to_string(),
+            reason: "calibrated_below_lower_bound".to_string(),
+            calibration_id: Some("calibration-a".to_string()),
+            confidence: Some(0.97),
+        };
+        let mut provenance = crate::ExecutionProvenance {
+            execution_engine: "fem_cpu_native".to_string(),
+            precision: "double".to_string(),
+            ..crate::ExecutionProvenance::default()
+        };
+
+        attach_fem_crossover_decision_to_provenance(&mut provenance, Some(decision.clone()));
+
+        assert_eq!(provenance.fem_crossover_decision, Some(decision));
+        let artifact_json = serde_json::to_value(&provenance).expect("serialize provenance");
+        let crossover = &artifact_json["fem_crossover_decision"];
+        assert_eq!(crossover["requested"], "auto");
+        assert_eq!(crossover["resolved"], "cpu");
+        assert_eq!(crossover["reason"], "calibrated_below_lower_bound");
+        assert_eq!(crossover["calibration_id"], "calibration-a");
+        assert_eq!(crossover["confidence"], 0.97);
     }
 
     #[test]
@@ -828,38 +865,53 @@ impl InteractiveFemPreviewRuntime {
                         .to_string(),
             });
         };
-        let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?;
+        let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem, false)?;
         eprintln!(
             "[fullmag-runner] interactive FEM engine: resolved_engine_id={} fallback={:?}",
             dispatch::fem_engine_label(resolution.engine),
             resolution.fallback.as_ref().map(|f| &f.reason),
         );
-        Self::from_fem_plan(fem, resolution.engine, resolution.fallback, None)
+        Self::from_fem_plan(
+            fem,
+            resolution.engine,
+            resolution.fallback,
+            resolution.fem_crossover_decision,
+            None,
+        )
     }
 
     pub(crate) fn create_from_plan(
         problem: &ProblemIR,
         plan: &FemPlanIR,
         stage_asset: Option<&crate::types::StageFemMeshAsset>,
+        preview_enabled: bool,
     ) -> Result<Self, RunError> {
-        let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, plan)?;
+        let resolution =
+            dispatch::resolve_fem_engine_for_plan_with_trail(problem, plan, preview_enabled)?;
         eprintln!(
             "[fullmag-runner] interactive FEM engine: resolved_engine_id={} fallback={:?}",
             dispatch::fem_engine_label(resolution.engine),
             resolution.fallback.as_ref().map(|f| &f.reason),
         );
-        Self::from_fem_plan(plan, resolution.engine, resolution.fallback, stage_asset)
+        Self::from_fem_plan(
+            plan,
+            resolution.engine,
+            resolution.fallback,
+            resolution.fem_crossover_decision,
+            stage_asset,
+        )
     }
 
     fn from_fem_plan(
         plan: &FemPlanIR,
         engine: FemEngine,
         fallback: Option<ResolvedFallback>,
+        crossover_decision: Option<crate::types::FemCrossoverDecision>,
         stage_asset: Option<&crate::types::StageFemMeshAsset>,
     ) -> Result<Self, RunError> {
         #[cfg(not(feature = "fem-gpu"))]
         {
-            let _ = (plan, engine, fallback, stage_asset);
+            let _ = (plan, engine, fallback, crossover_decision, stage_asset);
             return Err(RunError {
                 message:
                     "interactive native FEM runtime requested but the runner was built without fem-gpu"
@@ -888,6 +940,7 @@ impl InteractiveFemPreviewRuntime {
             let antenna_field = crate::antenna_fields::compute_antenna_field(&effective_plan)?;
             let mut provenance = fem_gpu_execution_provenance(&effective_plan, &device_info)?;
             attach_resolved_fallback_to_provenance(&mut provenance, fallback);
+            attach_fem_crossover_decision_to_provenance(&mut provenance, crossover_decision);
             let inner = InteractiveFemPreviewRuntimeInner::Gpu(GpuInteractiveFemPreviewRuntime {
                 backend,
                 mesh,

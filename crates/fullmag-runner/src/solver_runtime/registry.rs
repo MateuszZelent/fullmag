@@ -12,7 +12,7 @@ use crate::solver_runtime::fem_selection::{
     has_antenna_field_source, resolve_fem_engine_for_plan_with_trail, resolve_fem_engine_with_trail,
 };
 use crate::solver_runtime::selection::{
-    apply_runtime_gpu_index, requested_registry_device_for_fdm, requested_registry_device_for_fem,
+    apply_runtime_gpu_index, effective_fem_device_request, requested_registry_device_for_fdm,
     resolve_fdm_engine_with_trail, resolve_registry_runtime_for_backend, runtime_fem_order,
     runtime_precision,
 };
@@ -61,9 +61,10 @@ pub(crate) fn resolve_fem_engine_with_registry(
     registry: &RuntimeRegistry,
     _explicit_selection: bool,
     plan: Option<&FemPlanIR>,
+    preview_enabled: bool,
 ) -> Result<DispatchEngineResolution, RunError> {
     apply_runtime_gpu_index(problem, "fem");
-    let requested_device = requested_registry_device_for_fem(problem);
+    let requested_device = effective_fem_device_request(problem);
     let forced_device = requested_device != "auto";
     let requested_precision = runtime_precision(problem).to_string();
     let resolved = resolve_registry_runtime_for_backend(
@@ -161,7 +162,7 @@ pub(crate) fn resolve_fem_engine_with_registry(
 
         if let Some(fem_plan) = plan {
             if !forced_device {
-                let decision = resolve_auto_fem_plan_device(fem_plan, false);
+                let decision = resolve_auto_fem_plan_device(fem_plan, preview_enabled);
                 if decision.resolved == "cpu" {
                     let cpu_resolved = resolve_registry_runtime_for_backend(
                         registry,
@@ -213,6 +214,7 @@ pub(crate) fn resolve_with_registry(
     problem: &ProblemIR,
     registry: Option<&RuntimeRegistry>,
     explicit_selection: bool,
+    preview_enabled: bool,
 ) -> Result<DispatchEngineResolution, RunError> {
     let plan = fullmag_plan::plan(problem)?;
     match registry {
@@ -220,14 +222,18 @@ pub(crate) fn resolve_with_registry(
             BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => {
                 resolve_fdm_engine_with_registry(problem, registry, explicit_selection)
             }
-            BackendPlanIR::Fem(fem) => {
-                resolve_fem_engine_with_registry(problem, registry, explicit_selection, Some(fem))
-            }
+            BackendPlanIR::Fem(fem) => resolve_fem_engine_with_registry(
+                problem,
+                registry,
+                explicit_selection,
+                Some(fem),
+                preview_enabled,
+            ),
             BackendPlanIR::FemEigen(_) => {
-                resolve_fem_engine_with_registry(problem, registry, explicit_selection, None)
+                resolve_fem_engine_with_registry(problem, registry, explicit_selection, None, false)
             }
             BackendPlanIR::FemFrequencyResponse(_) => {
-                resolve_fem_engine_with_registry(problem, registry, explicit_selection, None)
+                resolve_fem_engine_with_registry(problem, registry, explicit_selection, None, false)
             }
         },
         None => match &plan.backend_plan {
@@ -247,7 +253,8 @@ pub(crate) fn resolve_with_registry(
                 })
             }
             BackendPlanIR::Fem(fem) => {
-                let resolution = resolve_fem_engine_for_plan_with_trail(problem, fem)?;
+                let resolution =
+                    resolve_fem_engine_for_plan_with_trail(problem, fem, preview_enabled)?;
                 Ok(DispatchEngineResolution {
                     engine: DispatchEngine::Fem(resolution.engine),
                     fallback: resolution.fallback,

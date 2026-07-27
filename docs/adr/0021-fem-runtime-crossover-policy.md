@@ -68,20 +68,38 @@ An applicable `FemCrossoverProfileV1` is generated offline and contains:
 - runtime bundle and native-library SHA-256 hashes;
 - GPU UUID, name, compute capability, driver, and CUDA toolkit;
 - CPU identity;
-- profile SHA-256 and optional external signature.
+- profile SHA-256; schema v1 reserves a nullable `signature` field but does not
+  accept a non-null value.
 
-The profile hash covers the canonical serialized profile payload with the
-integrity field omitted. Loading is fail closed: unknown schema, unqualified
-status, malformed or mismatched hash, GPU identity mismatch, runtime/library
-hash mismatch, or a feature stratum that requires unavailable values rejects
-the profile. A profile for one GPU is never applied to another GPU. Signature
-verification may be required by distribution policy; a signature string alone
-does not qualify a profile.
+The profile hash covers the canonical unsigned serialized payload with both
+`profile_sha256` and `signature` omitted. Schema v1 has no signing algorithm,
+key identifier, trust-root, or verification policy, so a non-null signature is
+unsupported and rejected. A later schema may add signatures only together
+with those missing trust semantics.
+
+Loading is fail closed: unknown schema, unqualified status, malformed or
+mismatched hash, GPU identity mismatch, runtime/library hash mismatch, or a
+feature stratum that requires unavailable values rejects the profile. Runtime
+identity must be derived from the selected managed-runtime manifest, the
+libraries actually loaded, and the detected GPU; caller-provided profile and
+identity JSON cannot attest to each other. The current runtime registry does
+not yet expose that joined authoritative identity, so production profile
+activation remains deliberately unavailable and `auto` uses the no-profile
+behavior below. `FULLMAG_FEM_CROSSOVER_RUNTIME_IDENTITY` is diagnostic input
+only and cannot activate a profile. A profile for one GPU is never applied to
+another GPU.
 
 The selected stratum resolves CPU below its lower bound, GPU above its upper
 bound, and its recorded stable preference inside the hysteresis band. Runtime
 selection reads this data only; it never performs a CPU/GPU trial solve in a
 user run.
+
+Selection is one atomic operation. The decision used to choose the engine is
+pinned in the engine/session result and threaded unchanged into run artifacts,
+the CLI session manifest, v2 status, and persistent interactive-runtime
+provenance. Those consumers never reload the profile. Preview is supplied from
+the real execution cadence (`field_every_n != u64::MAX`), not invented problem
+metadata; batch and idle snapshot paths explicitly select no-preview.
 
 ### No-profile behavior and debug override
 
@@ -99,8 +117,10 @@ whichever happens first.
 ### Distribution and API
 
 Managed runtime packaging may ship crossover profiles beside the runtime
-manifest. A profile is active only after its identity and hashes match that
-manifest and the detected device. The checked-in
+manifest. A profile is active only after the runtime registry exposes, and the
+selector independently derives, one authoritative identity covering that
+manifest, loaded native libraries, and detected device. Merely pointing two
+environment variables at matching JSON files never activates it. The checked-in
 `benchmarks/fem-gpu/crossover/rtx4080-sm89.json` is deliberately unqualified
 and cannot affect runtime selection.
 
@@ -129,7 +149,10 @@ node-count threshold as a production policy.
 
 - RED/GREEN tests prove explicit GPU is not switched by the debug threshold.
 - Profile tests cover lower/upper hysteresis decisions and rejection of bad
-  profile hash, GPU identity, and library hashes.
+  profile hash, unsupported signatures, GPU identity, and library hashes.
+- Tests prove caller JSON cannot self-attest, resolution is pinned across
+  profile mutation/removal, preview uses real cadence, and request precedence
+  is deterministic.
 - Managed FEM relaxation, time-domain, and frequency-domain contract gates
   pass through repository `just` recipes.
 - Generated v2 API types, Control Room typecheck, lint, and tests pass.

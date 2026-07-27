@@ -1616,6 +1616,7 @@ mod tests {
                     resolved_worker: None,
                     resolved_cpu_threads: None,
                     resolved_fallback: None,
+                    fem_crossover_decision: None,
                     artifact_dir: String::new(),
                     started_at_unix_ms: 0,
                     finished_at_unix_ms: 0,

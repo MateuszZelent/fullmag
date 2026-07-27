@@ -1547,17 +1547,8 @@ pub fn run_planned_problem(
             Ok(executed)
         }
         BackendPlanIR::Fem(fem) => {
-            let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?;
-            let resolved_device = match resolution.engine {
-                dispatch::FemEngine::CpuNative => "cpu",
-                dispatch::FemEngine::NativeGpu => "gpu",
-            };
-            let crossover_decision = dispatch::reconciled_fem_crossover_decision_for_plan(
-                problem,
-                fem,
-                resolved_device,
-                resolution.fallback.as_ref(),
-            );
+            let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem, false)?;
+            let crossover_decision = resolution.fem_crossover_decision.clone();
             let mut executed = if fem.relaxation.is_some() {
                 fem::relax::execute_fem_relax(
                     fem_engine_kind(resolution.engine),
@@ -1875,17 +1866,12 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
             Ok(executed)
         }
         BackendPlanIR::Fem(fem) => {
-            let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?;
-            let resolved_device = match resolution.engine {
-                dispatch::FemEngine::CpuNative => "cpu",
-                dispatch::FemEngine::NativeGpu => "gpu",
-            };
-            let crossover_decision = dispatch::reconciled_fem_crossover_decision_for_plan(
+            let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(
                 problem,
                 fem,
-                resolved_device,
-                resolution.fallback.as_ref(),
-            );
+                field_every_n != u64::MAX,
+            )?;
+            let crossover_decision = resolution.fem_crossover_decision.clone();
             let live = Some(types::LiveStepConsumer {
                 grid: [0, 0, 0],
                 field_every_n,
@@ -2249,17 +2235,12 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             Ok(executed)
         }
         BackendPlanIR::Fem(fem) => {
-            let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?;
-            let resolved_device = match resolution.engine {
-                dispatch::FemEngine::CpuNative => "cpu",
-                dispatch::FemEngine::NativeGpu => "gpu",
-            };
-            let crossover_decision = dispatch::reconciled_fem_crossover_decision_for_plan(
+            let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(
                 problem,
                 fem,
-                resolved_device,
-                resolution.fallback.as_ref(),
-            );
+                field_every_n != u64::MAX,
+            )?;
+            let crossover_decision = resolution.fem_crossover_decision.clone();
             eprintln!(
                 "[fullmag-runner] live FEM engine: resolved_engine_id={} fallback={:?}",
                 dispatch::fem_engine_label(resolution.engine),
@@ -2777,6 +2758,23 @@ pub fn create_planned_interactive_runtime_with_stage_fem_mesh_asset(
     stage_fem_mesh_asset: Option<&StageFemMeshAsset>,
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> Result<InteractiveRuntime, RunError> {
+    create_planned_interactive_runtime_with_stage_fem_mesh_asset_and_preview_cadence(
+        problem,
+        plan,
+        stage_fem_mesh_asset,
+        u64::MAX,
+        continuation_magnetization,
+    )
+}
+
+/// Create a persistent runtime with the actual live-preview cadence known by the caller.
+pub fn create_planned_interactive_runtime_with_stage_fem_mesh_asset_and_preview_cadence(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    stage_fem_mesh_asset: Option<&StageFemMeshAsset>,
+    field_every_n: u64,
+    continuation_magnetization: Option<&[[f64; 3]]>,
+) -> Result<InteractiveRuntime, RunError> {
     let backend: Box<dyn InteractiveBackend> = match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => Box::new(InteractiveFdmPreviewRuntime::create_from_plan(
             problem, fdm,
@@ -2785,6 +2783,7 @@ pub fn create_planned_interactive_runtime_with_stage_fem_mesh_asset(
             problem,
             fem,
             stage_fem_mesh_asset,
+            field_every_n != u64::MAX,
         )?),
         _ => {
             return Err(RunError {
@@ -3128,7 +3127,7 @@ pub fn resolve_planned_runtime_capabilities(
             capabilities::FdmCapabilityProfile::SingleGrid,
         )),
         BackendPlanIR::Fem(fem) => Ok(capabilities_for_fem_engine(
-            dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?.engine,
+            dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem, false)?.engine,
         )),
         BackendPlanIR::FdmMultilayer(_) => Ok(capabilities_for_fdm_engine(
             dispatch::resolve_fdm_engine_with_trail(problem)?.engine,
@@ -3146,12 +3145,27 @@ pub fn resolve_planned_runtime_capabilities(
 }
 
 pub fn resolve_session_runtime(problem: &ProblemIR) -> Result<ResolvedSessionRuntime, RunError> {
-    resolve_session_runtime_with_registry(problem, None)
+    resolve_session_runtime_with_registry_and_preview(problem, None, false)
+}
+
+pub fn resolve_session_runtime_for_preview(
+    problem: &ProblemIR,
+    field_every_n: u64,
+) -> Result<ResolvedSessionRuntime, RunError> {
+    resolve_session_runtime_with_registry_and_preview(problem, None, field_every_n != u64::MAX)
 }
 
 pub fn resolve_session_runtime_with_registry(
     problem: &ProblemIR,
     registry: Option<&RuntimeRegistry>,
+) -> Result<ResolvedSessionRuntime, RunError> {
+    resolve_session_runtime_with_registry_and_preview(problem, registry, false)
+}
+
+pub fn resolve_session_runtime_with_registry_and_preview(
+    problem: &ProblemIR,
+    registry: Option<&RuntimeRegistry>,
+    preview_enabled: bool,
 ) -> Result<ResolvedSessionRuntime, RunError> {
     let plan = fullmag_plan::plan(problem)?;
     let resolved_cpu_threads = configured_cpu_threads(problem);
@@ -3165,16 +3179,8 @@ pub fn resolve_session_runtime_with_registry(
         problem,
         registry,
         explicit_selection_from_problem(problem),
+        preview_enabled,
     )?;
-    let fem_crossover_decision = match &plan.backend_plan {
-        BackendPlanIR::Fem(fem) => dispatch::reconciled_fem_crossover_decision_for_plan(
-            problem,
-            fem,
-            &dispatch_resolution.resolved_device,
-            dispatch_resolution.fallback.as_ref(),
-        ),
-        _ => None,
-    };
 
     match (&plan.backend_plan, dispatch_resolution.engine) {
         (BackendPlanIR::Fdm(_), dispatch::DispatchEngine::Fdm(engine)) => {
@@ -3266,7 +3272,7 @@ pub fn resolve_session_runtime_with_registry(
                         .unwrap_or_else(|| default_worker.to_string()),
                 ),
                 resolved_fallback: dispatch_resolution.fallback,
-                fem_crossover_decision,
+                fem_crossover_decision: dispatch_resolution.fem_crossover_decision,
             })
         }
         (BackendPlanIR::FemEigen(_), dispatch::DispatchEngine::Fem(engine)) => {

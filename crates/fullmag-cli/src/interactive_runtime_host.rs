@@ -638,6 +638,7 @@ impl InteractiveRuntimeHost {
         problem: &ProblemIR,
         plan: &ExecutionPlanIR,
         stage_fem_mesh_asset: Option<&fullmag_runner::StageFemMeshAsset>,
+        field_every_n: u64,
         continuation_magnetization: Option<&[[f64; 3]]>,
         live_workspace: &LocalLiveWorkspace,
     ) -> Result<()> {
@@ -649,6 +650,7 @@ impl InteractiveRuntimeHost {
             problem,
             plan,
             stage_fem_mesh_asset,
+            field_every_n,
             continuation_magnetization,
         )?;
         if let Some(runtime) = self.runtime.as_mut() {
@@ -853,12 +855,14 @@ fn create_interactive_preview_runtime(
     base_problem: &ProblemIR,
     plan: &ExecutionPlanIR,
     stage_fem_mesh_asset: Option<&fullmag_runner::StageFemMeshAsset>,
+    field_every_n: u64,
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> Result<fullmag_runner::InteractiveRuntime> {
-    fullmag_runner::create_planned_interactive_runtime_with_stage_fem_mesh_asset(
+    fullmag_runner::create_planned_interactive_runtime_with_stage_fem_mesh_asset_and_preview_cadence(
         base_problem,
         plan,
         stage_fem_mesh_asset,
+        field_every_n,
         continuation_magnetization,
     )
     .map_err(|error| anyhow!(error.to_string()))
@@ -877,6 +881,7 @@ fn ensure_interactive_preview_runtime(
     problem: &ProblemIR,
     plan: &ExecutionPlanIR,
     stage_fem_mesh_asset: Option<&fullmag_runner::StageFemMeshAsset>,
+    field_every_n: u64,
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> Result<()> {
     let needs_rebuild = runtime
@@ -887,6 +892,7 @@ fn ensure_interactive_preview_runtime(
             problem,
             plan,
             stage_fem_mesh_asset,
+            field_every_n,
             continuation_magnetization,
         )?);
     }
@@ -991,6 +997,7 @@ mod tests {
                 resolved_worker: None,
                 resolved_cpu_threads: None,
                 resolved_fallback: None,
+                fem_crossover_decision: None,
                 artifact_dir: "/tmp/artifacts".to_string(),
                 started_at_unix_ms: 0,
                 finished_at_unix_ms: 0,
