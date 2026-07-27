@@ -31,13 +31,23 @@ impl InteractiveFemPreviewRuntime {
             dispatch::fem_engine_label(resolution.engine),
             resolution.fallback.as_ref().map(|f| &f.reason),
         );
-        Self::from_fem_plan(fem, resolution.engine)
+        Self::from_fem_plan(
+            fem,
+            resolution.engine,
+            resolution.fallback,
+            resolution.fem_crossover_decision,
+        )
     }
 
-    fn from_fem_plan(plan: &FemPlanIR, engine: FemEngine) -> Result<Self, RunError> {
+    fn from_fem_plan(
+        plan: &FemPlanIR,
+        engine: FemEngine,
+        fallback: Option<ResolvedFallback>,
+        crossover_decision: Option<crate::types::FemCrossoverDecision>,
+    ) -> Result<Self, RunError> {
         #[cfg(not(feature = "fem-gpu"))]
         {
-            let _ = (plan, engine);
+            let _ = (plan, engine, fallback, crossover_decision);
             return Err(RunError {
                 message:
                     "interactive native FEM runtime requested but the runner was built without fem-gpu"
@@ -55,12 +65,15 @@ impl InteractiveFemPreviewRuntime {
             let backend = NativeFemBackend::create(&effective_plan)?;
             let device_info = backend.device_info()?;
             let antenna_field = crate::antenna_fields::compute_antenna_field(&effective_plan)?;
+            let mut provenance = fem_gpu_execution_provenance(&effective_plan, &device_info)?;
+            attach_resolved_fallback_to_provenance(&mut provenance, fallback);
+            attach_fem_crossover_decision_to_provenance(&mut provenance, crossover_decision);
             let inner = InteractiveFemPreviewRuntimeInner::Gpu(GpuInteractiveFemPreviewRuntime {
                 backend,
                 mesh,
                 node_count: effective_plan.mesh.nodes.len(),
                 plan_signature: normalize_fem_plan_signature(&effective_plan),
-                provenance: fem_gpu_execution_provenance(&effective_plan, &device_info)?,
+                provenance,
                 total_steps: 0,
                 total_time: 0.0,
                 antenna_field,

@@ -52,7 +52,7 @@ pub(crate) fn effective_fem_device_request(problem: &ProblemIR) -> String {
     )
 }
 
-fn effective_fem_device_request_from_sources(
+pub(super) fn effective_fem_device_request_from_sources(
     script_device: Option<&str>,
     execution_env: Option<&str>,
     all_in_gpu_requested: bool,

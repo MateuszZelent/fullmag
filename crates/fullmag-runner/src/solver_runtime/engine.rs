@@ -1,5 +1,6 @@
 //! Backend-neutral engine identifiers used by dispatch and runtime metadata.
 
+use crate::types::FemCrossoverDecision;
 use crate::types::ResolvedFallback;
 
 /// Which execution engine to use for FDM.
@@ -26,6 +27,13 @@ pub(crate) struct EngineResolution<E> {
     pub fallback: Option<ResolvedFallback>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct FemEngineResolution {
+    pub engine: FemEngine,
+    pub fallback: Option<ResolvedFallback>,
+    pub fem_crossover_decision: Option<FemCrossoverDecision>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DispatchEngine {
     Fdm(FdmEngine),
@@ -41,6 +49,7 @@ pub(crate) struct DispatchEngineResolution {
     pub resolved_backend: String,
     pub resolved_device: String,
     pub resolved_precision: String,
+    pub fem_crossover_decision: Option<FemCrossoverDecision>,
 }
 
 pub(crate) fn fdm_engine_id(engine: FdmEngine) -> &'static str {

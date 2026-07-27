@@ -18,6 +18,20 @@ use crate::solver_runtime::selection::{
 };
 use crate::types::RunError;
 
+fn reconcile_pinned_fem_crossover_decision(
+    mut decision: Option<crate::types::FemCrossoverDecision>,
+    resolved_device: &str,
+    fallback: Option<&crate::types::ResolvedFallback>,
+) -> Option<crate::types::FemCrossoverDecision> {
+    if let Some(decision) = decision.as_mut() {
+        decision.resolved = resolved_device.to_string();
+        if let Some(fallback) = fallback {
+            decision.reason = fallback.reason.clone();
+        }
+    }
+    decision
+}
+
 pub(crate) fn resolve_fdm_engine_with_registry(
     problem: &ProblemIR,
     registry: &RuntimeRegistry,
@@ -53,6 +67,7 @@ pub(crate) fn resolve_fdm_engine_with_registry(
         resolved_backend: "fdm".to_string(),
         resolved_device: resolved.device,
         resolved_precision: requested_precision,
+        fem_crossover_decision: None,
     })
 }
 
@@ -66,6 +81,9 @@ pub(crate) fn resolve_fem_engine_with_registry(
     apply_runtime_gpu_index(problem, "fem");
     let requested_device = effective_fem_device_request(problem);
     let forced_device = requested_device != "auto";
+    let fem_crossover_decision = plan
+        .filter(|_| !forced_device)
+        .map(|plan| resolve_auto_fem_plan_device(plan, preview_enabled));
     let requested_precision = runtime_precision(problem).to_string();
     let resolved = resolve_registry_runtime_for_backend(
         registry,
@@ -110,6 +128,11 @@ pub(crate) fn resolve_fem_engine_with_registry(
                 "current_modules_force_cpu",
                 message,
             ));
+            let fem_crossover_decision = reconcile_pinned_fem_crossover_decision(
+                fem_crossover_decision,
+                "cpu",
+                fallback.as_ref(),
+            );
             return Ok(DispatchEngineResolution {
                 engine: DispatchEngine::Fem(FemEngine::CpuNative),
                 fallback,
@@ -118,6 +141,7 @@ pub(crate) fn resolve_fem_engine_with_registry(
                 resolved_backend: "fem".to_string(),
                 resolved_device: "cpu".to_string(),
                 resolved_precision: requested_precision,
+                fem_crossover_decision,
             });
         }
 
@@ -149,6 +173,11 @@ pub(crate) fn resolve_fem_engine_with_registry(
                 "fem_gpu_fe_order_unsupported",
                 message,
             ));
+            let fem_crossover_decision = reconcile_pinned_fem_crossover_decision(
+                fem_crossover_decision,
+                "cpu",
+                fallback.as_ref(),
+            );
             return Ok(DispatchEngineResolution {
                 engine: DispatchEngine::Fem(FemEngine::CpuNative),
                 fallback,
@@ -157,12 +186,15 @@ pub(crate) fn resolve_fem_engine_with_registry(
                 resolved_backend: "fem".to_string(),
                 resolved_device: "cpu".to_string(),
                 resolved_precision: requested_precision,
+                fem_crossover_decision,
             });
         }
 
         if let Some(fem_plan) = plan {
             if !forced_device {
-                let decision = resolve_auto_fem_plan_device(fem_plan, preview_enabled);
+                let decision = fem_crossover_decision
+                    .as_ref()
+                    .expect("auto FEM plan must produce a crossover decision");
                 if decision.resolved == "cpu" {
                     let cpu_resolved = resolve_registry_runtime_for_backend(
                         registry,
@@ -185,6 +217,11 @@ pub(crate) fn resolve_fem_engine_with_registry(
                         &decision.reason,
                         message,
                     ));
+                    let fem_crossover_decision = reconcile_pinned_fem_crossover_decision(
+                        fem_crossover_decision,
+                        "cpu",
+                        fallback.as_ref(),
+                    );
                     return Ok(DispatchEngineResolution {
                         engine: DispatchEngine::Fem(FemEngine::CpuNative),
                         fallback,
@@ -193,12 +230,18 @@ pub(crate) fn resolve_fem_engine_with_registry(
                         resolved_backend: "fem".to_string(),
                         resolved_device: "cpu".to_string(),
                         resolved_precision: requested_precision,
+                        fem_crossover_decision,
                     });
                 }
             }
         }
     }
 
+    let fem_crossover_decision = reconcile_pinned_fem_crossover_decision(
+        fem_crossover_decision,
+        &resolved.device,
+        fallback.as_ref(),
+    );
     Ok(DispatchEngineResolution {
         engine: DispatchEngine::Fem(engine),
         fallback,
@@ -207,6 +250,7 @@ pub(crate) fn resolve_fem_engine_with_registry(
         resolved_backend: "fem".to_string(),
         resolved_device: resolved.device,
         resolved_precision: requested_precision,
+        fem_crossover_decision,
     })
 }
 
@@ -250,6 +294,7 @@ pub(crate) fn resolve_with_registry(
                         FdmEngine::CpuReference => "cpu".to_string(),
                     },
                     resolved_precision: runtime_precision(problem).to_string(),
+                    fem_crossover_decision: None,
                 })
             }
             BackendPlanIR::Fem(fem) => {
@@ -266,6 +311,7 @@ pub(crate) fn resolve_with_registry(
                         FemEngine::CpuNative => "cpu".to_string(),
                     },
                     resolved_precision: runtime_precision(problem).to_string(),
+                    fem_crossover_decision: resolution.fem_crossover_decision,
                 })
             }
             BackendPlanIR::FemEigen(_) => {
@@ -281,6 +327,7 @@ pub(crate) fn resolve_with_registry(
                         FemEngine::CpuNative => "cpu".to_string(),
                     },
                     resolved_precision: runtime_precision(problem).to_string(),
+                    fem_crossover_decision: None,
                 })
             }
             BackendPlanIR::FemFrequencyResponse(_) => {
@@ -296,6 +343,7 @@ pub(crate) fn resolve_with_registry(
                         FemEngine::CpuNative => "cpu".to_string(),
                     },
                     resolved_precision: runtime_precision(problem).to_string(),
+                    fem_crossover_decision: None,
                 })
             }
         },

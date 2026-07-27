@@ -85,9 +85,9 @@ libraries actually loaded, and the detected GPU; caller-provided profile and
 identity JSON cannot attest to each other. The current runtime registry does
 not yet expose that joined authoritative identity, so production profile
 activation remains deliberately unavailable and `auto` uses the no-profile
-behavior below. `FULLMAG_FEM_CROSSOVER_RUNTIME_IDENTITY` is diagnostic input
-only and cannot activate a profile. A profile for one GPU is never applied to
-another GPU.
+behavior below. `FULLMAG_FEM_CROSSOVER_RUNTIME_IDENTITY` is ignored and untrusted;
+it has no production or diagnostic consumer and cannot activate or attest to a
+profile. A profile for one GPU is never applied to another GPU.
 
 The selected stratum resolves CPU below its lower bound, GPU above its upper
 bound, and its recorded stable preference inside the hysteresis band. Runtime

@@ -37,12 +37,20 @@ fn production_source_before_cfg(path: &Path, cfg_marker: &str) -> String {
 fn task15_fem_crossover_resolution_is_pinned_instead_of_reloaded_for_provenance() {
     let root = crate_root();
     let dispatch = production_source(&root.join("src/dispatch.rs"));
+    let retained_engine = production_source(&root.join("src/solver_runtime/engine.rs"));
+    let retained_registry = production_source(&root.join("src/solver_runtime/registry.rs"));
     let runner = source(&root.join("src/lib.rs"));
 
     assert!(
         dispatch.contains("fem_crossover_decision: Option<crate::types::FemCrossoverDecision>"),
         "the engine resolution must own the exact crossover decision used for selection"
     );
+    for source in [&retained_engine, &retained_registry] {
+        assert!(
+            source.contains("fem_crossover_decision"),
+            "retained engine and registry resolutions must own the pinned decision"
+        );
+    }
     for source in [&dispatch, &runner] {
         assert!(
             !source.contains("reconciled_fem_crossover_decision_for_plan"),
@@ -54,12 +62,15 @@ fn task15_fem_crossover_resolution_is_pinned_instead_of_reloaded_for_provenance(
 #[test]
 fn task15_persistent_fem_runtime_attaches_the_pinned_crossover_decision() {
     let interactive = source(&crate_root().join("src/interactive_runtime.rs"));
-    assert!(
-        interactive.contains(
+    let retained_interactive = source(&crate_root().join("src/interactive_runtime/fem/mod.rs"));
+    for source in [&interactive, &retained_interactive] {
+        assert!(
+            source.contains(
             "attach_fem_crossover_decision_to_provenance(&mut provenance, crossover_decision);"
-        ),
-        "persistent FEM runtime provenance must retain requested/resolved/reason/calibration/confidence"
-    );
+            ),
+            "persistent FEM runtime provenance must retain requested/resolved/reason/calibration/confidence"
+        );
+    }
 }
 
 #[test]
@@ -68,8 +79,7 @@ fn task15_fem_preview_crossover_uses_real_cadence_across_active_and_dormant_path
     let dispatch = production_source(&root.join("src/dispatch.rs"));
     let runner = source(&root.join("src/lib.rs"));
     let compact_runner = runner.split_whitespace().collect::<String>();
-    let dormant_interactive =
-        production_source(&root.join("src/interactive_runtime/fem/mod.rs"));
+    let dormant_interactive = production_source(&root.join("src/interactive_runtime/fem/mod.rs"));
     let dormant_selection = production_source(&root.join("src/solver_runtime/fem_selection.rs"));
     let dormant_registry = production_source(&root.join("src/solver_runtime/registry.rs"));
 
@@ -109,10 +119,42 @@ fn task15_fem_preview_crossover_uses_real_cadence_across_active_and_dormant_path
     }
     assert!(
         dormant_interactive.contains("preview_enabled: bool")
-            && !dormant_interactive.contains(
-                "resolve_fem_engine_for_plan_with_trail(problem, fem, false)"
-            ),
+            && !dormant_interactive
+                .contains("resolve_fem_engine_for_plan_with_trail(problem, fem, false)"),
         "the dormant persistent FEM constructor must accept explicit preview state"
+    );
+}
+
+#[test]
+fn task15_crossover_capability_json_and_adr_match_the_ignored_identity_input_boundary() {
+    let root = repo_root();
+    let matrix: serde_json::Value =
+        serde_json::from_str(&source(&root.join("docs/specs/capability-matrix-v0.json")))
+            .expect("capability matrix JSON");
+    let notes = matrix["features"]
+        .as_array()
+        .expect("capability features")
+        .iter()
+        .find(|feature| feature["id"] == "fem_auto_device_crossover")
+        .and_then(|feature| feature["notes"].as_str())
+        .expect("FEM crossover capability notes");
+    assert!(
+        notes.contains("FULLMAG_FEM_CROSSOVER_RUNTIME_IDENTITY is ignored")
+            && notes.contains("untrusted")
+            && notes.contains("no production or diagnostic consumer"),
+        "machine-readable capability notes must expose the same fail-closed identity boundary as Markdown"
+    );
+
+    let adr = source(&root.join("docs/adr/0021-fem-runtime-crossover-policy.md"));
+    assert!(
+        adr.contains("`FULLMAG_FEM_CROSSOVER_RUNTIME_IDENTITY` is ignored and untrusted")
+            && adr.contains("no production or diagnostic consumer"),
+        "ADR must not describe an ignored environment value as diagnostic input"
+    );
+    assert!(
+        !production_source(&crate_root().join("src/solver_runtime/fem_crossover.rs"))
+            .contains("FULLMAG_FEM_CROSSOVER_RUNTIME_IDENTITY"),
+        "production crossover code must not consume caller-provided runtime identity"
     );
 }
 
@@ -1551,7 +1593,7 @@ fn interactive_fem_preview_runtime_facade_methods_have_fem_owner() {
     for needle in [
         "impl InteractiveFemPreviewRuntime",
         "interactive FEM preview runtime is supported only for FEM execution plans",
-        "fn from_fem_plan(plan: &FemPlanIR, engine: FemEngine)",
+        "fn from_fem_plan(\n        plan: &FemPlanIR,\n        engine: FemEngine,\n        fallback: Option<ResolvedFallback>,\n        crossover_decision: Option<crate::types::FemCrossoverDecision>,",
         "pub fn matches_plan(&self, plan: &FemPlanIR)",
         "plan: &FemPlanIR,\n        until_seconds: f64,\n        outputs: &[OutputIR],\n        field_every_n: u64,",
     ] {

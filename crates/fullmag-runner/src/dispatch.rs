@@ -6932,13 +6932,8 @@ mod tests {
             std::env::set_var("FULLMAG_FEM_ALL_IN_GPU", "1");
         }
         let fem_plan = tiny_fem_plan();
-        let result = resolve_fem_engine_with_registry(
-            &problem,
-            &registry,
-            false,
-            Some(&fem_plan),
-            false,
-        );
+        let result =
+            resolve_fem_engine_with_registry(&problem, &registry, false, Some(&fem_plan), false);
         unsafe {
             std::env::remove_var("FULLMAG_FEM_ALL_IN_GPU");
         }
@@ -7098,12 +7093,9 @@ mod tests {
     #[cfg(not(feature = "fem-gpu"))]
     #[test]
     fn time_domain_fem_without_mfem_backend_fails_early() {
-        let err = resolve_fem_engine_for_plan_with_trail(
-            &fem_policy_problem(),
-            &tiny_fem_plan(),
-            false,
-        )
-        .expect_err("time-domain FEM should fail before execution without MFEM support");
+        let err =
+            resolve_fem_engine_for_plan_with_trail(&fem_policy_problem(), &tiny_fem_plan(), false)
+                .expect_err("time-domain FEM should fail before execution without MFEM support");
         assert!(err.message.contains("MFEM/libCEED runtime stack"));
         assert!(err.message.contains("managed FEM runtime") || err.message.contains("fem-gpu"));
     }

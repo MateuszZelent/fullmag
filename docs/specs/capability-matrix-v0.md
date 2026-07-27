@@ -58,6 +58,8 @@ not yet join the selected manifest, actually loaded library hashes, and
 detected GPU into one authoritative identity. Matching caller-controlled JSON
 files cannot qualify a profile. Schema v1 rejects non-null signatures because
 no algorithm, trusted key, or verifier is defined.
+`FULLMAG_FEM_CROSSOVER_RUNTIME_IDENTITY` is ignored and untrusted; it has no
+production or diagnostic consumer and cannot attest to runtime identity.
 
 The crossover feature vector includes node count, optional native assembled
 matrix nonzero count, demag state, relaxation algorithm, and preview state.
