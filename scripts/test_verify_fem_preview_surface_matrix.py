@@ -1,5 +1,6 @@
 import importlib.util
 import hashlib
+import io
 import json
 import os
 import struct
@@ -7,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -19,6 +21,22 @@ SPEC.loader.exec_module(MATRIX)
 
 
 class FemPreviewSurfaceMatrixContractTests(unittest.TestCase):
+    def test_binary_request_preserves_http_error_body_and_url(self) -> None:
+        error = urllib.error.HTTPError(
+            "http://127.0.0.1:18197/field",
+            500,
+            "Internal Server Error",
+            {},
+            io.BytesIO(b'{"error":"FMVP value count mismatch"}'),
+        )
+
+        with mock.patch.object(MATRIX.urllib.request, "urlopen", side_effect=error):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"GET http://127\.0\.0\.1:18197/field failed: HTTP 500: .*FMVP value count mismatch",
+            ):
+                MATRIX.request_bytes("http://127.0.0.1:18197", "/field")
+
     def test_empty_energy_proof_matches_qualified_row_schema(self) -> None:
         proof = MATRIX.empty_energy_proof()
 

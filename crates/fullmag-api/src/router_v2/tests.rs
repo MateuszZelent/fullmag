@@ -24059,6 +24059,76 @@ async fn v2_field_vector_accepts_fem_live_magnetization_on_magnetic_nodes() {
 }
 
 #[tokio::test]
+async fn v2_field_vector_normalizes_unset_fem_grid_without_losing_topology_identity() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_scoped_fem_mesh_payload();
+        while mesh.nodes.len() < 70 {
+            let index = mesh.nodes.len() as f64;
+            mesh.nodes.push([index, index + 0.25, index + 0.5]);
+        }
+        let values = (0..70)
+            .map(|index| [index as f64, index as f64 + 0.1, index as f64 + 0.2])
+            .collect::<Vec<_>>();
+        snapshot.state_version = 52;
+        snapshot.mesh_revision = 19;
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.preview_cache = Default::default();
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": values,
+                "source_step": 52,
+                "source_revision": 19,
+                "materialized_at_unix_ms": 1_700_000_000_456_u64,
+                "layout": { "grid_cells": [0, 0, 0] }
+            }
+        }))
+        .expect("terminal FEM m field should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-fullmag-encoding"], "FMVP;version=3");
+    assert_eq!(
+        response.headers()["x-fullmag-field-indexing"],
+        "full_domain"
+    );
+    assert!(response
+        .headers()
+        .get("x-fullmag-mesh-topology-hash")
+        .is_some());
+    assert!(response
+        .headers()
+        .get("x-fullmag-node-index-count")
+        .is_none());
+
+    let bytes = body_bytes(response).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    assert_eq!(bytes[4], 3);
+    assert_eq!(bytes[6], 3);
+    assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()), 210);
+    assert_eq!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()), 70);
+    assert_eq!(u32::from_le_bytes(bytes[20..24].try_into().unwrap()), 1);
+    assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 1);
+    assert_eq!(u32::from_le_bytes(bytes[104..108].try_into().unwrap()), 0);
+    assert_eq!(u32::from_le_bytes(bytes[108..112].try_into().unwrap()), 0);
+    let values = decode_fmvp_payload_f64(&bytes);
+    assert_eq!(values.len(), 210);
+    assert_eq!(&values[..3], &[0.0, 0.1, 0.2]);
+    assert_eq!(&values[207..], &[69.0, 69.1, 69.2]);
+}
+
+#[tokio::test]
 async fn v2_field_vector_prefers_live_magnetization_over_stale_latest_field() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {

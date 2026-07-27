@@ -224,9 +224,16 @@ def require_inputs() -> None:
 
 
 def request_bytes(base: str, path: str, *, timeout: float = 10.0) -> bytes:
-    request = urllib.request.Request(base + path, headers={"Accept": "application/octet-stream"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read()
+    url = base + path
+    request = urllib.request.Request(url, headers={"Accept": "application/octet-stream"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.read()
+    except urllib.error.HTTPError as error:
+        body = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"GET {url} failed: HTTP {error.code}: {body}"
+        ) from error
 
 
 def get_json(base: str, path: str, *, timeout: float = 10.0) -> dict[str, Any]:
