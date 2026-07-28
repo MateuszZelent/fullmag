@@ -158,4 +158,45 @@ describe("MixedTopologyProvenanceSection", () => {
     expect(model.certificateReason).toBe("node plane count mismatch");
     expect(model.fallback).toBe("free_tetrahedral");
   });
+
+  it("renders structured mixed-P1 rejection evidence without inferring a fallback", () => {
+    const model = resolveMixedTopologyPresentation({
+      buildReport: null,
+      manifest: null,
+      rejectionEvidence: {
+        certificate_status: "rejected",
+        fallback: "none",
+        free_tetrahedral_alternative: "Select free_tetrahedral explicitly.",
+        missing_capabilities: ["fem.gpu.exchange_demag.mixed_p1"],
+        rejection_category: "missing_capability",
+        rejection_reason: "mixed-P1 GPU operators are unavailable",
+        requested_execution: {
+          backend: "fem",
+          device: "gpu",
+          mode: "strict",
+          precision: "double",
+          study: "relaxation",
+        },
+        resolved_execution: null,
+      },
+    });
+
+    expect(model.rejection).toMatchObject({
+      category: "missing_capability",
+      fallback: "none",
+      missingCapabilities: ["fem.gpu.exchange_demag.mixed_p1"],
+      requestedExecution: "fem / gpu / double / strict / relaxation",
+      resolvedExecution: "not resolved",
+    });
+
+    const html = renderToStaticMarkup(<MixedTopologyProvenanceSection model={model} />);
+    expect(html).toContain("Mixed-P1 request rejected");
+    expect(html).toContain("missing_capability");
+    expect(html).toContain("fem.gpu.exchange_demag.mixed_p1");
+    expect(html).toContain("fem / gpu / double / strict / relaxation");
+    expect(html).toContain("not resolved");
+    expect(html).toContain("Fallback");
+    expect(html).toContain("none");
+    expect(html).toContain("Select free_tetrahedral explicitly.");
+  });
 });

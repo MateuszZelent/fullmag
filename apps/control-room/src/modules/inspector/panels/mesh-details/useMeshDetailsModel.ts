@@ -58,6 +58,10 @@ import {
 import type { MeshSizeDistributionHoverBin } from "../MeshQualityChart";
 import { emitMeshSizeHistogramHover } from "../meshSizeHistogramHover";
 import {
+  resolveMixedCertificateQualityPresentation,
+  type MixedCertificateQualityPresentation,
+} from "./MeshQualityGatesSection";
+import {
   resolveMixedTopologyPresentation,
   type MixedTopologyPresentation,
 } from "./MixedTopologyProvenanceSection";
@@ -105,6 +109,7 @@ export interface MeshDetailsModel {
   meshStatistics: unknown;
   meshSummary: Record<string, unknown> | null;
   mixedTopology: MixedTopologyPresentation;
+  mixedCertificateQuality: MixedCertificateQualityPresentation;
   objectPolicyCount: number;
   operationStatuses: readonly unknown[];
   policyDiffRows: MeshPolicyDiffRow[];
@@ -472,6 +477,9 @@ export function useMeshDetailsModel(
       manifest: manifest.data,
       rejectionEvidence: activeBuild.data?.mixed_layer_topology_rejection,
     }),
+    mixedCertificateQuality: resolveMixedCertificateQualityPresentation(
+      qualityGates.data?.mixed_certificate,
+    ),
     objectPolicyCount: objectConfigs.length,
     operationStatuses,
     policyDiffRows: buildSharedDomainPolicyDiffRows({

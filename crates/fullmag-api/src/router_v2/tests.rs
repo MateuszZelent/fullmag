@@ -6120,7 +6120,18 @@ async fn mesh_active_build_publishes_mixed_layer_rejection_evidence() {
                     "schema_version": "mixed_layer_topology_rejection.v1",
                     "certificate_status": "rejected",
                     "requested_layer_count": 1,
-                    "rejection_reason": "resolved 2 layers"
+                    "rejection_category": "missing_capability",
+                    "rejection_reason": "resolved 2 layers",
+                    "missing_capabilities": ["fem.gpu.exchange_demag.mixed_p1"],
+                    "requested_execution": {
+                        "backend": "fem",
+                        "device": "gpu",
+                        "precision": "double",
+                        "mode": "strict",
+                        "study": "relaxation"
+                    },
+                    "fallback": "none",
+                    "free_tetrahedral_alternative": "Select free_tetrahedral explicitly."
                 }
             },
             "last_build_error": "resolved 2 layers"
@@ -6147,6 +6158,23 @@ async fn mesh_active_build_publishes_mixed_layer_rejection_evidence() {
     assert_eq!(
         json["mixed_layer_topology_rejection"]["rejection_reason"],
         "resolved 2 layers"
+    );
+    assert_eq!(
+        json["mixed_layer_topology_rejection"]["rejection_category"],
+        "missing_capability"
+    );
+    assert_eq!(
+        json["mixed_layer_topology_rejection"]["missing_capabilities"][0],
+        "fem.gpu.exchange_demag.mixed_p1"
+    );
+    assert_eq!(
+        json["mixed_layer_topology_rejection"]["requested_execution"]["device"],
+        "gpu"
+    );
+    assert_eq!(json["mixed_layer_topology_rejection"]["fallback"], "none");
+    assert_eq!(
+        json["mixed_layer_topology_rejection"]["free_tetrahedral_alternative"],
+        "Select free_tetrahedral explicitly."
     );
 }
 
@@ -6457,6 +6485,138 @@ async fn mesh_quality_gates_returns_marked_projection_when_backend_payload_is_mi
         json["gates"]["reason"],
         "mesh_quality_gates is missing from the current mesh workspace/build report"
     );
+    assert_eq!(json["mixed_certificate"]["status"], "unavailable");
+    assert_eq!(json["mixed_certificate"]["mesh_revision"], 20);
+    assert_eq!(
+        json["mixed_certificate"]["family_gates"],
+        serde_json::json!([])
+    );
+}
+
+#[tokio::test]
+async fn mesh_quality_gates_publishes_revision_bound_mixed_certificate_evidence() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+        ))
+        .expect("mixed certificate fixture should parse");
+        let mesh_ir: fullmag_ir::MeshIR = serde_json::from_value(fixture["mesh"].clone())
+            .expect("mixed mesh fixture should deserialize");
+        let certificate: fullmag_ir::MixedLayerTopologyCertificateV1IR =
+            serde_json::from_value(fixture["certificate"].clone())
+                .expect("mixed certificate fixture should deserialize");
+        let report: fullmag_ir::FemSharedDomainBuildReportIR =
+            serde_json::from_value(serde_json::json!({
+                "build_mode": "shared_domain",
+                "fallbacks_triggered": [],
+                "mixed_layer_topology_certificate": certificate
+            }))
+            .expect("mixed build report should deserialize");
+        snapshot.fem_mesh = Some(FemMeshPayload {
+            mesh_name: mesh_ir.mesh_name,
+            mesh_id: "mixed-quality:1".to_string(),
+            nodes: mesh_ir.nodes,
+            cells: mesh_ir.cells,
+            element_markers: mesh_ir.element_markers,
+            facets: mesh_ir.facets,
+            boundary_markers: mesh_ir.boundary_markers,
+            periodic_boundary_pairs: mesh_ir.periodic_boundary_pairs,
+            periodic_node_pairs: mesh_ir.periodic_node_pairs,
+            object_segments: Vec::new(),
+            mesh_parts: Vec::new(),
+            domain_mesh_mode: Some("shared_domain".to_string()),
+            domain_frame: None,
+            generation_id: Some("mixed-quality-generation".to_string()),
+            per_domain_quality: Default::default(),
+            build_report: Some(report),
+        });
+        snapshot.mesh_workspace = Some(serde_json::json!({}));
+        snapshot.mesh_revision = 91;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/quality-gates")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let evidence = &json["mixed_certificate"];
+    assert_eq!(evidence["status"], "valid");
+    assert_eq!(evidence["mesh_revision"], 91);
+    assert_eq!(
+        evidence["topology_fingerprint"],
+        evidence["certificate_fingerprint"]
+    );
+    assert_eq!(evidence["certificate_status"], "accepted");
+    let gates = evidence["family_gates"]
+        .as_array()
+        .expect("family gates should be typed rows");
+    assert_eq!(gates.len(), 3);
+    let prism = gates
+        .iter()
+        .find(|gate| gate["family"] == "prism6")
+        .expect("prism6 gate should be published");
+    assert_eq!(prism["metric"], "tetra_decomposition_scaled_jacobian.v1");
+    assert_eq!(prism["threshold"], 0.1);
+    assert_eq!(prism["passed"], true);
+    assert_eq!(prism["positive_jacobian"], true);
+    assert!(prism["minimum_jacobian_m3"].as_f64().unwrap() > 0.0);
+}
+
+#[tokio::test]
+async fn mesh_quality_gates_suppresses_stale_mixed_certificate_values() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+        ))
+        .expect("mixed certificate fixture should parse");
+        let certificate: fullmag_ir::MixedLayerTopologyCertificateV1IR =
+            serde_json::from_value(fixture["certificate"].clone())
+                .expect("mixed certificate fixture should deserialize");
+        let report: fullmag_ir::FemSharedDomainBuildReportIR =
+            serde_json::from_value(serde_json::json!({
+                "build_mode": "shared_domain",
+                "mixed_layer_topology_certificate": certificate
+            }))
+            .expect("mixed build report should deserialize");
+        let mut mesh = sample_fem_mesh_payload();
+        mesh.build_report = Some(report);
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_workspace = Some(serde_json::json!({}));
+        snapshot.mesh_revision = 92;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/quality-gates")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["mixed_certificate"]["status"], "stale");
+    assert_eq!(
+        json["mixed_certificate"]["family_gates"],
+        serde_json::json!([])
+    );
+    assert!(json["mixed_certificate"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("fingerprint"));
 }
 
 #[tokio::test]
@@ -7798,6 +7958,9 @@ fn openapi_registers_typed_mixed_topology_truth_fields() {
     for schema in [
         "MeshLayeredPolicyResource",
         "MeshMixedLayerTopologyCertificateSummaryResource",
+        "MeshMixedCertificateFamilyQualityGateResource",
+        "MeshMixedCertificateQualityEvidenceResource",
+        "MeshMixedP1ExecutionResource",
         "MeshMixedLayerTopologyRejectionResource",
         "MeshMixedTopologyProvenanceResource",
         "MeshSharedDomainBuildReportResource",
@@ -7827,6 +7990,27 @@ fn openapi_registers_typed_mixed_topology_truth_fields() {
         .as_object()
         .expect("active build properties");
     assert!(active_build.contains_key("mixed_layer_topology_rejection"));
+    let quality_gates = schemas["MeshQualityGatesResource"]["properties"]
+        .as_object()
+        .expect("quality-gates properties");
+    assert!(quality_gates.contains_key("mixed_certificate"));
+    let rejection = schemas["MeshMixedLayerTopologyRejectionResource"]["properties"]
+        .as_object()
+        .expect("mixed rejection properties");
+    for field in [
+        "rejection_category",
+        "rejection_reason",
+        "missing_capabilities",
+        "requested_execution",
+        "resolved_execution",
+        "fallback",
+        "free_tetrahedral_alternative",
+    ] {
+        assert!(
+            rejection.contains_key(field),
+            "missing rejection field {field}"
+        );
+    }
 }
 
 #[tokio::test]

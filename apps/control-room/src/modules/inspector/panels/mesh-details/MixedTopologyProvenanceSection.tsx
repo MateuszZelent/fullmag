@@ -21,6 +21,15 @@ export interface MixedTopologyPresentation {
   requestedExactLayers: boolean | null;
   requestedLayers: number | null;
   requestedTopology: string;
+  rejection: {
+    alternative: string;
+    category: string;
+    fallback: string;
+    missingCapabilities: readonly string[];
+    reason: string;
+    requestedExecution: string;
+    resolvedExecution: string;
+  } | null;
   resolvedExactLayers: boolean | null;
   resolvedLayers: number | null;
   resolvedTopology: string;
@@ -64,6 +73,15 @@ function firstBoolean(...values: unknown[]): boolean | null {
     if (typeof value === "boolean") return value;
   }
   return null;
+}
+
+function executionSummary(value: unknown, missing: string): string {
+  const record = asRecord(value);
+  if (!record) return missing;
+  const fields = ["backend", "device", "precision", "mode", "study"]
+    .map((key) => record[key])
+    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
+  return fields.length > 0 ? fields.join(" / ") : missing;
 }
 
 function flattenedCounts(
@@ -117,6 +135,12 @@ export function resolveMixedTopologyPresentation({
     manifestRecord?.mixed_layer_topology_certificate,
     manifestRecord?.mixed_layer_topology_certificate_summary,
   );
+  const rejectionRecord = asRecord(rejectionEvidence);
+  const missingCapabilities = Array.isArray(rejectionRecord?.missing_capabilities)
+    ? rejectionRecord.missing_capabilities.filter(
+        (value): value is string => typeof value === "string" && value.trim().length > 0,
+      )
+    : [];
   const counts = firstRecord(
     report?.element_counts_by_type,
     manifestRecord?.element_counts_by_type,
@@ -204,6 +228,23 @@ export function resolveMixedTopologyPresentation({
     requestedExactLayers: firstBoolean(requestedPolicy?.exact_layer_count),
     requestedLayers,
     requestedTopology,
+    rejection: rejectionRecord
+      ? {
+          alternative: firstString(rejectionRecord.free_tetrahedral_alternative),
+          category: firstString(rejectionRecord.rejection_category),
+          fallback: firstString(rejectionRecord.fallback),
+          missingCapabilities,
+          reason: firstString(rejectionRecord.rejection_reason),
+          requestedExecution: executionSummary(
+            rejectionRecord.requested_execution,
+            "not published",
+          ),
+          resolvedExecution: executionSummary(
+            rejectionRecord.resolved_execution,
+            "not resolved",
+          ),
+        }
+      : null,
     resolvedExactLayers: firstBoolean(resolvedPolicy?.exact_layer_count),
     resolvedLayers,
     resolvedTopology,
@@ -246,6 +287,27 @@ export function MixedTopologyProvenanceSection({
           kind="error"
           message={`Exact-layer certificate rejected: ${model.certificateReason}.`}
         />
+      ) : null}
+      {model.rejection ? (
+        <>
+          <strong>Mixed-P1 request rejected</strong>
+          <MeshResourceFields
+            fields={[
+              { label: "Rejection category", value: model.rejection.category },
+              { label: "Reason", value: model.rejection.reason },
+              {
+                label: "Missing capabilities",
+                value: model.rejection.missingCapabilities.length > 0
+                  ? model.rejection.missingCapabilities.join(", ")
+                  : "not published",
+              },
+              { label: "Requested execution", value: model.rejection.requestedExecution },
+              { label: "Resolved execution", value: model.rejection.resolvedExecution },
+              { label: "Fallback", value: model.rejection.fallback },
+              { label: "Free tetrahedral alternative", value: model.rejection.alternative },
+            ]}
+          />
+        </>
       ) : null}
       {model.layers === 1 ? (
         <FeedbackBanner

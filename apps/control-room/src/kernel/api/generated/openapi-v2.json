@@ -10231,6 +10231,106 @@
         ],
         "type": "object"
       },
+      "MeshMixedCertificateFamilyQualityGateResource": {
+        "properties": {
+          "family": {
+            "type": "string"
+          },
+          "metric": {
+            "type": "string"
+          },
+          "minimum_jacobian_m3": {
+            "format": "double",
+            "type": "number"
+          },
+          "p05": {
+            "format": "double",
+            "type": "number"
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "positive_jacobian": {
+            "type": "boolean"
+          },
+          "threshold": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "family",
+          "metric",
+          "p05",
+          "threshold",
+          "passed",
+          "minimum_jacobian_m3",
+          "positive_jacobian"
+        ],
+        "type": "object"
+      },
+      "MeshMixedCertificateQualityEvidenceResource": {
+        "properties": {
+          "certificate_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "certificate_schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "certificate_status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "family_gates": {
+            "items": {
+              "$ref": "#/components/schemas/MeshMixedCertificateFamilyQualityGateResource"
+            },
+            "type": "array"
+          },
+          "mesh_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/MeshMixedCertificateQualityEvidenceStatus"
+          },
+          "topology_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "mesh_revision"
+        ],
+        "type": "object"
+      },
+      "MeshMixedCertificateQualityEvidenceStatus": {
+        "enum": [
+          "valid",
+          "stale",
+          "rejected",
+          "unavailable"
+        ],
+        "type": "string"
+      },
       "MeshMixedLayerTopologyCertificateSummaryResource": {
         "properties": {
           "actual_node_plane_count": {
@@ -10282,13 +10382,57 @@
           "certificate_status": {
             "type": "string"
           },
+          "fallback": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "free_tetrahedral_alternative": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "missing_capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "rejection_category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "rejection_reason": {
             "type": "string"
+          },
+          "requested_execution": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshMixedP1ExecutionResource"
+              }
+            ]
           },
           "requested_layer_count": {
             "format": "int32",
             "minimum": 0,
             "type": "integer"
+          },
+          "resolved_execution": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshMixedP1ExecutionResource"
+              }
+            ]
           },
           "schema_version": {
             "type": "string"
@@ -10300,6 +10444,41 @@
           "requested_layer_count",
           "rejection_reason"
         ],
+        "type": "object"
+      },
+      "MeshMixedP1ExecutionResource": {
+        "properties": {
+          "backend": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "device": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "precision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "study": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "MeshMixedTopologyProvenanceResource": {
@@ -11102,6 +11281,9 @@
               "null"
             ]
           },
+          "mixed_certificate": {
+            "$ref": "#/components/schemas/MeshMixedCertificateQualityEvidenceResource"
+          },
           "revision": {
             "format": "int64",
             "minimum": 0,
@@ -11109,7 +11291,8 @@
           }
         },
         "required": [
-          "revision"
+          "revision",
+          "mixed_certificate"
         ],
         "type": "object"
       },

@@ -175,6 +175,7 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
         <MeshQualityGatesSection
           badge={model.sharedQualityStatus}
           gateRows={model.gateRows}
+          mixedCertificate={model.mixedCertificateQuality}
         />
       ) : null}
       {showSection("quality-statistics") ? (

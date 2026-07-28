@@ -29,10 +29,12 @@ use crate::schemas::mesh::{
     MeshBuildPolicyDiffResource, MeshBuildProvenanceResource, MeshBuildPublishedResourcesResource,
     MeshCapabilitiesResource, MeshHistogramBinElementsResource, MeshInterfaceConfigReplaceRequest,
     MeshInterfaceConfigResource, MeshInterfaceQualityResource, MeshInterfaceReportResource,
-    MeshLastSuccessfulBuildResource, MeshMixedLayerTopologyRejectionResource,
-    MeshObjectConfigEntryResource, MeshObjectConfigReplaceRequest, MeshObjectConfigResource,
-    MeshObjectQualityResource, MeshObjectReportResource, MeshObjectSegmentResource,
-    MeshObjectSizeFieldResource, MeshPartResource, MeshPeriodicBoundaryFacePairResource,
+    MeshLastSuccessfulBuildResource, MeshMixedCertificateFamilyQualityGateResource,
+    MeshMixedCertificateQualityEvidenceResource, MeshMixedCertificateQualityEvidenceStatus,
+    MeshMixedLayerTopologyRejectionResource, MeshObjectConfigEntryResource,
+    MeshObjectConfigReplaceRequest, MeshObjectConfigResource, MeshObjectQualityResource,
+    MeshObjectReportResource, MeshObjectSegmentResource, MeshObjectSizeFieldResource,
+    MeshPartResource, MeshPeriodicBoundaryFacePairResource,
     MeshPeriodicDomainNodePairCountsResource, MeshPeriodicPairResource, MeshPeriodicPairsResource,
     MeshQualityGatesResource, MeshRealizedSizeFieldResource, MeshRealizedSizeFieldsPayload,
     MeshRealizedSizeFieldsResource, MeshRegionMembershipResource, MeshRegionQualityResource,
@@ -1357,7 +1359,153 @@ pub async fn get_mesh_quality_gates(
     Ok(Json(MeshQualityGatesResource {
         revision: snapshot.mesh_revision,
         gates,
+        mixed_certificate: mixed_certificate_quality_evidence(&snapshot),
     }))
+}
+
+fn mixed_certificate_quality_evidence(
+    snapshot: &SessionStateResponse,
+) -> MeshMixedCertificateQualityEvidenceResource {
+    let Some(mesh) = snapshot.fem_mesh.as_ref() else {
+        return mixed_certificate_quality_unavailable(
+            snapshot.mesh_revision,
+            None,
+            None,
+            MeshMixedCertificateQualityEvidenceStatus::Unavailable,
+            "current FEM mesh is unavailable",
+        );
+    };
+    let topology_fingerprint = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
+    let Some(certificate) = mesh
+        .build_report
+        .as_ref()
+        .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
+    else {
+        return mixed_certificate_quality_unavailable(
+            snapshot.mesh_revision,
+            Some(topology_fingerprint),
+            None,
+            MeshMixedCertificateQualityEvidenceStatus::Unavailable,
+            "accepted mixed-layer topology certificate is unavailable",
+        );
+    };
+    let certificate_fingerprint = certificate.topology_fingerprint.clone();
+    let certificate_schema_version = Some(certificate.schema_version.clone());
+    let certificate_status = Some(certificate.certificate_status.clone());
+    if certificate_fingerprint != topology_fingerprint {
+        return MeshMixedCertificateQualityEvidenceResource {
+            status: MeshMixedCertificateQualityEvidenceStatus::Stale,
+            mesh_revision: snapshot.mesh_revision,
+            topology_fingerprint: Some(topology_fingerprint),
+            certificate_fingerprint: Some(certificate_fingerprint),
+            certificate_schema_version,
+            certificate_status,
+            reason: Some(
+                "certificate fingerprint does not match live topology fingerprint".to_string(),
+            ),
+            family_gates: Vec::new(),
+        };
+    }
+    if let Err(reasons) = certificate.validate() {
+        return MeshMixedCertificateQualityEvidenceResource {
+            status: MeshMixedCertificateQualityEvidenceStatus::Rejected,
+            mesh_revision: snapshot.mesh_revision,
+            topology_fingerprint: Some(topology_fingerprint),
+            certificate_fingerprint: Some(certificate_fingerprint),
+            certificate_schema_version,
+            certificate_status,
+            reason: Some(reasons.join("; ")),
+            family_gates: Vec::new(),
+        };
+    }
+    let Some(threshold) = certificate
+        .deterministic_inputs
+        .get("scaled_jacobian_p05_min")
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite())
+    else {
+        return mixed_certificate_quality_unavailable(
+            snapshot.mesh_revision,
+            Some(topology_fingerprint),
+            Some(certificate_fingerprint),
+            MeshMixedCertificateQualityEvidenceStatus::Rejected,
+            "mixed certificate quality threshold is unavailable",
+        );
+    };
+    let families = certificate
+        .cell_family_counts_by_part
+        .values()
+        .flat_map(|counts| counts.keys().cloned())
+        .collect::<BTreeSet<_>>();
+    let mut family_gates = Vec::with_capacity(families.len());
+    for family in families {
+        let Some(p05) = certificate
+            .scaled_jacobian_p05_by_family
+            .get(&family)
+            .copied()
+            .filter(|value| value.is_finite())
+        else {
+            return mixed_certificate_quality_unavailable(
+                snapshot.mesh_revision,
+                Some(topology_fingerprint),
+                Some(certificate_fingerprint),
+                MeshMixedCertificateQualityEvidenceStatus::Rejected,
+                "mixed certificate per-family p05 evidence is incomplete",
+            );
+        };
+        let Some(minimum_jacobian_m3) = certificate
+            .jacobian_minima_m3_by_family
+            .get(&family)
+            .copied()
+            .filter(|value| value.is_finite())
+        else {
+            return mixed_certificate_quality_unavailable(
+                snapshot.mesh_revision,
+                Some(topology_fingerprint),
+                Some(certificate_fingerprint),
+                MeshMixedCertificateQualityEvidenceStatus::Rejected,
+                "mixed certificate positive-Jacobian evidence is incomplete",
+            );
+        };
+        family_gates.push(MeshMixedCertificateFamilyQualityGateResource {
+            family,
+            metric: certificate.quality_metric.clone(),
+            p05,
+            threshold,
+            passed: p05 >= threshold,
+            minimum_jacobian_m3,
+            positive_jacobian: minimum_jacobian_m3 > 0.0,
+        });
+    }
+    MeshMixedCertificateQualityEvidenceResource {
+        status: MeshMixedCertificateQualityEvidenceStatus::Valid,
+        mesh_revision: snapshot.mesh_revision,
+        topology_fingerprint: Some(topology_fingerprint),
+        certificate_fingerprint: Some(certificate_fingerprint),
+        certificate_schema_version,
+        certificate_status,
+        reason: None,
+        family_gates,
+    }
+}
+
+fn mixed_certificate_quality_unavailable(
+    mesh_revision: u64,
+    topology_fingerprint: Option<String>,
+    certificate_fingerprint: Option<String>,
+    status: MeshMixedCertificateQualityEvidenceStatus,
+    reason: &str,
+) -> MeshMixedCertificateQualityEvidenceResource {
+    MeshMixedCertificateQualityEvidenceResource {
+        status,
+        mesh_revision,
+        topology_fingerprint,
+        certificate_fingerprint,
+        certificate_schema_version: None,
+        certificate_status: None,
+        reason: Some(reason.to_string()),
+        family_gates: Vec::new(),
+    }
 }
 
 #[utoipa::path(

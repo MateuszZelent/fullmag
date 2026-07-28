@@ -69,6 +69,14 @@ multiple bodies, or multilayers. FDM and hybrid lanes are unsupported. The
 Gmsh 4.15.2 fixture is topology feasibility evidence and does not promote any
 row to `production_executable` or `validated`.
 
+The Control Room may display typed mixed-certificate quality gates and
+structured mixed-P1 rejection evidence without changing any capability row.
+Per-family quality evidence proves only the identity and acceptance checks of
+the current certified mesh. Missing-capability IDs, requested/resolved
+execution, `fallback=none`, and the `free_tetrahedral` alternative are
+diagnostics supplied by the planner/runtime path; rendering them must never be
+used to infer executable availability or validation.
+
 ### Execution-device cardinality
 
 The public execution vocabulary accepts a device target and `gpu_count`, but

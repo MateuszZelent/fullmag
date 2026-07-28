@@ -5700,6 +5700,31 @@ export interface components {
             topology: string;
             transition_policy: string;
         };
+        MeshMixedCertificateFamilyQualityGateResource: {
+            family: string;
+            metric: string;
+            /** Format: double */
+            minimum_jacobian_m3: number;
+            /** Format: double */
+            p05: number;
+            passed: boolean;
+            positive_jacobian: boolean;
+            /** Format: double */
+            threshold: number;
+        };
+        MeshMixedCertificateQualityEvidenceResource: {
+            certificate_fingerprint?: string | null;
+            certificate_schema_version?: string | null;
+            certificate_status?: string | null;
+            family_gates?: components["schemas"]["MeshMixedCertificateFamilyQualityGateResource"][];
+            /** Format: int64 */
+            mesh_revision: number;
+            reason?: string | null;
+            status: components["schemas"]["MeshMixedCertificateQualityEvidenceStatus"];
+            topology_fingerprint?: string | null;
+        };
+        /** @enum {string} */
+        MeshMixedCertificateQualityEvidenceStatus: "valid" | "stale" | "rejected" | "unavailable";
         MeshMixedLayerTopologyCertificateSummaryResource: {
             /** Format: int32 */
             actual_node_plane_count?: number;
@@ -5715,10 +5740,23 @@ export interface components {
         };
         MeshMixedLayerTopologyRejectionResource: {
             certificate_status: string;
+            fallback?: string | null;
+            free_tetrahedral_alternative?: string | null;
+            missing_capabilities?: string[];
+            rejection_category?: string | null;
             rejection_reason: string;
+            requested_execution?: null | components["schemas"]["MeshMixedP1ExecutionResource"];
             /** Format: int32 */
             requested_layer_count: number;
+            resolved_execution?: null | components["schemas"]["MeshMixedP1ExecutionResource"];
             schema_version: string;
+        };
+        MeshMixedP1ExecutionResource: {
+            backend?: string | null;
+            device?: string | null;
+            mode?: string | null;
+            precision?: string | null;
+            study?: string | null;
         };
         MeshMixedTopologyProvenanceResource: {
             accepted_certificate_fingerprint: string;
@@ -5933,6 +5971,7 @@ export interface components {
         };
         MeshQualityGatesResource: {
             gates?: Record<string, never> | null;
+            mixed_certificate: components["schemas"]["MeshMixedCertificateQualityEvidenceResource"];
             /** Format: int64 */
             revision: number;
         };

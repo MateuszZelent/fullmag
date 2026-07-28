@@ -455,7 +455,33 @@ pub struct MeshMixedLayerTopologyRejectionResource {
     pub schema_version: String,
     pub certificate_status: String,
     pub requested_layer_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rejection_category: Option<String>,
     pub rejection_reason: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing_capabilities: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_execution: Option<MeshMixedP1ExecutionResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_execution: Option<MeshMixedP1ExecutionResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub free_tetrahedral_alternative: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub struct MeshMixedP1ExecutionResource {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub precision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub study: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
@@ -596,6 +622,45 @@ pub struct MeshQualityGatesResource {
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gates: Option<Value>,
+    pub mixed_certificate: MeshMixedCertificateQualityEvidenceResource,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MeshMixedCertificateQualityEvidenceStatus {
+    Valid,
+    Stale,
+    Rejected,
+    Unavailable,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct MeshMixedCertificateFamilyQualityGateResource {
+    pub family: String,
+    pub metric: String,
+    pub p05: f64,
+    pub threshold: f64,
+    pub passed: bool,
+    pub minimum_jacobian_m3: f64,
+    pub positive_jacobian: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct MeshMixedCertificateQualityEvidenceResource {
+    pub status: MeshMixedCertificateQualityEvidenceStatus,
+    pub mesh_revision: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topology_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certificate_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certificate_schema_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certificate_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub family_gates: Vec<MeshMixedCertificateFamilyQualityGateResource>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
