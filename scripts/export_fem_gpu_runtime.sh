@@ -9,6 +9,9 @@ VARIANTS_ROOT="${RUNTIME_PARENT}/fem-gpu-variants"
 STAGING_ROOT="${RUNTIME_ROOT}.staging.$$"
 STAGING_RELATIVE=".fullmag/runtimes/$(basename "${STAGING_ROOT}")"
 RUNTIME_LOCK="${RUNTIME_PARENT}/.fem-gpu-host.export.lock"
+docker_build_ref=""
+docker_compatibility_ref="fullmag/fem-gpu:local"
+docker_build_ref_marker=""
 mkdir -p "${RUNTIME_PARENT}"
 exec 9>"${RUNTIME_LOCK}"
 if ! flock -n 9; then
@@ -18,6 +21,12 @@ fi
 
 cleanup_failed_export() {
   local status="$?"
+  if [ -n "${docker_build_ref}" ]; then
+    remove_managed_fem_build_ref "${docker_build_ref}" || true
+  fi
+  if [ -n "${docker_build_ref_marker}" ]; then
+    rmdir -- "${docker_build_ref_marker}" 2>/dev/null || true
+  fi
   rm -rf -- "${STAGING_ROOT}"
   exit "${status}"
 }
@@ -44,9 +53,10 @@ export FULLMAG_ENABLE_NVTX
 FULLMAG_HOST_UID="$(id -u)"
 FULLMAG_HOST_GID="$(id -g)"
 
-docker compose --profile fem-gpu build fem-gpu
-
-docker_image_id="$(capture_managed_fem_image_id fullmag/fem-gpu:local)"
+docker_build_ref_marker="$(mktemp -d "${TMPDIR:-/tmp}/fullmag-fem-gpu-runtime-export.XXXXXXXXXX")"
+docker_build_ref="fullmag/fem-gpu:$(basename "${docker_build_ref_marker}")"
+build_managed_fem_image "${docker_build_ref}" "${docker_compatibility_ref}"
+docker_image_id="${MANAGED_FEM_BUILT_IMAGE_ID}"
 
 FULLMAG_FEM_GPU_IMAGE="${docker_image_id}" docker compose --profile fem-gpu run --rm -T \
   -e FULLMAG_FEM_RUNTIME_CARGO_JOBS="${FULLMAG_FEM_RUNTIME_CARGO_JOBS}" \
@@ -549,7 +559,7 @@ chmod -R u+rwX,go+rX,go-w ${runtime_root}
 echo "[export_fem_gpu_runtime] container-side export complete"
 ' < /dev/null
 
-observed_docker_image_id="$(observe_managed_fem_image_tag fullmag/fem-gpu:local "${docker_image_id}")"
+observed_docker_image_id="$(observe_managed_fem_image_tag "${docker_compatibility_ref}" "${docker_image_id}")"
 
 cat > "${STAGING_ROOT}/bin/fullmag-fem-gpu" <<'EOF'
 #!/usr/bin/env bash
@@ -797,6 +807,10 @@ publish_runtime_bundle() {
 }
 
 publish_runtime_bundle
+remove_managed_fem_build_ref "${docker_build_ref}"
+docker_build_ref=""
+rmdir -- "${docker_build_ref_marker}"
+docker_build_ref_marker=""
 trap - EXIT
 echo "Exported FEM GPU host runtime bundle: ${RUNTIME_ROOT}"
 echo "Main executable: ${RUNTIME_ROOT}/bin/fullmag-fem-gpu"

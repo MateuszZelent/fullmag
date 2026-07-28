@@ -392,7 +392,9 @@ def test_export_script_serializes_runtime_bundle_mutation_with_flock() -> None:
     script = EXPORT_SCRIPT.read_text(encoding="utf-8")
     lock_index = script.find('RUNTIME_LOCK="${RUNTIME_PARENT}/.fem-gpu-host.export.lock"')
     flock_index = script.find('flock 9')
-    compose_index = script.find("docker compose --profile fem-gpu build fem-gpu")
+    compose_index = script.find(
+        'build_managed_fem_image "${docker_build_ref}" "${docker_compatibility_ref}"'
+    )
 
     assert lock_index != -1
     assert flock_index != -1
@@ -406,10 +408,10 @@ def test_export_script_pins_built_image_id_across_export_and_validation() -> Non
     identity_helper = IMAGE_IDENTITY_HELPER.read_text(encoding="utf-8")
     manifest_builder = MANIFEST_BUILDER.read_text(encoding="utf-8")
 
-    build_index = script.find("docker compose --profile fem-gpu build fem-gpu")
-    capture_index = script.find(
-        'docker_image_id="$(capture_managed_fem_image_id fullmag/fem-gpu:local)"'
+    build_index = script.find(
+        'build_managed_fem_image "${docker_build_ref}" "${docker_compatibility_ref}"'
     )
+    capture_index = script.find('docker_image_id="${MANAGED_FEM_BUILT_IMAGE_ID}"')
     export_index = script.find(
         'FULLMAG_FEM_GPU_IMAGE="${docker_image_id}" docker compose --profile fem-gpu run'
     )
@@ -421,12 +423,86 @@ def test_export_script_pins_built_image_id_across_export_and_validation() -> Non
     assert export_index != -1
     assert validate_index != -1
     assert build_index < capture_index < export_index < validate_index
-    assert script.count('docker_image_id="$(capture_managed_fem_image_id') == 1
+    assert 'capture_managed_fem_image_id fullmag/fem-gpu:local' not in script
     assert script.count("observe_managed_fem_image_tag") == 1
+    assert 'remove_managed_fem_build_ref "${docker_build_ref}"' in script
+    final_cleanup_index = script.rfind(
+        'remove_managed_fem_build_ref "${docker_build_ref}"'
+    )
+    trap_clear_index = script.rfind("trap - EXIT")
+    assert validate_index < final_cleanup_index < trap_clear_index
     assert '--observed-docker-image-id "${observed_docker_image_id}"' in script
     assert "managed FEM image tag drift detected" in identity_helper
+    assert 'FULLMAG_FEM_GPU_IMAGE="${build_image_ref}"' in identity_helper
+    assert 'capture_managed_fem_image_id "${build_image_ref}"' in identity_helper
+    assert 'docker image tag "${MANAGED_FEM_BUILT_IMAGE_ID}"' in identity_helper
+    assert 'docker image rm "${build_image_ref}"' in identity_helper
+    assert "docker image rm --force" not in identity_helper
     assert 'current_image_id="$(docker image inspect "${image_ref}"' in identity_helper
     assert '"drift_observed"' in manifest_builder
+
+
+def test_managed_fem_build_capture_ignores_compatibility_retag(
+    tmp_path: Path,
+) -> None:
+    fake_docker = tmp_path / "docker"
+    calls = tmp_path / "docker-calls"
+    fake_docker.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s|%s\n' "${FULLMAG_FEM_GPU_IMAGE:-<unset>}" "$*" >> "${FAKE_DOCKER_CALLS}"
+if [ "$1" = "compose" ]; then
+  exit 0
+fi
+if [ "$1 $2" = "image inspect" ]; then
+  case "$3" in
+    fullmag/fem-gpu:runtime-export-test) printf 'sha256:%064d\n' 1 ;;
+    fullmag/fem-gpu:local) printf 'sha256:%064d\n' 2 ;;
+    *) exit 1 ;;
+  esac
+  exit 0
+fi
+if [ "$1 $2" = "image tag" ]; then
+  exit 0
+fi
+exit 1
+""",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-euo",
+            "pipefail",
+            "-c",
+            f"""
+source "{IMAGE_IDENTITY_HELPER}"
+build_managed_fem_image \\
+  fullmag/fem-gpu:runtime-export-test \\
+  fullmag/fem-gpu:local
+printf '%s\n' "${{MANAGED_FEM_BUILT_IMAGE_ID}}"
+""",
+        ],
+        cwd=REPO_ROOT,
+        env={
+            "PATH": f"{tmp_path}:/usr/bin:/bin",
+            "FAKE_DOCKER_CALLS": str(calls),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == f"sha256:{1:064d}"
+    docker_calls = calls.read_text(encoding="utf-8").splitlines()
+    assert docker_calls == [
+        "fullmag/fem-gpu:runtime-export-test|compose --profile fem-gpu build fem-gpu",
+        "<unset>|image inspect fullmag/fem-gpu:runtime-export-test --format {{.Id}}",
+        f"<unset>|image tag sha256:{1:064d} fullmag/fem-gpu:local",
+    ]
 
 
 def test_managed_fem_image_identity_warns_and_keeps_pinned_id_on_retag(
