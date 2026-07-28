@@ -192,11 +192,12 @@ impl AutosaveTargetState {
         };
         let payload_ref = match sample_kind {
             AutosaveSampleKind::Table => format!(
-                "stages/{}/table/{stage_sample_index}",
-                active.manifest.stage_id
+                "stages/stage_{:04}_{}/table/{stage_sample_index}",
+                active.manifest.stage_index, active.manifest.stage_id
             ),
             AutosaveSampleKind::Field => format!(
-                "stages/{}/fields/{}/{stage_sample_index}",
+                "stages/stage_{:04}_{}/fields/{}/{stage_sample_index}",
+                active.manifest.stage_index,
                 active.manifest.stage_id,
                 quantity.unwrap_or("unknown")
             ),
@@ -367,7 +368,7 @@ mod tests {
         assert!(!state.recover_incomplete_stage().unwrap().complete);
         let encoded = serde_json::to_value(state.continuous_index()).unwrap();
         assert!(encoded[0].get("values").is_none());
-        assert_eq!(encoded[0]["payload_ref"], "stages/relax/table/0");
+        assert_eq!(encoded[0]["payload_ref"], "stages/stage_0000_relax/table/0");
     }
 
     #[test]
