@@ -43,7 +43,7 @@ from fullmag.model.discretization import PerObjectMeshRecipe
 
 def _make_mesh_3elem():
     """Minimal 3-tet mesh: markers 1 (left), 2 (right), 3 (air)."""
-    return MeshData(
+    return MeshData.from_legacy_tet4(
         nodes=np.asarray(
             [
                 [-0.5, -0.5, -0.5],
@@ -495,7 +495,7 @@ class SingleObjectPreviewTests(unittest.TestCase):
         ), patch(
             "fullmag.meshing.asset_pipeline.generate_mesh",
         ) as gen:
-            gen.return_value = MeshData(
+            gen.return_value = MeshData.from_legacy_tet4(
                 nodes=np.zeros((4, 3), dtype=np.float64),
                 elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
                 element_markers=np.ones(1, dtype=np.int32),
@@ -519,7 +519,7 @@ class SingleObjectPreviewTests(unittest.TestCase):
         ), patch(
             "fullmag.meshing.asset_pipeline.generate_mesh_from_file",
         ) as gen:
-            gen.return_value = MeshData(
+            gen.return_value = MeshData.from_legacy_tet4(
                 nodes=np.zeros((4, 3), dtype=np.float64),
                 elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
                 element_markers=np.ones(1, dtype=np.int32),
@@ -540,7 +540,7 @@ class SingleObjectPreviewTests(unittest.TestCase):
         ), patch(
             "fullmag.meshing.asset_pipeline.generate_mesh",
         ) as gen:
-            gen.return_value = MeshData(
+            gen.return_value = MeshData.from_legacy_tet4(
                 nodes=np.zeros((4, 3), dtype=np.float64),
                 elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
                 element_markers=np.ones(1, dtype=np.int32),
@@ -569,7 +569,7 @@ class SingleObjectPreviewTests(unittest.TestCase):
         ), patch(
             "fullmag.meshing.asset_pipeline.generate_mesh",
         ) as gen:
-            gen.return_value = MeshData(
+            gen.return_value = MeshData.from_legacy_tet4(
                 nodes=np.zeros((4, 3), dtype=np.float64),
                 elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
                 element_markers=np.ones(1, dtype=np.int32),

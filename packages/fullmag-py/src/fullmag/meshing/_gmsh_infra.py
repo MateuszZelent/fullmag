@@ -95,6 +95,7 @@ def _scale_mesh_nodes(mesh: MeshData, scale_xyz: NDArray[np.float64]) -> MeshDat
         periodic_mesh_certificate=mesh.periodic_mesh_certificate,
         quality=mesh.quality,
         per_domain_quality=mesh.per_domain_quality,
+        realization_report=mesh.realization_report,
     )
 
 

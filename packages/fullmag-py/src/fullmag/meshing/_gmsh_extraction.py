@@ -262,6 +262,35 @@ _MESHIO_SUPPORTED_ELEMENTS: dict[str, tuple[int, int, int]] = {
     "triangle": (2, 1, 3),
     "quad": (2, 1, 4),
 }
+
+# Gmsh linear element IDs are an ingress detail. Keep the conversion to the
+# canonical Fullmag local-node order explicit even where the current mapping
+# is identity, so a future family cannot accidentally inherit prefix/order
+# assumptions. Gmsh 4.15 Prism 6 uses bottom (0,1,2), top (3,4,5), matching
+# Fullmag's positive-reference ``prism6`` convention.
+_GMSH_TO_FULLMAG_NODE_PERMUTATION: dict[int, tuple[int, ...]] = {
+    2: (0, 1, 2),
+    3: (0, 1, 2, 3),
+    4: (0, 1, 2, 3),
+    5: (0, 1, 2, 3, 4, 5, 6, 7),
+    6: (0, 1, 2, 3, 4, 5),
+    7: (0, 1, 2, 3, 4),
+}
+
+
+def _canonical_gmsh_nodes(element_type: int, nodes: list[int]) -> list[int]:
+    try:
+        permutation = _GMSH_TO_FULLMAG_NODE_PERMUTATION[int(element_type)]
+    except KeyError as exc:
+        raise ValueError(
+            f"missing canonical Fullmag node permutation for Gmsh element type {element_type}"
+        ) from exc
+    if len(nodes) != len(permutation):
+        raise ValueError(
+            f"Gmsh element type {element_type} has {len(nodes)} nodes; "
+            f"canonical permutation expects {len(permutation)}"
+        )
+    return [nodes[index] for index in permutation]
 _MESHIO_VOLUME_TYPES = {
     "tetra": "tet4",
     "wedge": "prism6",
@@ -445,7 +474,12 @@ def _extract_mesh_data(
                     block_tags = [int(tag) for tag in tags]
                     for element_offset, start in enumerate(range(0, len(flat), num_nodes)):
                         cell_types.append(kind)
-                        cell_nodes.extend(flat[start : start + num_nodes])
+                        cell_nodes.extend(
+                            _canonical_gmsh_nodes(
+                                int(etype),
+                                flat[start : start + num_nodes],
+                            )
+                        )
                         cell_offsets.append(len(cell_nodes))
                         markers_list.append(semantic_marker)
                         if element_offset < len(block_tags):
@@ -474,7 +508,12 @@ def _extract_mesh_data(
                     flat = [node_index[int(t)] for t in nids]
                     for start in range(0, len(flat), num_nodes):
                         facet_types.append(kind)
-                        facet_nodes.extend(flat[start : start + num_nodes])
+                        facet_nodes.extend(
+                            _canonical_gmsh_nodes(
+                                int(etype),
+                                flat[start : start + num_nodes],
+                            )
+                        )
                         facet_offsets.append(len(facet_nodes))
                         bmarkers_list.append(semantic_marker)
 
@@ -1146,7 +1185,12 @@ def _extract_gmsh_typed_connectivity(
             )
         for start in range(0, len(flat), num_nodes):
             types.append(kind)
-            nodes.extend(flat[start : start + num_nodes])
+            nodes.extend(
+                _canonical_gmsh_nodes(
+                    int(element_type),
+                    flat[start : start + num_nodes],
+                )
+            )
             offsets.append(len(nodes))
     return (
         types,

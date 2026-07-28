@@ -11,8 +11,19 @@ import pytest
 
 import fullmag as fm
 import fullmag.meshing._gmsh_generators as gmsh_generators
-from fullmag.meshing._gmsh_extraction import _extract_mesh_data
-from fullmag.meshing._gmsh_types import MeshData, _cell_jacobian_determinants
+import fullmag.meshing._gmsh_types as gmsh_types
+from fullmag.meshing._gmsh_extraction import (
+    _GMSH_TO_FULLMAG_NODE_PERMUTATION,
+    _extract_mesh_data,
+)
+from fullmag.meshing._gmsh_types import MeshData, MeshOptions, _cell_jacobian_determinants
+from fullmag.meshing._gmsh_swept import (
+    SWEEP_STRATEGY_PRISM,
+    _extract_swept_mesh_data,
+    generate_swept_box_mesh,
+    generate_swept_cylinder_mesh,
+    generate_swept_mesh,
+)
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "gmsh" / "mixed_prism_pyramid_airbox.geo"
@@ -34,6 +45,10 @@ CELL_FACES = {
         (3, 0, 4),
     ),
 }
+
+
+def test_gmsh_prism6_node_order_has_an_explicit_canonical_permutation() -> None:
+    assert _GMSH_TO_FULLMAG_NODE_PERMUTATION[6] == (0, 1, 2, 3, 4, 5)
 
 
 def _physical_entities(gmsh, *, dim: int, name: str) -> list[int]:
@@ -247,6 +262,539 @@ def test_gmsh_feasibility_freezes_mixed_p1_topology(
         prism_splitter.assert_not_called()
     finally:
         gmsh.finalize()
+
+
+@pytest.mark.parametrize(("layers", "expected_planes"), [(1, 2), (2, 3), (3, 4)])
+def test_body_only_box_prism_mesh_has_exact_requested_layers(
+    layers: int,
+    expected_planes: int,
+) -> None:
+    gmsh = pytest.importorskip("gmsh")
+    assert getattr(gmsh, "__version__", "unknown") == "4.15.2"
+
+    mesh = generate_swept_box_mesh(
+        (8.0e-9, 5.0e-9, 3.0e-9),
+        hmax=2.0e-9,
+        n_layers=layers,
+        thin_axis=2,
+        order=1,
+        recombine=True,
+    )
+
+    assert set(mesh.cell_types.tolist()) == {"prism6"}
+    tolerance = max(1.0e-15, 1.0e-8 * 3.0e-9)
+    planes: list[float] = []
+    for coordinate in sorted(float(value) for value in mesh.nodes[:, 2]):
+        if not planes or abs(coordinate - planes[-1]) > tolerance:
+            planes.append(coordinate)
+    assert len(planes) == expected_planes
+    mesh.validate_strict()
+
+
+@pytest.mark.parametrize("axis", [0, 1, 2])
+def test_body_only_box_prism_mesh_honours_explicit_sweep_axis(axis: int) -> None:
+    pytest.importorskip("gmsh")
+    size = [9.0e-9, 7.0e-9, 5.0e-9]
+    mesh = generate_swept_box_mesh(
+        tuple(size),
+        hmax=2.0e-9,
+        n_layers=1,
+        thin_axis=axis,
+        order=1,
+        recombine=True,
+    )
+
+    tolerance = max(1.0e-15, 1.0e-8 * size[axis])
+    planes: list[float] = []
+    for coordinate in sorted(float(value) for value in mesh.nodes[:, axis]):
+        if not planes or abs(coordinate - planes[-1]) > tolerance:
+            planes.append(coordinate)
+    assert len(planes) == 2
+    assert np.isclose(planes[0], -size[axis] / 2.0, atol=tolerance)
+    assert np.isclose(planes[1], size[axis] / 2.0, atol=tolerance)
+    assert set(mesh.cell_types.tolist()) == {"prism6"}
+    mesh.validate_strict()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"n_layers": 0}, "n_layers must be >= 1"),
+        ({"n_layers": 1, "order": 2}, "order=1"),
+        ({"n_layers": 1, "thin_axis": 3}, "thin_axis"),
+        ({"n_layers": 1, "distribution": "linear"}, "fixed distribution"),
+    ],
+)
+def test_body_only_box_prism_mesh_rejects_unsupported_request(
+    kwargs: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises((TypeError, ValueError), match=message):
+        generate_swept_box_mesh(
+            (8.0e-9, 5.0e-9, 3.0e-9),
+            hmax=2.0e-9,
+            **kwargs,
+        )
+
+
+def test_explicit_prism_strategy_rejects_non_box_geometry() -> None:
+    opts = fm.meshing.MeshOptions(mesh_strategy=SWEEP_STRATEGY_PRISM)
+    geometry = fm.Cylinder(radius=4.0e-9, height=2.0e-9)
+
+    with pytest.raises(TypeError, match="supports only axis-aligned Box"):
+        generate_swept_mesh(
+            geometry,
+            hmax=2.0e-9,
+            n_layers=1,
+            order=1,
+            options=opts,
+        )
+
+
+def test_body_only_box_prism_path_never_calls_prism_splitter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("gmsh")
+    swept_module = importlib.import_module("fullmag.meshing._gmsh_swept")
+    splitter = Mock(side_effect=AssertionError("prism splitter called"))
+    monkeypatch.setattr(swept_module, "_split_prism_to_tets", splitter)
+
+    mesh = generate_swept_box_mesh(
+        (8.0e-9, 5.0e-9, 3.0e-9),
+        hmax=2.0e-9,
+        n_layers=1,
+        order=1,
+        recombine=True,
+    )
+
+    assert set(mesh.cell_types.tolist()) == {"prism6"}
+    splitter.assert_not_called()
+
+
+def test_body_only_box_prism_uses_one_exact_uniform_extrusion_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gmsh = pytest.importorskip("gmsh")
+    calls: list[tuple[list[int], list[float], bool]] = []
+    real_extrude = gmsh.model.geo.extrude
+
+    def recording_extrude(*args, **kwargs):
+        calls.append(
+            (
+                list(kwargs["numElements"]),
+                list(kwargs["heights"]),
+                bool(kwargs["recombine"]),
+            )
+        )
+        return real_extrude(*args, **kwargs)
+
+    monkeypatch.setattr(gmsh.model.geo, "extrude", recording_extrude)
+    mesh = generate_swept_box_mesh(
+        (8.0e-9, 5.0e-9, 3.0e-9),
+        hmax=2.0e-9,
+        n_layers=3,
+        thin_axis=2,
+        order=1,
+    )
+
+    assert calls == [([3], [1.0], True)]
+    assert set(mesh.cell_types.tolist()) == {"prism6"}
+
+
+def test_body_only_box_prism_extraction_is_independent_of_gmsh_block_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gmsh = pytest.importorskip("gmsh")
+    real_get_elements = gmsh.model.mesh.getElements
+
+    def reversed_blocks(*args, **kwargs):
+        element_types, element_tags, node_tags = real_get_elements(*args, **kwargs)
+        order = list(range(len(element_types) - 1, -1, -1))
+        return (
+            np.asarray([element_types[index] for index in order]),
+            [element_tags[index] for index in order],
+            [node_tags[index] for index in order],
+        )
+
+    monkeypatch.setattr(gmsh.model.mesh, "getElements", reversed_blocks)
+    swept_module = importlib.import_module("fullmag.meshing._gmsh_swept")
+    splitter = Mock(side_effect=AssertionError("prism splitter called"))
+    monkeypatch.setattr(swept_module, "_split_prism_to_tets", splitter)
+
+    mesh = generate_swept_box_mesh(
+        (8.0e-9, 5.0e-9, 3.0e-9),
+        hmax=2.0e-9,
+        n_layers=2,
+        thin_axis=2,
+        order=1,
+    )
+
+    assert set(mesh.cell_types.tolist()) == {"prism6"}
+    mesh.validate_strict()
+    splitter.assert_not_called()
+
+
+def test_body_only_box_prism_rejects_wrong_realized_gmsh_family(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tet_mesh = MeshData.from_legacy_tet4(
+        nodes=_REFERENCE_CELLS["tet4"],
+        elements=[[0, 1, 2, 3]],
+        element_markers=[1],
+        boundary_faces=[[0, 2, 1]],
+        boundary_markers=[1],
+    )
+    swept_module = importlib.import_module("fullmag.meshing._gmsh_swept")
+    monkeypatch.setattr(swept_module, "_extract_mesh_data", lambda _gmsh: tet_mesh)
+
+    with pytest.raises(RuntimeError, match="required prism6-only.*tet4"):
+        _extract_swept_mesh_data(
+            Mock(),
+            1.0,
+            requested_axis=2,
+            requested_layers=1,
+        )
+
+
+def test_body_only_box_prism_rejects_wrong_realized_layer_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prism_mesh = MeshData(
+        nodes=_REFERENCE_CELLS["prism6"],
+        cell_types=["prism6"],
+        cell_offsets=[0, 6],
+        cell_nodes=list(range(6)),
+        cell_global_ordinals=[0],
+        element_markers=[1],
+        facet_types=[],
+        facet_roles=[],
+        facet_offsets=[0],
+        facet_nodes=[],
+        facet_global_ordinals=[],
+        boundary_markers=[],
+    )
+    swept_module = importlib.import_module("fullmag.meshing._gmsh_swept")
+    monkeypatch.setattr(swept_module, "_extract_mesh_data", lambda _gmsh: prism_mesh)
+
+    with pytest.raises(RuntimeError, match="requested 2 layers.*resolved 1"):
+        _extract_swept_mesh_data(
+            Mock(),
+            1.0,
+            requested_axis=2,
+            requested_layers=2,
+        )
+
+
+def test_body_only_box_prism_reports_requested_and_resolved_realization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("gmsh")
+    swept_module = importlib.import_module("fullmag.meshing._gmsh_swept")
+    messages: list[str] = []
+    monkeypatch.setattr(swept_module, "emit_progress", messages.append)
+
+    generate_swept_box_mesh(
+        (8.0e-9, 5.0e-9, 3.0e-9),
+        hmax=2.0e-9,
+        n_layers=2,
+        thin_axis=1,
+        order=1,
+    )
+
+    realization = next(message for message in messages if "requested topology=" in message)
+    assert "requested topology=prism6 axis=y layers=2 order=1" in realization
+    assert "resolved topology=prism6 axis=y layers=2 order=1" in realization
+    assert "fallbacks=[]" in realization
+
+
+def test_generate_mesh_dispatch_preserves_native_prisms_for_explicit_box_strategy() -> None:
+    pytest.importorskip("gmsh")
+    mesh = gmsh_generators.generate_mesh(
+        fm.Box(size=(8.0e-9, 5.0e-9, 3.0e-9), name="film"),
+        hmax=2.0e-9,
+        order=1,
+        options=MeshOptions(
+            mesh_strategy=SWEEP_STRATEGY_PRISM,
+            through_thickness_elements=1,
+            through_thickness_distribution="fixed",
+            sweep_face_meshing="triangular",
+        ),
+    )
+
+    assert set(mesh.cell_types.tolist()) == {"prism6"}
+    with pytest.raises(ValueError, match="tet4-only compatibility view"):
+        _ = mesh.elements
+    mesh.validate_strict()
+
+
+def test_explicit_swept_hex_never_silently_realizes_prism(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    swept_module = importlib.import_module("fullmag.meshing._gmsh_swept")
+    gmsh_import = Mock(side_effect=AssertionError("Gmsh started before hex rejection"))
+    monkeypatch.setattr(swept_module, "_import_gmsh", gmsh_import)
+
+    with pytest.raises(ValueError, match="swept_hex.*not implemented"):
+        generate_swept_mesh(
+            fm.Box(size=(8.0e-9, 5.0e-9, 3.0e-9)),
+            hmax=2.0e-9,
+            n_layers=1,
+            order=1,
+            recombine=True,
+            options=MeshOptions(mesh_strategy="swept_hex"),
+        )
+    gmsh_import.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"n_layers": True}, "n_layers must be an integer"),
+        ({"n_layers": 1.5}, "n_layers must be an integer"),
+        ({"n_layers": 1, "order": True}, "order must be an integer"),
+        ({"n_layers": 1, "order": 1.0}, "order must be an integer"),
+        ({"n_layers": 1, "thin_axis": True}, "thin_axis must be an integer"),
+        ({"n_layers": 1, "thin_axis": 2.0}, "thin_axis must be an integer"),
+    ],
+)
+def test_body_only_box_prism_rejects_non_integer_controls_before_gmsh(
+    monkeypatch: pytest.MonkeyPatch,
+    kwargs: dict[str, object],
+    message: str,
+) -> None:
+    swept_module = importlib.import_module("fullmag.meshing._gmsh_swept")
+    gmsh_import = Mock(side_effect=AssertionError("Gmsh started before validation"))
+    monkeypatch.setattr(swept_module, "_import_gmsh", gmsh_import)
+
+    with pytest.raises((TypeError, ValueError), match=message):
+        generate_swept_box_mesh(
+            (8.0e-9, 5.0e-9, 3.0e-9),
+            hmax=2.0e-9,
+            **kwargs,
+        )
+    gmsh_import.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("size", "hmax", "hmin", "message"),
+    [
+        ((-8.0e-9, 5.0e-9, 3.0e-9), 2.0e-9, None, "size\\[0\\].*finite and positive"),
+        ((8.0e-9, 0.0, 3.0e-9), 2.0e-9, None, "size\\[1\\].*finite and positive"),
+        ((8.0e-9, 5.0e-9, float("nan")), 2.0e-9, None, "size\\[2\\].*finite and positive"),
+        ((8.0e-9, 5.0e-9, 3.0e-9), 0.0, None, "hmax.*finite and positive"),
+        ((8.0e-9, 5.0e-9, 3.0e-9), float("inf"), None, "hmax.*finite and positive"),
+        ((8.0e-9, 5.0e-9, 3.0e-9), 2.0e-9, -1.0e-9, "hmin.*finite and positive"),
+        ((8.0e-9, 5.0e-9, 3.0e-9), 2.0e-9, float("nan"), "hmin.*finite and positive"),
+    ],
+)
+def test_body_only_box_prism_rejects_invalid_sizes_before_gmsh(
+    monkeypatch: pytest.MonkeyPatch,
+    size: tuple[float, float, float],
+    hmax: float,
+    hmin: float | None,
+    message: str,
+) -> None:
+    swept_module = importlib.import_module("fullmag.meshing._gmsh_swept")
+    gmsh_import = Mock(side_effect=AssertionError("Gmsh started before validation"))
+    monkeypatch.setattr(swept_module, "_import_gmsh", gmsh_import)
+
+    with pytest.raises(ValueError, match=message):
+        generate_swept_box_mesh(
+            size,
+            hmax=hmax,
+            n_layers=1,
+            options=MeshOptions(hmin=hmin),
+        )
+    gmsh_import.assert_not_called()
+
+
+def test_body_only_box_prism_provenance_is_typed_and_persistent(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("gmsh")
+    mesh = generate_swept_box_mesh(
+        (8.0e-9, 5.0e-9, 3.0e-9),
+        hmax=2.0e-9,
+        n_layers=2,
+        thin_axis=1,
+        order=1,
+    )
+
+    report_type = getattr(gmsh_types, "MeshRealizationReport", None)
+    assert report_type is not None
+    assert isinstance(mesh.realization_report, report_type)
+    assert mesh.realization_report.requested_topology == "prism6"
+    assert mesh.realization_report.resolved_topology == "prism6"
+    assert mesh.realization_report.requested_layers == 2
+    assert mesh.realization_report.resolved_layers == 2
+    assert mesh.realization_report.requested_axis == "y"
+    assert mesh.realization_report.resolved_axis == "y"
+    assert mesh.realization_report.requested_order == 1
+    assert mesh.realization_report.resolved_order == 1
+    assert mesh.realization_report.fallbacks_triggered == ()
+
+    for suffix in (".json", ".npz"):
+        path = tmp_path / f"prism{suffix}"
+        mesh.save(path)
+        restored = MeshData.load(path)
+        assert restored.realization_report == mesh.realization_report
+    assert mesh.oriented_copy().realization_report == mesh.realization_report
+    assert mesh.to_ir("film")["mesh_realization_report"] == (
+        mesh.realization_report.to_dict()
+    )
+
+
+def test_existing_swept_cylinder_quality_path_remains_available() -> None:
+    pytest.importorskip("gmsh")
+    mesh = generate_swept_cylinder_mesh(
+        radius=4.0e-9,
+        height=2.0e-9,
+        hmax=2.0e-9,
+        n_layers=1,
+        order=1,
+        options=MeshOptions(compute_quality=True),
+    )
+
+    assert set(mesh.cell_types.tolist()) == {"tet4"}
+    assert mesh.quality is not None
+    assert mesh.quality.quality_source == "swept_topology_proxy"
+
+
+def test_mesh_data_rejects_realization_report_that_misstates_topology() -> None:
+    report = gmsh_types.MeshRealizationReport(
+        requested_topology="prism6",
+        resolved_topology="prism6",
+        requested_layers=1,
+        resolved_layers=1,
+        requested_axis="z",
+        resolved_axis="z",
+        requested_order=1,
+        resolved_order=1,
+    )
+
+    with pytest.raises(ValueError, match="resolved topology prism6.*actual.*tet4"):
+        MeshData.from_legacy_tet4(
+            nodes=_REFERENCE_CELLS["tet4"],
+            elements=[[0, 1, 2, 3]],
+            element_markers=[1],
+            boundary_faces=[[0, 2, 1]],
+            boundary_markers=[1],
+            realization_report=report,
+        )
+
+
+def test_mesh_data_rejects_realization_report_that_misstates_layers() -> None:
+    report = gmsh_types.MeshRealizationReport(
+        requested_topology="prism6",
+        resolved_topology="prism6",
+        requested_layers=99,
+        resolved_layers=99,
+        requested_axis="z",
+        resolved_axis="z",
+        requested_order=1,
+        resolved_order=1,
+    )
+
+    with pytest.raises(ValueError, match="resolved layers 99.*actual.*1"):
+        MeshData(
+            nodes=_REFERENCE_CELLS["prism6"],
+            cell_types=["prism6"],
+            cell_offsets=[0, 6],
+            cell_nodes=list(range(6)),
+            cell_global_ordinals=[0],
+            element_markers=[1],
+            facet_types=[],
+            facet_roles=[],
+            facet_offsets=[0],
+            facet_nodes=[],
+            facet_global_ordinals=[],
+            boundary_markers=[],
+            realization_report=report,
+        )
+
+
+def test_mesh_realization_report_rejects_empty_fallback_marker() -> None:
+    with pytest.raises(ValueError, match="fallback markers must be non-empty"):
+        gmsh_types.MeshRealizationReport(
+            requested_topology="prism6",
+            resolved_topology="prism6",
+            requested_layers=1,
+            resolved_layers=1,
+            requested_axis="z",
+            resolved_axis="z",
+            requested_order=1,
+            resolved_order=1,
+            fallbacks_triggered=("",),
+        )
+
+
+def test_mesh_realization_report_rejects_hidden_degradation_without_fallback() -> None:
+    with pytest.raises(ValueError, match="requested/resolved fields must match.*no fallback"):
+        gmsh_types.MeshRealizationReport(
+            requested_topology="tet4",
+            resolved_topology="prism6",
+            requested_layers=8,
+            resolved_layers=1,
+            requested_axis="x",
+            resolved_axis="z",
+            requested_order=2,
+            resolved_order=1,
+            fallbacks_triggered=(),
+        )
+
+
+@pytest.mark.parametrize("suffix", [".json", ".npz"])
+def test_mesh_load_rejects_tampered_realization_report(
+    tmp_path: Path,
+    suffix: str,
+) -> None:
+    pytest.importorskip("gmsh")
+    mesh = generate_swept_box_mesh(
+        (8.0e-9, 5.0e-9, 3.0e-9),
+        hmax=2.0e-9,
+        n_layers=1,
+        thin_axis=2,
+        order=1,
+    )
+    path = tmp_path / f"tampered{suffix}"
+    mesh.save(path)
+    if suffix == ".json":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["realization_report"]["requested_layers"] = 99
+        payload["realization_report"]["resolved_layers"] = 99
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    else:
+        with np.load(path) as archive:
+            payload = {name: archive[name] for name in archive.files}
+        report = json.loads(str(payload["realization_report_json"]))
+        report["requested_layers"] = 99
+        report["resolved_layers"] = 99
+        payload["realization_report_json"] = np.asarray(json.dumps(report))
+        np.savez_compressed(path, **payload)
+
+    with pytest.raises(ValueError, match="resolved layers 99.*actual layer count 1"):
+        MeshData.load(path)
+
+
+def test_mesh_load_rejects_hidden_degradation_in_tampered_report(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("gmsh")
+    mesh = generate_swept_box_mesh(
+        (8.0e-9, 5.0e-9, 3.0e-9),
+        hmax=2.0e-9,
+        n_layers=1,
+        thin_axis=2,
+        order=1,
+    )
+    path = tmp_path / "hidden-degradation.json"
+    mesh.save(path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["realization_report"]["requested_topology"] = "tet4"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="requested/resolved fields must match.*no fallback"):
+        MeshData.load(path)
 
 
 def _mixed_nodes() -> np.ndarray:

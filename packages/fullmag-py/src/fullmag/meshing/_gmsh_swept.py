@@ -21,6 +21,7 @@ References:
 from __future__ import annotations
 
 import math
+import numbers
 import tempfile
 from pathlib import Path
 from typing import Any, Literal
@@ -34,16 +35,18 @@ from fullmag.model.geometry import ArchWaveguide, Box, Cylinder, Geometry
 from ._gmsh_types import (
     AirboxOptions,
     MeshData,
+    MeshRealizationReport,
     MeshOptions,
     MeshQualityReport,
     _infer_axis_aligned_periodic_pairs,
+    _count_exact_layer_planes,
 )
 from ._gmsh_infra import (
     _import_gmsh,
     _configure_gmsh_threads,
     _GmshProgressLogger,
 )
-from ._gmsh_extraction import _extract_quality_metrics
+from ._gmsh_extraction import _extract_mesh_data
 from ._gmsh_fields import _apply_mesh_options
 
 
@@ -470,34 +473,65 @@ def generate_swept_box_mesh(
     airbox: AirboxOptions | None = None,
     options: MeshOptions | None = None,
 ) -> MeshData:
-    """Generate a swept mesh for a thin box/slab geometry.
+    """Generate a native ``prism6`` mesh for an axis-aligned box.
 
     Meshes the large cross-section face (perpendicular to *thin_axis*),
-    then extrudes with *n_layers* structured layers along the thin axis.
+    then extrudes its triangular mesh with exactly *n_layers* structured
+    layers. ``recombine`` is retained for caller compatibility; prism
+    realization always recombines the triangular extrusion and never
+    recombines the source face into quadrilaterals.
     """
     opts = options or MeshOptions()
     SCALE = 1e6
 
-    if airbox is not None:
-        emit_progress(
-            "Gmsh swept: airbox requested — "
-            "falling back to free tetrahedral for combined domain"
+    for name, value in (
+        ("n_layers", n_layers),
+        ("order", order),
+        ("thin_axis", thin_axis),
+    ):
+        if isinstance(value, bool) or not isinstance(value, numbers.Integral):
+            raise TypeError(f"{name} must be an integer")
+    n_layers = int(n_layers)
+    order = int(order)
+    thin_axis = int(thin_axis)
+    if order != 1:
+        raise ValueError(
+            f"body-only swept prism meshing supports order=1; requested order={order}"
         )
-        from ._gmsh_generators import generate_box_mesh
-        return generate_box_mesh(size, hmax, order=order, airbox=airbox, options=options)
+    if n_layers < 1:
+        raise ValueError("n_layers must be >= 1")
+    if thin_axis not in (0, 1, 2):
+        raise ValueError("thin_axis must be one of 0 (x), 1 (y), or 2 (z)")
+    if distribution != DISTRIBUTION_FIXED or element_ratio != 1.0 or symmetric:
+        raise ValueError(
+            "body-only swept prism meshing currently supports only fixed distribution"
+        )
+    if opts.periodic_pair_ids:
+        raise ValueError("body-only swept prism meshing does not support periodic pairs")
+    if airbox is not None:
+        raise ValueError(
+            "body-only swept prism meshing does not yet support an airbox; "
+            "conforming prism/pyramid/tetrahedron airbox realization is required"
+        )
 
-    sx, sy, sz = size
+    try:
+        sx, sy, sz = (float(value) for value in size)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("size must contain exactly three finite positive values") from exc
+    for index, value in enumerate((sx, sy, sz)):
+        if not math.isfinite(value) or value <= 0.0:
+            raise ValueError(f"size[{index}] must be finite and positive")
+    if isinstance(hmax, bool) or not math.isfinite(float(hmax)) or float(hmax) <= 0.0:
+        raise ValueError("hmax must be finite and positive")
+    hmax = float(hmax)
+    if opts.hmin is not None and (
+        isinstance(opts.hmin, bool)
+        or not math.isfinite(float(opts.hmin))
+        or float(opts.hmin) <= 0.0
+    ):
+        raise ValueError("hmin must be finite and positive")
     dims = [sx, sy, sz]
     thickness = dims[thin_axis]
-
-    layer_heights = _compute_layer_heights(
-        n_layers, thickness, distribution, element_ratio, symmetric,
-    )
-    cumulative = []
-    acc = 0.0
-    for h in layer_heights:
-        acc += h
-        cumulative.append(acc)
 
     emit_progress(
         f"Gmsh swept: box {sx:.2e}×{sy:.2e}×{sz:.2e}, "
@@ -553,32 +587,34 @@ def generate_swept_box_mesh(
         loop = gmsh.model.geo.addCurveLoop([l1, l2, l3, l4])
         source_surf = gmsh.model.geo.addPlaneSurface([loop])
 
-        if recombine:
-            gmsh.model.geo.mesh.setRecombine(2, source_surf)
-
         gmsh.model.geo.synchronize()
 
-        # Mesh the source face
+        # The source face must remain triangular. Recombining this face would
+        # turn the extrusion into hex8 instead of the requested prism6 family.
         gmsh.option.setNumber("Mesh.CharacteristicLengthMax", hmax_scaled)
         if opts.hmin is not None:
             gmsh.option.setNumber("Mesh.CharacteristicLengthMin", opts.hmin * SCALE)
         gmsh.option.setNumber("Mesh.Algorithm", opts.algorithm_2d)
-        gmsh.model.mesh.generate(2)
-
-        # Extrude
-        num_elements_per_layer = [1] * n_layers
+        # Extrude the geometry before generating the mesh. One layer group
+        # with a terminal normalized height is the documented uniform Gmsh
+        # contract: exactly ``n_layers`` subdivisions ending at height 1.0.
         gmsh.model.geo.extrude(
             [(2, source_surf)],
             extrude_dir[0], extrude_dir[1], extrude_dir[2],
-            numElements=num_elements_per_layer,
-            heights=cumulative,
-            recombine=recombine,
+            numElements=[n_layers],
+            heights=[1.0],
+            recombine=True,
         )
         gmsh.model.geo.synchronize()
         gmsh.model.mesh.generate(3)
 
         # Extract → same pipeline as cylinder
-        return _extract_swept_mesh_data(gmsh, SCALE, opts)
+        return _extract_swept_mesh_data(
+            gmsh,
+            SCALE,
+            requested_axis=thin_axis,
+            requested_layers=n_layers,
+        )
     finally:
         gmsh.finalize()
 
@@ -622,90 +658,73 @@ def _split_hex_to_tets(hexes: NDArray) -> list[NDArray[np.int32]]:
 def _extract_swept_mesh_data(
     gmsh: Any,
     scale: float,
-    opts: MeshOptions,
+    *,
+    requested_axis: int,
+    requested_layers: int,
 ) -> MeshData:
-    """Extract mesh data from Gmsh after swept extrusion, converting to MeshData."""
-    node_tags, node_coords, _ = gmsh.model.mesh.getNodes()
-    nodes = np.array(node_coords, dtype=np.float64).reshape(-1, 3) / scale
-
-    elem_types, elem_tags_list, elem_node_tags_list = gmsh.model.mesh.getElements(3)
-    tag_to_idx = np.zeros(int(node_tags.max()) + 1, dtype=np.int32)
-    for idx, tag in enumerate(node_tags):
-        tag_to_idx[int(tag)] = idx
-
-    tet_elements: list[NDArray[np.int32]] = []
-    for etype, etags, enodes in zip(elem_types, elem_tags_list, elem_node_tags_list):
-        info = gmsh.model.mesh.getElementProperties(etype)
-        npn = info[3]
-        remapped = tag_to_idx[np.array(enodes, dtype=np.int64).reshape(-1, npn)]
-        if etype == 6:
-            tet_elements.extend(_split_prism_to_tets(remapped))
-        elif etype == 5:
-            tet_elements.extend(_split_hex_to_tets(remapped))
-        elif etype == 4:
-            tet_elements.append(remapped)
-
-    if not tet_elements:
-        raise RuntimeError("Swept mesh produced 0 volume elements")
-
-    elements = np.vstack(tet_elements).astype(np.int32)
-    element_markers = np.ones(elements.shape[0], dtype=np.int32)
-
-    surf_types, surf_tags_list, surf_node_tags_list = gmsh.model.mesh.getElements(2)
-    bf_list: list[NDArray[np.int32]] = []
-    for stype, stags, snodes in zip(surf_types, surf_tags_list, surf_node_tags_list):
-        info = gmsh.model.mesh.getElementProperties(stype)
-        npn = info[3]
-        if npn == 3:
-            tri = tag_to_idx[np.array(snodes, dtype=np.int64).reshape(-1, 3)]
-            bf_list.append(tri.astype(np.int32))
-        elif npn == 4:
-            quad = tag_to_idx[np.array(snodes, dtype=np.int64).reshape(-1, 4)]
-            bf_list.append(quad[:, [0, 1, 2]].astype(np.int32))
-            bf_list.append(quad[:, [0, 2, 3]].astype(np.int32))
-
-    boundary_faces = np.vstack(bf_list) if bf_list else np.zeros((0, 3), dtype=np.int32)
-    boundary_markers = np.ones(boundary_faces.shape[0], dtype=np.int32)
-
-    quality = _compute_swept_quality(nodes, elements) if opts.compute_quality else None
-
-    emit_progress(
-        f"Gmsh swept: mesh ready — {nodes.shape[0]} nodes, "
-        f"{elements.shape[0]} elements, {boundary_faces.shape[0]} boundary faces"
-    )
-
-    periodic_boundary_pairs: list[dict[str, object]] = []
-    periodic_node_pairs: list[dict[str, object]] = []
-    if opts.periodic_pair_ids:
-        inferred_mesh = MeshData.from_legacy_tet4(
-            nodes=nodes,
-            elements=elements,
-            element_markers=element_markers,
-            boundary_faces=boundary_faces,
-            boundary_markers=boundary_markers,
-            quality=quality,
+    """Extract one body-only prism mesh without a compatibility conversion."""
+    mesh = _extract_mesh_data(gmsh)
+    if mesh.n_elements == 0:
+        raise RuntimeError("swept prism realization produced zero volume elements")
+    realized_families = sorted(set(mesh.cell_types.tolist()))
+    if realized_families != ["prism6"]:
+        raise RuntimeError(
+            "swept prism realization required prism6-only volume cells; "
+            f"Gmsh produced {realized_families}"
         )
-        all_boundary_pairs, all_node_pairs = _infer_axis_aligned_periodic_pairs(
-            inferred_mesh
+    if any(kind not in {"tri3", "quad4"} for kind in mesh.facet_types.tolist()):
+        raise RuntimeError(
+            "swept prism realization produced an unsupported boundary facet family"
         )
-        requested_pair_ids = set(opts.periodic_pair_ids)
-        periodic_boundary_pairs = [
-            pair for pair in all_boundary_pairs if pair.get("pair_id") in requested_pair_ids
-        ]
-        periodic_node_pairs = [
-            pair for pair in all_node_pairs if pair.get("pair_id") in requested_pair_ids
-        ]
 
-    return MeshData.from_legacy_tet4(
+    # Gmsh 4.15 linear Prism 6 ordering is the canonical Fullmag prism6
+    # ordering. ``oriented_copy`` is a fail-safe for an entity orientation
+    # reversal; strict validation then proves positive mapped Jacobians.
+    mesh = mesh.oriented_copy()
+    mesh.validate_strict()
+    nodes = np.asarray(mesh.nodes, dtype=np.float64) / scale
+    resolved_layers = _count_exact_layer_planes(nodes, requested_axis) - 1
+    if resolved_layers != requested_layers:
+        raise RuntimeError(
+            f"swept prism realization requested {requested_layers} layers "
+            f"but resolved {resolved_layers}"
+        )
+    mesh = MeshData(
         nodes=nodes,
-        elements=elements,
-        element_markers=element_markers,
-        boundary_faces=boundary_faces,
-        boundary_markers=boundary_markers,
-        periodic_boundary_pairs=periodic_boundary_pairs,
-        periodic_node_pairs=periodic_node_pairs,
-        quality=quality,
+        cell_types=mesh.cell_types,
+        cell_offsets=mesh.cell_offsets,
+        cell_nodes=mesh.cell_nodes,
+        element_markers=mesh.element_markers,
+        facet_types=mesh.facet_types,
+        facet_roles=mesh.facet_roles,
+        facet_offsets=mesh.facet_offsets,
+        facet_nodes=mesh.facet_nodes,
+        boundary_markers=mesh.boundary_markers,
+        cell_global_ordinals=mesh.cell_global_ordinals,
+        facet_global_ordinals=mesh.facet_global_ordinals,
+        quality=mesh.quality,
+        per_domain_quality=mesh.per_domain_quality,
+        realization_report=MeshRealizationReport(
+            requested_topology="prism6",
+            resolved_topology="prism6",
+            requested_layers=requested_layers,
+            resolved_layers=resolved_layers,
+            requested_axis="xyz"[requested_axis],
+            resolved_axis="xyz"[requested_axis],
+            requested_order=1,
+            resolved_order=1,
+            fallbacks_triggered=(),
+        ),
     )
+    mesh.validate_strict()
+    emit_progress(
+        "Gmsh swept realization: requested topology=prism6 "
+        f"axis={'xyz'[requested_axis]} layers={requested_layers} order=1; "
+        f"resolved topology=prism6 axis={'xyz'[requested_axis]} "
+        f"layers={requested_layers} order=1 "
+        f"cells={mesh.n_elements} facets={mesh.n_boundary_faces} fallbacks=[]"
+    )
+    return mesh
 
 
 # ---------------------------------------------------------------------------
@@ -820,6 +839,18 @@ def generate_swept_mesh(
     options: MeshOptions | None = None,
 ) -> MeshData:
     """Dispatch swept mesh generation based on geometry type."""
+    if options is not None and options.mesh_strategy == SWEEP_STRATEGY_HEX:
+        raise ValueError(
+            "explicit swept_hex realization is not implemented in the body-only prism path"
+        )
+    if (
+        options is not None
+        and options.mesh_strategy == SWEEP_STRATEGY_PRISM
+        and not isinstance(geometry, Box)
+    ):
+        raise TypeError(
+            "body-only swept prism meshing supports only axis-aligned Box geometry"
+        )
     if isinstance(geometry, Cylinder):
         if geometry.axis != (0.0, 0.0, 1.0):
             raise ValueError(

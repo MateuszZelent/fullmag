@@ -12,6 +12,8 @@ from numpy.typing import NDArray
 
 FEM_TOPOLOGY_DETERMINANT_EPS = 1.0e-30
 FEM_TOPOLOGY_VOLUME_EPS = FEM_TOPOLOGY_DETERMINANT_EPS / 6.0
+FEM_EXACT_LAYER_PLANE_ABS_TOLERANCE_M = 1.0e-15
+FEM_EXACT_LAYER_PLANE_REL_TOLERANCE = 1.0e-8
 
 FEM_CELL_ARITIES = {"tet4": 4, "prism6": 6, "pyramid5": 5, "hex8": 8}
 FEM_FACET_ARITIES = {"tri3": 3, "quad4": 4}
@@ -492,6 +494,99 @@ class MeshFacetBlockView:
 
 
 @dataclass(frozen=True, slots=True)
+class MeshRealizationReport:
+    """Durable requested/resolved provenance for one mesh realization."""
+
+    requested_topology: str
+    resolved_topology: str
+    requested_layers: int
+    resolved_layers: int
+    requested_axis: str
+    resolved_axis: str
+    requested_order: int
+    resolved_order: int
+    fallbacks_triggered: tuple[str, ...] = ()
+    schema_version: str = "mesh_realization_report.v1"
+
+    def __post_init__(self) -> None:
+        if self.schema_version != "mesh_realization_report.v1":
+            raise ValueError(
+                "mesh realization report must use schema mesh_realization_report.v1"
+            )
+        if self.requested_topology not in FEM_CELL_ARITIES:
+            raise ValueError("mesh realization report has unknown requested topology")
+        if self.resolved_topology not in FEM_CELL_ARITIES:
+            raise ValueError("mesh realization report has unknown resolved topology")
+        for name, value in (
+            ("requested_layers", self.requested_layers),
+            ("resolved_layers", self.resolved_layers),
+            ("requested_order", self.requested_order),
+            ("resolved_order", self.resolved_order),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"mesh realization report {name} must be a positive integer")
+        if self.requested_axis not in {"x", "y", "z"}:
+            raise ValueError("mesh realization report has invalid requested axis")
+        if self.resolved_axis not in {"x", "y", "z"}:
+            raise ValueError("mesh realization report has invalid resolved axis")
+        normalized_fallbacks: list[str] = []
+        for item in self.fallbacks_triggered:
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError("mesh realization report fallback markers must be non-empty strings")
+            normalized_fallbacks.append(item)
+        object.__setattr__(self, "fallbacks_triggered", tuple(normalized_fallbacks))
+        requested = (
+            self.requested_topology,
+            self.requested_layers,
+            self.requested_axis,
+            self.requested_order,
+        )
+        resolved = (
+            self.resolved_topology,
+            self.resolved_layers,
+            self.resolved_axis,
+            self.resolved_order,
+        )
+        if not normalized_fallbacks and requested != resolved:
+            raise ValueError(
+                "mesh realization report requested/resolved fields must match "
+                "when no fallback was triggered"
+            )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "requested_topology": self.requested_topology,
+            "resolved_topology": self.resolved_topology,
+            "requested_layers": self.requested_layers,
+            "resolved_layers": self.resolved_layers,
+            "requested_axis": self.requested_axis,
+            "resolved_axis": self.resolved_axis,
+            "requested_order": self.requested_order,
+            "resolved_order": self.resolved_order,
+            "fallbacks_triggered": list(self.fallbacks_triggered),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, object]) -> "MeshRealizationReport":
+        raw_fallbacks = payload.get("fallbacks_triggered", [])
+        if not isinstance(raw_fallbacks, (list, tuple)):
+            raise TypeError("mesh realization report fallbacks_triggered must be an array")
+        return cls(
+            schema_version=str(payload.get("schema_version", "")),
+            requested_topology=str(payload.get("requested_topology", "")),
+            resolved_topology=str(payload.get("resolved_topology", "")),
+            requested_layers=payload.get("requested_layers", 0),  # type: ignore[arg-type]
+            resolved_layers=payload.get("resolved_layers", 0),  # type: ignore[arg-type]
+            requested_axis=str(payload.get("requested_axis", "")),
+            resolved_axis=str(payload.get("resolved_axis", "")),
+            requested_order=payload.get("requested_order", 0),  # type: ignore[arg-type]
+            resolved_order=payload.get("resolved_order", 0),  # type: ignore[arg-type]
+            fallbacks_triggered=tuple(raw_fallbacks),  # type: ignore[arg-type]
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class MeshData:
     """Canonical typed variable-arity FEM topology in CSR layout."""
 
@@ -512,6 +607,7 @@ class MeshData:
     periodic_mesh_certificate: dict[str, object] | None = None
     quality: MeshQualityReport | None = None
     per_domain_quality: dict[int, MeshQualityReport] | None = None
+    realization_report: MeshRealizationReport | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "nodes", np.asarray(self.nodes, dtype=np.float64))
@@ -543,7 +639,37 @@ class MeshData:
             if certificate.get("certificate_status") != "accepted":
                 raise ValueError("periodic_mesh_certificate must be accepted")
             object.__setattr__(self, "periodic_mesh_certificate", certificate)
+        if self.realization_report is not None and not isinstance(
+            self.realization_report,
+            MeshRealizationReport,
+        ):
+            raise TypeError("realization_report must be a MeshRealizationReport")
         self.validate()
+        self._validate_realization_report()
+
+    def _validate_realization_report(self) -> None:
+        report = self.realization_report
+        if report is None:
+            return
+        actual_families = sorted(set(self.cell_types.tolist()))
+        if actual_families != [report.resolved_topology]:
+            actual = ",".join(actual_families) if actual_families else "empty"
+            raise ValueError(
+                f"mesh realization report resolved topology {report.resolved_topology} "
+                f"does not match actual cell family {actual}"
+            )
+        if report.resolved_order != 1:
+            raise ValueError(
+                f"mesh realization report resolved order {report.resolved_order} "
+                "does not match actual linear topology order 1"
+            )
+        axis = {"x": 0, "y": 1, "z": 2}[report.resolved_axis]
+        actual_layers = _count_exact_layer_planes(self.nodes, axis) - 1
+        if actual_layers != report.resolved_layers:
+            raise ValueError(
+                f"mesh realization report resolved layers {report.resolved_layers} "
+                f"does not match actual layer count {actual_layers}"
+            )
 
     @classmethod
     def from_legacy_tet4(
@@ -559,6 +685,7 @@ class MeshData:
         periodic_mesh_certificate: dict[str, object] | None = None,
         quality: MeshQualityReport | None = None,
         per_domain_quality: dict[int, MeshQualityReport] | None = None,
+        realization_report: MeshRealizationReport | None = None,
     ) -> "MeshData":
         """Normalize the explicit legacy tet4/tri3 boundary into canonical CSR."""
         tet = np.asarray(elements, dtype=np.int32)
@@ -589,6 +716,7 @@ class MeshData:
             periodic_mesh_certificate=periodic_mesh_certificate,
             quality=quality,
             per_domain_quality=per_domain_quality,
+            realization_report=realization_report,
         )
 
     @property
@@ -800,6 +928,7 @@ class MeshData:
             ),
             quality=self.quality,
             per_domain_quality=self.per_domain_quality,
+            realization_report=self.realization_report,
         )
 
     def save(self, path: str | Path) -> None:
@@ -825,6 +954,11 @@ class MeshData:
                         "periodic_boundary_pairs": self.periodic_boundary_pairs,
                         "periodic_node_pairs": self.periodic_node_pairs,
                         "periodic_mesh_certificate": self.periodic_mesh_certificate,
+                        "realization_report": (
+                            self.realization_report.to_dict()
+                            if self.realization_report is not None
+                            else None
+                        ),
                     },
                     indent=2,
                 ),
@@ -853,6 +987,13 @@ class MeshData:
             ),
             periodic_mesh_certificate_json=np.asarray(
                 json.dumps(self.periodic_mesh_certificate),
+            ),
+            realization_report_json=np.asarray(
+                json.dumps(
+                    self.realization_report.to_dict()
+                    if self.realization_report is not None
+                    else None
+                ),
             ),
         )
 
@@ -1006,11 +1147,17 @@ class MeshData:
         periodic_mesh_certificate = None
         if "periodic_mesh_certificate_json" in data.files:
             periodic_mesh_certificate = json.loads(str(data["periodic_mesh_certificate_json"]))
+        realization_report = None
+        if "realization_report_json" in data.files:
+            raw_report = json.loads(str(data["realization_report_json"]))
+            if raw_report is not None:
+                realization_report = MeshRealizationReport.from_dict(dict(raw_report))
         payload = {name: data[name] for name in data.files if not name.endswith("_json")}
         payload.update(
             periodic_boundary_pairs=periodic_boundary_pairs,
             periodic_node_pairs=periodic_node_pairs,
             periodic_mesh_certificate=periodic_mesh_certificate,
+            realization_report=realization_report,
         )
         return cls._from_serialized_mapping(payload)
 
@@ -1031,6 +1178,9 @@ class MeshData:
             periodic_boundary_pairs=[dict(pair) for pair in payload.get("periodic_boundary_pairs", [])],
             periodic_node_pairs=[dict(pair) for pair in payload.get("periodic_node_pairs", [])],
             periodic_mesh_certificate=payload.get("periodic_mesh_certificate"),
+            realization_report=_mesh_realization_report_from_serialized(
+                payload.get("realization_report")
+            ),
         )
         if legacy:
             if "elements" not in payload or "boundary_faces" not in payload:
@@ -1086,6 +1236,8 @@ class MeshData:
             ir["periodic_node_pairs"] = periodic_node_pairs
         if mesh.periodic_mesh_certificate is not None:
             ir["periodic_mesh_certificate"] = dict(mesh.periodic_mesh_certificate)
+        if mesh.realization_report is not None:
+            ir["mesh_realization_report"] = mesh.realization_report.to_dict()
         if mesh.per_domain_quality is not None:
             ir["per_domain_quality"] = {
                 str(marker): {
@@ -1111,6 +1263,18 @@ class MeshData:
                 _build_mesh_statistics_report(mesh, mesh_name)
             )
         return ir
+
+
+def _mesh_realization_report_from_serialized(
+    value: object,
+) -> MeshRealizationReport | None:
+    if value is None:
+        return None
+    if isinstance(value, MeshRealizationReport):
+        return value
+    if isinstance(value, dict):
+        return MeshRealizationReport.from_dict(value)
+    raise TypeError("serialized realization_report must be an object or null")
 
 
 def _validate_typed_csr(
@@ -1161,6 +1325,29 @@ def _validate_global_ordinals(
         raise ValueError(f"{kind}_global_ordinals must be non-negative")
     if len(set(int(value) for value in ordinals)) != item_count:
         raise ValueError(f"{kind}_global_ordinals must be unique")
+
+
+def _count_exact_layer_planes(
+    nodes: NDArray[np.float64] | object,
+    axis: int,
+) -> int:
+    """Count coordinate planes using the canonical exact-layer tolerance."""
+    coordinates = np.asarray(nodes, dtype=np.float64)
+    if coordinates.ndim != 2 or coordinates.shape[1] != 3 or len(coordinates) == 0:
+        raise ValueError("exact-layer plane count requires non-empty nodes with shape (N, 3)")
+    if axis not in (0, 1, 2):
+        raise ValueError("exact-layer plane count axis must be 0, 1, or 2")
+    values = sorted(float(value) for value in coordinates[:, axis])
+    thickness = values[-1] - values[0]
+    tolerance = max(
+        FEM_EXACT_LAYER_PLANE_ABS_TOLERANCE_M,
+        FEM_EXACT_LAYER_PLANE_REL_TOLERANCE * thickness,
+    )
+    planes: list[float] = []
+    for value in values:
+        if not planes or abs(value - planes[-1]) > tolerance:
+            planes.append(value)
+    return len(planes)
 
 
 def _cell_jacobian_determinants(
