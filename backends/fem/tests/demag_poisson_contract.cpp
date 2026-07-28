@@ -1429,7 +1429,7 @@ void demag_recovery_is_owned_by_poisson_recovery_module() {
         "void destroy_demag_poisson_recovery_workspace(",
         "bool recover_demag_poisson_field(",
         "fe->CalcPhysDShape",
-        "ctx.demag.h_visual_xyz = h_demag_xyz;",
+        "ctx.demag.h_visual_xyz.assign(field_len, 0.0);",
         "finalize_demag_poisson_recovered_field(ctx, h_demag_xyz);",
         "ctx.demag.cached_robin_boundary_energy =",
     };
@@ -1527,20 +1527,20 @@ void demag_recovery_finalizes_periodic_field_before_energy() {
         read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_recovery.cpp");
 
     const size_t visual_pos =
-        recovery.find("ctx.demag.h_visual_xyz = h_demag_xyz;");
+        recovery.find("ctx.demag.h_visual_xyz.assign(field_len, 0.0);");
     const size_t zero_pos =
         recovery.find("zero_non_magnetic_nodes_aos(h_demag_xyz, ctx.mesh.magnetic_node_mask);");
     const size_t finalize_pos =
         recovery.find("finalize_demag_poisson_recovered_field(ctx, h_demag_xyz);");
     const size_t energy_pos =
         recovery.find("demag_energy = demag_poisson_energy_from_field(");
-    check(visual_pos != std::string::npos, "recovery must preserve visual demag before zeroing");
+    check(visual_pos != std::string::npos, "recovery must accumulate visual demag separately");
     check(zero_pos != std::string::npos, "recovery must zero nonmagnetic LLG demag field");
     check(finalize_pos != std::string::npos, "recovery must finalize periodic demag field");
     check(energy_pos != std::string::npos, "recovery must compute demag energy");
     check(
         visual_pos < zero_pos && zero_pos < finalize_pos && finalize_pos < energy_pos,
-        "periodic demag projection must happen after visual preservation/zeroing and before energy");
+        "periodic demag projection must happen after visual accumulation/zeroing and before energy");
 }
 
 void demag_solver_stats_are_filled_by_poisson_module() {

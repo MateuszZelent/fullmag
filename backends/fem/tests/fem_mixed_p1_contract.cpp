@@ -9,6 +9,7 @@
 #if FULLMAG_HAS_MFEM_STACK
 
 #include "context.hpp"
+#include "cpu/mfem/interactions/demag_poisson_recovery.hpp"
 #include "cpu/mfem/runtime/mfem_context.hpp"
 #include "cpu/mfem/runtime/mfem_mesh_builder.hpp"
 #include "cpu/mfem/runtime/step_metrics.hpp"
@@ -23,9 +24,12 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <numeric>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -625,6 +629,236 @@ void conforming_mixed_domain_shares_faces_and_h1_dofs()
     check_linear_interface_values(source, fes, {1,4,6});
 }
 
+struct RecoveryResult {
+    std::vector<double> magnetic;
+    std::vector<double> visual;
+};
+
+RecoveryResult recover_p1_potential(
+    const FemMeshRuntimeState &source,
+    const std::vector<uint8_t> &magnetic_elements,
+    const std::vector<uint8_t> &magnetic_nodes,
+    const std::vector<double> &nodal_potential)
+{
+    auto mesh = build(source);
+    mfem::H1_FECollection fec(1, mesh->Dimension());
+    mfem::FiniteElementSpace fes(mesh.get(), &fec);
+    check(nodal_potential.size() == static_cast<size_t>(fes.GetNDofs()),
+          "recovery fixture must provide one scalar potential per P1 DOF");
+
+    fullmag::fem::Context ctx{};
+    ctx.mesh = source;
+    ctx.mesh.magnetic_element_mask = magnetic_elements;
+    ctx.mesh.magnetic_node_mask = magnetic_nodes;
+    ctx.mfem_context.mesh = mesh.get();
+    ctx.integration_weights.mfem_lumped_mass.assign(source.n_nodes, 1.0);
+
+    mfem::GridFunction potential_grid(&fes);
+    double *potential_host = potential_grid.HostWrite();
+    for (int dof = 0; dof < fes.GetNDofs(); ++dof) {
+        potential_host[dof] = nodal_potential[static_cast<size_t>(dof)];
+    }
+    mfem::Vector potential;
+    potential_grid.GetTrueDofs(potential);
+
+    std::string error;
+    check(fullmag::fem::initialize_demag_poisson_recovery_workspace(ctx, fes, error),
+          error.c_str());
+    RecoveryResult result;
+    double energy = 0.0;
+    uint64_t energy_wall_time_ns = 0;
+    const std::vector<double> zero_magnetization(3u * source.n_nodes, 0.0);
+    check(fullmag::fem::recover_demag_poisson_field(
+              ctx,
+              potential,
+              result.magnetic,
+              energy,
+              zero_magnetization,
+              &energy_wall_time_ns,
+              error),
+          error.c_str());
+    result.visual = ctx.demag.h_visual_xyz;
+    check(energy == 0.0, "zero magnetization must keep mixed recovery energy at zero");
+    fullmag::fem::destroy_demag_poisson_recovery_workspace(ctx);
+    return result;
+}
+
+std::vector<double> nodal_linear_potential(const FemMeshRuntimeState &source)
+{
+    std::vector<double> values(source.n_nodes, 0.0);
+    for (uint32_t node = 0; node < source.n_nodes; ++node) {
+        const size_t base = 3u * static_cast<size_t>(node);
+        values[node] = source.nodes_xyz[base] + 2.0 * source.nodes_xyz[base + 1u] -
+            3.0 * source.nodes_xyz[base + 2u];
+    }
+    return values;
+}
+
+void manufactured_linear_potential_recovers_on_tet_prism_and_pyramid()
+{
+    const std::vector<FemMeshRuntimeState> cases{
+        make_mesh(
+            {0,0,0, 1,0,0, 0,1,0, 0,0,1},
+            {FULLMAG_FEM_CELL_TET4}, {0,4}, {0,1,2,3}, {7}),
+        make_mesh(
+            {0,0,0, 1,0,0, 0,1,0, 0,0,1, 1,0,1, 0,1,1},
+            {FULLMAG_FEM_CELL_PRISM6}, {0,6}, {0,1,2,3,4,5}, {7}),
+        make_mesh(
+            {0,0,0, 1,0,0, 1,1,0, 0,1,0, 0.5,0.5,1},
+            {FULLMAG_FEM_CELL_PYRAMID5}, {0,5}, {0,1,2,3,4}, {7}),
+    };
+
+    for (const auto &source : cases) {
+        const auto recovered = recover_p1_potential(
+            source,
+            {1u},
+            std::vector<uint8_t>(source.n_nodes, 1u),
+            nodal_linear_potential(source));
+        for (uint32_t node = 0; node < source.n_nodes; ++node) {
+            const size_t base = 3u * static_cast<size_t>(node);
+            check(std::abs(recovered.magnetic[base] + 1.0) < 1.0e-12 &&
+                      std::abs(recovered.magnetic[base + 1u] + 2.0) < 1.0e-12 &&
+                      std::abs(recovered.magnetic[base + 2u] - 3.0) < 1.0e-12,
+                  "manufactured P1 recovery must equal -grad(x+2y-3z)");
+            check(std::abs(recovered.visual[base] + 1.0) < 1.0e-12 &&
+                      std::abs(recovered.visual[base + 1u] + 2.0) < 1.0e-12 &&
+                      std::abs(recovered.visual[base + 2u] - 3.0) < 1.0e-12,
+                  "single-cell full-domain visualization must equal manufactured recovery");
+        }
+    }
+}
+
+void mixed_recovery_excludes_air_from_magnetic_interface_nodes()
+{
+    const auto source = conforming_prism_pyramid_tet();
+    std::vector<double> potential(source.n_nodes, 0.0);
+    for (uint32_t node = 0; node < 6u; ++node) {
+        potential[node] = source.nodes_xyz[3u * static_cast<size_t>(node)];
+    }
+    potential[6] = 10.0;
+    potential[7] = -4.0;
+
+    const auto magnetic_only = recover_p1_potential(
+        source,
+        {1u, 0u, 0u},
+        {1u,1u,1u,1u,1u,1u,0u,0u},
+        potential);
+    for (uint32_t node = 0; node < 6u; ++node) {
+        const size_t base = 3u * static_cast<size_t>(node);
+        check(std::abs(magnetic_only.magnetic[base] + 1.0) < 1.0e-12 &&
+                  std::abs(magnetic_only.magnetic[base + 1u]) < 1.0e-12 &&
+                  std::abs(magnetic_only.magnetic[base + 2u]) < 1.0e-12,
+              "magnetic recovery must exclude air gradients at shared interface nodes");
+    }
+
+    const auto all_domain = recover_p1_potential(
+        source,
+        {1u, 1u, 1u},
+        std::vector<uint8_t>(source.n_nodes, 1u),
+        potential);
+    bool visual_includes_air = false;
+    for (uint32_t node : {0u, 1u, 3u, 4u}) {
+        const size_t base = 3u * static_cast<size_t>(node);
+        for (size_t component = 0; component < 3u; ++component) {
+            check(std::abs(magnetic_only.visual[base + component] -
+                           all_domain.magnetic[base + component]) < 1.0e-12,
+                  "full-domain visualization must include the same cells as all-domain recovery");
+            visual_includes_air = visual_includes_air ||
+                std::abs(magnetic_only.visual[base + component] -
+                         magnetic_only.magnetic[base + component]) > 1.0e-8;
+        }
+    }
+    check(visual_includes_air,
+          "full-domain visualization must retain an observable air-gradient contribution");
+}
+
+RecoveryResult recover_manufactured_on_mesh(mfem::Mesh &mesh, int recover_threads)
+{
+    mfem::H1_FECollection fec(1, mesh.Dimension());
+    mfem::FiniteElementSpace fes(&mesh, &fec);
+    fullmag::fem::Context ctx{};
+    ctx.mfem_context.mesh = &mesh;
+    ctx.mesh.n_nodes = static_cast<uint32_t>(fes.GetNDofs());
+    ctx.cpu_threads.effective_omp_threads = recover_threads;
+    ctx.integration_weights.mfem_lumped_mass.assign(ctx.mesh.n_nodes, 1.0);
+
+    mfem::GridFunction potential_grid(&fes);
+    mfem::FunctionCoefficient potential_function(
+        [](const mfem::Vector &x) { return x[0] + 2.0 * x[1] - 3.0 * x[2]; });
+    potential_grid.ProjectCoefficient(potential_function);
+    mfem::Vector potential;
+    potential_grid.GetTrueDofs(potential);
+
+    std::string error;
+    check(fullmag::fem::initialize_demag_poisson_recovery_workspace(ctx, fes, error),
+          error.c_str());
+    RecoveryResult result;
+    double energy = 0.0;
+    uint64_t energy_wall_time_ns = 0;
+    const std::vector<double> zero_magnetization(3u * ctx.mesh.n_nodes, 0.0);
+    check(fullmag::fem::recover_demag_poisson_field(
+              ctx,
+              potential,
+              result.magnetic,
+              energy,
+              zero_magnetization,
+              &energy_wall_time_ns,
+              error),
+          error.c_str());
+    result.visual = ctx.demag.h_visual_xyz;
+    fullmag::fem::destroy_demag_poisson_recovery_workspace(ctx);
+    return result;
+}
+
+void parallel_recovery_matches_serial_with_caller_owned_transformations()
+{
+#ifdef _OPENMP
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian3D(
+        10, 10, 4, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0);
+    check(mesh.GetNE() >= 2000,
+          "parallel recovery fixture must cross the production OpenMP threshold");
+    const auto serial = recover_manufactured_on_mesh(mesh, 1);
+    const auto parallel = recover_manufactured_on_mesh(mesh, 4);
+    check(serial.magnetic.size() == parallel.magnetic.size(),
+          "serial and parallel recovery must publish the same field extent");
+    for (size_t value = 0; value < serial.magnetic.size(); ++value) {
+        check(std::abs(serial.magnetic[value] - parallel.magnetic[value]) < 1.0e-12,
+              "parallel recovery must match serial recovery with thread-local transformations");
+        check(std::abs(serial.visual[value] - parallel.visual[value]) < 1.0e-12,
+              "parallel visual recovery must match serial full-domain recovery");
+    }
+#endif
+}
+
+std::string read_text_file(const std::filesystem::path &path)
+{
+    std::ifstream input(path);
+    check(static_cast<bool>(input), "mixed recovery source contract must be readable");
+    std::ostringstream buffer;
+    buffer << input.rdbuf();
+    return buffer.str();
+}
+
+void recovery_source_uses_tet_geometry_and_signed_certified_quadrature()
+{
+    const std::filesystem::path this_file(__FILE__);
+    const auto root = this_file.parent_path().parent_path();
+    const std::string recovery = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "demag_poisson_recovery.cpp");
+    check(recovery.find("fe->GetGeomType() == mfem::Geometry::TETRAHEDRON") !=
+              std::string::npos,
+          "P1 demag fast path must be selected by tetrahedron geometry");
+    check(recovery.find("std::abs(shape(i))") == std::string::npos,
+          "generic demag recovery must retain the signed P1 shape value");
+    check(recovery.find("std::abs(T->Weight())") == std::string::npos,
+          "demag recovery must not hide an inverted Jacobian with abs");
+    check(recovery.find("mesh->GetElementTransformation(elem);") == std::string::npos,
+          "parallel demag recovery must not reuse the mesh-owned element transformation");
+    check(recovery.find("mesh->GetElementTransformation(elem, &transformation);") !=
+              std::string::npos,
+          "parallel demag recovery must fill a caller-owned element transformation");
+}
+
 void inverted_family_permutations_fail_closed()
 {
     struct Case {
@@ -895,6 +1129,10 @@ int main()
     zero_marker_uses_an_unoccupied_positive_air_attribute();
     legal_int_max_marker_without_air_is_preserved();
     conforming_mixed_domain_shares_faces_and_h1_dofs();
+    manufactured_linear_potential_recovers_on_tet_prism_and_pyramid();
+    mixed_recovery_excludes_air_from_magnetic_interface_nodes();
+    parallel_recovery_matches_serial_with_caller_owned_transformations();
+    recovery_source_uses_tet_geometry_and_signed_certified_quadrature();
     inverted_family_permutations_fail_closed();
     typed_boundary_uses_owner_orientation_roles_and_attributes();
     all_tet_periodic_seam_remains_an_attributed_boundary();
