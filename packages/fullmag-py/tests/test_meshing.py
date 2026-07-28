@@ -4183,50 +4183,15 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertFalse(result.sweepable)
         self.assertIn("OCC free-tetrahedral", result.reason)
 
-    def test_arch_waveguide_shared_domain_uses_component_surface_prep(self) -> None:
-        if not _has_trimesh:
-            self.skipTest("trimesh not available")
-
-        mesh = self._unit_tet_mesh()
-        mesh = MeshData.from_legacy_tet4(
-            nodes=mesh.nodes,
-            elements=mesh.elements,
-            element_markers=np.asarray([17], dtype=np.int32),
-            boundary_faces=mesh.boundary_faces,
-            boundary_markers=mesh.boundary_markers,
-        )
-
-        def _fake_component_mesh(component_descriptors, **_kwargs):
-            self.assertEqual(len(component_descriptors), 1)
-            self.assertEqual(component_descriptors[0].geometry_name, "arch_waveguide")
-            imported = _import_trimesh().load_mesh(
-                component_descriptors[0].stl_path,
-                force="mesh",
-                process=False,
-            )
-            vertices = np.asarray(imported.vertices, dtype=np.float64)
-            left_section = vertices[
-                np.isclose(vertices[:, 0], vertices[:, 0].min(), rtol=0.0, atol=1e-18)
-            ]
-            z_levels = np.unique(np.round(left_section[:, 2], decimals=18))
-            self.assertEqual(len(z_levels), 2)
-            return SharedDomainMeshResult(
-                mesh=mesh,
-                component_marker_tags={"arch_waveguide": 17},
-                component_volume_tags={"arch_waveguide": [1]},
-                component_surface_tags={"arch_waveguide": [10]},
-                interface_surface_tags=[10],
-                outer_boundary_surface_tags=[99],
-            )
-
+    def test_arch_waveguide_shared_domain_rejects_unqualified_mixed_route(self) -> None:
         with patch(
-            "fullmag.meshing._gmsh_occ.is_occ_compatible",
-            return_value=False,
-        ), patch(
-            "fullmag.meshing.asset_pipeline.generate_shared_domain_mesh_from_components",
-            side_effect=_fake_component_mesh,
-        ):
-            _mesh, _region_markers, report = realize_fem_domain_mesh_asset_from_components_with_report(
+            "fullmag.meshing.asset_pipeline.generate_shared_domain_mesh_from_components"
+        ) as generator:
+            with self.assertRaisesRegex(
+                ValueError,
+                "qualified mixed shared-domain route rejects: exactly one Box geometry",
+            ):
+                realize_fem_domain_mesh_asset_from_components_with_report(
                 [
                     fm.ArchWaveguide(
                         length=100e-9,
@@ -4249,16 +4214,7 @@ class MeshScaffoldTests(unittest.TestCase):
                     }
                 },
             )
-
-        self.assertEqual(report.build_mode, "component_aware")
-        self.assertNotIn("component_surface_prep_failed", report.fallbacks_triggered)
-        statuses = {
-            (status.kind, status.scope): status
-            for status in report.operation_statuses
-        }
-        swept_status = statuses[("swept_prism", "arch_waveguide")]
-        self.assertEqual(swept_status.status, "applied")
-        self.assertEqual(swept_status.actual_method, "layered_surface_tetrahedral")
+        generator.assert_not_called()
 
     def test_meshdata_to_ir_has_canonical_shape(self) -> None:
         mesh = self._unit_tet_mesh()

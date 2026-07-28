@@ -3313,7 +3313,7 @@ class ProblemApiTests(unittest.TestCase):
             ],
         )
 
-        stub_mesh = MeshData(
+        stub_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -4055,7 +4055,7 @@ class ProblemApiTests(unittest.TestCase):
             discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, maximum_element_size=2e-9)),
         )
 
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -4101,7 +4101,7 @@ class ProblemApiTests(unittest.TestCase):
         body.alpha = 0.1
         body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -4161,7 +4161,7 @@ class ProblemApiTests(unittest.TestCase):
         right.alpha = 0.1
         right.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -4175,7 +4175,7 @@ class ProblemApiTests(unittest.TestCase):
             boundary_faces=np.asarray([[0, 1, 2]], dtype=np.int32),
             boundary_markers=np.asarray([1], dtype=np.int32),
         )
-        domain_mesh = MeshData(
+        domain_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -4239,7 +4239,7 @@ class ProblemApiTests(unittest.TestCase):
             discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, maximum_element_size=2e-9)),
         )
 
-        surface_mesh = MeshData(
+        surface_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -4274,7 +4274,7 @@ class ProblemApiTests(unittest.TestCase):
             ),
         )
 
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],

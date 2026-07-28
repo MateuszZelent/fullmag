@@ -13,7 +13,7 @@ from numpy.typing import NDArray
 from fullmag._progress import emit_progress
 from fullmag.model.geometry import Geometry, Translate
 
-from ._gmsh_types import MeshData
+from ._gmsh_types import MeshData, _rebuild_mixed_layer_topology_certificate
 
 
 def _peel_translate_chain(
@@ -75,9 +75,19 @@ def _source_hmax_from_scale(hmax: float, scale_xyz: NDArray[np.float64]) -> floa
 
 
 def _scale_mesh_nodes(mesh: MeshData, scale_xyz: NDArray[np.float64]) -> MeshData:
-    if np.allclose(scale_xyz, 1.0):
+    scale_xyz = np.asarray(scale_xyz, dtype=np.float64)
+    if scale_xyz.shape != (3,) or not np.all(np.isfinite(scale_xyz)) or np.any(scale_xyz <= 0.0):
+        raise ValueError("mesh scale must contain exactly three finite positive values")
+    if np.array_equal(scale_xyz, np.ones(3, dtype=np.float64)):
         return mesh
-    return MeshData(
+    certificate = mesh.mixed_layer_topology_certificate
+    if certificate is not None and not (
+        scale_xyz[0] == scale_xyz[1] == scale_xyz[2]
+    ):
+        raise ValueError(
+            "anisotropic scaling of a certified mixed shared-domain mesh is not qualified"
+        )
+    scaled = MeshData(
         nodes=np.asarray(mesh.nodes, dtype=np.float64) * scale_xyz.reshape(1, 3),
         cell_types=mesh.cell_types,
         cell_offsets=mesh.cell_offsets,
@@ -90,6 +100,7 @@ def _scale_mesh_nodes(mesh: MeshData, scale_xyz: NDArray[np.float64]) -> MeshDat
         boundary_markers=mesh.boundary_markers,
         cell_global_ordinals=mesh.cell_global_ordinals,
         facet_global_ordinals=mesh.facet_global_ordinals,
+        cell_mesh_parts=mesh.cell_mesh_parts,
         periodic_boundary_pairs=mesh.periodic_boundary_pairs,
         periodic_node_pairs=mesh.periodic_node_pairs,
         periodic_mesh_certificate=mesh.periodic_mesh_certificate,
@@ -97,6 +108,13 @@ def _scale_mesh_nodes(mesh: MeshData, scale_xyz: NDArray[np.float64]) -> MeshDat
         per_domain_quality=mesh.per_domain_quality,
         realization_report=mesh.realization_report,
     )
+    if certificate is not None:
+        return _rebuild_mixed_layer_topology_certificate(
+            scaled,
+            certificate,
+            authored_scale=float(scale_xyz[0]),
+        )
+    return scaled
 
 
 
@@ -117,8 +135,17 @@ def _resolve_gmsh_thread_count(requested_threads: int | None = None) -> int:
     return max(1, cpu_total)
 
 
-def _configure_gmsh_threads(gmsh: Any, requested_threads: int | None = None) -> int:
-    thread_count = _resolve_gmsh_thread_count(requested_threads)
+def _configure_gmsh_threads(
+    gmsh: Any,
+    requested_threads: int | None = None,
+    *,
+    honor_environment: bool = True,
+) -> int:
+    thread_count = (
+        _resolve_gmsh_thread_count(requested_threads)
+        if honor_environment
+        else max(1, int(requested_threads or 1))
+    )
     gmsh.option.setNumber("General.NumThreads", thread_count)
     gmsh.option.setNumber("Mesh.MaxNumThreads1D", thread_count)
     gmsh.option.setNumber("Mesh.MaxNumThreads2D", thread_count)

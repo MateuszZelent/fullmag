@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -14,11 +15,36 @@ FEM_TOPOLOGY_DETERMINANT_EPS = 1.0e-30
 FEM_TOPOLOGY_VOLUME_EPS = FEM_TOPOLOGY_DETERMINANT_EPS / 6.0
 FEM_EXACT_LAYER_PLANE_ABS_TOLERANCE_M = 1.0e-15
 FEM_EXACT_LAYER_PLANE_REL_TOLERANCE = 1.0e-8
+MIXED_SHARED_GMSH_VERSION = "4.15.2"
+MIXED_SHARED_GEO_STRATEGY = "shared_geo_extrusion_pyramid_tet.v1"
+MIXED_INTERFACE_MARKER = 10
+MIXED_QUALITY_METRIC = "tetra_decomposition_scaled_jacobian.v1"
 
 FEM_CELL_ARITIES = {"tet4": 4, "prism6": 6, "pyramid5": 5, "hex8": 8}
 FEM_FACET_ARITIES = {"tri3": 3, "quad4": 4}
 FEM_FACET_ROLES = {"exterior", "material_interface", "periodic_seam"}
 VTK_CELL_TYPES = {"tet4": 10, "hex8": 12, "prism6": 13, "pyramid5": 14}
+
+
+def _mixed_deterministic_inputs() -> dict[str, object]:
+    return {
+        "algorithm_2d": 6,
+        "algorithm_3d": 1,
+        "element_order": 1,
+        "gmsh_version": MIXED_SHARED_GMSH_VERSION,
+        "random_factor": 0.0,
+        "thread_count": 1,
+    }
+
+
+def _strict_bounds_vector(value: object, name: str) -> tuple[float, float, float]:
+    if not isinstance(value, tuple) or len(value) != 3 or any(
+        not isinstance(item, float) or not math.isfinite(item) for item in value
+    ):
+        raise TypeError(
+            f"mixed layer topology certificate {name} must be a tuple of three finite floats"
+        )
+    return value
 
 # Keep this dispatch table keyed by Gmsh's exact linear element IDs instead of
 # accepting a compatible-looking prefix of higher-order connectivity.
@@ -587,6 +613,339 @@ class MeshRealizationReport:
 
 
 @dataclass(frozen=True, slots=True)
+class MixedLayerTopologyCertificate:
+    """Accepted shared-domain prism/pyramid/tet topology evidence."""
+
+    certificate_status: str
+    requested_sweep_direction: str
+    resolved_sweep_direction: str
+    requested_layer_count: int
+    realized_layer_count: int
+    magnetic_plane_coordinates_m: tuple[float, ...]
+    plane_tolerance_m: float
+    transition_shell_thickness_m: float
+    transition_shell_interface_tri3_count: int
+    interface_marker: int
+    outer_boundary_marker: int
+    magnetic_bounds_min_m: tuple[float, float, float]
+    magnetic_bounds_max_m: tuple[float, float, float]
+    airbox_bounds_min_m: tuple[float, float, float]
+    airbox_bounds_max_m: tuple[float, float, float]
+    magnetic_bounds_relative_error: float
+    airbox_bounds_relative_error: float
+    cell_family_counts_by_marker: dict[str, dict[str, int]]
+    cell_family_counts_by_part: dict[str, dict[str, int]]
+    facet_family_counts_by_role_marker: dict[str, dict[str, int]]
+    jacobian_minima_m3_by_family: dict[str, float]
+    quality_metric: str
+    scaled_jacobian_minima_by_family: dict[str, float]
+    scaled_jacobian_p05_by_family: dict[str, float]
+    magnetic_volume_m3: float
+    expected_magnetic_volume_m3: float
+    magnetic_relative_volume_error: float
+    air_volume_m3: float
+    shared_domain_volume_m3: float
+    expected_shared_domain_volume_m3: float
+    shared_domain_relative_volume_error: float
+    marker_coverage_complete: bool
+    nonconforming_face_count: int
+    orphan_face_count: int
+    nonmanifold_face_count: int
+    coincident_interface_face_count: int
+    topology_fingerprint_version: str
+    topology_fingerprint: str
+    gmsh_version: str
+    strategy: str
+    effective_gmsh_thread_count: int
+    deterministic_inputs: dict[str, object]
+    fallbacks_triggered: tuple[str, ...] = ()
+    schema_version: str = "mixed_layer_topology_certificate.v1"
+
+    def __post_init__(self) -> None:
+        if self.schema_version != "mixed_layer_topology_certificate.v1":
+            raise ValueError(
+                "mixed layer topology certificate must use schema "
+                "mixed_layer_topology_certificate.v1"
+            )
+        if self.certificate_status != "accepted":
+            raise ValueError("mixed layer topology certificate must be accepted")
+        if self.requested_sweep_direction not in {"x", "y", "z"} or (
+            self.resolved_sweep_direction not in {"x", "y", "z"}
+        ):
+            raise ValueError("mixed layer topology certificate has an invalid sweep direction")
+        if self.requested_sweep_direction != self.resolved_sweep_direction:
+            raise ValueError("strict mixed layer topology cannot change sweep direction")
+        for name, value in (
+            ("requested_layer_count", self.requested_layer_count),
+            ("realized_layer_count", self.realized_layer_count),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"mixed layer topology certificate {name} must be positive")
+        if self.requested_layer_count != self.realized_layer_count:
+            raise ValueError("strict mixed layer topology cannot change layer count")
+        planes = tuple(float(value) for value in self.magnetic_plane_coordinates_m)
+        if len(planes) != self.realized_layer_count + 1 or any(
+            not math.isfinite(value) for value in planes
+        ):
+            raise ValueError("mixed layer topology certificate has invalid magnetic planes")
+        if any(right <= left for left, right in zip(planes, planes[1:], strict=False)):
+            raise ValueError("mixed layer topology certificate magnetic planes must increase")
+        object.__setattr__(self, "magnetic_plane_coordinates_m", planes)
+        if not math.isfinite(self.plane_tolerance_m) or self.plane_tolerance_m <= 0.0:
+            raise ValueError("mixed layer topology certificate plane tolerance must be positive")
+        if (
+            not math.isfinite(self.transition_shell_thickness_m)
+            or self.transition_shell_thickness_m <= 0.0
+        ):
+            raise ValueError(
+                "mixed layer topology certificate transition shell thickness must be positive"
+            )
+        if self.transition_shell_interface_tri3_count < 1:
+            raise ValueError(
+                "mixed layer topology certificate transition shell interface must contain tri3"
+            )
+        for name in ("interface_marker", "outer_boundary_marker", "effective_gmsh_thread_count"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"mixed layer topology certificate {name} must be positive")
+        if self.interface_marker == self.outer_boundary_marker:
+            raise ValueError("mixed layer topology certificate markers must be distinct")
+        for prefix in ("magnetic", "airbox"):
+            minimum = _strict_bounds_vector(
+                getattr(self, f"{prefix}_bounds_min_m"),
+                f"{prefix}_bounds_min_m",
+            )
+            maximum = _strict_bounds_vector(
+                getattr(self, f"{prefix}_bounds_max_m"),
+                f"{prefix}_bounds_max_m",
+            )
+            if any(right <= left for left, right in zip(minimum, maximum, strict=True)):
+                raise ValueError(
+                    f"mixed layer topology certificate {prefix} authored bounds must increase"
+                )
+            object.__setattr__(self, f"{prefix}_bounds_min_m", minimum)
+            object.__setattr__(self, f"{prefix}_bounds_max_m", maximum)
+        for name in (
+            "magnetic_volume_m3",
+            "expected_magnetic_volume_m3",
+            "air_volume_m3",
+            "shared_domain_volume_m3",
+            "expected_shared_domain_volume_m3",
+        ):
+            value = float(getattr(self, name))
+            if not math.isfinite(value) or value <= 0.0:
+                raise ValueError(f"mixed layer topology certificate {name} must be positive")
+        for name in (
+            "magnetic_relative_volume_error",
+            "shared_domain_relative_volume_error",
+            "magnetic_bounds_relative_error",
+            "airbox_bounds_relative_error",
+        ):
+            value = float(getattr(self, name))
+            if not math.isfinite(value) or value < 0.0 or value > 1.0e-8:
+                raise ValueError(
+                    f"mixed layer topology certificate {name} exceeds 1e-8"
+                )
+        if not self.marker_coverage_complete:
+            raise ValueError("mixed layer topology certificate marker coverage is incomplete")
+        for name in (
+            "nonconforming_face_count",
+            "orphan_face_count",
+            "nonmanifold_face_count",
+            "coincident_interface_face_count",
+        ):
+            if getattr(self, name) != 0:
+                raise ValueError(f"mixed layer topology certificate {name} must be zero")
+        if self.topology_fingerprint_version != "v2":
+            raise ValueError("mixed layer topology certificate requires topology fingerprint v2")
+        if (
+            not self.topology_fingerprint.startswith("sha256:")
+            or len(self.topology_fingerprint) != len("sha256:") + 64
+        ):
+            raise ValueError("mixed layer topology certificate has an invalid fingerprint")
+        if self.gmsh_version != MIXED_SHARED_GMSH_VERSION:
+            raise ValueError("mixed layer topology certificate has unqualified Gmsh version")
+        if self.strategy != MIXED_SHARED_GEO_STRATEGY:
+            raise ValueError("mixed layer topology certificate has unqualified strategy")
+        if self.effective_gmsh_thread_count != 1:
+            raise ValueError("mixed layer topology certificate requires one effective Gmsh thread")
+        if not isinstance(self.deterministic_inputs, dict):
+            raise TypeError("mixed layer topology certificate deterministic_inputs must be an object")
+        expected_inputs = _mixed_deterministic_inputs()
+        if self.deterministic_inputs != expected_inputs or any(
+            key not in self.deterministic_inputs
+            or type(self.deterministic_inputs[key]) is not type(value)
+            for key, value in expected_inputs.items()
+        ):
+            raise ValueError("mixed layer topology certificate deterministic_inputs are stale")
+        if self.fallbacks_triggered:
+            raise ValueError("strict mixed layer topology certificate requires no fallbacks")
+        for name, mapping in (
+            ("cell_family_counts_by_marker", self.cell_family_counts_by_marker),
+            ("cell_family_counts_by_part", self.cell_family_counts_by_part),
+            ("facet_family_counts_by_role_marker", self.facet_family_counts_by_role_marker),
+        ):
+            normalized = _normalize_nested_counts(mapping, name)
+            object.__setattr__(self, name, normalized)
+        for name, mapping in (
+            ("jacobian_minima_m3_by_family", self.jacobian_minima_m3_by_family),
+            ("scaled_jacobian_minima_by_family", self.scaled_jacobian_minima_by_family),
+            ("scaled_jacobian_p05_by_family", self.scaled_jacobian_p05_by_family),
+        ):
+            if not isinstance(mapping, dict) or any(
+                not isinstance(key, str)
+                or isinstance(value, bool)
+                or not isinstance(value, float)
+                for key, value in mapping.items()
+            ):
+                raise TypeError(
+                    f"mixed layer topology certificate {name} must map strings to floats"
+                )
+            normalized = dict(mapping)
+            if not normalized or any(
+                not math.isfinite(value) or value <= 0.0
+                for value in normalized.values()
+            ):
+                raise ValueError(f"mixed layer topology certificate {name} must be positive")
+            object.__setattr__(self, name, normalized)
+        if self.quality_metric != MIXED_QUALITY_METRIC:
+            raise ValueError(
+                "mixed layer topology certificate quality_metric must be "
+                f"{MIXED_QUALITY_METRIC}"
+            )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "certificate_status": self.certificate_status,
+            "requested_sweep_direction": self.requested_sweep_direction,
+            "resolved_sweep_direction": self.resolved_sweep_direction,
+            "requested_layer_count": self.requested_layer_count,
+            "realized_layer_count": self.realized_layer_count,
+            "magnetic_plane_coordinates_m": list(self.magnetic_plane_coordinates_m),
+            "plane_tolerance_m": self.plane_tolerance_m,
+            "transition_shell_thickness_m": self.transition_shell_thickness_m,
+            "transition_shell_interface_tri3_count": (
+                self.transition_shell_interface_tri3_count
+            ),
+            "interface_marker": self.interface_marker,
+            "outer_boundary_marker": self.outer_boundary_marker,
+            "magnetic_bounds_min_m": list(self.magnetic_bounds_min_m),
+            "magnetic_bounds_max_m": list(self.magnetic_bounds_max_m),
+            "airbox_bounds_min_m": list(self.airbox_bounds_min_m),
+            "airbox_bounds_max_m": list(self.airbox_bounds_max_m),
+            "magnetic_bounds_relative_error": self.magnetic_bounds_relative_error,
+            "airbox_bounds_relative_error": self.airbox_bounds_relative_error,
+            "cell_family_counts_by_marker": self.cell_family_counts_by_marker,
+            "cell_family_counts_by_part": self.cell_family_counts_by_part,
+            "facet_family_counts_by_role_marker": self.facet_family_counts_by_role_marker,
+            "jacobian_minima_m3_by_family": self.jacobian_minima_m3_by_family,
+            "quality_metric": self.quality_metric,
+            "scaled_jacobian_minima_by_family": self.scaled_jacobian_minima_by_family,
+            "scaled_jacobian_p05_by_family": self.scaled_jacobian_p05_by_family,
+            "magnetic_volume_m3": self.magnetic_volume_m3,
+            "expected_magnetic_volume_m3": self.expected_magnetic_volume_m3,
+            "magnetic_relative_volume_error": self.magnetic_relative_volume_error,
+            "air_volume_m3": self.air_volume_m3,
+            "shared_domain_volume_m3": self.shared_domain_volume_m3,
+            "expected_shared_domain_volume_m3": self.expected_shared_domain_volume_m3,
+            "shared_domain_relative_volume_error": self.shared_domain_relative_volume_error,
+            "marker_coverage_complete": self.marker_coverage_complete,
+            "nonconforming_face_count": self.nonconforming_face_count,
+            "orphan_face_count": self.orphan_face_count,
+            "nonmanifold_face_count": self.nonmanifold_face_count,
+            "coincident_interface_face_count": self.coincident_interface_face_count,
+            "topology_fingerprint_version": self.topology_fingerprint_version,
+            "topology_fingerprint": self.topology_fingerprint,
+            "gmsh_version": self.gmsh_version,
+            "strategy": self.strategy,
+            "effective_gmsh_thread_count": self.effective_gmsh_thread_count,
+            "deterministic_inputs": self.deterministic_inputs,
+            "fallbacks_triggered": list(self.fallbacks_triggered),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, object]) -> "MixedLayerTopologyCertificate":
+        def require(name: str, kind: type) -> object:
+            value = payload.get(name)
+            if kind is int:
+                if isinstance(value, bool) or not isinstance(value, int):
+                    raise TypeError(f"mixed layer topology certificate {name} must be an integer")
+            elif kind is float:
+                if not isinstance(value, float):
+                    raise TypeError(f"mixed layer topology certificate {name} must be a float")
+            elif not isinstance(value, kind):
+                raise TypeError(f"mixed layer topology certificate {name} must be a {kind.__name__}")
+            return value
+
+        raw_planes = require("magnetic_plane_coordinates_m", list)
+        assert isinstance(raw_planes, list)
+        if any(not isinstance(value, float) for value in raw_planes):
+            raise TypeError(
+                "mixed layer topology certificate magnetic_plane_coordinates_m must contain floats"
+            )
+        def require_bounds(name: str) -> tuple[float, float, float]:
+            raw = require(name, list)
+            assert isinstance(raw, list)
+            if len(raw) != 3 or any(not isinstance(value, float) for value in raw):
+                raise TypeError(
+                    f"mixed layer topology certificate {name} must contain three floats"
+                )
+            return tuple(raw)  # type: ignore[return-value]
+
+        def require_nested_counts(name: str) -> dict[str, dict[str, int]]:
+            raw = require(name, dict)
+            return _normalize_nested_counts(raw, name)
+
+        return cls(
+            schema_version=require("schema_version", str),  # type: ignore[arg-type]
+            certificate_status=require("certificate_status", str),  # type: ignore[arg-type]
+            requested_sweep_direction=require("requested_sweep_direction", str),  # type: ignore[arg-type]
+            resolved_sweep_direction=require("resolved_sweep_direction", str),  # type: ignore[arg-type]
+            requested_layer_count=require("requested_layer_count", int),  # type: ignore[arg-type]
+            realized_layer_count=require("realized_layer_count", int),  # type: ignore[arg-type]
+            magnetic_plane_coordinates_m=tuple(raw_planes),
+            plane_tolerance_m=float(require("plane_tolerance_m", float)),
+            transition_shell_thickness_m=float(require("transition_shell_thickness_m", float)),
+            transition_shell_interface_tri3_count=require("transition_shell_interface_tri3_count", int),  # type: ignore[arg-type]
+            interface_marker=require("interface_marker", int),  # type: ignore[arg-type]
+            outer_boundary_marker=require("outer_boundary_marker", int),  # type: ignore[arg-type]
+            magnetic_bounds_min_m=require_bounds("magnetic_bounds_min_m"),
+            magnetic_bounds_max_m=require_bounds("magnetic_bounds_max_m"),
+            airbox_bounds_min_m=require_bounds("airbox_bounds_min_m"),
+            airbox_bounds_max_m=require_bounds("airbox_bounds_max_m"),
+            magnetic_bounds_relative_error=float(require("magnetic_bounds_relative_error", float)),
+            airbox_bounds_relative_error=float(require("airbox_bounds_relative_error", float)),
+            cell_family_counts_by_marker=require_nested_counts("cell_family_counts_by_marker"),
+            cell_family_counts_by_part=require_nested_counts("cell_family_counts_by_part"),
+            facet_family_counts_by_role_marker=require_nested_counts("facet_family_counts_by_role_marker"),
+            jacobian_minima_m3_by_family=dict(require("jacobian_minima_m3_by_family", dict)),
+            quality_metric=require("quality_metric", str),  # type: ignore[arg-type]
+            scaled_jacobian_minima_by_family=dict(require("scaled_jacobian_minima_by_family", dict)),
+            scaled_jacobian_p05_by_family=dict(require("scaled_jacobian_p05_by_family", dict)),
+            magnetic_volume_m3=float(require("magnetic_volume_m3", float)),
+            expected_magnetic_volume_m3=float(require("expected_magnetic_volume_m3", float)),
+            magnetic_relative_volume_error=float(require("magnetic_relative_volume_error", float)),
+            air_volume_m3=float(require("air_volume_m3", float)),
+            shared_domain_volume_m3=float(require("shared_domain_volume_m3", float)),
+            expected_shared_domain_volume_m3=float(require("expected_shared_domain_volume_m3", float)),
+            shared_domain_relative_volume_error=float(require("shared_domain_relative_volume_error", float)),
+            marker_coverage_complete=require("marker_coverage_complete", bool),  # type: ignore[arg-type]
+            nonconforming_face_count=require("nonconforming_face_count", int),  # type: ignore[arg-type]
+            orphan_face_count=require("orphan_face_count", int),  # type: ignore[arg-type]
+            nonmanifold_face_count=require("nonmanifold_face_count", int),  # type: ignore[arg-type]
+            coincident_interface_face_count=require("coincident_interface_face_count", int),  # type: ignore[arg-type]
+            topology_fingerprint_version=require("topology_fingerprint_version", str),  # type: ignore[arg-type]
+            topology_fingerprint=require("topology_fingerprint", str),  # type: ignore[arg-type]
+            gmsh_version=require("gmsh_version", str),  # type: ignore[arg-type]
+            strategy=require("strategy", str),  # type: ignore[arg-type]
+            effective_gmsh_thread_count=require("effective_gmsh_thread_count", int),  # type: ignore[arg-type]
+            deterministic_inputs=dict(require("deterministic_inputs", dict)),
+            fallbacks_triggered=tuple(require("fallbacks_triggered", list)),  # type: ignore[arg-type]
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class MeshData:
     """Canonical typed variable-arity FEM topology in CSR layout."""
 
@@ -602,12 +961,16 @@ class MeshData:
     boundary_markers: NDArray[np.int32]
     cell_global_ordinals: NDArray[np.int64]
     facet_global_ordinals: NDArray[np.int64]
+    cell_mesh_parts: NDArray[np.str_] = field(
+        default_factory=lambda: np.asarray([], dtype=np.str_)
+    )
     periodic_boundary_pairs: list[dict[str, object]] = field(default_factory=list)
     periodic_node_pairs: list[dict[str, object]] = field(default_factory=list)
     periodic_mesh_certificate: dict[str, object] | None = None
     quality: MeshQualityReport | None = None
     per_domain_quality: dict[int, MeshQualityReport] | None = None
     realization_report: MeshRealizationReport | None = None
+    mixed_layer_topology_certificate: MixedLayerTopologyCertificate | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "nodes", np.asarray(self.nodes, dtype=np.float64))
@@ -622,6 +985,7 @@ class MeshData:
         object.__setattr__(self, "boundary_markers", np.asarray(self.boundary_markers, dtype=np.int32))
         object.__setattr__(self, "cell_global_ordinals", np.asarray(self.cell_global_ordinals, dtype=np.int64))
         object.__setattr__(self, "facet_global_ordinals", np.asarray(self.facet_global_ordinals, dtype=np.int64))
+        object.__setattr__(self, "cell_mesh_parts", np.asarray(self.cell_mesh_parts, dtype=np.str_))
         object.__setattr__(
             self,
             "periodic_boundary_pairs",
@@ -644,8 +1008,16 @@ class MeshData:
             MeshRealizationReport,
         ):
             raise TypeError("realization_report must be a MeshRealizationReport")
+        if self.mixed_layer_topology_certificate is not None and not isinstance(
+            self.mixed_layer_topology_certificate,
+            MixedLayerTopologyCertificate,
+        ):
+            raise TypeError(
+                "mixed_layer_topology_certificate must be a MixedLayerTopologyCertificate"
+            )
         self.validate()
         self._validate_realization_report()
+        self._validate_mixed_layer_topology_certificate()
 
     def _validate_realization_report(self) -> None:
         report = self.realization_report
@@ -671,6 +1043,121 @@ class MeshData:
                 f"does not match actual layer count {actual_layers}"
             )
 
+    def _validate_mixed_layer_topology_certificate(self) -> None:
+        certificate = self.mixed_layer_topology_certificate
+        if certificate is None:
+            return
+        expected = self.topology_fingerprint_v2()
+        if certificate.topology_fingerprint != expected:
+            raise ValueError(
+                "mixed layer topology certificate topology fingerprint is stale: "
+                f"certificate={certificate.topology_fingerprint}, actual={expected}"
+            )
+        _validate_mixed_pyramid_bases(
+            self,
+            interface_marker=certificate.interface_marker,
+        )
+        evidence = _recompute_mixed_certificate_evidence(
+            self,
+            sweep_axis={"x": 0, "y": 1, "z": 2}[certificate.resolved_sweep_direction],
+            interface_marker=certificate.interface_marker,
+            outer_boundary_marker=certificate.outer_boundary_marker,
+            magnetic_bounds_min_m=certificate.magnetic_bounds_min_m,
+            magnetic_bounds_max_m=certificate.magnetic_bounds_max_m,
+            airbox_bounds_min_m=certificate.airbox_bounds_min_m,
+            airbox_bounds_max_m=certificate.airbox_bounds_max_m,
+        )
+        for name, actual in evidence.items():
+            claimed = getattr(certificate, name)
+            if isinstance(actual, dict):
+                matches = claimed == actual
+            elif isinstance(actual, tuple):
+                matches = len(claimed) == len(actual) and np.allclose(
+                    claimed, actual, rtol=0.0, atol=max(
+                        certificate.plane_tolerance_m, float(evidence["plane_tolerance_m"])
+                    )
+                )
+            elif isinstance(actual, (bool, int)):
+                matches = claimed == actual
+            else:
+                matches = math.isclose(
+                    float(claimed), float(actual), rel_tol=1.0e-12, abs_tol=1.0e-30
+                )
+            if not matches:
+                raise ValueError(f"mixed layer topology certificate {name} is stale")
+        axis = {"x": 0, "y": 1, "z": 2}[certificate.resolved_sweep_direction]
+        magnetic_ordinals = np.flatnonzero(self.element_markers == 1)
+        if not len(magnetic_ordinals):
+            raise ValueError("mixed layer topology certificate requires magnetic marker 1")
+        magnetic_nodes = np.unique(
+            np.concatenate([self.cell_node_ids(int(index)) for index in magnetic_ordinals])
+        )
+        planes, tolerance = _cluster_coordinate_planes(self.nodes[magnetic_nodes], axis)
+        if len(planes) != certificate.realized_layer_count + 1 or not np.allclose(
+            planes,
+            certificate.magnetic_plane_coordinates_m,
+            rtol=0.0,
+            atol=max(tolerance, certificate.plane_tolerance_m),
+        ):
+            raise ValueError("mixed layer topology certificate magnetic planes are stale")
+        if _cell_counts_by_marker(self) != certificate.cell_family_counts_by_marker:
+            raise ValueError("mixed layer topology certificate cell marker counts are stale")
+        parts = certificate.cell_family_counts_by_part
+        if set(parts) != {"magnetic", "transition_air", "far_air"}:
+            raise ValueError("mixed layer topology certificate mesh parts are incomplete")
+        marker_counts = certificate.cell_family_counts_by_marker
+        if parts["magnetic"] != marker_counts.get("1", {}):
+            raise ValueError("mixed layer topology certificate magnetic part counts are stale")
+        air_totals: dict[str, int] = {}
+        for part in ("transition_air", "far_air"):
+            for family, count in parts[part].items():
+                air_totals[family] = air_totals.get(family, 0) + int(count)
+        if dict(sorted(air_totals.items())) != marker_counts.get("0", {}):
+            raise ValueError("mixed layer topology certificate air part counts are stale")
+        if parts["transition_air"].get("pyramid5", 0) < 1 or any(
+            family != "tet4" for family in parts["far_air"]
+        ):
+            raise ValueError("mixed layer topology certificate transition partition is stale")
+        if _facet_counts_by_role_marker(self) != certificate.facet_family_counts_by_role_marker:
+            raise ValueError("mixed layer topology certificate facet counts are stale")
+        conformity = _mixed_mesh_conformity_counts(self, tolerance=tolerance)
+        for name, actual in conformity.items():
+            if int(getattr(certificate, name)) != actual:
+                raise ValueError(f"mixed layer topology certificate {name} is stale")
+
+    def topology_fingerprint_v2(self) -> str:
+        payload = {
+            "nodes": self.nodes.tolist(),
+            "cells": {
+                "types": self.cell_types.tolist(),
+                "offsets": self.cell_offsets.tolist(),
+                "nodes": self.cell_nodes.tolist(),
+                "global_ordinals": self.cell_global_ordinals.tolist(),
+                "mesh_parts": self.cell_mesh_parts.tolist(),
+            },
+            "element_markers": self.element_markers.tolist(),
+            "facets": {
+                "types": self.facet_types.tolist(),
+                "roles": self.facet_roles.tolist(),
+                "offsets": self.facet_offsets.tolist(),
+                "nodes": self.facet_nodes.tolist(),
+                "global_ordinals": self.facet_global_ordinals.tolist(),
+            },
+            "boundary_markers": self.boundary_markers.tolist(),
+            "periodic_boundary_pairs": self.periodic_boundary_pairs,
+            "periodic_node_pairs": self.periodic_node_pairs,
+        }
+        encoded = json.dumps(
+            payload,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        digest = hashlib.sha256(
+            b"fullmag:fem-mesh-topology-fingerprint:v2" + encoded
+        ).hexdigest()
+        return f"sha256:{digest}"
+
     @classmethod
     def from_legacy_tet4(
         cls,
@@ -686,6 +1173,7 @@ class MeshData:
         quality: MeshQualityReport | None = None,
         per_domain_quality: dict[int, MeshQualityReport] | None = None,
         realization_report: MeshRealizationReport | None = None,
+        mixed_layer_topology_certificate: MixedLayerTopologyCertificate | None = None,
     ) -> "MeshData":
         """Normalize the explicit legacy tet4/tri3 boundary into canonical CSR."""
         tet = np.asarray(elements, dtype=np.int32)
@@ -717,6 +1205,8 @@ class MeshData:
             quality=quality,
             per_domain_quality=per_domain_quality,
             realization_report=realization_report,
+            mixed_layer_topology_certificate=mixed_layer_topology_certificate,
+            cell_mesh_parts=np.asarray([], dtype=np.str_),
         )
 
     @property
@@ -800,6 +1290,15 @@ class MeshData:
         )
         if self.element_markers.shape != (self.n_elements,):
             raise ValueError("element_markers must have shape (cell count,)")
+        if self.cell_mesh_parts.shape not in {(0,), (self.n_elements,)}:
+            raise ValueError("cell_mesh_parts must be empty or have shape (cell count,)")
+        if self.cell_mesh_parts.size:
+            unknown_parts = sorted(
+                set(self.cell_mesh_parts.tolist())
+                - {"magnetic", "transition_air", "far_air"}
+            )
+            if unknown_parts:
+                raise ValueError(f"unknown cell mesh part: {unknown_parts[0]}")
         _validate_global_ordinals(self.cell_global_ordinals, self.n_elements, "cell")
         _validate_typed_csr(
             types=self.facet_types,
@@ -919,6 +1418,7 @@ class MeshData:
             boundary_markers=np.array(self.boundary_markers, copy=True),
             cell_global_ordinals=np.array(self.cell_global_ordinals, copy=True),
             facet_global_ordinals=np.array(self.facet_global_ordinals, copy=True),
+            cell_mesh_parts=np.array(self.cell_mesh_parts, copy=True),
             periodic_boundary_pairs=[dict(pair) for pair in self.periodic_boundary_pairs],
             periodic_node_pairs=[dict(pair) for pair in self.periodic_node_pairs],
             periodic_mesh_certificate=(
@@ -929,6 +1429,7 @@ class MeshData:
             quality=self.quality,
             per_domain_quality=self.per_domain_quality,
             realization_report=self.realization_report,
+            mixed_layer_topology_certificate=self.mixed_layer_topology_certificate,
         )
 
     def save(self, path: str | Path) -> None:
@@ -951,12 +1452,18 @@ class MeshData:
                         "boundary_markers": self.boundary_markers.tolist(),
                         "cell_global_ordinals": self.cell_global_ordinals.tolist(),
                         "facet_global_ordinals": self.facet_global_ordinals.tolist(),
+                        "cell_mesh_parts": self.cell_mesh_parts.tolist(),
                         "periodic_boundary_pairs": self.periodic_boundary_pairs,
                         "periodic_node_pairs": self.periodic_node_pairs,
                         "periodic_mesh_certificate": self.periodic_mesh_certificate,
                         "realization_report": (
                             self.realization_report.to_dict()
                             if self.realization_report is not None
+                            else None
+                        ),
+                        "mixed_layer_topology_certificate": (
+                            self.mixed_layer_topology_certificate.to_dict()
+                            if self.mixed_layer_topology_certificate is not None
                             else None
                         ),
                     },
@@ -979,6 +1486,7 @@ class MeshData:
             boundary_markers=self.boundary_markers,
             cell_global_ordinals=self.cell_global_ordinals,
             facet_global_ordinals=self.facet_global_ordinals,
+            cell_mesh_parts=self.cell_mesh_parts,
             periodic_boundary_pairs_json=np.asarray(
                 json.dumps(self.periodic_boundary_pairs),
             ),
@@ -992,6 +1500,13 @@ class MeshData:
                 json.dumps(
                     self.realization_report.to_dict()
                     if self.realization_report is not None
+                    else None
+                ),
+            ),
+            mixed_layer_topology_certificate_json=np.asarray(
+                json.dumps(
+                    self.mixed_layer_topology_certificate.to_dict()
+                    if self.mixed_layer_topology_certificate is not None
                     else None
                 ),
             ),
@@ -1152,12 +1667,27 @@ class MeshData:
             raw_report = json.loads(str(data["realization_report_json"]))
             if raw_report is not None:
                 realization_report = MeshRealizationReport.from_dict(dict(raw_report))
+        mixed_layer_topology_certificate = None
+        if "mixed_layer_topology_certificate_json" in data.files:
+            raw_certificate = json.loads(
+                str(data["mixed_layer_topology_certificate_json"])
+            )
+            if raw_certificate is not None:
+                if not isinstance(raw_certificate, dict):
+                    raise TypeError(
+                        "serialized mixed_layer_topology_certificate must be "
+                        "an object or null"
+                    )
+                mixed_layer_topology_certificate = (
+                    MixedLayerTopologyCertificate.from_dict(raw_certificate)
+                )
         payload = {name: data[name] for name in data.files if not name.endswith("_json")}
         payload.update(
             periodic_boundary_pairs=periodic_boundary_pairs,
             periodic_node_pairs=periodic_node_pairs,
             periodic_mesh_certificate=periodic_mesh_certificate,
             realization_report=realization_report,
+            mixed_layer_topology_certificate=mixed_layer_topology_certificate,
         )
         return cls._from_serialized_mapping(payload)
 
@@ -1180,6 +1710,11 @@ class MeshData:
             periodic_mesh_certificate=payload.get("periodic_mesh_certificate"),
             realization_report=_mesh_realization_report_from_serialized(
                 payload.get("realization_report")
+            ),
+            mixed_layer_topology_certificate=(
+                _mixed_layer_topology_certificate_from_serialized(
+                    payload.get("mixed_layer_topology_certificate")
+                )
             ),
         )
         if legacy:
@@ -1204,6 +1739,7 @@ class MeshData:
             facet_nodes=payload["facet_nodes"],
             cell_global_ordinals=payload.get("cell_global_ordinals", np.arange(len(payload["cell_types"]), dtype=np.int64)),
             facet_global_ordinals=payload.get("facet_global_ordinals", np.arange(len(payload["facet_types"]), dtype=np.int64)),
+            cell_mesh_parts=payload.get("cell_mesh_parts", np.asarray([], dtype=np.str_)),
         )
 
     def to_ir(self, mesh_name: str) -> dict[str, object]:
@@ -1217,6 +1753,7 @@ class MeshData:
                 "offsets": mesh.cell_offsets.tolist(),
                 "nodes": mesh.cell_nodes.tolist(),
                 "global_ordinals": mesh.cell_global_ordinals.tolist(),
+                "mesh_parts": mesh.cell_mesh_parts.tolist(),
             },
             "element_markers": mesh.element_markers.tolist(),
             "facets": {
@@ -1238,6 +1775,10 @@ class MeshData:
             ir["periodic_mesh_certificate"] = dict(mesh.periodic_mesh_certificate)
         if mesh.realization_report is not None:
             ir["mesh_realization_report"] = mesh.realization_report.to_dict()
+        if mesh.mixed_layer_topology_certificate is not None:
+            ir["mixed_layer_topology_certificate"] = (
+                mesh.mixed_layer_topology_certificate.to_dict()
+            )
         if mesh.per_domain_quality is not None:
             ir["per_domain_quality"] = {
                 str(marker): {
@@ -1275,6 +1816,476 @@ def _mesh_realization_report_from_serialized(
     if isinstance(value, dict):
         return MeshRealizationReport.from_dict(value)
     raise TypeError("serialized realization_report must be an object or null")
+
+
+def _mixed_layer_topology_certificate_from_serialized(
+    value: object,
+) -> MixedLayerTopologyCertificate | None:
+    if value is None:
+        return None
+    if isinstance(value, MixedLayerTopologyCertificate):
+        return value
+    if isinstance(value, dict):
+        return MixedLayerTopologyCertificate.from_dict(value)
+    raise TypeError(
+        "serialized mixed_layer_topology_certificate must be an object or null"
+    )
+
+
+def _normalize_nested_counts(
+    value: object,
+    name: str,
+) -> dict[str, dict[str, int]]:
+    if not isinstance(value, dict):
+        raise TypeError(f"mixed layer topology certificate {name} must be an object")
+    normalized: dict[str, dict[str, int]] = {}
+    for outer_key, raw_counts in value.items():
+        if not isinstance(outer_key, str):
+            raise TypeError(
+                f"mixed layer topology certificate {name} outer keys must be strings"
+            )
+        if not isinstance(raw_counts, dict):
+            raise TypeError(
+                f"mixed layer topology certificate {name}[{outer_key!r}] must be an object"
+            )
+        counts: dict[str, int] = {}
+        for family, raw_count in raw_counts.items():
+            if not isinstance(family, str):
+                raise TypeError(
+                    f"mixed layer topology certificate {name} inner keys must be strings"
+                )
+            if isinstance(raw_count, bool) or not isinstance(raw_count, int) or raw_count < 0:
+                raise TypeError(
+                    f"mixed layer topology certificate {name} counts must be non-negative integers"
+                )
+            if raw_count:
+                counts[family] = raw_count
+        normalized[outer_key] = counts
+    return normalized
+
+
+def _cluster_coordinate_planes(
+    nodes: NDArray[np.float64] | object,
+    axis: int,
+) -> tuple[tuple[float, ...], float]:
+    coordinates = np.asarray(nodes, dtype=np.float64)
+    if coordinates.ndim != 2 or coordinates.shape[1] != 3 or len(coordinates) == 0:
+        raise ValueError("plane clustering requires non-empty nodes with shape (N, 3)")
+    values = sorted(float(value) for value in coordinates[:, axis])
+    thickness = values[-1] - values[0]
+    tolerance = max(
+        FEM_EXACT_LAYER_PLANE_ABS_TOLERANCE_M,
+        FEM_EXACT_LAYER_PLANE_REL_TOLERANCE * thickness,
+    )
+    planes: list[float] = []
+    for value in values:
+        if not planes or abs(value - planes[-1]) > tolerance:
+            planes.append(value)
+    return tuple(planes), tolerance
+
+
+def _cell_counts_by_marker(mesh: MeshData) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for family, marker in zip(
+        mesh.cell_types.tolist(), mesh.element_markers.tolist(), strict=True
+    ):
+        by_family = counts.setdefault(str(int(marker)), {})
+        by_family[str(family)] = by_family.get(str(family), 0) + 1
+    return {key: dict(sorted(value.items())) for key, value in sorted(counts.items())}
+
+
+def _cell_counts_by_part(mesh: MeshData) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {
+        "magnetic": {},
+        "transition_air": {},
+        "far_air": {},
+    }
+    if mesh.cell_mesh_parts.shape != (mesh.n_elements,):
+        return {}
+    for family, part in zip(
+        mesh.cell_types.tolist(), mesh.cell_mesh_parts.tolist(), strict=True
+    ):
+        counts[part][str(family)] = counts[part].get(str(family), 0) + 1
+    return {
+        key: dict(sorted(value.items()))
+        for key, value in sorted(counts.items())
+        if value
+    }
+
+
+def _facet_counts_by_role_marker(mesh: MeshData) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for family, role, marker in zip(
+        mesh.facet_types.tolist(),
+        mesh.facet_roles.tolist(),
+        mesh.boundary_markers.tolist(),
+        strict=True,
+    ):
+        key = f"{role}:{int(marker)}"
+        by_family = counts.setdefault(key, {})
+        by_family[str(family)] = by_family.get(str(family), 0) + 1
+    return {key: dict(sorted(value.items())) for key, value in sorted(counts.items())}
+
+
+_MIXED_CELL_LOCAL_FACETS: dict[str, tuple[tuple[int, ...], ...]] = {
+    "tet4": ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)),
+    "prism6": (
+        (0, 1, 2),
+        (3, 5, 4),
+        (0, 3, 4, 1),
+        (1, 4, 5, 2),
+        (2, 5, 3, 0),
+    ),
+    "pyramid5": (
+        (0, 3, 2, 1),
+        (0, 1, 4),
+        (1, 2, 4),
+        (2, 3, 4),
+        (3, 0, 4),
+    ),
+    "hex8": (
+        (0, 3, 2, 1),
+        (4, 5, 6, 7),
+        (0, 1, 5, 4),
+        (1, 2, 6, 5),
+        (2, 3, 7, 6),
+        (3, 0, 4, 7),
+    ),
+}
+
+
+def _mixed_mesh_conformity_counts(
+    mesh: MeshData,
+    *,
+    tolerance: float,
+    interface_marker: int = MIXED_INTERFACE_MARKER,
+    outer_boundary_marker: int | None = None,
+) -> dict[str, int]:
+    adjacency: dict[tuple[int, ...], list[tuple[int, str]]] = {}
+    for ordinal, family in enumerate(mesh.cell_types.tolist()):
+        cell = mesh.cell_node_ids(ordinal)
+        for local_face in _MIXED_CELL_LOCAL_FACETS[str(family)]:
+            key = tuple(sorted(int(cell[index]) for index in local_face))
+            adjacency.setdefault(key, []).append(
+                (int(mesh.element_markers[ordinal]), str(family))
+            )
+
+    explicit: dict[tuple[int, ...], list[int]] = {}
+    exterior: list[tuple[int, ...]] = []
+    interfaces: list[tuple[int, ...]] = []
+    orphan = 0
+    nonconforming = 0
+    for ordinal, role in enumerate(mesh.facet_roles.tolist()):
+        key = tuple(sorted(int(node) for node in mesh.facet_node_ids(ordinal)))
+        explicit.setdefault(key, []).append(ordinal)
+        owners = adjacency.get(key, [])
+        if not owners:
+            orphan += 1
+            continue
+        if role == "exterior":
+            exterior.append(key)
+            if len(owners) != 1 or (
+                outer_boundary_marker is not None
+                and int(mesh.boundary_markers[ordinal]) != outer_boundary_marker
+            ):
+                nonconforming += 1
+        elif role == "material_interface":
+            interfaces.append(key)
+            if (
+                len(owners) != 2
+                or {marker for marker, _ in owners} != {0, 1}
+                or int(mesh.boundary_markers[ordinal]) != interface_marker
+            ):
+                nonconforming += 1
+
+    nonmanifold = sum(1 for owners in adjacency.values() if len(owners) > 2)
+    nonconforming += sum(
+        1
+        for key, owners in adjacency.items()
+        if len(owners) == 1 and exterior.count(key) != 1
+    )
+    nonconforming += sum(
+        1
+        for key, owners in adjacency.items()
+        if len(owners) == 2
+        and owners[0][0] != owners[1][0]
+        and interfaces.count(key) != 1
+    )
+    nonconforming += sum(max(0, exterior.count(key) - 1) for key in set(exterior))
+    duplicate_interface_faces = sum(
+        max(0, len(explicit.get(key, [])) - 1) for key in set(interfaces)
+    )
+
+    interface_nodes = sorted({node for face in interfaces for node in face})
+    coordinate_keys: dict[tuple[int, int, int], int] = {}
+    duplicate_interface_nodes = 0
+    scale = max(float(tolerance), np.finfo(np.float64).eps)
+    for node in interface_nodes:
+        key = tuple(int(round(float(value) / scale)) for value in mesh.nodes[node])
+        if key in coordinate_keys and coordinate_keys[key] != node:
+            duplicate_interface_nodes += 1
+        else:
+            coordinate_keys[key] = node
+    return {
+        "nonconforming_face_count": int(nonconforming),
+        "orphan_face_count": int(orphan),
+        "nonmanifold_face_count": int(nonmanifold),
+        "coincident_interface_face_count": int(
+            duplicate_interface_faces + duplicate_interface_nodes
+        ),
+    }
+
+
+def _mixed_cell_volume(family: str, coordinates: NDArray[np.float64]) -> float:
+    def tet(indices: tuple[int, int, int, int]) -> float:
+        points = coordinates[list(indices)]
+        return abs(float(np.linalg.det(np.stack(
+            [points[1] - points[0], points[2] - points[0], points[3] - points[0]],
+            axis=1,
+        )))) / 6.0
+
+    if family == "tet4":
+        return tet((0, 1, 2, 3))
+    if family == "prism6":
+        return sum(tet(indices) for indices in ((0, 1, 2, 3), (1, 2, 3, 4), (2, 3, 4, 5)))
+    if family == "pyramid5":
+        return tet((0, 1, 2, 4)) + tet((0, 2, 3, 4))
+    raise ValueError(f"mixed shared-domain certificate does not support {family}")
+
+
+def _mixed_cell_scaled_jacobians(
+    family: str, coordinates: NDArray[np.float64]
+) -> NDArray[np.float64]:
+    decompositions = {
+        "tet4": ((0, 1, 2, 3),),
+        "prism6": ((0, 1, 2, 3), (1, 2, 3, 4), (2, 3, 4, 5)),
+        "pyramid5": ((0, 1, 2, 4), (0, 2, 3, 4)),
+    }[family]
+    values: list[float] = []
+    for indices in decompositions:
+        points = coordinates[list(indices)]
+        matrix = np.stack(
+            [points[1] - points[0], points[2] - points[0], points[3] - points[0]],
+            axis=1,
+        )
+        denominator = float(np.prod(np.linalg.norm(matrix, axis=0)))
+        values.append(abs(float(np.linalg.det(matrix))) / denominator if denominator else 0.0)
+    return np.asarray(values, dtype=np.float64)
+
+
+def _mixed_face_adjacency(mesh: MeshData) -> dict[tuple[int, ...], list[int]]:
+    adjacency: dict[tuple[int, ...], list[int]] = {}
+    for ordinal, family in enumerate(mesh.cell_types.tolist()):
+        cell = mesh.cell_node_ids(ordinal)
+        for local_face in _MIXED_CELL_LOCAL_FACETS[str(family)]:
+            key = tuple(sorted(int(cell[index]) for index in local_face))
+            adjacency.setdefault(key, []).append(ordinal)
+    return adjacency
+
+
+def _validate_mixed_pyramid_bases(
+    mesh: MeshData,
+    *,
+    interface_marker: int,
+) -> None:
+    interface_quads = {
+        tuple(sorted(int(node) for node in mesh.facet_node_ids(ordinal)))
+        for ordinal, (family, role, marker) in enumerate(zip(
+            mesh.facet_types.tolist(),
+            mesh.facet_roles.tolist(),
+            mesh.boundary_markers.tolist(),
+            strict=True,
+        ))
+        if family == "quad4"
+        and role == "material_interface"
+        and int(marker) == interface_marker
+    }
+    pyramid_bases = {
+        tuple(sorted(int(mesh.cell_node_ids(ordinal)[index]) for index in (0, 1, 2, 3)))
+        for ordinal, family in enumerate(mesh.cell_types.tolist())
+        if family == "pyramid5"
+    }
+    if not pyramid_bases or not pyramid_bases.issubset(interface_quads):
+        raise ValueError(
+            "mixed layer topology certificate pyramid bases must be exact quad4 "
+            f"material-interface facets with marker {interface_marker}"
+        )
+
+
+def _bounds_relative_error(
+    realized_min: NDArray[np.float64],
+    realized_max: NDArray[np.float64],
+    authored_min: tuple[float, float, float],
+    authored_max: tuple[float, float, float],
+) -> float:
+    expected_min = np.asarray(authored_min, dtype=np.float64)
+    expected_max = np.asarray(authored_max, dtype=np.float64)
+    scale = float(np.max(expected_max - expected_min))
+    return float(max(
+        np.max(np.abs(realized_min - expected_min)),
+        np.max(np.abs(realized_max - expected_max)),
+    ) / scale)
+
+
+def _recompute_mixed_certificate_evidence(
+    mesh: MeshData,
+    *,
+    sweep_axis: int,
+    interface_marker: int,
+    outer_boundary_marker: int,
+    magnetic_bounds_min_m: tuple[float, float, float],
+    magnetic_bounds_max_m: tuple[float, float, float],
+    airbox_bounds_min_m: tuple[float, float, float],
+    airbox_bounds_max_m: tuple[float, float, float],
+) -> dict[str, object]:
+    if mesh.cell_mesh_parts.shape != (mesh.n_elements,):
+        raise ValueError("mixed layer topology certificate requires per-cell mesh parts")
+    allowed = {
+        "magnetic": ({"prism6"}, 1),
+        "transition_air": ({"pyramid5", "tet4"}, 0),
+        "far_air": ({"tet4"}, 0),
+    }
+    for ordinal, (family, marker, part) in enumerate(zip(
+        mesh.cell_types.tolist(), mesh.element_markers.tolist(), mesh.cell_mesh_parts.tolist(), strict=True
+    )):
+        families, expected_marker = allowed[part]
+        if family not in families or int(marker) != expected_marker:
+            raise ValueError(
+                f"mixed layer topology certificate cell {ordinal} has invalid mesh part/family/marker"
+            )
+    part_counts = _cell_counts_by_part(mesh)
+    if set(part_counts) != set(allowed) or not all(part_counts[part] for part in allowed):
+        raise ValueError("mixed layer topology certificate mesh parts are incomplete")
+
+    volumes = np.zeros(mesh.n_elements, dtype=np.float64)
+    jacobians: dict[str, list[float]] = {}
+    scaled: dict[str, list[float]] = {}
+    for ordinal, family in enumerate(mesh.cell_types.tolist()):
+        coordinates = mesh.nodes[mesh.cell_node_ids(ordinal)]
+        volumes[ordinal] = _mixed_cell_volume(family, coordinates)
+        jacobians.setdefault(family, []).extend(
+            _cell_jacobian_determinants(family, coordinates).tolist()
+        )
+        scaled.setdefault(family, []).extend(
+            _mixed_cell_scaled_jacobians(family, coordinates).tolist()
+        )
+    jacobian_minima = {key: float(np.min(value)) for key, value in sorted(jacobians.items())}
+    scaled_minima = {key: float(np.min(value)) for key, value in sorted(scaled.items())}
+    scaled_p05 = {key: float(np.percentile(value, 5.0)) for key, value in sorted(scaled.items())}
+
+    magnetic = mesh.cell_mesh_parts == "magnetic"
+    transition = mesh.cell_mesh_parts == "transition_air"
+    magnetic_nodes = np.unique(np.concatenate([
+        mesh.cell_node_ids(int(index)) for index in np.flatnonzero(magnetic)
+    ]))
+    transition_nodes = np.unique(np.concatenate([
+        mesh.cell_node_ids(int(index)) for index in np.flatnonzero(transition)
+    ]))
+    magnetic_bounds = (np.min(mesh.nodes[magnetic_nodes], axis=0), np.max(mesh.nodes[magnetic_nodes], axis=0))
+    transition_bounds = (np.min(mesh.nodes[transition_nodes], axis=0), np.max(mesh.nodes[transition_nodes], axis=0))
+    outer_bounds = (np.min(mesh.nodes, axis=0), np.max(mesh.nodes, axis=0))
+    magnetic_bounds_error = _bounds_relative_error(
+        magnetic_bounds[0], magnetic_bounds[1], magnetic_bounds_min_m, magnetic_bounds_max_m
+    )
+    airbox_bounds_error = _bounds_relative_error(
+        outer_bounds[0], outer_bounds[1], airbox_bounds_min_m, airbox_bounds_max_m
+    )
+    if magnetic_bounds_error > 1.0e-8 or airbox_bounds_error > 1.0e-8:
+        raise ValueError(
+            "mixed layer topology certificate realized bounds do not match authored CAD bounds"
+        )
+    shell_offsets = np.concatenate([
+        magnetic_bounds[0] - transition_bounds[0],
+        transition_bounds[1] - magnetic_bounds[1],
+    ])
+    shell_thickness = float(np.mean(shell_offsets))
+    if np.any(shell_offsets <= 0.0) or not np.allclose(
+        shell_offsets, shell_thickness, rtol=1.0e-10, atol=1.0e-15
+    ):
+        raise ValueError("mixed layer topology certificate transition shell thickness is not uniform")
+
+    adjacency = _mixed_face_adjacency(mesh)
+    shell_faces = [
+        key for key, owners in adjacency.items()
+        if len(owners) == 2
+        and {mesh.cell_mesh_parts[index] for index in owners} == {"transition_air", "far_air"}
+    ]
+    if not shell_faces or any(len(face) != 3 for face in shell_faces):
+        raise ValueError("mixed layer topology certificate transition shell interface is not tri3")
+    planes, plane_tolerance = _cluster_coordinate_planes(mesh.nodes[magnetic_nodes], sweep_axis)
+    magnetic_volume = float(np.sum(volumes[magnetic]))
+    shared_volume = float(np.sum(volumes))
+    expected_magnetic = float(np.prod(
+        np.asarray(magnetic_bounds_max_m) - np.asarray(magnetic_bounds_min_m)
+    ))
+    expected_shared = float(np.prod(
+        np.asarray(airbox_bounds_max_m) - np.asarray(airbox_bounds_min_m)
+    ))
+    conformity = _mixed_mesh_conformity_counts(
+        mesh,
+        tolerance=plane_tolerance,
+        interface_marker=interface_marker,
+        outer_boundary_marker=outer_boundary_marker,
+    )
+    return {
+        "magnetic_plane_coordinates_m": planes,
+        "plane_tolerance_m": plane_tolerance,
+        "transition_shell_thickness_m": shell_thickness,
+        "transition_shell_interface_tri3_count": len(shell_faces),
+        "cell_family_counts_by_marker": _cell_counts_by_marker(mesh),
+        "cell_family_counts_by_part": part_counts,
+        "facet_family_counts_by_role_marker": _facet_counts_by_role_marker(mesh),
+        "jacobian_minima_m3_by_family": jacobian_minima,
+        "scaled_jacobian_minima_by_family": scaled_minima,
+        "scaled_jacobian_p05_by_family": scaled_p05,
+        "magnetic_volume_m3": magnetic_volume,
+        "expected_magnetic_volume_m3": expected_magnetic,
+        "magnetic_relative_volume_error": abs(magnetic_volume - expected_magnetic) / expected_magnetic,
+        "magnetic_bounds_relative_error": magnetic_bounds_error,
+        "air_volume_m3": shared_volume - magnetic_volume,
+        "shared_domain_volume_m3": shared_volume,
+        "expected_shared_domain_volume_m3": expected_shared,
+        "shared_domain_relative_volume_error": abs(shared_volume - expected_shared) / expected_shared,
+        "airbox_bounds_relative_error": airbox_bounds_error,
+        "marker_coverage_complete": True,
+        **conformity,
+    }
+
+
+def _rebuild_mixed_layer_topology_certificate(
+    mesh: MeshData,
+    template: MixedLayerTopologyCertificate,
+    *,
+    authored_scale: float = 1.0,
+) -> MeshData:
+    def scaled(values: tuple[float, float, float]) -> tuple[float, float, float]:
+        return tuple(float(value * authored_scale) for value in values)  # type: ignore[return-value]
+
+    magnetic_bounds_min_m = scaled(template.magnetic_bounds_min_m)
+    magnetic_bounds_max_m = scaled(template.magnetic_bounds_max_m)
+    airbox_bounds_min_m = scaled(template.airbox_bounds_min_m)
+    airbox_bounds_max_m = scaled(template.airbox_bounds_max_m)
+    evidence = _recompute_mixed_certificate_evidence(
+        mesh,
+        sweep_axis={"x": 0, "y": 1, "z": 2}[template.resolved_sweep_direction],
+        interface_marker=template.interface_marker,
+        outer_boundary_marker=template.outer_boundary_marker,
+        magnetic_bounds_min_m=magnetic_bounds_min_m,
+        magnetic_bounds_max_m=magnetic_bounds_max_m,
+        airbox_bounds_min_m=airbox_bounds_min_m,
+        airbox_bounds_max_m=airbox_bounds_max_m,
+    )
+    certificate = replace(
+        template,
+        realized_layer_count=len(evidence["magnetic_plane_coordinates_m"]) - 1,
+        topology_fingerprint=mesh.topology_fingerprint_v2(),
+        magnetic_bounds_min_m=magnetic_bounds_min_m,
+        magnetic_bounds_max_m=magnetic_bounds_max_m,
+        airbox_bounds_min_m=airbox_bounds_min_m,
+        airbox_bounds_max_m=airbox_bounds_max_m,
+        **evidence,
+    )
+    return replace(mesh, mixed_layer_topology_certificate=certificate)
 
 
 def _validate_typed_csr(

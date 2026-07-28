@@ -48,6 +48,14 @@ from ._gmsh_infra import (
 )
 from ._gmsh_extraction import _extract_mesh_data
 from ._gmsh_fields import _apply_mesh_options
+from ._gmsh_airbox import (
+    _MIXED_SHARED_GMSH_VERSION,
+    _add_conforming_swept_box_airbox_geo,
+    _attach_mixed_layer_topology_certificate,
+    _gmsh_cell_parts_in_extraction_order,
+    _gmsh_cell_family_counts_for_entities,
+    _gmsh_require_triangular_shell_interface,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -509,10 +517,31 @@ def generate_swept_box_mesh(
     if opts.periodic_pair_ids:
         raise ValueError("body-only swept prism meshing does not support periodic pairs")
     if airbox is not None:
-        raise ValueError(
-            "body-only swept prism meshing does not yet support an airbox; "
-            "conforming prism/pyramid/tetrahedron airbox realization is required"
-        )
+        if str(airbox.shape).strip().lower() != "bbox":
+            raise ValueError(
+                "mixed shared-domain swept meshing supports only a bbox airbox"
+            )
+        if int(airbox.boundary_marker) == 10:
+            raise ValueError("mixed shared-domain interface and outer boundary markers must be distinct")
+        unsupported = []
+        if opts.algorithm_2d != 6:
+            unsupported.append("algorithm_2d")
+        if opts.algorithm_3d != 1:
+            unsupported.append("algorithm_3d")
+        if opts.size_fields:
+            unsupported.append("size_fields")
+        if opts.boundary_layer_count is not None:
+            unsupported.append("boundary layers")
+        if opts.optimize is not None:
+            unsupported.append("optimizer")
+        if opts.periodic_pair_ids:
+            unsupported.append("periodic pairs")
+        if opts.sweep_face_meshing not in (None, "triangular"):
+            unsupported.append("sweep_face_meshing")
+        if unsupported:
+            raise ValueError(
+                "mixed shared-domain strategy is not qualified for: " + ", ".join(unsupported)
+            )
 
     try:
         sx, sy, sz = (float(value) for value in size)
@@ -539,10 +568,20 @@ def generate_swept_box_mesh(
     )
 
     gmsh = _import_gmsh()
+    gmsh_version = str(getattr(gmsh, "__version__", "unknown"))
+    if airbox is not None and gmsh_version != _MIXED_SHARED_GMSH_VERSION:
+        raise RuntimeError(
+            "mixed shared-domain swept meshing is qualified only for Gmsh "
+            f"{_MIXED_SHARED_GMSH_VERSION}; detected {gmsh_version}"
+        )
     gmsh.initialize()
     gmsh.option.setNumber("General.Terminal", 0)
     try:
-        _configure_gmsh_threads(gmsh)
+        effective_gmsh_thread_count = _configure_gmsh_threads(
+            gmsh,
+            requested_threads=1 if airbox is not None else None,
+            honor_environment=airbox is None,
+        )
         gmsh.model.add("fullmag_swept_box")
 
         # Compute source-face rectangle (the two non-thin axes)
@@ -573,7 +612,10 @@ def generate_swept_box_mesh(
         corner3 = list(origin)
         corner3[face_axes[0]] += w
         corner3[face_axes[1]] += h
-        p3 = gmsh.model.geo.addPoint(corner3[0], corner3[1], corner3[2], hmax_scaled)
+        p3_mesh_size = hmax_scaled * (0.5 if airbox is not None else 1.0)
+        p3 = gmsh.model.geo.addPoint(
+            corner3[0], corner3[1], corner3[2], p3_mesh_size
+        )
 
         corner4 = list(origin)
         corner4[face_axes[1]] += h
@@ -584,7 +626,18 @@ def generate_swept_box_mesh(
         l3 = gmsh.model.geo.addLine(p3, p4)
         l4 = gmsh.model.geo.addLine(p4, p1)
 
-        loop = gmsh.model.geo.addCurveLoop([l1, l2, l3, l4])
+        source_loop = [l1, l2, l3, l4]
+        if airbox is not None:
+            first = np.zeros(3, dtype=np.float64)
+            second = np.zeros(3, dtype=np.float64)
+            first[face_axes[0]] = 1.0
+            second[face_axes[1]] = 1.0
+            if float(np.dot(np.cross(first, second), extrude_dir)) > 0.0:
+                # The inner shell must follow the frozen GEO fixture: source
+                # normal opposite to extrusion, so it is a true air-volume
+                # hole instead of an overlapping shell.
+                source_loop = [-l4, -l3, -l2, -l1]
+        loop = gmsh.model.geo.addCurveLoop(source_loop)
         source_surf = gmsh.model.geo.addPlaneSurface([loop])
 
         gmsh.model.geo.synchronize()
@@ -598,17 +651,108 @@ def generate_swept_box_mesh(
         # Extrude the geometry before generating the mesh. One layer group
         # with a terminal normalized height is the documented uniform Gmsh
         # contract: exactly ``n_layers`` subdivisions ending at height 1.0.
-        gmsh.model.geo.extrude(
+        extrusion_entities = gmsh.model.geo.extrude(
             [(2, source_surf)],
             extrude_dir[0], extrude_dir[1], extrude_dir[2],
             numElements=[n_layers],
             heights=[1.0],
             recombine=True,
         )
-        gmsh.model.geo.synchronize()
-        gmsh.model.mesh.generate(3)
+        outer_size_m: tuple[float, float, float] | None = None
+        transition_shell_thickness_m: float | None = None
+        domain_volume_entities: tuple[int, int, int] | None = None
+        transition_shell_surfaces: list[int] | None = None
+        if airbox is not None:
+            (
+                domain_volume_entities,
+                _outer_surfaces,
+                outer_size_m,
+                transition_shell_thickness_m,
+                transition_shell_surfaces,
+            ) = (
+                _add_conforming_swept_box_airbox_geo(
+                    gmsh,
+                    body_size_scaled=(sx * SCALE, sy * SCALE, sz * SCALE),
+                    source_surface=source_surf,
+                    extrusion_entities=list(extrusion_entities),
+                    airbox=airbox,
+                    hmax_scaled=hmax_scaled,
+                    scale=SCALE,
+                )
+            )
+        else:
+            gmsh.model.geo.synchronize()
+        gmsh.option.setNumber("Mesh.Algorithm3D", opts.algorithm_3d)
+        gmsh.option.setNumber("Mesh.RandomFactor", 0.0)
+        gmsh.option.setNumber("Mesh.ElementOrder", 1)
+        with _GmshProgressLogger(gmsh):
+            gmsh.model.mesh.generate(3)
 
         # Extract → same pipeline as cylinder
+        if airbox is not None:
+            raw_mesh = _extract_mesh_data(gmsh, has_physical_groups=True)
+            mesh = MeshData(
+                nodes=np.asarray(raw_mesh.nodes, dtype=np.float64) / SCALE,
+                cell_types=raw_mesh.cell_types,
+                cell_offsets=raw_mesh.cell_offsets,
+                cell_nodes=raw_mesh.cell_nodes,
+                element_markers=raw_mesh.element_markers,
+                facet_types=raw_mesh.facet_types,
+                facet_roles=raw_mesh.facet_roles,
+                facet_offsets=raw_mesh.facet_offsets,
+                facet_nodes=raw_mesh.facet_nodes,
+                boundary_markers=raw_mesh.boundary_markers,
+                cell_global_ordinals=raw_mesh.cell_global_ordinals,
+                facet_global_ordinals=raw_mesh.facet_global_ordinals,
+            )
+            assert outer_size_m is not None
+            assert transition_shell_thickness_m is not None
+            assert domain_volume_entities is not None
+            assert transition_shell_surfaces is not None
+            transition_shell_interface_tri3_count = (
+                _gmsh_require_triangular_shell_interface(
+                    gmsh, transition_shell_surfaces
+                )
+            )
+            (
+                magnetic_volume,
+                transition_air_volume,
+                far_air_volume,
+            ) = domain_volume_entities
+            cell_mesh_parts = _gmsh_cell_parts_in_extraction_order(
+                gmsh,
+                {
+                    "magnetic": [magnetic_volume],
+                    "transition_air": [transition_air_volume],
+                    "far_air": [far_air_volume],
+                },
+            )
+            if cell_mesh_parts.shape != (mesh.n_elements,):
+                raise RuntimeError("mixed shared-domain cell mesh-part identity is incomplete")
+            airbox_center_m = (
+                np.zeros(3, dtype=np.float64)
+                if airbox.center is None
+                else np.asarray(airbox.center, dtype=np.float64)
+            )
+            airbox_size_array_m = np.asarray(outer_size_m, dtype=np.float64)
+            return _attach_mixed_layer_topology_certificate(
+                mesh,
+                body_size_m=(sx, sy, sz),
+                airbox_bounds_min_m=tuple(
+                    float(value)
+                    for value in airbox_center_m - 0.5 * airbox_size_array_m
+                ),
+                airbox_bounds_max_m=tuple(
+                    float(value)
+                    for value in airbox_center_m + 0.5 * airbox_size_array_m
+                ),
+                requested_axis=thin_axis,
+                requested_layers=n_layers,
+                gmsh_version=gmsh_version,
+                cell_mesh_parts=cell_mesh_parts,
+                outer_boundary_marker=int(airbox.boundary_marker),
+                effective_gmsh_thread_count=effective_gmsh_thread_count,
+            )
         return _extract_swept_mesh_data(
             gmsh,
             SCALE,

@@ -28,9 +28,409 @@ from fullmag.model.geometry import (
 )
 from ._gmsh_waveguides import add_arch_waveguide_to_occ
 
-from ._gmsh_types import AirboxOptions, MeshData, MeshOptions, MeshQualityReport
+from ._gmsh_types import (
+    AirboxOptions,
+    MeshData,
+    MeshOptions,
+    MeshQualityReport,
+    MixedLayerTopologyCertificate,
+    MIXED_INTERFACE_MARKER,
+    MIXED_QUALITY_METRIC,
+    MIXED_SHARED_GEO_STRATEGY,
+    MIXED_SHARED_GMSH_VERSION,
+    SUPPORTED_VOLUME_ELEMENTS,
+    _cluster_coordinate_planes,
+    _mixed_mesh_conformity_counts,
+    _mixed_deterministic_inputs,
+    _recompute_mixed_certificate_evidence,
+    _validate_mixed_pyramid_bases,
+)
 from ._gmsh_infra import _import_gmsh, _configure_gmsh_threads, _GmshProgressLogger
 from ._gmsh_extraction import _extract_quality_metrics
+
+
+_MIXED_SHARED_GEO_STRATEGY = MIXED_SHARED_GEO_STRATEGY
+_MIXED_SHARED_GMSH_VERSION = MIXED_SHARED_GMSH_VERSION
+
+
+def _add_geo_box_surface_loop(
+    gmsh: Any,
+    *,
+    bounds_min: np.ndarray,
+    bounds_max: np.ndarray,
+    mesh_size: float,
+) -> tuple[list[int], int]:
+    points: dict[tuple[int, int, int], int] = {}
+    for iz, z in enumerate((bounds_min[2], bounds_max[2])):
+        for iy, y in enumerate((bounds_min[1], bounds_max[1])):
+            for ix, x in enumerate((bounds_min[0], bounds_max[0])):
+                points[(ix, iy, iz)] = gmsh.model.geo.addPoint(
+                    float(x), float(y), float(z), float(mesh_size)
+                )
+
+    p000 = points[(0, 0, 0)]
+    p100 = points[(1, 0, 0)]
+    p110 = points[(1, 1, 0)]
+    p010 = points[(0, 1, 0)]
+    p001 = points[(0, 0, 1)]
+    p101 = points[(1, 0, 1)]
+    p111 = points[(1, 1, 1)]
+    p011 = points[(0, 1, 1)]
+    bottom = [
+        gmsh.model.geo.addLine(p000, p100),
+        gmsh.model.geo.addLine(p100, p110),
+        gmsh.model.geo.addLine(p110, p010),
+        gmsh.model.geo.addLine(p010, p000),
+    ]
+    top = [
+        gmsh.model.geo.addLine(p001, p101),
+        gmsh.model.geo.addLine(p101, p111),
+        gmsh.model.geo.addLine(p111, p011),
+        gmsh.model.geo.addLine(p011, p001),
+    ]
+    vertical = [
+        gmsh.model.geo.addLine(p000, p001),
+        gmsh.model.geo.addLine(p100, p101),
+        gmsh.model.geo.addLine(p110, p111),
+        gmsh.model.geo.addLine(p010, p011),
+    ]
+    loops = [
+        gmsh.model.geo.addCurveLoop(bottom),
+        gmsh.model.geo.addCurveLoop(top),
+        gmsh.model.geo.addCurveLoop([bottom[0], vertical[1], -top[0], -vertical[0]]),
+        gmsh.model.geo.addCurveLoop([bottom[1], vertical[2], -top[1], -vertical[1]]),
+        gmsh.model.geo.addCurveLoop([bottom[2], vertical[3], -top[2], -vertical[2]]),
+        gmsh.model.geo.addCurveLoop([bottom[3], vertical[0], -top[3], -vertical[3]]),
+    ]
+    surfaces = [gmsh.model.geo.addPlaneSurface([loop]) for loop in loops]
+    return surfaces, int(gmsh.model.geo.addSurfaceLoop(surfaces))
+
+
+def _add_conforming_swept_box_airbox_geo(
+    gmsh: Any,
+    *,
+    body_size_scaled: tuple[float, float, float],
+    source_surface: int,
+    extrusion_entities: list[tuple[int, int]],
+    airbox: AirboxOptions,
+    hmax_scaled: float,
+    scale: float,
+) -> tuple[
+    tuple[int, int, int],
+    list[int],
+    tuple[float, float, float],
+    float,
+    list[int],
+]:
+    """Add dedicated transition-shell and far-air GEO volumes."""
+    if str(airbox.shape).strip().lower() != "bbox":
+        raise ValueError("mixed shared-domain swept meshing supports only a bbox airbox")
+    magnetic_volumes = [int(tag) for dim, tag in extrusion_entities if int(dim) == 3]
+    extruded_surfaces = [int(tag) for dim, tag in extrusion_entities if int(dim) == 2]
+    if len(magnetic_volumes) != 1 or len(extruded_surfaces) != 5:
+        raise RuntimeError(
+            "Gmsh GEO extrusion did not return one prism volume and five boundary surfaces"
+        )
+    interface_surfaces = [int(source_surface), *extruded_surfaces]
+
+    body_size = np.asarray(body_size_scaled, dtype=np.float64)
+    if airbox.size is None:
+        if not math.isfinite(float(airbox.padding_factor)) or airbox.padding_factor <= 1.0:
+            raise ValueError("mixed shared-domain airbox padding_factor must be greater than 1")
+        outer_size = body_size * float(airbox.padding_factor)
+    else:
+        outer_size = np.asarray(airbox.size, dtype=np.float64) * float(scale)
+    center = (
+        np.zeros(3, dtype=np.float64)
+        if airbox.center is None
+        else np.asarray(airbox.center, dtype=np.float64) * float(scale)
+    )
+    if outer_size.shape != (3,) or center.shape != (3,) or not np.all(
+        np.isfinite(outer_size)
+    ) or not np.all(np.isfinite(center)) or np.any(outer_size <= 0.0):
+        raise ValueError("mixed shared-domain airbox size/center must be finite 3-vectors")
+    outer_min = center - 0.5 * outer_size
+    outer_max = center + 0.5 * outer_size
+    body_min = -0.5 * body_size
+    body_max = 0.5 * body_size
+    containment_tolerance = np.finfo(np.float64).eps * max(
+        1.0, float(np.max(outer_size))
+    )
+    if np.any(body_min <= outer_min + containment_tolerance) or np.any(
+        body_max >= outer_max - containment_tolerance
+    ):
+        raise ValueError(
+            "mixed shared-domain airbox must strictly contain the magnetic Box"
+        )
+
+    h_outer = (
+        float(airbox.maximum_element_size) * float(scale)
+        if airbox.maximum_element_size is not None
+        else hmax_scaled * max(float(airbox.grading_ratio) ** 4, 1.0)
+    )
+    if not math.isfinite(h_outer) or h_outer <= 0.0:
+        raise ValueError("mixed shared-domain airbox maximum element size must be positive")
+    h_inner = (
+        float(airbox.minimum_element_size) * float(scale)
+        if airbox.minimum_element_size is not None
+        else hmax_scaled
+    )
+    if not math.isfinite(h_inner) or h_inner <= 0.0:
+        raise ValueError("mixed shared-domain airbox minimum element size must be positive")
+    clearance = 0.5 * (outer_size - body_size)
+    shell_thickness = min(
+        max(float(h_inner), float(hmax_scaled)),
+        0.5 * float(np.min(clearance)),
+    )
+    if not math.isfinite(shell_thickness) or shell_thickness <= 0.0:
+        raise ValueError("mixed shared-domain transition shell has no positive thickness")
+    shell_min = body_min - shell_thickness
+    shell_max = body_max + shell_thickness
+    shell_outer_mesh_size = max(float(h_inner), float(hmax_scaled))
+
+    outer_surfaces, outer_loop = _add_geo_box_surface_loop(
+        gmsh,
+        bounds_min=outer_min,
+        bounds_max=outer_max,
+        mesh_size=h_outer,
+    )
+    shell_surfaces, shell_outer_loop = _add_geo_box_surface_loop(
+        gmsh,
+        bounds_min=shell_min,
+        bounds_max=shell_max,
+        mesh_size=shell_outer_mesh_size,
+    )
+    magnetic_loop = gmsh.model.geo.addSurfaceLoop(interface_surfaces)
+    transition_air_volume = gmsh.model.geo.addVolume(
+        [shell_outer_loop, magnetic_loop]
+    )
+    shell_inner_loop = gmsh.model.geo.addSurfaceLoop(shell_surfaces)
+    far_air_volume = gmsh.model.geo.addVolume([outer_loop, shell_inner_loop])
+    gmsh.model.geo.synchronize()
+
+    gmsh.model.addPhysicalGroup(3, magnetic_volumes, tag=1)
+    gmsh.model.setPhysicalName(3, 1, "magnetic")
+    gmsh.model.addPhysicalGroup(
+        3, [transition_air_volume, far_air_volume], tag=2
+    )
+    gmsh.model.setPhysicalName(3, 2, "air")
+    gmsh.model.addPhysicalGroup(2, interface_surfaces, tag=10)
+    gmsh.model.setPhysicalName(2, 10, "mag_air_interface")
+    gmsh.model.addPhysicalGroup(2, outer_surfaces, tag=int(airbox.boundary_marker))
+    gmsh.model.setPhysicalName(2, int(airbox.boundary_marker), "Gamma_out")
+
+    if float(airbox.grading_ratio) > 1.0:
+        field = _add_airbox_grading_field(
+            gmsh,
+            surface_tags=shell_surfaces,
+            h_inner=shell_outer_mesh_size,
+            h_outer=h_outer,
+            grading_ratio=float(airbox.grading_ratio),
+            grading_mode=str(airbox.grading_mode),
+            dist_max=max(
+                float(np.min(0.5 * (outer_size - (shell_max - shell_min)))),
+                shell_outer_mesh_size,
+            ),
+            object_bounds_min=tuple(float(value) for value in shell_min),
+            object_bounds_max=tuple(float(value) for value in shell_max),
+            airbox_bounds_min=tuple(float(value) for value in outer_min),
+            airbox_bounds_max=tuple(float(value) for value in outer_max),
+            airbox_shape="bbox",
+            air_volume_tags=[far_air_volume],
+        )
+        if field is not None:
+            gmsh.model.mesh.field.setAsBackgroundMesh(field)
+    return (
+        (magnetic_volumes[0], transition_air_volume, far_air_volume),
+        outer_surfaces,
+        tuple(float(value / scale) for value in outer_size),
+        float(shell_thickness / scale),
+        shell_surfaces,
+    )
+
+
+def _gmsh_cell_family_counts_for_entities(
+    gmsh: Any,
+    entities: list[int],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for entity in entities:
+        element_types, element_tags, _ = gmsh.model.mesh.getElements(3, int(entity))
+        for element_type, tags in zip(element_types, element_tags, strict=True):
+            family = SUPPORTED_VOLUME_ELEMENTS[int(element_type)][0]
+            counts[family] = counts.get(family, 0) + len(tags)
+    return dict(sorted(counts.items()))
+
+
+def _gmsh_cell_parts_in_extraction_order(
+    gmsh: Any,
+    entities_by_part: dict[str, list[int]],
+) -> np.ndarray:
+    entity_to_part = {
+        int(entity): part
+        for part, entities in entities_by_part.items()
+        for entity in entities
+    }
+    result: list[str] = []
+    for _dim, physical_tag in gmsh.model.getPhysicalGroups(dim=3):
+        for entity in gmsh.model.getEntitiesForPhysicalGroup(3, physical_tag):
+            if int(entity) not in entity_to_part:
+                raise RuntimeError("mixed shared-domain Gmsh entity is missing mesh-part identity")
+            _element_types, element_tags, _ = gmsh.model.mesh.getElements(3, int(entity))
+            result.extend(
+                [entity_to_part[int(entity)]] * sum(len(tags) for tags in element_tags)
+            )
+    return np.asarray(result, dtype=np.str_)
+
+
+def _gmsh_require_triangular_shell_interface(
+    gmsh: Any,
+    surface_tags: list[int],
+) -> int:
+    count = 0
+    for surface_tag in surface_tags:
+        element_types, element_tags, _ = gmsh.model.mesh.getElements(
+            2, int(surface_tag)
+        )
+        for element_type, tags in zip(element_types, element_tags, strict=True):
+            family = gmsh.model.mesh.getElementProperties(int(element_type))[0]
+            if family != "Triangle 3":
+                raise RuntimeError(
+                    "mixed shared-domain transition shell outer interface must be tri3; "
+                    f"Gmsh produced {family}"
+                )
+            count += len(tags)
+    if count == 0:
+        raise RuntimeError("mixed shared-domain transition shell interface is empty")
+    return count
+
+
+def _attach_mixed_layer_topology_certificate(
+    mesh: MeshData,
+    *,
+    body_size_m: tuple[float, float, float],
+    airbox_bounds_min_m: tuple[float, float, float],
+    airbox_bounds_max_m: tuple[float, float, float],
+    requested_axis: int,
+    requested_layers: int,
+    gmsh_version: str,
+    cell_mesh_parts: np.ndarray,
+    outer_boundary_marker: int,
+    effective_gmsh_thread_count: int,
+) -> MeshData:
+    """Validate and bind ``mixed_layer_topology_certificate.v1``."""
+    mesh = MeshData(
+        nodes=mesh.nodes,
+        cell_types=mesh.cell_types,
+        cell_offsets=mesh.cell_offsets,
+        cell_nodes=mesh.cell_nodes,
+        element_markers=mesh.element_markers,
+        facet_types=mesh.facet_types,
+        facet_roles=mesh.facet_roles,
+        facet_offsets=mesh.facet_offsets,
+        facet_nodes=mesh.facet_nodes,
+        boundary_markers=mesh.boundary_markers,
+        cell_global_ordinals=mesh.cell_global_ordinals,
+        facet_global_ordinals=mesh.facet_global_ordinals,
+        cell_mesh_parts=cell_mesh_parts,
+        quality=mesh.quality,
+        per_domain_quality=mesh.per_domain_quality,
+    ).oriented_copy()
+    mesh.validate_strict(require_positive_orientation=True)
+    families = set(mesh.cell_types.tolist())
+    if families != {"prism6", "pyramid5", "tet4"}:
+        raise RuntimeError(
+            "mixed shared-domain realization requires prism6/pyramid5/tet4; "
+            f"Gmsh produced {sorted(families)}"
+        )
+    if any(
+        (family == "prism6" and int(marker) != 1)
+        or (family in {"pyramid5", "tet4"} and int(marker) != 0)
+        for family, marker in zip(
+            mesh.cell_types.tolist(), mesh.element_markers.tolist(), strict=True
+        )
+    ):
+        raise RuntimeError("mixed shared-domain realization violated magnetic/air markers")
+
+    magnetic_ordinals = np.flatnonzero(mesh.element_markers == 1)
+    magnetic_nodes = np.unique(
+        np.concatenate([mesh.cell_node_ids(int(index)) for index in magnetic_ordinals])
+    )
+    planes, plane_tolerance = _cluster_coordinate_planes(
+        mesh.nodes[magnetic_nodes], requested_axis
+    )
+    realized_layers = len(planes) - 1
+    if realized_layers != requested_layers:
+        raise RuntimeError(
+            f"mixed shared-domain realization requested {requested_layers} layers "
+            f"but resolved {realized_layers}"
+        )
+    conformity = _mixed_mesh_conformity_counts(
+        mesh,
+        tolerance=plane_tolerance,
+        interface_marker=MIXED_INTERFACE_MARKER,
+        outer_boundary_marker=outer_boundary_marker,
+    )
+    if any(conformity.values()):
+        raise RuntimeError(f"mixed shared-domain conformity validation failed: {conformity}")
+    _validate_mixed_pyramid_bases(mesh, interface_marker=MIXED_INTERFACE_MARKER)
+    magnetic_bounds_min_m = tuple(float(-0.5 * value) for value in body_size_m)
+    magnetic_bounds_max_m = tuple(float(0.5 * value) for value in body_size_m)
+    try:
+        evidence = _recompute_mixed_certificate_evidence(
+            mesh,
+            sweep_axis=requested_axis,
+            interface_marker=MIXED_INTERFACE_MARKER,
+            outer_boundary_marker=outer_boundary_marker,
+            magnetic_bounds_min_m=magnetic_bounds_min_m,
+            magnetic_bounds_max_m=magnetic_bounds_max_m,
+            airbox_bounds_min_m=airbox_bounds_min_m,
+            airbox_bounds_max_m=airbox_bounds_max_m,
+        )
+    except ValueError as exc:
+        raise RuntimeError(
+            f"mixed shared-domain authored CAD bounds validation failed: {exc}"
+        ) from exc
+    certificate = MixedLayerTopologyCertificate(
+        certificate_status="accepted",
+        requested_sweep_direction="xyz"[requested_axis],
+        resolved_sweep_direction="xyz"[requested_axis],
+        requested_layer_count=requested_layers,
+        realized_layer_count=realized_layers,
+        interface_marker=MIXED_INTERFACE_MARKER,
+        outer_boundary_marker=outer_boundary_marker,
+        magnetic_bounds_min_m=magnetic_bounds_min_m,
+        magnetic_bounds_max_m=magnetic_bounds_max_m,
+        airbox_bounds_min_m=airbox_bounds_min_m,
+        airbox_bounds_max_m=airbox_bounds_max_m,
+        quality_metric=MIXED_QUALITY_METRIC,
+        topology_fingerprint_version="v2",
+        topology_fingerprint=mesh.topology_fingerprint_v2(),
+        gmsh_version=gmsh_version,
+        strategy=_MIXED_SHARED_GEO_STRATEGY,
+        effective_gmsh_thread_count=effective_gmsh_thread_count,
+        deterministic_inputs=_mixed_deterministic_inputs(),
+        fallbacks_triggered=(),
+        **evidence,
+    )
+    return MeshData(
+        nodes=mesh.nodes,
+        cell_types=mesh.cell_types,
+        cell_offsets=mesh.cell_offsets,
+        cell_nodes=mesh.cell_nodes,
+        element_markers=mesh.element_markers,
+        facet_types=mesh.facet_types,
+        facet_roles=mesh.facet_roles,
+        facet_offsets=mesh.facet_offsets,
+        facet_nodes=mesh.facet_nodes,
+        boundary_markers=mesh.boundary_markers,
+        cell_global_ordinals=mesh.cell_global_ordinals,
+        facet_global_ordinals=mesh.facet_global_ordinals,
+        cell_mesh_parts=mesh.cell_mesh_parts,
+        quality=mesh.quality,
+        per_domain_quality=mesh.per_domain_quality,
+        mixed_layer_topology_certificate=certificate,
+    )
 
 
 def _radius_from_center_to_bbox_corner(

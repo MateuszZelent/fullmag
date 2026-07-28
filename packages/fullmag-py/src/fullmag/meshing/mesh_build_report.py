@@ -7,7 +7,7 @@ from typing import Mapping
 import numpy as np
 
 from fullmag.model.discretization import FEM, PerObjectMeshRecipe
-from fullmag.model.geometry import ArchWaveguide, Geometry
+from fullmag.model.geometry import ArchWaveguide, Box, Geometry
 
 from ._gmsh_fields import resolve_effective_algorithm_3d
 from ._gmsh_swept import classify_sweepability
@@ -227,6 +227,12 @@ def _shared_domain_swept_fallback_reason(
         geometry_count == 1
         and isinstance(geometries[0], ArchWaveguide)
         and build_mode in {"component_aware", "concatenated_stl_fallback"}
+    ):
+        return None
+    if (
+        geometry_count == 1
+        and isinstance(geometries[0], Box)
+        and build_mode == "single_geometry_geo_mixed"
     ):
         return None
     if airbox is not None:

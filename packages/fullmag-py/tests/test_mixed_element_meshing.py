@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -16,6 +17,7 @@ from fullmag.meshing._gmsh_extraction import (
     _GMSH_TO_FULLMAG_NODE_PERMUTATION,
     _extract_mesh_data,
 )
+from fullmag.meshing._gmsh_infra import _scale_mesh_nodes
 from fullmag.meshing._gmsh_types import MeshData, MeshOptions, _cell_jacobian_determinants
 from fullmag.meshing._gmsh_swept import (
     SWEEP_STRATEGY_PRISM,
@@ -794,6 +796,871 @@ def test_mesh_load_rejects_hidden_degradation_in_tampered_report(
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(ValueError, match="requested/resolved fields must match.*no fallback"):
+        MeshData.load(path)
+
+
+def _mixed_shared_domain_case(
+    *,
+    axis: int = 2,
+    layers: int = 1,
+) -> tuple[tuple[float, float, float], fm.meshing.AirboxOptions, MeshData]:
+    body_size = [4.0e-6, 2.0e-6, 0.2e-6]
+    body_size[axis], body_size[2] = body_size[2], body_size[axis]
+    airbox_size = tuple(value + 4.0e-6 for value in body_size)
+    airbox = fm.meshing.AirboxOptions(
+        shape="bbox",
+        size=airbox_size,
+        center=(0.0, 0.0, 0.0),
+        boundary_marker=99,
+        minimum_element_size=0.4e-6,
+        maximum_element_size=1.2e-6,
+        grading_ratio=1.3,
+        grading_mode="geometric",
+    )
+    mesh = generate_swept_box_mesh(
+        tuple(body_size),
+        hmax=0.8e-6,
+        n_layers=layers,
+        thin_axis=axis,
+        order=1,
+        distribution="fixed",
+        airbox=airbox,
+        options=MeshOptions(mesh_strategy=SWEEP_STRATEGY_PRISM),
+    )
+    return tuple(body_size), airbox, mesh
+
+
+@pytest.mark.parametrize(("layers", "expected_planes"), [(1, 2), (2, 3)])
+def test_shared_domain_box_prism_mesh_has_exact_requested_layers(
+    layers: int,
+    expected_planes: int,
+) -> None:
+    pytest.importorskip("gmsh")
+    body_size, _airbox, mesh = _mixed_shared_domain_case(layers=layers)
+
+    magnetic_nodes = np.unique(
+        np.concatenate(
+            [
+                mesh.cell_node_ids(index)
+                for index, marker in enumerate(mesh.element_markers)
+                if int(marker) == 1
+            ]
+        )
+    )
+    tolerance = max(1.0e-15, 1.0e-8 * body_size[2])
+    planes: list[float] = []
+    for coordinate in sorted(float(value) for value in mesh.nodes[magnetic_nodes, 2]):
+        if not planes or abs(coordinate - planes[-1]) > tolerance:
+            planes.append(coordinate)
+
+    assert len(planes) == expected_planes
+    assert mesh.mixed_layer_topology_certificate is not None
+    assert mesh.mixed_layer_topology_certificate.realized_layer_count == layers
+    assert mesh.mixed_layer_topology_certificate.magnetic_plane_coordinates_m == pytest.approx(
+        planes
+    )
+
+
+@pytest.mark.parametrize("axis", [0, 1, 2])
+def test_shared_domain_box_prism_mesh_supports_each_axis(axis: int) -> None:
+    pytest.importorskip("gmsh")
+    body_size, _airbox, mesh = _mixed_shared_domain_case(axis=axis)
+
+    certificate = mesh.mixed_layer_topology_certificate
+    assert certificate is not None
+    assert certificate.requested_sweep_direction == "xyz"[axis]
+    assert certificate.resolved_sweep_direction == "xyz"[axis]
+    assert certificate.requested_layer_count == 1
+    assert certificate.realized_layer_count == 1
+    assert len(certificate.magnetic_plane_coordinates_m) == 2
+    assert certificate.magnetic_plane_coordinates_m == pytest.approx(
+        (-body_size[axis] / 2.0, body_size[axis] / 2.0)
+    )
+
+
+_CANONICAL_CELL_FACES = {
+    "tet4": ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)),
+    "prism6": (
+        (0, 1, 2),
+        (3, 5, 4),
+        (0, 3, 4, 1),
+        (1, 4, 5, 2),
+        (2, 5, 3, 0),
+    ),
+    "pyramid5": (
+        (0, 3, 2, 1),
+        (0, 1, 4),
+        (1, 2, 4),
+        (2, 3, 4),
+        (3, 0, 4),
+    ),
+}
+
+
+def _shared_domain_face_owners(
+    mesh: MeshData,
+) -> dict[tuple[int, ...], list[tuple[int, str]]]:
+    owners: dict[tuple[int, ...], list[tuple[int, str]]] = {}
+    for cell_index, cell_type in enumerate(mesh.cell_types.tolist()):
+        cell = mesh.cell_node_ids(cell_index)
+        for local_face in _CANONICAL_CELL_FACES[cell_type]:
+            key = tuple(sorted(int(cell[index]) for index in local_face))
+            owners.setdefault(key, []).append(
+                (int(mesh.element_markers[cell_index]), str(cell_type))
+            )
+    return owners
+
+
+def test_shared_domain_box_preserves_family_marker_and_facet_partition() -> None:
+    pytest.importorskip("gmsh")
+    _body_size, airbox, mesh = _mixed_shared_domain_case()
+    owners = _shared_domain_face_owners(mesh)
+
+    assert set(mesh.cell_types.tolist()) == {"prism6", "pyramid5", "tet4"}
+    assert all(
+        (cell_type == "prism6" and int(marker) == 1)
+        or (cell_type in {"pyramid5", "tet4"} and int(marker) == 0)
+        for cell_type, marker in zip(
+            mesh.cell_types.tolist(), mesh.element_markers.tolist(), strict=True
+        )
+    )
+
+    interface_faces = {
+        tuple(sorted(int(node) for node in mesh.facet_node_ids(index)))
+        for index, (role, marker) in enumerate(
+            zip(mesh.facet_roles.tolist(), mesh.boundary_markers.tolist(), strict=True)
+        )
+        if role == "material_interface" and int(marker) == 10
+    }
+    outer_faces = {
+        tuple(sorted(int(node) for node in mesh.facet_node_ids(index)))
+        for index, (role, marker) in enumerate(
+            zip(mesh.facet_roles.tolist(), mesh.boundary_markers.tolist(), strict=True)
+        )
+        if role == "exterior" and int(marker) == airbox.boundary_marker
+    }
+    quad_interface_faces = {
+        tuple(sorted(int(node) for node in mesh.facet_node_ids(index)))
+        for index, (kind, role) in enumerate(
+            zip(mesh.facet_types.tolist(), mesh.facet_roles.tolist(), strict=True)
+        )
+        if kind == "quad4" and role == "material_interface"
+    }
+    pyramid_quad_faces = {
+        tuple(sorted(int(cell[index]) for index in _CANONICAL_CELL_FACES["pyramid5"][0]))
+        for cell_index, cell_type in enumerate(mesh.cell_types.tolist())
+        if cell_type == "pyramid5"
+        for cell in [mesh.cell_node_ids(cell_index)]
+    }
+
+    assert interface_faces
+    assert outer_faces
+    assert pyramid_quad_faces
+    assert pyramid_quad_faces.issubset(quad_interface_faces)
+    assert all(
+        len(owners[face]) == 2
+        and {marker for marker, _family in owners[face]} == {0, 1}
+        for face in interface_faces
+    )
+    assert all(len(owners[face]) == 1 for face in outer_faces)
+    assert {face for face, adjacency in owners.items() if len(adjacency) == 1} == outer_faces
+    assert len(interface_faces) == len(set(interface_faces))
+
+    certificate = mesh.mixed_layer_topology_certificate
+    assert certificate is not None
+    assert certificate.certificate_status == "accepted"
+    assert certificate.cell_family_counts_by_marker["1"] == {
+        "prism6": int(np.count_nonzero(mesh.cell_types == "prism6"))
+    }
+    assert certificate.cell_family_counts_by_marker["0"] == {
+        "pyramid5": int(np.count_nonzero(mesh.cell_types == "pyramid5")),
+        "tet4": int(np.count_nonzero(mesh.cell_types == "tet4")),
+    }
+    transition_counts = certificate.cell_family_counts_by_part["transition_air"]
+    far_counts = certificate.cell_family_counts_by_part["far_air"]
+    assert transition_counts["pyramid5"] == int(
+        np.count_nonzero(mesh.cell_types == "pyramid5")
+    )
+    assert transition_counts.get("tet4", 0) > 0
+    assert set(far_counts) == {"tet4"}
+    assert transition_counts["tet4"] + far_counts["tet4"] == int(
+        np.count_nonzero(mesh.cell_types == "tet4")
+    )
+    assert certificate.transition_shell_interface_tri3_count > 0
+    assert certificate.transition_shell_thickness_m == pytest.approx(0.8e-6)
+    assert certificate.nonconforming_face_count == 0
+    assert certificate.orphan_face_count == 0
+    assert certificate.nonmanifold_face_count == 0
+    assert certificate.coincident_interface_face_count == 0
+    assert certificate.marker_coverage_complete is True
+    assert certificate.fallbacks_triggered == ()
+
+
+@pytest.mark.parametrize(
+    ("airbox", "options", "message"),
+    [
+        (fm.meshing.AirboxOptions(shape="sphere"), MeshOptions(), "bbox"),
+        (
+            fm.meshing.AirboxOptions(size=(8.0e-6, 6.0e-6, 4.0e-6)),
+            MeshOptions(periodic_pair_ids=["x"]),
+            "periodic",
+        ),
+    ],
+)
+def test_shared_domain_box_rejects_unsupported_request_before_gmsh(
+    monkeypatch: pytest.MonkeyPatch,
+    airbox: fm.meshing.AirboxOptions,
+    options: MeshOptions,
+    message: str,
+) -> None:
+    swept_module = importlib.import_module("fullmag.meshing._gmsh_swept")
+    gmsh_import = Mock(side_effect=AssertionError("Gmsh started before validation"))
+    monkeypatch.setattr(swept_module, "_import_gmsh", gmsh_import)
+
+    with pytest.raises(ValueError, match=message):
+        generate_swept_box_mesh(
+            (4.0e-6, 2.0e-6, 0.2e-6),
+            hmax=0.8e-6,
+            n_layers=1,
+            airbox=airbox,
+            options=options,
+        )
+    gmsh_import.assert_not_called()
+
+
+def test_shared_domain_topology_fingerprint_is_deterministic() -> None:
+    pytest.importorskip("gmsh")
+    first = _mixed_shared_domain_case()[2]
+    second = _mixed_shared_domain_case()[2]
+
+    first_certificate = first.mixed_layer_topology_certificate
+    second_certificate = second.mixed_layer_topology_certificate
+    assert first_certificate is not None
+    assert second_certificate is not None
+    assert first_certificate.topology_fingerprint_version == "v2"
+    assert first_certificate.topology_fingerprint.startswith("sha256:")
+    assert first_certificate.topology_fingerprint == second_certificate.topology_fingerprint
+
+
+def test_shared_domain_box_asset_pipeline_routes_to_strict_mixed_geo_path() -> None:
+    pytest.importorskip("gmsh")
+    from fullmag.meshing.asset_pipeline import (
+        _realize_fem_domain_mesh_asset_from_components_impl,
+    )
+
+    mesh, region_markers, report = (
+        _realize_fem_domain_mesh_asset_from_components_impl(
+            [fm.Box(size=(4.0e-6, 2.0e-6, 0.2e-6), name="magnet")],
+            fm.FEM(order=1, hmax=0.8e-6),
+            study_universe={
+                "mode": "manual",
+                "size": [8.0e-6, 6.0e-6, 4.2e-6],
+                "center": [0.0, 0.0, 0.0],
+                "airbox_hmin": 0.4e-6,
+                "airbox_hmax": 1.2e-6,
+                "airbox_growth_rate": 1.3,
+                "airbox_grading": "geometric",
+            },
+            mesh_workflow={
+                "mesh_options": {
+                    "mesh_strategy": "swept_prism",
+                    "through_thickness_elements": 1,
+                    "through_thickness_distribution": "fixed",
+                }
+            },
+        )
+    )
+
+    assert report.build_mode == "single_geometry_geo_mixed"
+    assert report.fallbacks_triggered == []
+    assert region_markers == [{"geometry_name": "magnet", "marker": 1}]
+    assert mesh.mixed_layer_topology_certificate is not None
+    assert mesh.mixed_layer_topology_certificate.fallbacks_triggered == ()
+    assert set(mesh.cell_types.tolist()) == {"prism6", "pyramid5", "tet4"}
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "multiple",
+        "non_box",
+        "object_regions",
+        "per_object",
+        "per_geometry",
+        "size_fields",
+        "boundary_layer",
+        "optimizer",
+        "algorithm",
+        "order",
+        "distribution",
+        "sweep_face",
+        "recombine",
+        "periodic",
+    ],
+)
+def test_asset_mixed_route_rejects_unqualified_requests_before_generator(
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+) -> None:
+    asset_pipeline = importlib.import_module("fullmag.meshing.asset_pipeline")
+    generate_mesh = Mock(side_effect=AssertionError("mesh generator must not run"))
+    monkeypatch.setattr(asset_pipeline, "generate_mesh", generate_mesh)
+
+    geometries = [fm.Box(size=(4e-6, 2e-6, 0.2e-6), name="magnet")]
+    hints = fm.FEM(order=1, hmax=0.8e-6)
+    mesh_options: dict[str, object] = {
+        "mesh_strategy": "swept_prism",
+        "through_thickness_elements": 1,
+        "through_thickness_distribution": "fixed",
+    }
+    workflow: dict[str, object] = {"mesh_options": mesh_options}
+    kwargs: dict[str, object] = {}
+    if case == "multiple":
+        geometries.append(fm.Box(size=(1e-6, 1e-6, 0.2e-6), name="other"))
+    elif case == "non_box":
+        geometries = [fm.Cylinder(radius=2e-6, height=0.2e-6, name="magnet")]
+    elif case == "object_regions":
+        kwargs["object_regions"] = [{"enabled": False}]
+    elif case == "per_object":
+        kwargs["per_object_recipes"] = {"magnet": object()}
+    elif case == "per_geometry":
+        workflow["per_geometry"] = [{"geometry": "magnet", "hmax": 0.4e-6}]
+    elif case == "size_fields":
+        mesh_options["size_fields"] = [{"kind": "Box", "params": {}}]
+    elif case == "boundary_layer":
+        mesh_options["boundary_layer_count"] = 2
+    elif case == "optimizer":
+        mesh_options["optimize"] = "Netgen"
+    elif case == "algorithm":
+        mesh_options["algorithm_3d"] = 10
+    elif case == "order":
+        hints = fm.FEM(order=2, hmax=0.8e-6)
+    elif case == "distribution":
+        mesh_options["through_thickness_distribution"] = "linear"
+    elif case == "sweep_face":
+        mesh_options["sweep_face_meshing"] = "quadrilateral"
+    elif case == "recombine":
+        mesh_options["recombine"] = True
+    elif case == "periodic":
+        mesh_options["periodic_pair_ids"] = ["x"]
+
+    with pytest.raises(ValueError, match="qualified mixed shared-domain route rejects"):
+        asset_pipeline._realize_fem_domain_mesh_asset_from_components_impl(
+            geometries,
+            hints,
+            study_universe={
+                "mode": "manual",
+                "size": [8e-6, 6e-6, 4.2e-6],
+                "center": [0.0, 0.0, 0.0],
+            },
+            mesh_workflow=workflow,
+            **kwargs,
+        )
+    generate_mesh.assert_not_called()
+
+
+def test_mixed_route_forces_one_effective_gmsh_thread_despite_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("gmsh")
+    monkeypatch.setenv("FULLMAG_GMSH_THREADS", "8")
+    monkeypatch.setenv("FULLMAG_CPU_THREADS", "8")
+    certificate = _mixed_shared_domain_case()[2].mixed_layer_topology_certificate
+    assert certificate is not None
+    assert certificate.effective_gmsh_thread_count == 1
+    assert certificate.deterministic_inputs == {
+        "algorithm_2d": 6,
+        "algorithm_3d": 1,
+        "element_order": 1,
+        "gmsh_version": "4.15.2",
+        "random_factor": 0.0,
+        "thread_count": 1,
+    }
+
+
+@pytest.mark.parametrize("suffix", [".json", ".npz"])
+def test_mesh_load_rejects_stale_mixed_layer_topology_certificate(
+    tmp_path: Path,
+    suffix: str,
+) -> None:
+    pytest.importorskip("gmsh")
+    mesh = _mixed_shared_domain_case()[2]
+    path = tmp_path / f"stale-certificate{suffix}"
+    mesh.save(path)
+    if suffix == ".json":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["mixed_layer_topology_certificate"]["topology_fingerprint"] = (
+            "sha256:" + "0" * 64
+        )
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    else:
+        with np.load(path) as archive:
+            payload = {name: archive[name] for name in archive.files}
+        certificate = json.loads(str(payload["mixed_layer_topology_certificate_json"]))
+        certificate["topology_fingerprint"] = "sha256:" + "0" * 64
+        payload["mixed_layer_topology_certificate_json"] = np.asarray(
+            json.dumps(certificate)
+        )
+        np.savez_compressed(path, **payload)
+
+    with pytest.raises(ValueError, match="topology fingerprint.*stale"):
+        MeshData.load(path)
+
+
+def test_mixed_layer_topology_certificate_survives_owned_mesh_paths(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("gmsh")
+    mesh = _mixed_shared_domain_case()[2]
+    certificate = mesh.mixed_layer_topology_certificate
+    assert certificate is not None
+
+    for suffix in (".json", ".npz"):
+        path = tmp_path / f"mixed-shared{suffix}"
+        mesh.save(path)
+        assert MeshData.load(path).mixed_layer_topology_certificate == certificate
+    assert mesh.oriented_copy().mixed_layer_topology_certificate == certificate
+    assert mesh.to_ir("shared_domain")["mixed_layer_topology_certificate"] == (
+        certificate.to_dict()
+    )
+
+
+def _rewrite_persisted_mixed_certificate(
+    path: Path,
+    suffix: str,
+    mutate,
+) -> None:
+    if suffix == ".json":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        mutate(payload, payload["mixed_layer_topology_certificate"])
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return
+    with np.load(path) as archive:
+        payload = {name: archive[name] for name in archive.files}
+    certificate = json.loads(str(payload["mixed_layer_topology_certificate_json"]))
+    mutate(payload, certificate)
+    payload["mixed_layer_topology_certificate_json"] = np.asarray(
+        json.dumps(certificate)
+    )
+    np.savez_compressed(path, **payload)
+
+
+def test_mixed_cell_mesh_parts_are_canonical_and_persistent(tmp_path: Path) -> None:
+    pytest.importorskip("gmsh")
+    mesh = _mixed_shared_domain_case()[2]
+
+    assert hasattr(mesh, "cell_mesh_parts")
+    assert len(mesh.cell_mesh_parts) == mesh.n_elements
+    assert set(mesh.cell_mesh_parts.tolist()) == {
+        "magnetic",
+        "transition_air",
+        "far_air",
+    }
+    assert np.all(mesh.cell_mesh_parts[mesh.element_markers == 1] == "magnetic")
+    assert np.all(mesh.cell_mesh_parts[mesh.cell_types == "pyramid5"] == "transition_air")
+
+    for suffix in (".json", ".npz"):
+        path = tmp_path / f"mixed-parts{suffix}"
+        mesh.save(path)
+        loaded = MeshData.load(path)
+        np.testing.assert_array_equal(loaded.cell_mesh_parts, mesh.cell_mesh_parts)
+        assert loaded.to_ir("mixed")["cells"]["mesh_parts"] == (
+            mesh.cell_mesh_parts.tolist()
+        )
+
+
+@pytest.mark.parametrize("suffix", [".json", ".npz"])
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("magnetic_volume_m3", lambda value: value * 0.9),
+        (
+            "jacobian_minima_m3_by_family",
+            lambda value: {**value, "prism6": value["prism6"] * 0.5},
+        ),
+        (
+            "quality",
+            lambda value: {**value, "prism6": value["prism6"] * 0.5},
+        ),
+        ("transition_shell_interface_tri3_count", lambda value: value + 1),
+        ("gmsh_version", lambda _value: "4.15.1"),
+        ("strategy", lambda _value: "self_signed.fake"),
+    ],
+)
+def test_mesh_load_recomputes_mixed_certificate_evidence(
+    tmp_path: Path,
+    suffix: str,
+    field: str,
+    replacement,
+) -> None:
+    pytest.importorskip("gmsh")
+    mesh = _mixed_shared_domain_case()[2]
+    path = tmp_path / f"tampered-evidence-{field}{suffix}"
+    mesh.save(path)
+
+    def mutate(_payload, certificate) -> None:
+        resolved_field = field
+        if field == "quality":
+            resolved_field = (
+                "scaled_jacobian_p05_by_family"
+                if "scaled_jacobian_p05_by_family" in certificate
+                else "sicn_p05_by_family"
+            )
+        certificate[resolved_field] = replacement(certificate[resolved_field])
+
+    _rewrite_persisted_mixed_certificate(path, suffix, mutate)
+    with pytest.raises((TypeError, ValueError), match="mixed layer topology certificate"):
+        MeshData.load(path)
+
+
+@pytest.mark.parametrize("suffix", [".json", ".npz"])
+def test_mesh_load_rejects_mixed_part_reassignment_even_with_resigned_fingerprint(
+    tmp_path: Path,
+    suffix: str,
+) -> None:
+    pytest.importorskip("gmsh")
+    mesh = _mixed_shared_domain_case()[2]
+    assert hasattr(mesh, "cell_mesh_parts")
+    path = tmp_path / f"tampered-parts{suffix}"
+    mesh.save(path)
+
+    def mutate(payload, certificate) -> None:
+        if suffix == ".json":
+            parts = payload["cell_mesh_parts"]
+            index = parts.index("transition_air")
+            parts[index] = "far_air"
+        else:
+            parts = np.asarray(payload["cell_mesh_parts"]).astype(np.str_)
+            index = int(np.flatnonzero(parts == "transition_air")[0])
+            parts[index] = "far_air"
+            payload["cell_mesh_parts"] = parts
+        certificate["topology_fingerprint"] = "sha256:" + "0" * 64
+
+    _rewrite_persisted_mixed_certificate(path, suffix, mutate)
+    with pytest.raises(ValueError, match="mesh part|topology fingerprint"):
+        MeshData.load(path)
+
+
+def test_mixed_certificate_rejects_semantically_resigned_part_reassignment() -> None:
+    pytest.importorskip("gmsh")
+    mesh = _mixed_shared_domain_case()[2]
+    certificate = mesh.mixed_layer_topology_certificate
+    assert certificate is not None
+    parts = np.array(mesh.cell_mesh_parts, copy=True)
+    index = int(np.flatnonzero(parts == "transition_air")[0])
+    parts[index] = "far_air"
+    unsigned = replace(
+        mesh,
+        cell_mesh_parts=parts,
+        mixed_layer_topology_certificate=None,
+    )
+    resigned = replace(
+        certificate,
+        topology_fingerprint=unsigned.topology_fingerprint_v2(),
+    )
+    with pytest.raises(ValueError, match="mixed layer topology certificate.*stale"):
+        replace(unsigned, mixed_layer_topology_certificate=resigned)
+
+
+def test_mixed_certificate_uses_recomputable_scaled_jacobian_not_gmsh_sicn() -> None:
+    pytest.importorskip("gmsh")
+    certificate = _mixed_shared_domain_case()[2].mixed_layer_topology_certificate
+    assert certificate is not None
+    payload = certificate.to_dict()
+    assert payload["quality_metric"] == "tetra_decomposition_scaled_jacobian.v1"
+    assert "scaled_jacobian_minima_by_family" in payload
+    assert "scaled_jacobian_p05_by_family" in payload
+    assert "sicn_minima_by_family" not in payload
+    assert "sicn_p05_by_family" not in payload
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [
+        ("requested_layer_count", "1"),
+        ("transition_shell_interface_tri3_count", True),
+        ("magnetic_volume_m3", "1.0"),
+    ],
+)
+def test_mixed_certificate_wire_types_reject_coercion(
+    field: str,
+    bad_value: object,
+) -> None:
+    pytest.importorskip("gmsh")
+    payload = _mixed_shared_domain_case()[2].mixed_layer_topology_certificate.to_dict()
+    payload[field] = bad_value
+    with pytest.raises(TypeError, match=field):
+        gmsh_types.MixedLayerTopologyCertificate.from_dict(payload)
+
+
+def test_uniform_scale_rebuilds_mixed_certificate() -> None:
+    pytest.importorskip("gmsh")
+    mesh = _mixed_shared_domain_case()[2]
+    original = mesh.mixed_layer_topology_certificate
+    assert original is not None
+    scaled = _scale_mesh_nodes(mesh, np.asarray([2.0, 2.0, 2.0]))
+    certificate = scaled.mixed_layer_topology_certificate
+    assert certificate is not None
+    np.testing.assert_array_equal(scaled.cell_mesh_parts, mesh.cell_mesh_parts)
+    assert certificate.topology_fingerprint != original.topology_fingerprint
+    assert certificate.magnetic_volume_m3 == pytest.approx(
+        original.magnetic_volume_m3 * 8.0
+    )
+    assert certificate.transition_shell_thickness_m == pytest.approx(
+        original.transition_shell_thickness_m * 2.0
+    )
+    assert certificate.magnetic_plane_coordinates_m == pytest.approx(
+        np.asarray(original.magnetic_plane_coordinates_m) * 2.0
+    )
+
+
+def test_anisotropic_scale_rejects_certified_mixed_mesh() -> None:
+    pytest.importorskip("gmsh")
+    mesh = _mixed_shared_domain_case()[2]
+    with pytest.raises(ValueError, match="anisotropic.*certified mixed"):
+        _scale_mesh_nodes(mesh, np.asarray([2.0, 1.0, 1.0]))
+
+
+def _mixed_evidence(
+    mesh: MeshData,
+    certificate: gmsh_types.MixedLayerTopologyCertificate | None = None,
+) -> dict[str, object]:
+    certificate = certificate or mesh.mixed_layer_topology_certificate
+    assert certificate is not None
+    return gmsh_types._recompute_mixed_certificate_evidence(
+        replace(mesh, mixed_layer_topology_certificate=None),
+        sweep_axis={"x": 0, "y": 1, "z": 2}[certificate.resolved_sweep_direction],
+        interface_marker=certificate.interface_marker,
+        outer_boundary_marker=certificate.outer_boundary_marker,
+        magnetic_bounds_min_m=certificate.magnetic_bounds_min_m,
+        magnetic_bounds_max_m=certificate.magnetic_bounds_max_m,
+        airbox_bounds_min_m=certificate.airbox_bounds_min_m,
+        airbox_bounds_max_m=certificate.airbox_bounds_max_m,
+    )
+
+
+@pytest.mark.parametrize("role", ["material_interface", "exterior"])
+def test_mixed_evidence_rejects_wrong_explicit_facet_marker(role: str) -> None:
+    pytest.importorskip("gmsh")
+    mesh = _mixed_shared_domain_case()[2]
+    certificate = mesh.mixed_layer_topology_certificate
+    assert certificate is not None
+    ordinal = int(np.flatnonzero(mesh.facet_roles == role)[0])
+    markers = np.array(mesh.boundary_markers, copy=True)
+    markers[ordinal] += 1
+    tampered = replace(
+        mesh,
+        boundary_markers=markers,
+        mixed_layer_topology_certificate=None,
+    )
+    evidence = _mixed_evidence(tampered, certificate)
+    assert evidence["nonconforming_face_count"] > 0
+
+
+def test_mixed_evidence_rejects_missing_material_interface_facet() -> None:
+    pytest.importorskip("gmsh")
+    mesh = _mixed_shared_domain_case()[2]
+    certificate = mesh.mixed_layer_topology_certificate
+    assert certificate is not None
+    removed = int(np.flatnonzero(mesh.facet_roles == "material_interface")[0])
+    kept = [index for index in range(mesh.n_boundary_faces) if index != removed]
+    blocks = [mesh.facet_node_ids(index) for index in kept]
+    offsets = np.zeros(len(blocks) + 1, dtype=np.int64)
+    offsets[1:] = np.cumsum([len(block) for block in blocks])
+    tampered = replace(
+        mesh,
+        facet_types=mesh.facet_types[kept],
+        facet_roles=mesh.facet_roles[kept],
+        facet_offsets=offsets,
+        facet_nodes=np.concatenate(blocks).astype(np.int32),
+        boundary_markers=mesh.boundary_markers[kept],
+        facet_global_ordinals=np.arange(len(kept), dtype=np.int64),
+        mixed_layer_topology_certificate=None,
+    )
+    evidence = _mixed_evidence(tampered, certificate)
+    assert evidence["nonconforming_face_count"] > 0
+
+
+def test_mixed_marker_collision_fails_before_gmsh_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    swept = importlib.import_module("fullmag.meshing._gmsh_swept")
+    import_gmsh = Mock(side_effect=AssertionError("Gmsh import must not run"))
+    monkeypatch.setattr(swept, "_import_gmsh", import_gmsh)
+    with pytest.raises(ValueError, match="markers must be distinct"):
+        generate_swept_box_mesh(
+            (4e-6, 2e-6, 0.2e-6),
+            hmax=0.3e-6,
+            n_layers=1,
+            airbox=fm.meshing.AirboxOptions(boundary_marker=10),
+        )
+    import_gmsh.assert_not_called()
+
+
+def test_mixed_certificate_persists_authored_cad_bounds() -> None:
+    pytest.importorskip("gmsh")
+    body_size, airbox, mesh = _mixed_shared_domain_case()
+    certificate = mesh.mixed_layer_topology_certificate
+    assert certificate is not None
+    assert certificate.magnetic_bounds_min_m == pytest.approx(
+        tuple(-0.5 * value for value in body_size)
+    )
+    assert certificate.magnetic_bounds_max_m == pytest.approx(
+        tuple(0.5 * value for value in body_size)
+    )
+    assert airbox.size is not None
+    assert certificate.airbox_bounds_min_m == pytest.approx(
+        tuple(-0.5 * value for value in airbox.size)
+    )
+    assert certificate.airbox_bounds_max_m == pytest.approx(
+        tuple(0.5 * value for value in airbox.size)
+    )
+
+
+def test_mixed_attach_rejects_fake_authored_cad_dimensions() -> None:
+    pytest.importorskip("gmsh")
+    from fullmag.meshing._gmsh_airbox import _attach_mixed_layer_topology_certificate
+
+    mesh = _mixed_shared_domain_case()[2]
+    unsigned = replace(mesh, mixed_layer_topology_certificate=None)
+    with pytest.raises(RuntimeError, match="authored.*bounds|volume balance"):
+        _attach_mixed_layer_topology_certificate(
+            unsigned,
+            body_size_m=(40e-6, 20e-6, 2e-6),
+            airbox_bounds_min_m=(-40e-6, -30e-6, -21e-6),
+            airbox_bounds_max_m=(40e-6, 30e-6, 21e-6),
+            requested_axis=2,
+            requested_layers=1,
+            gmsh_version="4.15.2",
+            cell_mesh_parts=unsigned.cell_mesh_parts,
+            outer_boundary_marker=99,
+            effective_gmsh_thread_count=1,
+        )
+
+
+@pytest.mark.parametrize("suffix", [".json", ".npz"])
+def test_mesh_load_rejects_tampered_authored_cad_bounds(
+    tmp_path: Path,
+    suffix: str,
+) -> None:
+    pytest.importorskip("gmsh")
+    mesh = _mixed_shared_domain_case()[2]
+    path = tmp_path / f"tampered-authored-bounds{suffix}"
+    mesh.save(path)
+
+    def mutate(_payload, certificate) -> None:
+        certificate["magnetic_bounds_min_m"] = [-20e-6, -10e-6, -1e-6]
+        certificate["magnetic_bounds_max_m"] = [20e-6, 10e-6, 1e-6]
+        certificate["airbox_bounds_min_m"] = [-40e-6, -30e-6, -21e-6]
+        certificate["airbox_bounds_max_m"] = [40e-6, 30e-6, 21e-6]
+
+    _rewrite_persisted_mixed_certificate(path, suffix, mutate)
+    with pytest.raises(ValueError, match="mixed layer topology certificate.*authored|volume"):
+        MeshData.load(path)
+
+
+def test_near_identity_anisotropic_scale_rejects_certified_mixed_mesh() -> None:
+    pytest.importorskip("gmsh")
+    mesh = _mixed_shared_domain_case()[2]
+    with pytest.raises(ValueError, match="anisotropic.*certified mixed"):
+        _scale_mesh_nodes(mesh, np.asarray([1.0, 1.000001, 1.0]))
+
+
+def test_uniform_scale_scales_authored_cad_bounds() -> None:
+    pytest.importorskip("gmsh")
+    mesh = _mixed_shared_domain_case()[2]
+    original = mesh.mixed_layer_topology_certificate
+    assert original is not None
+    scaled = _scale_mesh_nodes(mesh, np.asarray([2.0, 2.0, 2.0]))
+    certificate = scaled.mixed_layer_topology_certificate
+    assert certificate is not None
+    assert certificate.magnetic_bounds_min_m == pytest.approx(
+        np.asarray(original.magnetic_bounds_min_m) * 2.0
+    )
+    assert certificate.magnetic_bounds_max_m == pytest.approx(
+        np.asarray(original.magnetic_bounds_max_m) * 2.0
+    )
+    assert certificate.airbox_bounds_min_m == pytest.approx(
+        np.asarray(original.airbox_bounds_min_m) * 2.0
+    )
+    assert certificate.airbox_bounds_max_m == pytest.approx(
+        np.asarray(original.airbox_bounds_max_m) * 2.0
+    )
+
+
+def test_resigned_mesh_with_pyramid_base_off_quad_interface_is_rejected() -> None:
+    pytest.importorskip("gmsh")
+    mesh = _mixed_shared_domain_case()[2]
+    certificate = mesh.mixed_layer_topology_certificate
+    assert certificate is not None
+    ordinal = int(np.flatnonzero(mesh.cell_types == "pyramid5")[0])
+    nodes = np.array(mesh.cell_nodes, copy=True)
+    start = int(mesh.cell_offsets[ordinal])
+    nodes[start], nodes[start + 4] = nodes[start + 4], nodes[start]
+    unsigned = replace(
+        mesh,
+        cell_nodes=nodes,
+        mixed_layer_topology_certificate=None,
+    )
+    resigned = replace(
+        certificate,
+        topology_fingerprint=unsigned.topology_fingerprint_v2(),
+    )
+    with pytest.raises(ValueError, match="pyramid bases.*quad.*marker 10"):
+        replace(unsigned, mixed_layer_topology_certificate=resigned)
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [
+        ("cell_family_counts_by_marker", [("0", {"tet4": 1})]),
+        ("cell_family_counts_by_marker", {0: {"tet4": 1}}),
+        ("cell_family_counts_by_marker", {"0": {4: 1}}),
+        ("cell_family_counts_by_marker", {"0": {"tet4": True}}),
+        ("scaled_jacobian_minima_by_family", [("tet4", 0.5)]),
+    ],
+)
+def test_mixed_certificate_nested_wire_types_fail_before_normalization(
+    field: str,
+    bad_value: object,
+) -> None:
+    pytest.importorskip("gmsh")
+    payload = _mixed_shared_domain_case()[2].mixed_layer_topology_certificate.to_dict()
+    payload[field] = bad_value
+    with pytest.raises(TypeError, match=field):
+        gmsh_types.MixedLayerTopologyCertificate.from_dict(payload)
+
+
+def test_mixed_certificate_uses_versioned_tetra_decomposition_quality_name() -> None:
+    pytest.importorskip("gmsh")
+    certificate = _mixed_shared_domain_case()[2].mixed_layer_topology_certificate
+    assert certificate is not None
+    assert certificate.quality_metric == "tetra_decomposition_scaled_jacobian.v1"
+    payload = certificate.to_dict()
+    payload["quality_metric"] = "scaled_jacobian"
+    with pytest.raises(ValueError, match="quality_metric"):
+        gmsh_types.MixedLayerTopologyCertificate.from_dict(payload)
+
+
+def test_npz_load_rejects_top_level_certificate_list_of_pairs(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("gmsh")
+    mesh = _mixed_shared_domain_case()[2]
+    path = tmp_path / "certificate-list-of-pairs.npz"
+    mesh.save(path)
+    with np.load(path) as archive:
+        payload = {name: archive[name] for name in archive.files}
+    certificate = json.loads(str(payload["mixed_layer_topology_certificate_json"]))
+    payload["mixed_layer_topology_certificate_json"] = np.asarray(
+        json.dumps(list(certificate.items()))
+    )
+    np.savez_compressed(path, **payload)
+
+    with pytest.raises(
+        TypeError,
+        match="mixed_layer_topology_certificate.*object",
+    ):
         MeshData.load(path)
 
 
