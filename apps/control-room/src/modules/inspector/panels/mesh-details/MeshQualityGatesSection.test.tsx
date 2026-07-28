@@ -45,6 +45,11 @@ describe("MeshQualityGatesSection mixed certificate evidence", () => {
     expect(html).toContain("0.34");
     expect(html).toContain("0.1");
     expect(html).toContain("positive");
+    expect(html).toContain('role="table"');
+    expect(html).toContain('id="fm-mixed-certificate-quality-heading"');
+    expect(html).toContain('aria-labelledby="fm-mixed-certificate-quality-heading"');
+    expect(html.match(/role="columnheader"/g)).toHaveLength(3);
+    expect(html.match(/role="cell"/g)).toHaveLength(3);
   });
 
   it("fails closed without rendering family values for stale evidence", () => {

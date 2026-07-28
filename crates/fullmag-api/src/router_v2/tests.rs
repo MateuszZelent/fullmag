@@ -6572,6 +6572,79 @@ async fn mesh_quality_gates_publishes_revision_bound_mixed_certificate_evidence(
 }
 
 #[tokio::test]
+async fn mesh_quality_gates_rejects_quality_evidence_mutated_for_the_same_topology() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+        ))
+        .expect("mixed certificate fixture should parse");
+        let mesh_ir: fullmag_ir::MeshIR = serde_json::from_value(fixture["mesh"].clone())
+            .expect("mixed mesh fixture should deserialize");
+        let mut certificate: fullmag_ir::MixedLayerTopologyCertificateV1IR =
+            serde_json::from_value(fixture["certificate"].clone())
+                .expect("mixed certificate fixture should deserialize");
+        *certificate
+            .scaled_jacobian_p05_by_family
+            .get_mut("prism6")
+            .expect("fixture should contain prism6 quality") += 0.01;
+        certificate
+            .validate()
+            .expect("mutated finite above-threshold evidence remains internally valid");
+        let report: fullmag_ir::FemSharedDomainBuildReportIR =
+            serde_json::from_value(serde_json::json!({
+                "build_mode": "shared_domain",
+                "fallbacks_triggered": [],
+                "mixed_layer_topology_certificate": certificate
+            }))
+            .expect("mixed build report should deserialize");
+        snapshot.fem_mesh = Some(FemMeshPayload {
+            mesh_name: mesh_ir.mesh_name,
+            mesh_id: "mixed-quality:mutated".to_string(),
+            nodes: mesh_ir.nodes,
+            cells: mesh_ir.cells,
+            element_markers: mesh_ir.element_markers,
+            facets: mesh_ir.facets,
+            boundary_markers: mesh_ir.boundary_markers,
+            periodic_boundary_pairs: mesh_ir.periodic_boundary_pairs,
+            periodic_node_pairs: mesh_ir.periodic_node_pairs,
+            object_segments: Vec::new(),
+            mesh_parts: Vec::new(),
+            domain_mesh_mode: Some("shared_domain".to_string()),
+            domain_frame: None,
+            generation_id: Some("mixed-quality-mutated-generation".to_string()),
+            per_domain_quality: Default::default(),
+            build_report: Some(report),
+        });
+        snapshot.mesh_workspace = Some(serde_json::json!({}));
+        snapshot.mesh_revision = 93;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/quality-gates")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["mixed_certificate"]["status"], "rejected");
+    assert_eq!(
+        json["mixed_certificate"]["family_gates"],
+        serde_json::json!([])
+    );
+    assert!(json["mixed_certificate"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("scaled_jacobian_p05_by_family"));
+}
+
+#[tokio::test]
 async fn mesh_quality_gates_suppresses_stale_mixed_certificate_values() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {

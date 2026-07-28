@@ -1375,7 +1375,8 @@ fn mixed_certificate_quality_evidence(
             "current FEM mesh is unavailable",
         );
     };
-    let topology_fingerprint = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
+    let mesh_ir = periodic_mesh_ir(mesh);
+    let topology_fingerprint = mesh_ir.topology_fingerprint_v6();
     let Some(certificate) = mesh
         .build_report
         .as_ref()
@@ -1406,7 +1407,9 @@ fn mixed_certificate_quality_evidence(
             family_gates: Vec::new(),
         };
     }
-    if let Err(reasons) = certificate.validate() {
+    if let Err(reasons) =
+        fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(certificate, &mesh_ir)
+    {
         return MeshMixedCertificateQualityEvidenceResource {
             status: MeshMixedCertificateQualityEvidenceStatus::Rejected,
             mesh_revision: snapshot.mesh_revision,

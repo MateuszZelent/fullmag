@@ -149,7 +149,7 @@ export function MeshQualityGatesSection({
       ) : (
         <MeshResourceEmpty label="No quality-gate checks published yet." />
       )}
-      <strong>Mixed certificate quality</strong>
+      <strong id="fm-mixed-certificate-quality-heading">Mixed certificate quality</strong>
       {mixedCertificate.status === "valid" ? null : (
         <FeedbackBanner
           kind="warning"
@@ -167,11 +167,15 @@ export function MeshQualityGatesSection({
         ]}
       />
       {mixedCertificate.familyGates.length > 0 ? (
-        <div className="fm-mesh-detail-table" role="table">
+        <div
+          aria-labelledby="fm-mixed-certificate-quality-heading"
+          className="fm-mesh-detail-table"
+          role="table"
+        >
           <div className="fm-mesh-detail-table__row" role="row">
-            <span>Family / metric</span>
-            <span>p05 / threshold</span>
-            <span>Jacobian</span>
+            <span role="columnheader">Family / metric</span>
+            <span role="columnheader">p05 / threshold</span>
+            <span role="columnheader">Jacobian</span>
           </div>
           {mixedCertificate.familyGates.map((gate) => (
             <div
@@ -180,9 +184,9 @@ export function MeshQualityGatesSection({
               data-status={gate.passed && gate.positiveJacobian ? "pass" : "fail"}
               role="row"
             >
-              <span>{gate.family} · {gate.metric}</span>
-              <span>{formatValue(gate.p05)} / {formatValue(gate.threshold)} · {gate.passed ? "pass" : "fail"}</span>
-              <span>{gate.positiveJacobian ? "positive" : "non-positive"} · {formatValue(gate.minimumJacobianM3)} m³</span>
+              <span role="cell">{gate.family} · {gate.metric}</span>
+              <span role="cell">{formatValue(gate.p05)} / {formatValue(gate.threshold)} · {gate.passed ? "pass" : "fail"}</span>
+              <span role="cell">{gate.positiveJacobian ? "positive" : "non-positive"} · {formatValue(gate.minimumJacobianM3)} m³</span>
             </div>
           ))}
         </div>

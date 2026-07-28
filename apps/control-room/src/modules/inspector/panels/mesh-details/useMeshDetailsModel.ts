@@ -27,6 +27,7 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import { useKernel } from "@/kernel/KernelContext";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 import {
   normalizeMeshPipelineStatus,
   resolveMeshBuildStatusLabel,
@@ -267,6 +268,43 @@ export function buildSharedDomainPolicyDiffRows({
   });
 }
 
+export function resolveCurrentMixedCertificateQualityPresentation({
+  currentMeshRevision,
+  data,
+  resourceStatus,
+}: {
+  currentMeshRevision: unknown;
+  data: unknown;
+  resourceStatus: ResourceStatus;
+}): MixedCertificateQualityPresentation {
+  const resource = asRecord(data);
+  const sidecar = asRecord(resource?.mixed_certificate);
+  const enclosingRevision = numericRevision(resource?.revision);
+  const sidecarRevision = numericRevision(sidecar?.mesh_revision);
+  const currentRevision = numericRevision(currentMeshRevision);
+  const revisionsAgree =
+    enclosingRevision !== null &&
+    sidecarRevision !== null &&
+    currentRevision !== null &&
+    enclosingRevision === currentRevision &&
+    sidecarRevision === currentRevision;
+
+  if (resourceStatus === "ready" && revisionsAgree) {
+    return resolveMixedCertificateQualityPresentation(sidecar);
+  }
+
+  const reason =
+    resourceStatus === "ready"
+      ? "quality-gates resource, certificate evidence, and current mesh revisions do not agree"
+      : `quality-gates resource is ${resourceStatus}`;
+  return resolveMixedCertificateQualityPresentation({
+    ...(sidecar ?? {}),
+    family_gates: [],
+    reason,
+    status: sidecar ? "stale" : "unavailable",
+  });
+}
+
 export function useMeshDetailsModel(
   selection: InspectorPanelProps["selection"],
 ): MeshDetailsModel {
@@ -477,9 +515,11 @@ export function useMeshDetailsModel(
       manifest: manifest.data,
       rejectionEvidence: activeBuild.data?.mixed_layer_topology_rejection,
     }),
-    mixedCertificateQuality: resolveMixedCertificateQualityPresentation(
-      qualityGates.data?.mixed_certificate,
-    ),
+    mixedCertificateQuality: resolveCurrentMixedCertificateQualityPresentation({
+      currentMeshRevision: runtimeStatus?.resources.mesh_revision,
+      data: qualityGates.data,
+      resourceStatus: qualityGates.status,
+    }),
     objectPolicyCount: objectConfigs.length,
     operationStatuses,
     policyDiffRows: buildSharedDomainPolicyDiffRows({
