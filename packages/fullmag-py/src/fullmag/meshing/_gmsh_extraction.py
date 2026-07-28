@@ -357,17 +357,11 @@ def _drop_unattached_provisional_facets(
     )
 
 
-def _is_single_region_tet4_air_topology(
+def _is_tet4_provisional_interface_topology(
     cell_types: object,
-    element_markers: object,
 ) -> bool:
     types = np.asarray(cell_types, dtype=np.str_)
-    markers = np.asarray(element_markers, dtype=np.int32)
-    return bool(
-        len(types) > 0
-        and np.all(types == "tet4")
-        and set(int(marker) for marker in markers.tolist()) == {0}
-    )
+    return bool(len(types) > 0 and np.all(types == "tet4"))
 
 
 def _derive_facet_roles(
@@ -398,10 +392,7 @@ def _derive_facet_roles(
     face_markers = np.asarray(boundary_markers, dtype=np.int32)
     seams = periodic_markers or set()
     provisional_interfaces = provisional_interface_markers or set()
-    provisional_interface_allowed = _is_single_region_tet4_air_topology(
-        types,
-        markers,
-    )
+    provisional_interface_allowed = _is_tet4_provisional_interface_topology(types)
     roles: list[str] = []
     for ordinal in range(len(face_offsets) - 1):
         if int(face_markers[ordinal]) in seams:
@@ -643,10 +634,10 @@ def _extract_mesh_data(
             )
 
     if provisional_interface_markers:
-        if not _is_single_region_tet4_air_topology(cell_types, element_markers):
+        if not _is_tet4_provisional_interface_topology(cell_types):
             raise ValueError(
                 "provisional interface extraction is restricted to the "
-                "single-region tet4 frozen-air workflow"
+                "tet4 frozen-air workflow"
             )
         (
             facet_types,

@@ -3583,6 +3583,7 @@ pub(crate) fn plan_fem_frequency_response(
         spin_wave_bc: eigen_proxy_spin_wave_bc,
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
             }],

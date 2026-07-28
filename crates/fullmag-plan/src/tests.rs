@@ -5,6 +5,100 @@ use crate::geometry::{
 };
 use std::collections::BTreeMap;
 
+fn resolved_stage_autosave(
+    stage_id: &str,
+    format: AutosaveFormatIR,
+    layout: AutosaveLayoutIR,
+    clock: ResolvedAutosaveClock,
+) -> ResolvedStageAutosave {
+    ResolvedStageAutosave {
+        stage_id: stage_id.into(),
+        target: "main".into(),
+        layout,
+        format,
+        table_quantities: vec!["step".into(), "mx".into()],
+        field_quantities: vec!["m".into()],
+        mesh_identity: "mesh-v1".into(),
+        component_count: 3,
+        clock,
+        requested: serde_json::from_value(serde_json::json!({
+            "target": "main",
+            "layout": layout,
+            "format": format,
+            "table": {"every_steps": 10, "quantities": ["step", "mx"]},
+            "fields": [{"quantity": "m", "every_steps": 10}]
+        }))
+        .unwrap(),
+    }
+}
+
+#[test]
+fn stage_autosave_planning_accepts_relax_and_run_in_one_continuous_target() {
+    let relax = resolved_stage_autosave(
+        "relax",
+        AutosaveFormatIR::Zarr,
+        AutosaveLayoutIR::Continuous,
+        ResolvedAutosaveClock::AcceptedStep,
+    );
+    let mut run = relax.clone();
+    run.stage_id = "run".into();
+    run.clock = ResolvedAutosaveClock::PhysicalTime;
+
+    validate_continuous_autosave_targets(&[relax, run])
+        .expect("stage indexes preserve each clock kind without schema drift");
+}
+
+#[test]
+fn stage_autosave_planning_reports_every_continuous_schema_conflict() {
+    let baseline = resolved_stage_autosave(
+        "first",
+        AutosaveFormatIR::Zarr,
+        AutosaveLayoutIR::Continuous,
+        ResolvedAutosaveClock::AcceptedStep,
+    );
+    let mut conflicting = baseline.clone();
+    conflicting.stage_id = "second".into();
+    conflicting.format = AutosaveFormatIR::Hdf5;
+    conflicting.table_quantities = vec!["step".into(), "my".into()];
+    conflicting.field_quantities = vec!["H_demag".into()];
+    conflicting.mesh_identity = "mesh-v2".into();
+    conflicting.component_count = 1;
+
+    let error = validate_continuous_autosave_targets(&[baseline, conflicting])
+        .expect_err("continuous schema drift must fail closed");
+    for expected in [
+        "format differs",
+        "table schema differs",
+        "field set differs",
+        "mesh identity differs",
+        "component count differs",
+    ] {
+        assert!(
+            error.reasons.iter().any(|reason| reason.contains(expected)),
+            "missing {expected:?} in {:?}",
+            error.reasons
+        );
+    }
+}
+
+#[test]
+fn stage_autosave_planning_keeps_separate_targets_independent() {
+    let first = resolved_stage_autosave(
+        "first",
+        AutosaveFormatIR::Zarr,
+        AutosaveLayoutIR::Separate,
+        ResolvedAutosaveClock::AcceptedStep,
+    );
+    let mut second = first.clone();
+    second.stage_id = "second".into();
+    second.format = AutosaveFormatIR::Txt;
+    second.table_quantities = vec!["step".into()];
+    second.field_quantities.clear();
+
+    validate_continuous_autosave_targets(&[first, second])
+        .expect("separate layouts do not share a schema registry");
+}
+
 fn auto_sampling_problem(cutoffs_hz: &[f64], active_stage_id: Option<&str>) -> ProblemIR {
     let mut problem = ProblemIR::bootstrap_example();
     if let Some(stage_id) = active_stage_id {
@@ -2741,6 +2835,7 @@ fn fem_shared_domain_ir_for_magnetoelastic() -> ProblemIR {
         },
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![
                 fullmag_ir::OutputIR::Field {
                     name: "H_mel".to_string(),
@@ -2820,6 +2915,7 @@ fn fem_quasistatic_magnetoelastic_is_explicitly_rejected_until_mechanics_solver_
         },
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::Field {
                 name: "H_mel".to_string(),
                 every_seconds: 1e-12,
@@ -2850,6 +2946,7 @@ fn fem_elastodynamic_magnetoelastic_is_explicitly_rejected_until_mechanics_solve
         },
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::Field {
                 name: "H_mel".to_string(),
                 every_seconds: 1e-12,
@@ -2878,6 +2975,7 @@ fn fem_mechanics_observables_are_rejected_until_mechanics_solver_exists() {
         },
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![
                 fullmag_ir::OutputIR::Field {
                     name: "u".to_string(),
@@ -5129,6 +5227,7 @@ fn inactive_term_output_is_rejected_for_execution() {
         dynamics: ir.study.dynamics().clone(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs,
         },
     };
@@ -5181,6 +5280,7 @@ fn fem_dmi_field_outputs_require_matching_dmi_terms() {
         dynamics: ir.study.dynamics().clone(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![
                 OutputIR::Field {
                     name: "H_dmi".to_string(),
@@ -5218,6 +5318,7 @@ fn fem_bulk_dmi_field_output_plans_when_bulk_dmi_is_active() {
         dynamics: ir.study.dynamics().clone(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![OutputIR::Field {
                 name: "H_dmi_bulk".to_string(),
                 every_seconds: 1e-12,
@@ -5243,6 +5344,7 @@ fn fem_material_dmi_constants_lower_to_native_plan() {
         dynamics: ir.study.dynamics().clone(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![
                 OutputIR::Field {
                     name: "H_dmi".to_string(),
@@ -6856,6 +6958,7 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![
                 fullmag_ir::OutputIR::EigenSpectrum {
                     quantity: "eigenfrequency".to_string(),
@@ -7007,6 +7110,7 @@ fn fem_eigen_carries_k0_kittel_validation_from_runtime_metadata() {
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
             }],
@@ -7218,6 +7322,7 @@ fn fem_eigen_allows_k0_kittel_synthetic_demag_factor_floquet_path() {
         ),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
             }],
@@ -7375,6 +7480,7 @@ fn fem_eigen_allows_k0_kittel_periodic_airbox_shared_domain_path() {
         ),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
             }],
@@ -7503,6 +7609,7 @@ fn fem_eigen_shared_domain_region_samples_equilibrium_once_per_object() {
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
             }],
@@ -7600,6 +7707,7 @@ fn fem_eigen_backend_interfacial_dmi_defaults_interface_normal_to_z_in_strict_mo
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
             }],
@@ -7702,6 +7810,7 @@ fn fem_eigen_auto_demag_resolves_to_poisson_robin_on_shared_domain_mesh_with_air
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
             }],
@@ -7802,6 +7911,7 @@ fn fem_eigen_periodic_bc_requires_periodic_node_pairs() {
         ),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
             }],
@@ -7896,6 +8006,7 @@ fn fem_eigen_periodic_bc_with_pairs_plans_successfully() {
         ),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
             }],
@@ -7987,6 +8098,7 @@ fn fem_eigen_floquet_bc_with_pairs_and_k_sampling_plans_successfully() {
         ),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
             }],
@@ -8101,6 +8213,7 @@ fn fem_eigen_floquet_dynamic_demag_is_rejected() {
         ),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
             }],
@@ -8239,6 +8352,7 @@ fn fem_eigen_surface_anisotropy_requires_positive_ks_and_axis() {
         ),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
             }],
@@ -9114,6 +9228,7 @@ fn fem_frequency_response_mesh_asset_problem() -> ProblemIR {
         solver_policy: None,
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
                 observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
             }],
@@ -9240,6 +9355,7 @@ fn fdm_frequency_response_remains_explicitly_not_executable() {
         solver_policy: None,
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
                 observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
             }],
@@ -9301,6 +9417,7 @@ fn frequency_response_planner_controls_do_not_validate_time_integrator_settings(
         solver_policy: None,
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
                 observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
             }],
@@ -9356,6 +9473,7 @@ fn frequency_response_planner_controls_ignore_invalid_time_integrator_alias() {
         solver_policy: None,
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
                 observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
             }],
@@ -12874,6 +12992,7 @@ fn minimal_hysteresis_study() -> StudyIR {
         minor_loops: None,
         sampling: SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![OutputIR::Scalar {
                 name: "mx".to_string(),
                 every_seconds: 1.0e-12,

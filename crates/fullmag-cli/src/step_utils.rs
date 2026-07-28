@@ -1645,6 +1645,7 @@ fn time_domain_sampling_from(base: &fullmag_ir::SamplingIR) -> fullmag_ir::Sampl
         .collect();
     fullmag_ir::SamplingIR {
         table_autosave: base.table_autosave.clone(),
+        stage_autosave: None,
         outputs,
     }
 }
@@ -1686,6 +1687,7 @@ fn eigen_sampling_from(base: &fullmag_ir::SamplingIR, mode_count: u32) -> fullma
     }
     fullmag_ir::SamplingIR {
         table_autosave: base.table_autosave.clone(),
+        stage_autosave: None,
         outputs,
     }
 }
@@ -1693,6 +1695,7 @@ fn eigen_sampling_from(base: &fullmag_ir::SamplingIR, mode_count: u32) -> fullma
 fn frequency_response_sampling_from(base: &fullmag_ir::SamplingIR) -> fullmag_ir::SamplingIR {
     fullmag_ir::SamplingIR {
         table_autosave: base.table_autosave.clone(),
+        stage_autosave: None,
         outputs: base
             .outputs
             .iter()
@@ -1812,6 +1815,7 @@ fn materialize_pipeline_run(
         .unwrap_or_else(|| "study_pipeline_run".to_string());
     ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
     ir.study = fullmag_ir::StudyIR::TimeEvolution { dynamics, sampling };
+    attach_stage_autosave_from_payload(&mut ir, payload, "run")?;
     let until_seconds = resolve_script_until_seconds(
         &ir,
         payload_f64(payload, "until_seconds")?.or(default_until_seconds),
@@ -1832,7 +1836,12 @@ fn validate_pipeline_run_primitive_payload(payload: &BTreeMap<String, Value>) ->
         .filter(|key| {
             !matches!(
                 key.as_str(),
-                "entrypoint_kind" | "kind" | "stage_id" | "until_seconds"
+                "entrypoint_kind"
+                    | "kind"
+                    | "stage_id"
+                    | "until_seconds"
+                    | "output_every_seconds"
+                    | "autosave"
             )
         })
         .cloned()
@@ -1851,7 +1860,18 @@ fn materialize_pipeline_relax(
     payload: &BTreeMap<String, Value>,
 ) -> Result<ResolvedScriptStage> {
     let mut ir = base_ir.clone();
-    let sampling = time_domain_sampling_from(ir.study.sampling());
+    let mut sampling = time_domain_sampling_from(ir.study.sampling());
+    if let Some(value) = payload.get("table_autosave") {
+        let table: TableAutosaveIR = serde_json::from_value(value.clone())
+            .context("relax stage table_autosave is invalid")?;
+        if table.accepted_step_cadence().is_none() {
+            bail!("relax stage table_autosave must use a positive every_steps cadence");
+        }
+        if table.quantities.is_empty() {
+            bail!("relax stage table_autosave quantities must not be empty");
+        }
+        sampling.table_autosave = Some(table);
+    }
     let entrypoint_kind = payload_string(payload, "entrypoint_kind")
         .unwrap_or_else(|| "study_pipeline_relax".to_string());
     ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
@@ -1871,12 +1891,34 @@ fn materialize_pipeline_relax(
         stop: payload_relax_stop(payload, true)?,
         sampling,
     };
+    attach_stage_autosave_from_payload(&mut ir, payload, "relax")?;
     let until_seconds = resolve_script_until_seconds(&ir, None)?;
     Ok(ResolvedScriptStage::solver(
         ir,
         until_seconds,
         entrypoint_kind,
     ))
+}
+
+fn attach_stage_autosave_from_payload(
+    ir: &mut ProblemIR,
+    payload: &BTreeMap<String, Value>,
+    stage_kind: &str,
+) -> Result<()> {
+    let Some(value) = payload.get("autosave") else {
+        ir.study.sampling_mut().stage_autosave = None;
+        return Ok(());
+    };
+    let policy: fullmag_ir::StageAutosaveIR = serde_json::from_value(value.clone())
+        .with_context(|| format!("{stage_kind} stage autosave payload is invalid"))?;
+    policy.validate_for_study(&ir.study).map_err(|errors| {
+        anyhow::anyhow!(
+            "{stage_kind} stage autosave validation failed: {}",
+            errors.join("; ")
+        )
+    })?;
+    ir.study.sampling_mut().stage_autosave = Some(policy);
+    Ok(())
 }
 
 fn materialize_pipeline_eigenmodes(
@@ -2094,6 +2136,7 @@ fn materialize_pipeline_frequency_response(
         solver_policy: payload_frequency_solver_policy(payload, default_solver_policy)?,
         sampling: fullmag_ir::SamplingIR {
             table_autosave: sampling.table_autosave,
+            stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
                 observable: payload_frequency_observable(payload)?,
             }],
@@ -4633,6 +4676,198 @@ mod tests {
     }
 
     #[test]
+    fn stage_local_table_autosave_is_owned_by_relaxation_only() {
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(5e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    StudyPipelineNode::Primitive {
+                        id: "relax".to_string(),
+                        label: "".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("script_imported".to_string()),
+                        stage_kind: "relax".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "kind": "relax",
+                            "entrypoint_kind": "pipeline_relax",
+                            "relax_algorithm": "projected_gradient_bb",
+                            "torque_tolerance": "1e-4",
+                            "max_steps": "25",
+                            "table_autosave": {
+                                "kind": "table_autosave",
+                                "table_id": "default",
+                                "every_steps": 10,
+                                "quantities": ["step", "mx"]
+                            }
+                        }))
+                        .expect("relax payload"),
+                    },
+                    StudyPipelineNode::Primitive {
+                        id: "after".to_string(),
+                        label: "".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("script_imported".to_string()),
+                        stage_kind: "run".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "kind": "run",
+                            "entrypoint_kind": "pipeline_run",
+                            "until_seconds": "5e-12"
+                        }))
+                        .expect("run payload"),
+                    },
+                ],
+            }),
+            stages: vec![],
+        };
+
+        let stages = materialize_script_stages(config).expect("pipeline should materialize");
+        assert_eq!(stages.len(), 2);
+        assert_eq!(
+            stages[0]
+                .ir
+                .study
+                .sampling()
+                .table_autosave
+                .as_ref()
+                .and_then(fullmag_ir::TableAutosaveIR::accepted_step_cadence),
+            Some(10),
+        );
+        assert!(stages[1].ir.study.sampling().table_autosave.is_none());
+    }
+
+    #[test]
+    fn stage_local_autosave_materializes_without_leaking_to_following_stage() {
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(5e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    primitive_node(
+                        "relax",
+                        "relax",
+                        json!({
+                            "kind": "relax",
+                            "relax_algorithm": "projected_gradient_bb",
+                            "max_steps": "25",
+                            "autosave": {
+                                "kind": "stage_autosave",
+                                "target": "main",
+                                "layout": "continuous",
+                                "format": "zarr",
+                                "table": {"every_steps": 10, "quantities": ["step", "mx"]},
+                                "fields": [{"quantity": "m", "every_steps": 20}]
+                            }
+                        }),
+                    ),
+                    primitive_node(
+                        "run",
+                        "run",
+                        json!({
+                            "kind": "run",
+                            "until_seconds": "5e-12",
+                            "autosave": {
+                                "kind": "stage_autosave",
+                                "target": "main",
+                                "layout": "continuous",
+                                "format": "zarr",
+                                "table": {"sample_period_s": 1e-12, "quantities": ["step", "mx"]},
+                                "fields": [{"quantity": "m", "every_seconds": 2e-12}]
+                            }
+                        }),
+                    ),
+                    primitive_node(
+                        "after",
+                        "run",
+                        json!({"kind": "run", "until_seconds": "5e-12"}),
+                    ),
+                ],
+            }),
+            stages: vec![],
+        };
+
+        let stages = materialize_script_stages(config).expect("stage autosave should materialize");
+        assert_eq!(stages.len(), 3);
+        assert_eq!(
+            stages[0]
+                .ir
+                .study
+                .sampling()
+                .stage_autosave
+                .as_ref()
+                .unwrap()
+                .fields[0]
+                .every_steps,
+            Some(20)
+        );
+        assert_eq!(
+            stages[1]
+                .ir
+                .study
+                .sampling()
+                .stage_autosave
+                .as_ref()
+                .unwrap()
+                .fields[0]
+                .every_seconds,
+            Some(2e-12)
+        );
+        assert!(stages[2].ir.study.sampling().stage_autosave.is_none());
+    }
+
+    #[test]
+    fn stage_local_autosave_rejects_malformed_or_wrong_clock_payloads() {
+        for (stage_kind, payload, expected) in [
+            (
+                "run",
+                json!({
+                    "kind": "run",
+                    "until_seconds": "5e-12",
+                    "autosave": {
+                        "target": "main",
+                        "layout": "continuous",
+                        "format": "zarr",
+                        "fields": [{"quantity": "m", "every_steps": 10}]
+                    }
+                }),
+                "only valid for relaxation",
+            ),
+            (
+                "relax",
+                json!({
+                    "kind": "relax",
+                    "relax_algorithm": "projected_gradient_bb",
+                    "max_steps": "25",
+                    "autosave": {"target": "main", "layout": "not-a-layout"}
+                }),
+                "payload is invalid",
+            ),
+        ] {
+            let config = ScriptExecutionConfig {
+                ir: sample_problem_ir(),
+                shared_geometry_assets: None,
+                default_until_seconds: Some(5e-12),
+                study_pipeline: Some(StudyPipelineDocument {
+                    version: "study_pipeline.v1".to_string(),
+                    nodes: vec![primitive_node("invalid", stage_kind, payload)],
+                }),
+                stages: vec![],
+            };
+            let error = materialize_script_stages(config).expect_err("invalid policy must fail");
+            assert!(
+                format!("{error:#}").contains(expected),
+                "missing {expected:?} in {error:#}"
+            );
+        }
+    }
+
+    #[test]
     fn materialized_compatible_solver_stages_are_marked_continue_in_place() {
         let config = ScriptExecutionConfig {
             ir: sample_problem_ir(),
@@ -4797,6 +5032,7 @@ mod tests {
             solver_policy: None,
             sampling: fullmag_ir::SamplingIR {
                 table_autosave: None,
+                stage_autosave: None,
                 outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
                     observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
                 }],
@@ -4913,6 +5149,7 @@ mod tests {
             solver_policy: None,
             sampling: fullmag_ir::SamplingIR {
                 table_autosave: None,
+                stage_autosave: None,
                 outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
                     observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
                 }],

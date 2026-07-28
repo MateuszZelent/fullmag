@@ -260,6 +260,181 @@ fn table_autosave_step_cadence_round_trips_and_rejects_time_ambiguity() {
 }
 
 #[test]
+fn stage_autosave_serde_preserves_formats_layouts_and_clock_kinds() {
+    let continuous: StageAutosaveIR = serde_json::from_value(serde_json::json!({
+        "kind": "stage_autosave",
+        "target": "main",
+        "layout": "continuous",
+        "format": "zarr",
+        "table": {
+            "kind": "table_autosave",
+            "table_id": "default",
+            "every_steps": 10,
+            "quantities": ["step", "mx"]
+        },
+        "fields": [{
+            "kind": "field_autosave",
+            "quantity": "m",
+            "every_steps": 20
+        }]
+    }))
+    .expect("accepted-step autosave policy should deserialize");
+    assert_eq!(continuous.layout, AutosaveLayoutIR::Continuous);
+    assert_eq!(continuous.format, AutosaveFormatIR::Zarr);
+    assert_eq!(continuous.fields[0].accepted_step_cadence(), Some(20));
+
+    for format in ["hdf5", "txt"] {
+        let policy: StageAutosaveIR = serde_json::from_value(serde_json::json!({
+            "kind": "stage_autosave",
+            "target": "run-output",
+            "layout": "separate",
+            "format": format,
+            "table": {
+                "kind": "table_autosave",
+                "table_id": "default",
+                "sample_period_s": 1e-12,
+                "quantities": ["step", "t", "mx"]
+            },
+            "fields": []
+        }))
+        .expect("time-clock autosave policy should deserialize");
+        assert_eq!(policy.layout, AutosaveLayoutIR::Separate);
+        assert_eq!(serde_json::to_value(policy).unwrap()["format"], format);
+    }
+}
+
+#[test]
+fn stage_autosave_validation_accepts_matching_relax_and_run_clocks() {
+    let mut relax = ProblemIR::bootstrap_example();
+    let sampling = relax.study.sampling().clone();
+    relax.study = StudyIR::Relaxation {
+        algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+        dynamics: None,
+        stop: RelaxStopIR {
+            torque_tolerance_apm: None,
+            energy_tolerance_j: None,
+            max_steps: Some(100),
+            max_relaxation_time_s: None,
+        },
+        sampling,
+    };
+    relax.study.sampling_mut().stage_autosave = Some(
+        serde_json::from_value(serde_json::json!({
+            "kind": "stage_autosave",
+            "target": "main",
+            "layout": "continuous",
+            "format": "zarr",
+            "table": {"every_steps": 10, "quantities": ["step", "mx"]},
+            "fields": [{"quantity": "m", "every_steps": 20}]
+        }))
+        .unwrap(),
+    );
+    relax
+        .validate()
+        .expect("Relax accepted-step policy is valid");
+
+    let mut run = ProblemIR::bootstrap_example();
+    run.study.sampling_mut().stage_autosave = Some(
+        serde_json::from_value(serde_json::json!({
+            "kind": "stage_autosave",
+            "target": "main",
+            "layout": "continuous",
+            "format": "hdf5",
+            "table": {"sample_period_s": 1e-12, "quantities": ["step", "t"]},
+            "fields": [{"quantity": "m", "every_seconds": 2e-12}]
+        }))
+        .unwrap(),
+    );
+    run.validate().expect("Run physical-time policy is valid");
+}
+
+#[test]
+fn stage_autosave_validation_rejects_txt_fields_duplicates_and_unsafe_target() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study.sampling_mut().stage_autosave = Some(
+        serde_json::from_value(serde_json::json!({
+            "kind": "stage_autosave",
+            "target": "../escape",
+            "layout": "continuous",
+            "format": "txt",
+            "table": {
+                "sample_period_s": 1e-12,
+                "quantities": ["step", "step"]
+            },
+            "fields": [
+                {"quantity": "m", "every_seconds": 1e-12},
+                {"quantity": "m", "every_seconds": 2e-12}
+            ]
+        }))
+        .unwrap(),
+    );
+    let errors = ir
+        .validate()
+        .expect_err("invalid storage policy must fail closed");
+    for expected in [
+        "target must start",
+        "txt format supports scalar tables only",
+        "duplicate quantity 'step'",
+        "duplicate field quantity 'm'",
+    ] {
+        assert!(
+            errors.iter().any(|error| error.contains(expected)),
+            "missing {expected:?} in {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn stage_autosave_validation_rejects_study_clock_mismatches() {
+    let mut run = ProblemIR::bootstrap_example();
+    run.study.sampling_mut().stage_autosave = Some(
+        serde_json::from_value(serde_json::json!({
+            "target": "main",
+            "layout": "continuous",
+            "format": "zarr",
+            "table": {"every_steps": 10, "quantities": ["step"]},
+            "fields": [{"quantity": "m", "every_steps": 10}]
+        }))
+        .unwrap(),
+    );
+    let errors = run
+        .validate()
+        .expect_err("Run must reject accepted-step cadence");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("only valid for relaxation")));
+
+    let mut relax = ProblemIR::bootstrap_example();
+    let sampling = relax.study.sampling().clone();
+    relax.study = StudyIR::Relaxation {
+        algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+        dynamics: None,
+        stop: RelaxStopIR {
+            torque_tolerance_apm: None,
+            energy_tolerance_j: None,
+            max_steps: Some(100),
+            max_relaxation_time_s: None,
+        },
+        sampling,
+    };
+    relax.study.sampling_mut().stage_autosave = Some(
+        serde_json::from_value(serde_json::json!({
+            "target": "main",
+            "layout": "continuous",
+            "format": "zarr",
+            "fields": [{"quantity": "m", "every_seconds": 1e-12}]
+        }))
+        .unwrap(),
+    );
+    let errors = relax
+        .validate()
+        .expect_err("Relax must reject physical-time cadence");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("must use every_steps")));
+}
+
+#[test]
 fn sampling_policy_round_trips_automatic_field_and_scalar_outputs() {
     for (kind, expected_name) in [("field_auto", "m"), ("scalar_auto", "mx")] {
         let output: OutputIR = serde_json::from_value(serde_json::json!({
@@ -1058,6 +1233,7 @@ fn hysteresis_validation_accepts_field_unit_provenance() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1103,6 +1279,7 @@ fn hysteresis_validation_rejects_invalid_field_unit_provenance() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1166,6 +1343,7 @@ fn hysteresis_validation_rejects_invalid_piecewise_schedule() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1223,6 +1401,7 @@ fn hysteresis_validation_rejects_overlapping_dense_windows_without_priority() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1270,6 +1449,7 @@ fn hysteresis_validation_accepts_major_with_minor_loops_branch_mode() {
                 every_seconds: 1e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1323,6 +1503,7 @@ fn hysteresis_validation_accepts_replace_parent_minor_loop_continuation_policy()
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1365,6 +1546,7 @@ fn hysteresis_validation_accepts_minor_loop_intermediate_fields() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1407,6 +1589,7 @@ fn hysteresis_validation_rejects_duplicate_minor_loop_intermediate_boundary() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1455,6 +1638,7 @@ fn hysteresis_validation_rejects_unknown_minor_loop_continuation_policy() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1515,6 +1699,7 @@ fn hysteresis_validation_rejects_run_next_algorithm_without_next_step() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1573,6 +1758,7 @@ fn hysteresis_validation_rejects_run_next_algorithm_tree_without_fallback_branch
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1633,6 +1819,7 @@ fn hysteresis_validation_rejects_retry_with_smaller_dt_without_scale() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1693,6 +1880,7 @@ fn hysteresis_validation_rejects_invalid_settle_step_selection_contract() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1753,6 +1941,7 @@ fn hysteresis_validation_rejects_direct_minimizer_physical_time_budget() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1864,6 +2053,7 @@ fn hysteresis_validation_rejects_dynamics_settle_stop_criteria() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -1940,6 +2130,7 @@ fn hysteresis_validation_rejects_invalid_public_contract_values() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -2008,6 +2199,7 @@ fn hysteresis_validation_accepts_custom_measurement_axis_vector() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -2047,6 +2239,7 @@ fn hysteresis_validation_accepts_checkpoint_with_initial_state_ref() {
                 every_seconds: 1.0e-12,
             }],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -2083,6 +2276,7 @@ fn hysteresis_validation_rejects_checkpoint_without_initial_state_ref() {
         sampling: SamplingIR {
             outputs: vec![],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -2126,6 +2320,7 @@ fn hysteresis_validation_rejects_zero_custom_measurement_axis_vector() {
         sampling: SamplingIR {
             outputs: vec![],
             table_autosave: None,
+            stage_autosave: None,
         },
     };
 
@@ -3483,6 +3678,7 @@ fn eigenmodes_with_spectrum_and_mode_outputs_validate() {
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
         sampling: SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![
                 OutputIR::EigenSpectrum {
                     quantity: "eigenfrequency".to_string(),
@@ -3526,6 +3722,7 @@ fn unsampled_time_evolution_is_valid_but_eigenmodes_require_outputs() {
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
         sampling: SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![],
         },
         mode_tracking: None,
@@ -3591,6 +3788,7 @@ fn eigenmodes_k0_kittel_validation_runtime_metadata_deserializes_to_typed_ir() {
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
         sampling: SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![OutputIR::EigenSpectrum {
                 quantity: "frequency_hz".to_string(),
             }],
@@ -3681,6 +3879,7 @@ fn eigenmodes_closed_k_path_sample_count_and_segment_length_validate() {
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
         sampling: SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![
                 OutputIR::EigenSpectrum {
                     quantity: "frequency_hz".to_string(),
@@ -3733,6 +3932,7 @@ fn eigenmodes_rejects_closed_k_path_with_open_segment_count() {
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
         sampling: SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![OutputIR::EigenSpectrum {
                 quantity: "frequency_hz".to_string(),
             }],
@@ -3784,6 +3984,7 @@ fn frequency_response_round_trips_as_first_class_study() {
         }),
         sampling: SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![OutputIR::EigenSpectrum {
                 quantity: "susceptibility".to_string(),
             }],
@@ -3852,6 +4053,7 @@ fn frequency_response_does_not_validate_time_integrator_alias() {
         solver_policy: None,
         sampling: SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![OutputIR::FrequencyResponseOutput {
                 observable: FrequencyResponseOutputIR::SusceptibilityTensor,
             }],
@@ -3891,6 +4093,7 @@ fn frequency_response_rejects_non_finite_excitation_phase() {
         solver_policy: None,
         sampling: SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![OutputIR::FrequencyResponseOutput {
                 observable: FrequencyResponseOutputIR::SusceptibilityTensor,
             }],
@@ -3933,6 +4136,7 @@ fn frequency_response_output_is_first_class_sampling_request() {
         solver_policy: None,
         sampling: SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![OutputIR::FrequencyResponseOutput {
                 observable: FrequencyResponseOutputIR::SusceptibilityTensor,
             }],
@@ -4638,6 +4842,7 @@ fn eigenmodes_require_spectrum_or_mode_output() {
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
         sampling: SamplingIR {
             table_autosave: None,
+            stage_autosave: None,
             outputs: vec![OutputIR::DispersionCurve {
                 name: "dispersion".to_string(),
             }],

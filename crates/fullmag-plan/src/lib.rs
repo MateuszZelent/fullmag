@@ -44,7 +44,8 @@ pub use quantities::{
     QuantityCapability,
 };
 pub use sampling::{
-    resolve_auto_sampling_for_stage, SamplingResolutionIR, SAMPLING_RESOLUTION_SCHEMA_VERSION,
+    resolve_auto_sampling_for_stage, validate_continuous_autosave_targets, ResolvedAutosaveClock,
+    ResolvedStageAutosave, SamplingResolutionIR, SAMPLING_RESOLUTION_SCHEMA_VERSION,
 };
 pub use surface_selectors::{resolve_fem_surface_selector, ResolvedFemSurfaceSelector};
 pub use util::generate_random_unit_vectors;

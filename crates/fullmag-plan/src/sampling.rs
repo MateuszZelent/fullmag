@@ -1,12 +1,111 @@
 use fullmag_ir::{
-    OutputIR, ProblemIR, SamplingPeriodPolicyIR, StudyIR, TimeDependenceIR,
-    AUTO_SINC_NYQUIST_GUARD_FACTOR,
+    AutosaveFormatIR, AutosaveLayoutIR, OutputIR, ProblemIR, SamplingPeriodPolicyIR,
+    StageAutosaveIR, StudyIR, TimeDependenceIR, AUTO_SINC_NYQUIST_GUARD_FACTOR,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use crate::PlanError;
 
 pub const SAMPLING_RESOLUTION_SCHEMA_VERSION: &str = "sampling_resolution.v1";
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolvedAutosaveClock {
+    PhysicalTime,
+    AcceptedStep,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedStageAutosave {
+    pub stage_id: String,
+    pub target: String,
+    pub layout: AutosaveLayoutIR,
+    pub format: AutosaveFormatIR,
+    pub table_quantities: Vec<String>,
+    pub field_quantities: Vec<String>,
+    pub mesh_identity: String,
+    pub component_count: u8,
+    pub clock: ResolvedAutosaveClock,
+    pub requested: StageAutosaveIR,
+}
+
+impl ResolvedStageAutosave {
+    pub fn from_problem(
+        problem: &ProblemIR,
+        stage_id: impl Into<String>,
+        mesh_identity: impl Into<String>,
+        component_count: u8,
+    ) -> Option<Self> {
+        let requested = problem.study.sampling().stage_autosave.clone()?;
+        let mut field_quantities = requested
+            .fields
+            .iter()
+            .map(|field| field.quantity.clone())
+            .collect::<Vec<_>>();
+        field_quantities.sort();
+        Some(Self {
+            stage_id: stage_id.into(),
+            target: requested.target.clone(),
+            layout: requested.layout,
+            format: requested.format,
+            table_quantities: requested
+                .table
+                .as_ref()
+                .map(|table| table.quantities.clone())
+                .unwrap_or_default(),
+            field_quantities,
+            mesh_identity: mesh_identity.into(),
+            component_count,
+            clock: if matches!(problem.study, StudyIR::Relaxation { .. }) {
+                ResolvedAutosaveClock::AcceptedStep
+            } else {
+                ResolvedAutosaveClock::PhysicalTime
+            },
+            requested,
+        })
+    }
+}
+
+pub fn validate_continuous_autosave_targets(
+    stages: &[ResolvedStageAutosave],
+) -> Result<(), PlanError> {
+    let mut targets: BTreeMap<&str, &ResolvedStageAutosave> = BTreeMap::new();
+    let mut reasons = Vec::new();
+    for stage in stages {
+        if stage.layout == AutosaveLayoutIR::Separate {
+            continue;
+        }
+        let Some(first) = targets.get(stage.target.as_str()).copied() else {
+            targets.insert(stage.target.as_str(), stage);
+            continue;
+        };
+        let prefix = format!(
+            "continuous autosave target '{}' conflicts between stages '{}' and '{}'",
+            stage.target, first.stage_id, stage.stage_id
+        );
+        if first.format != stage.format {
+            reasons.push(format!("{prefix}: format differs"));
+        }
+        if first.table_quantities != stage.table_quantities {
+            reasons.push(format!("{prefix}: table schema differs"));
+        }
+        if first.field_quantities != stage.field_quantities {
+            reasons.push(format!("{prefix}: field set differs"));
+        }
+        if first.mesh_identity != stage.mesh_identity {
+            reasons.push(format!("{prefix}: mesh identity differs"));
+        }
+        if first.component_count != stage.component_count {
+            reasons.push(format!("{prefix}: component count differs"));
+        }
+    }
+    if reasons.is_empty() {
+        Ok(())
+    } else {
+        Err(PlanError { reasons })
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplingResolutionIR {
@@ -24,9 +123,26 @@ pub struct SamplingResolutionIR {
 fn auto_policy(problem: &ProblemIR) -> Option<SamplingPeriodPolicyIR> {
     let sampling = problem.study.sampling();
     sampling
-        .table_autosave
+        .stage_autosave
         .as_ref()
-        .and_then(|table| table.sample_period_policy.clone())
+        .and_then(|policy| {
+            policy
+                .table
+                .as_ref()
+                .and_then(|table| table.sample_period_policy.clone())
+                .or_else(|| {
+                    policy
+                        .fields
+                        .iter()
+                        .find_map(|field| field.sample_period_policy.clone())
+                })
+        })
+        .or_else(|| {
+            sampling
+                .table_autosave
+                .as_ref()
+                .and_then(|table| table.sample_period_policy.clone())
+        })
         .or_else(|| {
             sampling.outputs.iter().find_map(|output| match output {
                 OutputIR::FieldAuto {
@@ -44,7 +160,14 @@ fn auto_policy(problem: &ProblemIR) -> Option<SamplingPeriodPolicyIR> {
 
 pub(crate) fn has_unresolved_auto_sampling(problem: &ProblemIR) -> bool {
     let sampling = problem.study.sampling();
-    sampling.table_autosave.as_ref().is_some_and(|table| {
+    sampling.stage_autosave.as_ref().is_some_and(|policy| {
+        policy.table.as_ref().is_some_and(|table| {
+            table.requests_auto_sinc_cutoff() && table.resolved_sample_period_s.is_none()
+        }) || policy
+            .fields
+            .iter()
+            .any(|field| field.sample_period_policy.is_some() && field.every_seconds.is_none())
+    }) || sampling.table_autosave.as_ref().is_some_and(|table| {
         table.requests_auto_sinc_cutoff() && table.resolved_sample_period_s.is_none()
     }) || sampling
         .outputs
@@ -139,6 +262,19 @@ pub fn resolve_auto_sampling_for_stage(
     };
 
     let sampling = problem.study.sampling_mut();
+    if let Some(policy) = sampling.stage_autosave.as_mut() {
+        if let Some(table) = policy.table.as_mut() {
+            if table.requests_auto_sinc_cutoff() {
+                table.set_resolved_sample_period_s(sample_period_s);
+            }
+        }
+        for field in &mut policy.fields {
+            if field.sample_period_policy.is_some() {
+                field.every_seconds = Some(sample_period_s);
+                field.sample_period_policy = None;
+            }
+        }
+    }
     if let Some(table) = sampling.table_autosave.as_mut() {
         if table.requests_auto_sinc_cutoff() {
             table.set_resolved_sample_period_s(sample_period_s);

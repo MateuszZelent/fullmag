@@ -4644,6 +4644,16 @@ class MeshScaffoldTests(unittest.TestCase):
             ["material_interface"],
         )
 
+        physical_group_topology = dict(topology)
+        physical_group_topology["element_markers"] = [1, 1]
+        self.assertEqual(
+            _derive_facet_roles(
+                **physical_group_topology,
+                provisional_interface_markers={10},
+            ),
+            ["material_interface"],
+        )
+
         with self.assertRaisesRegex(ValueError, r"adjacency \[0, 0\]"):
             _derive_facet_roles(
                 **topology,

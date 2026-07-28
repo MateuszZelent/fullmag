@@ -456,6 +456,7 @@ impl ProblemIR {
                 },
                 sampling: SamplingIR {
                     table_autosave: None,
+                    stage_autosave: None,
                     outputs: vec![
                         OutputIR::Field {
                             name: "m".to_string(),
@@ -833,6 +834,11 @@ impl ProblemIR {
                         "sampling.table_autosave.quantities must not contain empty ids".to_string(),
                     );
                 }
+            }
+        }
+        if let Some(stage_autosave) = &self.study.sampling().stage_autosave {
+            if let Err(stage_errors) = stage_autosave.validate_for_study(&self.study) {
+                errors.extend(stage_errors);
             }
         }
         match &self.study {
