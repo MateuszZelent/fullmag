@@ -770,6 +770,9 @@ fullmag::fem::Context sharp_ms_demag_context() {
         0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 2.0,
     };
     ctx.mesh.cell_nodes = {0u, 1u, 2u, 3u, 0u, 1u, 3u, 4u, 0u, 2u, 4u, 5u};
+    ctx.mesh.cell_types = {
+        FULLMAG_FEM_CELL_TET4, FULLMAG_FEM_CELL_TET4, FULLMAG_FEM_CELL_TET4};
+    ctx.mesh.cell_offsets = {0u, 4u, 8u, 12u};
     ctx.mesh.magnetic_element_mask = {1u, 1u, 0u};
     ctx.mesh.magnetic_node_mask = {1u, 1u, 1u, 1u, 1u, 0u};
     ctx.material_fields.material.saturation_magnetisation = 800e3;

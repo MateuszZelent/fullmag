@@ -687,6 +687,16 @@ bool validate_periodic_scalar_field_classes(
 }
 
 void compute_node_volumes(Context &ctx) {
+    if (std::any_of(
+            ctx.mesh.cell_types.begin(),
+            ctx.mesh.cell_types.end(),
+            [](uint32_t type) { return type != FULLMAG_FEM_CELL_TET4; })) {
+        // Geometry/arity sharing is only the legacy tetrahedral compatibility
+        // rule. Mixed P1 waits for the generic MFEM magnetic mass row sums,
+        // which synchronize this view after operator assembly.
+        ctx.mesh.node_volumes.clear();
+        return;
+    }
     const size_t n = static_cast<size_t>(ctx.mesh.n_nodes);
     ctx.mesh.node_volumes.assign(n, 0.0);
 

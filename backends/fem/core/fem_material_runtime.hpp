@@ -35,7 +35,8 @@ private:
     P1TetrahedralMaterialRealization realization_;
 };
 
-// Build exactly once after mesh/mask/material validation, before interactions.
+// Build the exact tetrahedral adapter for element-DG0 fields after validation.
+// Uniform and nodal-P1 coefficients bypass it and are realized directly by MFEM.
 bool initialize_material_runtime(Context &ctx, std::string &error);
 
 } // namespace fullmag::fem

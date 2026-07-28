@@ -3,12 +3,14 @@
  */
 
 #include "core/fem_mesh.hpp"
+#include "core/fem_material_runtime.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 
 #include "context.hpp"
 #include "cpu/mfem/runtime/mfem_context.hpp"
 #include "cpu/mfem/runtime/mfem_mesh_builder.hpp"
+#include "cpu/mfem/runtime/step_metrics.hpp"
 
 #include <mfem.hpp>
 
@@ -62,6 +64,13 @@ std::unique_ptr<mfem::Mesh> build(const FemMeshRuntimeState &source)
     check(fullmag::fem::build_mfem_mesh(source, mesh, error), error.c_str());
     check(mesh != nullptr, "successful mixed MFEM build must return a mesh");
     return mesh;
+}
+
+bool close_volume(double actual, double expected)
+{
+    const double scale = std::max(std::abs(actual), std::abs(expected));
+    return std::abs(actual - expected) <=
+        256.0 * std::numeric_limits<double>::epsilon() * scale;
 }
 
 void expect_reject(const FemMeshRuntimeState &source, const char *needle)
@@ -266,6 +275,147 @@ FemMeshRuntimeState conforming_prism_pyramid_tet()
         {0,6,11,15},
         {0,1,2,3,4,5, 0,1,4,3,6, 1,4,6,7},
         {7,0,0});
+}
+
+void initialize_uniform_material(fullmag::fem::Context &ctx)
+{
+    ctx.base_plan.fe_order = 1u;
+    ctx.exchange.enabled = true;
+    ctx.material_fields.material.saturation_magnetisation = 8.0e5;
+    ctx.material_fields.material.exchange_stiffness = 13.0e-12;
+    ctx.material_fields.material.damping = 0.02;
+    ctx.material_fields.material.gyromagnetic_ratio = 2.211e5;
+    ctx.state.m_xyz.assign(3u * static_cast<size_t>(ctx.mesh.n_nodes), 0.0);
+    for (uint32_t node = 0; node < ctx.mesh.n_nodes; ++node) {
+        ctx.state.m_xyz[3u * static_cast<size_t>(node)] = 1.0;
+    }
+    const char *requested_device = std::getenv("FULLMAG_MIXED_P1_ROLLBACK_DEVICE");
+    ctx.mfem_device.device_string_override =
+        requested_device == nullptr || *requested_device == '\0' ? "cpu" : requested_device;
+}
+
+void initialize_mfem_and_check_magnetic_volume(
+    fullmag::fem::Context &ctx,
+    double expected_volume)
+{
+    std::string error;
+    check(fullmag::fem::initialize_material_runtime(ctx, error), error.c_str());
+    check(!ctx.material_fields.runtime.has_value(),
+          "uniform or nodal-P1 material must bypass the tetrahedral DG0 adapter");
+    check(fullmag::fem::context_initialize_mfem(ctx, error), error.c_str());
+    const auto &weights = ctx.integration_weights.mfem_lumped_mass;
+    check(weights.size() == ctx.mesh.n_nodes,
+          "MFEM magnetic mass row sums must publish one weight per P1 node");
+    double sum = 0.0;
+    for (size_t node = 0; node < weights.size(); ++node) {
+        const double weight = weights[node];
+        check(std::isfinite(weight) && weight >= 0.0,
+              "MFEM magnetic mass row sums must be finite and non-negative");
+        if (!ctx.mesh.magnetic_node_mask.empty() &&
+            ctx.mesh.magnetic_node_mask[node] == 0u) {
+            check(weight == 0.0,
+                  "air-only P1 nodes must have zero magnetic mass weight");
+        }
+        sum += weight;
+    }
+    check(close_volume(sum, expected_volume),
+          "MFEM magnetic mass row sums must conserve magnetic volume");
+    check(ctx.mesh.node_volumes == weights,
+          "compatibility node volumes must be synchronized from MFEM mass row sums");
+}
+
+void mfem_mass_weights_cover_tet_prism_and_mixed_magnetic_domains()
+{
+    struct Case {
+        FemMeshRuntimeState mesh;
+        std::vector<uint8_t> magnetic_elements;
+        std::vector<uint8_t> magnetic_nodes;
+        double volume;
+    };
+    std::vector<Case> cases;
+    cases.push_back({
+        make_mesh(
+            {0,0,0, 1,0,0, 0,1,0, 0,0,1},
+            {FULLMAG_FEM_CELL_TET4}, {0,4}, {0,1,2,3}, {7}),
+        {1}, {1,1,1,1}, 1.0 / 6.0});
+    cases.push_back({
+        make_mesh(
+            {0,0,0, 1,0,0, 0,1,0, 0,0,1, 1,0,1, 0,1,1},
+            {FULLMAG_FEM_CELL_PRISM6}, {0,6}, {0,1,2,3,4,5}, {7}),
+        {1}, {1,1,1,1,1,1}, 0.5});
+    cases.push_back({
+        conforming_prism_pyramid_tet(),
+        {1,0,0}, {1,1,1,1,1,1,0,0}, 0.5});
+
+    for (auto &item : cases) {
+        fullmag::fem::Context ctx{};
+        ctx.mesh = std::move(item.mesh);
+        ctx.mesh.magnetic_element_mask = std::move(item.magnetic_elements);
+        ctx.mesh.magnetic_node_mask = std::move(item.magnetic_nodes);
+        initialize_uniform_material(ctx);
+        initialize_mfem_and_check_magnetic_volume(ctx, item.volume);
+        const auto average = fullmag::fem::average_magnetization_components(ctx);
+        check(close_volume(average[0], 1.0) && close_volume(average[1], 0.0) &&
+                  close_volume(average[2], 0.0),
+              "uniform Ms average magnetization must use MFEM magnetic mass weights");
+        fullmag::fem::context_destroy_mfem(ctx);
+    }
+}
+
+void mixed_core_measure_over_arity_is_not_published_as_runtime_node_volume()
+{
+    fullmag::fem::Context ctx{};
+    ctx.mesh = conforming_prism_pyramid_tet();
+    ctx.mesh.magnetic_element_mask = {1,0,0};
+    fullmag::fem::compute_node_volumes(ctx);
+    check(ctx.mesh.node_volumes.empty(),
+          "mixed topology must wait for generic MFEM mass row sums instead of measure over arity");
+}
+
+void mixed_nodal_ms_average_uses_mfem_mass_weights()
+{
+    fullmag::fem::Context ctx{};
+    ctx.mesh = conforming_prism_pyramid_tet();
+    ctx.mesh.magnetic_element_mask = {1,0,0};
+    ctx.mesh.magnetic_node_mask = {1,1,1,1,1,1,0,0};
+    initialize_uniform_material(ctx);
+    ctx.material_fields.Ms_field = {1,1,1,2,2,2,0,0};
+    for (uint32_t node = 0; node < ctx.mesh.n_nodes; ++node) {
+        const size_t base = 3u * static_cast<size_t>(node);
+        ctx.state.m_xyz[base + 0u] = node < 3u ? 1.0 : 0.0;
+        ctx.state.m_xyz[base + 1u] = node >= 3u && node < 6u ? 1.0 : 0.0;
+    }
+    initialize_mfem_and_check_magnetic_volume(ctx, 0.5);
+    const auto average = fullmag::fem::average_magnetization_components(ctx);
+    check(close_volume(average[0], 1.0 / 3.0) &&
+              close_volume(average[1], 2.0 / 3.0) && close_volume(average[2], 0.0),
+          "nodal Ms average magnetization must use Ms times MFEM magnetic mass weights");
+    fullmag::fem::context_destroy_mfem(ctx);
+}
+
+void mixed_element_dg0_material_rejects_without_tetrahedral_realization()
+{
+    for (bool use_ms : {false, true}) {
+        fullmag::fem::Context ctx{};
+        ctx.mesh = conforming_prism_pyramid_tet();
+        ctx.mesh.magnetic_element_mask = {1,0,0};
+        initialize_uniform_material(ctx);
+        if (use_ms) {
+            ctx.material_fields.Ms_element_field = {8.0e5, 0.0, 0.0};
+        } else {
+            ctx.material_fields.A_element_field = {13.0e-12, 0.0, 0.0};
+        }
+        std::string error;
+        check(!fullmag::fem::initialize_material_runtime(ctx, error),
+              "mixed element-DG0 material must fail before tetrahedral realization");
+        check(error.find("element-DG0") != std::string::npos &&
+                  error.find("non-tetrahedral") != std::string::npos &&
+                  error.find(use_ms ? "Ms_element_field" : "A_element_field") !=
+                      std::string::npos,
+              "mixed DG0 rejection must name coefficient location and topology restriction");
+        check(!ctx.material_fields.runtime.has_value(),
+              "rejected mixed DG0 material must not publish a truncated tetra runtime");
+    }
 }
 
 int common_dof_count(mfem::FiniteElementSpace &fes, int first, int second)
@@ -612,6 +762,10 @@ int main()
     malformed_face_ownership_and_marker_inputs_fail_closed();
     repeated_incomplete_facets_fail_before_runtime_publication();
     repeated_post_device_fes_failure_rolls_back_runtime_state();
+    mfem_mass_weights_cover_tet_prism_and_mixed_magnetic_domains();
+    mixed_core_measure_over_arity_is_not_published_as_runtime_node_volume();
+    mixed_nodal_ms_average_uses_mfem_mass_weights();
+    mixed_element_dg0_material_rejects_without_tetrahedral_realization();
     return 0;
 }
 
