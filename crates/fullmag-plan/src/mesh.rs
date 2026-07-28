@@ -1249,6 +1249,142 @@ fn validate_domain_object_region_identity(
     Ok(())
 }
 
+fn cell_family_name(cell_type: FemCellTypeIR) -> &'static str {
+    match cell_type {
+        FemCellTypeIR::Tet4 => "tet4",
+        FemCellTypeIR::Prism6 => "prism6",
+        FemCellTypeIR::Pyramid5 => "pyramid5",
+        FemCellTypeIR::Hex8 => "hex8",
+    }
+}
+
+fn facet_family_name(facet_type: fullmag_ir::FemFacetTypeIR) -> &'static str {
+    match facet_type {
+        fullmag_ir::FemFacetTypeIR::Tri3 => "tri3",
+        fullmag_ir::FemFacetTypeIR::Quad4 => "quad4",
+    }
+}
+
+fn mixed_topology_families(mesh: &MeshIR) -> Option<(Vec<&'static str>, Vec<&'static str>)> {
+    let cell_families = mesh
+        .cells
+        .types
+        .iter()
+        .copied()
+        .map(cell_family_name)
+        .collect::<BTreeSet<_>>();
+    let facet_families = mesh
+        .facets
+        .types
+        .iter()
+        .copied()
+        .map(facet_family_name)
+        .collect::<BTreeSet<_>>();
+    let is_tetrahedral = cell_families.iter().all(|family| *family == "tet4")
+        && facet_families.iter().all(|family| *family == "tri3");
+    (!is_tetrahedral).then(|| {
+        (
+            cell_families.into_iter().collect(),
+            facet_families.into_iter().collect(),
+        )
+    })
+}
+
+fn requested_runtime_device(problem: &ProblemIR) -> &str {
+    problem
+        .problem_meta
+        .runtime_metadata
+        .get("runtime_selection")
+        .and_then(|value| value.get("device"))
+        .and_then(Value::as_str)
+        .unwrap_or("auto")
+}
+
+fn mixed_p1_operator_capability(device: &str) -> &'static str {
+    match device {
+        "cpu" => "fem.cpu.exchange_demag.mixed_p1",
+        "cuda" | "gpu" => "fem.gpu.exchange_demag.mixed_p1",
+        _ => "fem.cpu.exchange_demag.mixed_p1,fem.gpu.exchange_demag.mixed_p1",
+    }
+}
+
+pub(crate) fn reject_unsupported_mixed_topology(
+    problem: &ProblemIR,
+    mesh: &MeshIR,
+    certificate: Option<&fullmag_ir::MixedLayerTopologyCertificateV1IR>,
+) -> Result<(), String> {
+    let Some((cell_families, facet_families)) = mixed_topology_families(mesh) else {
+        return Ok(());
+    };
+    let topology = format!(
+        "cells=[{}],facets=[{}]",
+        cell_families.join(","),
+        facet_families.join(",")
+    );
+    let qualified_mixed_p1 = cell_families == ["prism6", "pyramid5", "tet4"]
+        && facet_families
+            .iter()
+            .all(|family| matches!(*family, "tri3" | "quad4"))
+        && facet_families.contains(&"quad4");
+    if !qualified_mixed_p1 {
+        return Err(format!(
+            "fem_typed_topology_unsupported_before_backend: actual_topology={topology}; \
+             supported_topology=tet4/tri3; fallback=none"
+        ));
+    }
+    let Some(certificate) = certificate else {
+        return Err(format!(
+            "fem_mixed_p1_certificate_required: actual_topology={topology}; \
+             required_capabilities=[mesh.topology.mixed_p1,mesh.swept.prism,\
+             mesh.transition.pyramid_tet,mesh.exact_layer_count]; fallback=none; \
+             select topology='free_tetrahedral' explicitly to use the qualified tetrahedral lane"
+        ));
+    };
+
+    let device = requested_runtime_device(problem);
+    let missing_operator = mixed_p1_operator_capability(device);
+    Err(format!(
+        "fem_mixed_p1_capability_rejected: actual_topology={topology}; \
+         accepted_certificate_fingerprint={}; requested_device={device}; requested_precision={:?}; \
+         requested_physics={:?}; requested_study={:?}; missing_capabilities=[{missing_operator}]; \
+         implementation_state=source_visible; production_executable=false; validated=false; \
+         fallback=none; select topology='free_tetrahedral' explicitly to use the qualified tetrahedral lane",
+        certificate.topology_fingerprint,
+        problem.backend_policy.execution_precision,
+        problem.energy_terms,
+        problem.study,
+    ))
+}
+
+pub(crate) fn reject_auto_backend_mixed_fem_topology(problem: &ProblemIR) -> Result<(), String> {
+    let Some(assets) = problem.geometry_assets.as_ref() else {
+        return Ok(());
+    };
+
+    if let Some(asset) = assets.fem_domain_mesh_asset.as_ref() {
+        let mesh = load_fem_domain_mesh_asset(asset)?;
+        reject_unsupported_mixed_topology(
+            problem,
+            &mesh,
+            asset
+                .build_report
+                .as_ref()
+                .and_then(|report| report.mixed_layer_topology_certificate.as_ref()),
+        )?;
+    }
+
+    for asset in &assets.fem_mesh_assets {
+        let mesh = match (&asset.mesh, &asset.mesh_source) {
+            (Some(mesh), _) => mesh.clone(),
+            (None, Some(source)) => load_mesh_from_source(source)?,
+            (None, None) => continue,
+        };
+        reject_unsupported_mixed_topology(problem, &mesh, None)?;
+    }
+
+    Ok(())
+}
+
 pub(crate) fn resolve_fem_domain_mesh_asset(
     problem: &ProblemIR,
     solver_supports_conformal: bool,
@@ -1262,6 +1398,14 @@ pub(crate) fn resolve_fem_domain_mesh_asset(
     };
     let mesh = load_fem_domain_mesh_asset(asset)?;
     validate_domain_object_region_identity(&mesh, problem, asset)?;
+    reject_unsupported_mixed_topology(
+        problem,
+        &mesh,
+        asset
+            .build_report
+            .as_ref()
+            .and_then(|report| report.mixed_layer_topology_certificate.as_ref()),
+    )?;
     let region_entries = shared_domain_region_entries_for_problem(&mesh, problem, asset);
     let analysis = analyze_shared_domain_mesh_with_entries(&mesh, region_entries)?;
     validate_packing_constraints(&analysis, &mesh.mesh_name, solver_supports_conformal)?;
@@ -1271,7 +1415,7 @@ pub(crate) fn resolve_fem_domain_mesh_asset(
         .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
     {
         return Err(format!(
-            "shared-domain FEM mesh '{}' cannot pack/reorder mixed-certified mesh '{}' without canonical certificate recomputation",
+            "shared-domain FEM mesh '{}' cannot pack/reorder certified topology '{}' without canonical certificate preservation",
             mesh.mesh_name, certificate.topology_fingerprint
         ));
     }

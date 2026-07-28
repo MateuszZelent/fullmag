@@ -393,6 +393,17 @@ mod mesh_asset_validation_tests {
         })
     }
 
+    fn mixed_topology_provenance_value(fingerprint: &str) -> Value {
+        serde_json::json!({
+            "requested_topology": "mixed_p1",
+            "resolved_topology": "mixed_p1",
+            "accepted_certificate_fingerprint": fingerprint,
+            "requested_device": "auto",
+            "precision": "double",
+            "capability_status": "unsupported"
+        })
+    }
+
     #[test]
     fn frozen_python_mixed_golden_pins_every_evidence_family() {
         let golden = frozen_python_mixed_golden();
@@ -733,6 +744,147 @@ mod mesh_asset_validation_tests {
         assert!(
             asset.validate().is_err(),
             "internally consistent false cell counts must be recomputed"
+        );
+    }
+
+    #[test]
+    fn public_mixed_certificate_validator_rejects_false_evidence_with_current_fingerprint() {
+        let asset: FemDomainMeshAssetIR =
+            serde_json::from_value(mixed_certificate_asset_value()).unwrap();
+        let mesh = asset.mesh.as_ref().expect("fixture carries an inline mesh");
+        let mut certificate = asset
+            .build_report
+            .as_ref()
+            .and_then(|report| report.mixed_layer_topology_certificate.clone())
+            .expect("fixture carries an accepted certificate");
+        assert_eq!(
+            certificate.topology_fingerprint,
+            mesh.topology_fingerprint_v6(),
+            "fixture fingerprint must already bind to the tested mesh"
+        );
+        certificate.magnetic_volume_m3 = 7.2;
+        certificate.expected_magnetic_volume_m3 = 7.2;
+        certificate.air_volume_m3 = 56.8;
+
+        let errors = validate_mixed_layer_topology_certificate_against_mesh(&certificate, mesh)
+            .expect_err("self-consistent false evidence must be recomputed from the mesh");
+
+        assert!(
+            errors.join("; ").contains("recomputed evidence is stale"),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn mixed_topology_provenance_requires_a_mixed_certificate() {
+        let mut payload = mixed_certificate_asset_value();
+        let certificate_fingerprint = payload["build_report"]["mixed_layer_topology_certificate"]
+            ["topology_fingerprint"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        payload["build_report"]["mixed_topology_provenance"] =
+            mixed_topology_provenance_value(&certificate_fingerprint);
+        payload["build_report"]
+            .as_object_mut()
+            .unwrap()
+            .remove("mixed_layer_topology_certificate");
+        let asset: FemDomainMeshAssetIR = serde_json::from_value(payload).unwrap();
+
+        let errors = asset
+            .validate()
+            .expect_err("provenance without a certificate must reject");
+
+        assert!(
+            errors
+                .join("; ")
+                .contains("mixed topology provenance requires a mixed layer topology certificate"),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn mixed_topology_provenance_rejects_stale_accepted_fingerprint() {
+        let mut payload = mixed_certificate_asset_value();
+        payload["build_report"]["mixed_topology_provenance"] =
+            mixed_topology_provenance_value(&format!("sha256:{}", "0".repeat(64)));
+        let asset: FemDomainMeshAssetIR = serde_json::from_value(payload).unwrap();
+
+        let errors = asset
+            .validate()
+            .expect_err("provenance fingerprint must bind to certificate and mesh");
+
+        assert!(
+            errors
+                .join("; ")
+                .contains("mixed topology provenance accepted certificate fingerprint is stale"),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn mixed_topology_provenance_rejects_capability_promotion_without_operator_proof() {
+        for status in ["source_visible", "production_executable", "validated"] {
+            let mut payload = mixed_certificate_asset_value();
+            let fingerprint = payload["build_report"]["mixed_layer_topology_certificate"]
+                ["topology_fingerprint"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let mut provenance = mixed_topology_provenance_value(&fingerprint);
+            provenance["capability_status"] = serde_json::json!(status);
+            payload["build_report"]["mixed_topology_provenance"] = provenance;
+            let asset: FemDomainMeshAssetIR = serde_json::from_value(payload).unwrap();
+
+            let errors = asset
+                .validate()
+                .expect_err("unproved mixed-P1 capability promotion must reject");
+
+            assert!(
+                errors.join("; ").contains("capability_status must be unsupported"),
+                "status={status}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn tetrahedral_mesh_rejects_mixed_topology_provenance() {
+        let mesh = MeshIR::from_legacy_tet4(
+            "tetrahedral".to_string(),
+            vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            vec![[0, 1, 2, 3]],
+            vec![1],
+            vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
+            vec![1, 1, 1, 1],
+            Vec::new(),
+            Vec::new(),
+            HashMap::new(),
+        );
+        validate_mesh_for_execution(&mesh).expect("tetrahedral control mesh must be valid");
+        let fingerprint = mesh.topology_fingerprint_v6();
+        let asset: FemDomainMeshAssetIR = serde_json::from_value(serde_json::json!({
+            "mesh": mesh,
+            "build_report": {
+                "build_mode": "test",
+                "mixed_topology_provenance": mixed_topology_provenance_value(&fingerprint)
+            }
+        }))
+        .unwrap();
+
+        let errors = asset
+            .validate()
+            .expect_err("tetrahedral mesh must not carry mixed topology provenance");
+
+        assert!(
+            errors
+                .join("; ")
+                .contains("mixed topology provenance requires an actual mixed topology mesh"),
+            "{errors:?}"
         );
     }
 
@@ -2260,7 +2412,7 @@ fn float_map_close(claimed: &BTreeMap<String, f64>, actual: &BTreeMap<String, f6
         })
 }
 
-fn validate_mixed_certificate_against_mesh(
+fn validate_mixed_certificate_evidence_against_mesh(
     certificate: &MixedLayerTopologyCertificateV1IR,
     mesh: &MeshIR,
 ) -> Result<(), Vec<String>> {
@@ -2418,6 +2570,43 @@ fn validate_mixed_certificate_against_mesh(
     }
 }
 
+/// Validate an accepted mixed-layer topology certificate against its exact mesh.
+///
+/// This is the canonical boundary for consumers that receive the certificate
+/// separately from `FemDomainMeshAssetIR`: it validates the certificate schema
+/// and status, binds its fingerprint to `mesh`, and recomputes mesh-derived
+/// evidence rather than trusting internally consistent certificate claims.
+pub fn validate_mixed_layer_topology_certificate_against_mesh(
+    certificate: &MixedLayerTopologyCertificateV1IR,
+    mesh: &MeshIR,
+) -> Result<(), Vec<String>> {
+    let mut errors = certificate.validate().err().unwrap_or_default();
+    if certificate.topology_fingerprint != mesh.topology_fingerprint_v6() {
+        errors.push("mixed layer topology certificate fingerprint is stale".to_string());
+    } else if let Err(evidence_errors) =
+        validate_mixed_certificate_evidence_against_mesh(certificate, mesh)
+    {
+        errors.extend(evidence_errors);
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+fn mesh_has_mixed_topology(mesh: &MeshIR) -> bool {
+    mesh.cells
+        .types
+        .iter()
+        .any(|cell_type| *cell_type != crate::FemCellTypeIR::Tet4)
+        || mesh
+            .facets
+            .types
+            .iter()
+            .any(|facet_type| *facet_type != crate::FemFacetTypeIR::Tri3)
+}
+
 /// Build report for a shared-domain FEM mesh, propagated from the Python
 /// meshing pipeline so the planner / runner can inspect how the mesh was built.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -2466,6 +2655,8 @@ pub struct FemSharedDomainBuildReportIR {
     pub realized_regions_count: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mixed_layer_topology_certificate: Option<MixedLayerTopologyCertificateV1IR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mixed_topology_provenance: Option<crate::FemMixedTopologyProvenanceIR>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -2566,21 +2757,82 @@ impl FemDomainMeshAssetIR {
             .as_ref()
             .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
         {
-            if let Err(certificate_errors) = certificate.validate() {
-                errors.extend(
-                    certificate_errors
-                        .into_iter()
-                        .map(|error| format!("fem_domain_mesh_asset.build_report.{error}")),
-                );
-            }
             match &self.mesh {
-                Some(mesh) if certificate.topology_fingerprint == mesh.topology_fingerprint_v6() => {
-                    if let Err(evidence_errors) = validate_mixed_certificate_against_mesh(certificate, mesh) {
-                        errors.extend(evidence_errors.into_iter().map(|error| format!("fem_domain_mesh_asset.build_report.{error}")));
+                Some(mesh) => {
+                    if let Err(certificate_errors) =
+                        validate_mixed_layer_topology_certificate_against_mesh(certificate, mesh)
+                    {
+                        errors.extend(certificate_errors.into_iter().map(|error| {
+                            format!("fem_domain_mesh_asset.build_report.{error}")
+                        }));
                     }
                 }
-                Some(_) => errors.push("fem_domain_mesh_asset mixed layer topology certificate fingerprint is stale".to_string()),
                 None => errors.push("fem_domain_mesh_asset mixed layer topology certificate requires an inline mesh for fingerprint binding".to_string()),
+            }
+        }
+        if let Some(provenance) = self
+            .build_report
+            .as_ref()
+            .and_then(|report| report.mixed_topology_provenance.as_ref())
+        {
+            let certificate = self
+                .build_report
+                .as_ref()
+                .and_then(|report| report.mixed_layer_topology_certificate.as_ref());
+            let mut accepted_fingerprint_is_stale = false;
+            match certificate {
+                Some(certificate)
+                    if provenance.accepted_certificate_fingerprint
+                        != certificate.topology_fingerprint =>
+                {
+                    accepted_fingerprint_is_stale = true;
+                }
+                Some(_) => {}
+                None => errors.push(
+                    "fem_domain_mesh_asset mixed topology provenance requires a mixed layer topology certificate"
+                        .to_string(),
+                ),
+            }
+            match &self.mesh {
+                Some(mesh) => {
+                    if !mesh_has_mixed_topology(mesh) {
+                        errors.push(
+                            "fem_domain_mesh_asset mixed topology provenance requires an actual mixed topology mesh"
+                                .to_string(),
+                        );
+                    }
+                    if provenance.accepted_certificate_fingerprint
+                        != mesh.topology_fingerprint_v6()
+                    {
+                        accepted_fingerprint_is_stale = true;
+                    }
+                }
+                None => errors.push(
+                    "fem_domain_mesh_asset mixed topology provenance requires an inline mixed topology mesh"
+                        .to_string(),
+                ),
+            }
+            if accepted_fingerprint_is_stale {
+                errors.push(
+                    "fem_domain_mesh_asset mixed topology provenance accepted certificate fingerprint is stale"
+                        .to_string(),
+                );
+            }
+            if provenance.requested_topology != crate::FemMeshTopologyFamilyIR::MixedP1
+                || provenance.resolved_topology != crate::FemMeshTopologyFamilyIR::MixedP1
+            {
+                errors.push(
+                    "fem_domain_mesh_asset mixed topology provenance requested and resolved topology must be mixed_p1"
+                        .to_string(),
+                );
+            }
+            if provenance.capability_status
+                != crate::FemMixedTopologyCapabilityStatusIR::Unsupported
+            {
+                errors.push(
+                    "fem_domain_mesh_asset mixed topology provenance capability_status must be unsupported until a mixed-P1 physics operator is production executable"
+                        .to_string(),
+                );
             }
         }
         let mut seen_markers = BTreeSet::new();

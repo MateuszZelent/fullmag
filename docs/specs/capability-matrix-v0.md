@@ -32,6 +32,9 @@ Every product-facing feature should be described with one of these statuses:
 | **`source_visible`** | Source code or scaffolding exists, but the lane is not publishable as an executable production path. |
 | **`semantic_only`** | Legal in Python API and `ProblemIR`, but not executable on the current public path. |
 | **`reference_executable`** | Executable on the trusted reference lane used for correctness and validation. |
+| **`development_executable`** | Executable only in an explicitly selected development mode; not production-qualified. |
+| **`partial_production_executable`** | Executable only for the explicitly documented bounded production workload. |
+| **`implemented`** | Implementation exists, but production execution and validation are separate states. |
 | **`production_executable`** | Executable on the intended production lane. |
 | **`validated`** | Executable and benchmarked with explicit regression coverage for the documented workload. |
 
@@ -39,16 +42,17 @@ Every product-facing feature should be described with one of these statuses:
 
 The canonical target is defined by
 `docs/physics/0106-fem-mixed-prism-pyramid-shared-domain.md` and ADR 0021.
-These IDs reserve one cross-layer vocabulary without claiming implementation:
+These IDs expose one cross-layer vocabulary without claiming execution or
+validation:
 
 | Capability | Current product status | implementation_state | Evidence now | First promotion scope |
 |---|---|---|---|---|
-| `mesh.topology.mixed_p1` | `unsupported` | contract_only | note 0106 and ADR 0021 | one axis-aligned P1 Box in one conforming airbox |
-| `mesh.swept.prism` | `unsupported` as native solver topology | source_visible | existing meshing compatibility still converts for the tet-only solver path | `prism6` magnetic cells with no tet conversion |
-| `mesh.transition.pyramid_tet` | `unsupported` | contract_only | frozen Gmsh feasibility fixture only | `pyramid5` air transition and `tet4` far air |
-| `mesh.exact_layer_count` | `unsupported` as a certified runtime contract | source_visible | authoring intent exists; exact certificate does not | `layers=1` gives exactly two magnetic node planes |
-| `fem.cpu.exchange_demag.mixed_p1` | `unsupported` | absent | no native mixed operator path | MFEM/hypre CPU double, exchange + uniform Zeeman + Poisson Robin/Dirichlet |
-| `fem.gpu.exchange_demag.mixed_p1` | `unsupported` | absent | no native mixed operator path | MFEM/libCEED/CUDA GPU double on the same certified mesh |
+| `mesh.topology.mixed_p1` | `semantic_only` on FEM; `unsupported` on FDM | semantic_only | typed CSR `MeshIR`, strict mixed topology validation, and accepted certificate exist; planner rejects before repacking or backend startup while native mixed operators remain unavailable | one axis-aligned P1 Box in one conforming airbox |
+| `mesh.swept.prism` | `semantic_only` on FEM; `unsupported` on FDM | semantic_only | native Python meshing preserves `prism6` and bypasses tet compatibility; no legal solver execution lane yet | `prism6` magnetic cells with no tet conversion |
+| `mesh.transition.pyramid_tet` | `semantic_only` on FEM; `unsupported` on FDM | semantic_only | conforming `pyramid5` transition and `tet4` far-air topology plus certificate evidence exist | `pyramid5` air transition and `tet4` far air |
+| `mesh.exact_layer_count` | `semantic_only` on FEM; `unsupported` on FDM | semantic_only | authoring, ProblemIR, and certificate preserve requested/realized layers and magnetic node planes | `layers=1` gives exactly two magnetic node planes |
+| `fem.cpu.exchange_demag.mixed_p1` | `unsupported` | source_visible | typed runner/native ABI and core mixed import exist, but MFEM execution remains tet-only and no mixed CPU physics operator exists | MFEM/hypre CPU double, exchange + uniform Zeeman + Poisson Robin/Dirichlet |
+| `fem.gpu.exchange_demag.mixed_p1` | `unsupported` | source_visible | typed runner/native ABI and core mixed import exist, but mixed GPU operators and device proof do not | MFEM/libCEED/CUDA GPU double on the same certified mesh |
 
 The future first-slice legality is strict or extended FEM, CPU/GPU/auto device,
 double precision, one Box, one shared-domain airbox, uniform `Ms`/`Aex`, and

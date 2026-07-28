@@ -145,6 +145,11 @@ repo-check:
 verify-fem-meshing-production:
     bash scripts/verify_fem_meshing_production.sh
 
+verify-fem-mixed-p1-capability-contract:
+    python3 scripts/validate_mixed_p1_capability_contract.py
+    python3 -m unittest scripts.test_validate_mixed_p1_capability_contract
+    cargo test -p fullmag-runner --no-default-features capabilities::tests::
+
 # MESH-GATE-002: cross-backend PBC matrix contract. Managed runtime evidence
 # is deliberately supplied by the case artifacts, not inferred by this recipe.
 verify-fdm-pbc-production:

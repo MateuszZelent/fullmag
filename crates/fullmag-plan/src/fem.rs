@@ -17,8 +17,8 @@ use crate::error::PlanError;
 use crate::mesh::{
     build_air_box_config, build_mesh_parts_from_segments, compatible_fem_material,
     initial_vectors_for_magnet, load_mesh_from_source, merge_fem_meshes, mesh_bounds,
-    resolve_fem_domain_mesh_asset, resolved_domain_mesh_mode, study_universe_planner_note,
-    MagnetPlanningEntry, AIR_OBJECT_SEGMENT_ID,
+    reject_unsupported_mixed_topology, resolve_fem_domain_mesh_asset, resolved_domain_mesh_mode,
+    study_universe_planner_note, MagnetPlanningEntry, AIR_OBJECT_SEGMENT_ID,
 };
 use crate::oersted::{resolve_fem_oersted_term, ResolvedOerstedTerm};
 use crate::spin_torque::{resolve_legacy_spin_torque, SpinTorqueExecutableLane};
@@ -2209,6 +2209,16 @@ pub(crate) fn plan_fem(
     let mesh_build_report = resolved_domain_mesh_asset
         .as_ref()
         .and_then(|asset| asset.build_report.clone());
+    reject_unsupported_mixed_topology(
+        problem,
+        &mesh,
+        mesh_build_report
+            .as_ref()
+            .and_then(|report| report.mixed_layer_topology_certificate.as_ref()),
+    )
+    .map_err(|reason| PlanError {
+        reasons: vec![reason],
+    })?;
     let n_nodes = mesh.nodes.len();
     let n_elements = mesh.cell_count();
     let mesh_name = mesh.mesh_name.clone();
@@ -3261,6 +3271,16 @@ pub(crate) fn plan_fem_eigen(
     let mesh_build_report = resolved_domain_mesh_asset
         .as_ref()
         .and_then(|asset| asset.build_report.clone());
+    reject_unsupported_mixed_topology(
+        problem,
+        &mesh,
+        mesh_build_report
+            .as_ref()
+            .and_then(|report| report.mixed_layer_topology_certificate.as_ref()),
+    )
+    .map_err(|reason| PlanError {
+        reasons: vec![reason],
+    })?;
     let mesh_name = mesh.mesh_name.clone();
     let n_nodes = mesh.nodes.len();
     let n_elements = mesh.cell_count();

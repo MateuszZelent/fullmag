@@ -9857,6 +9857,7 @@ fn fem_domain_mesh_asset_accepts_optional_build_report() {
             orphan_entities: Vec::new(),
             rejected_element_types: Vec::new(),
             mixed_layer_topology_certificate: None,
+            mixed_topology_provenance: None,
         }),
     };
     assert!(asset.validate().is_ok());
@@ -11208,13 +11209,18 @@ fn valid_mixed_certificate_asset() -> fullmag_ir::FemDomainMeshAssetIR {
             authored_regions_count: Some(1),
             realized_regions_count: Some(1),
             mixed_layer_topology_certificate: Some(certificate),
+            mixed_topology_provenance: None,
         }),
     }
 }
 
 #[test]
-fn fem_planner_rejects_repacking_a_mesh_with_a_carried_mixed_certificate() {
+fn fem_planner_rejects_certified_mixed_p1_before_backend_startup() {
     let mut ir = fem_minimal_test_ir();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cpu"}),
+    );
     let asset = valid_mixed_certificate_asset();
     asset
         .validate()
@@ -11223,6 +11229,7 @@ fn fem_planner_rejects_repacking_a_mesh_with_a_carried_mixed_certificate() {
         .mesh
         .as_ref()
         .expect("fixture must carry an inline mesh");
+    let source_fingerprint = source_mesh.topology_fingerprint_v6();
     let analysis = crate::mesh::analyze_shared_domain_mesh(source_mesh, &asset.region_markers)
         .expect("valid mixed fixture must be analyzable");
     let (packed_mesh, _, _) = crate::mesh::pack_mesh_by_analysis(source_mesh, &analysis)
@@ -11235,16 +11242,209 @@ fn fem_planner_rejects_repacking_a_mesh_with_a_carried_mixed_certificate() {
     ir.validate()
         .expect("problem with valid mixed certificate must pass IR validation");
 
-    let error = plan(&ir)
-        .expect_err("planner must not repack a certified mesh without recomputing its certificate");
-    assert!(
-        error
-            .reasons
-            .iter()
-            .any(|reason| reason.contains("cannot pack/reorder mixed-certified mesh")),
-        "{:?}",
-        error.reasons
+    let error = plan(&ir).expect_err(
+        "mixed P1 must remain capability-gated until native mixed operators are executable",
     );
+    let reason = error.reasons.join("\n");
+    assert!(
+        reason.contains("fem_mixed_p1_capability_rejected"),
+        "{reason}"
+    );
+    assert!(reason.contains("prism6"), "{reason}");
+    assert!(reason.contains("pyramid5"), "{reason}");
+    assert!(
+        reason.contains("fem.cpu.exchange_demag.mixed_p1"),
+        "{reason}"
+    );
+    assert!(reason.contains("fallback=none"), "{reason}");
+    assert!(reason.contains("free_tetrahedral"), "{reason}");
+    assert_eq!(
+        source_fingerprint,
+        ir.geometry_assets
+            .as_ref()
+            .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+            .and_then(|asset| asset.mesh.as_ref())
+            .as_ref()
+            .expect("source asset remains present")
+            .topology_fingerprint_v6(),
+        "capability rejection must not repack or mutate certified topology",
+    );
+}
+
+#[test]
+fn fem_planner_rejects_uncertified_mixed_topology_before_backend_startup() {
+    let mut ir = fem_minimal_test_ir();
+    let mut asset = valid_mixed_certificate_asset();
+    asset
+        .build_report
+        .as_mut()
+        .expect("fixture build report")
+        .mixed_layer_topology_certificate = None;
+    ir.geometry_assets.as_mut().unwrap().fem_domain_mesh_asset = Some(asset);
+    ir.validate()
+        .expect("typed mixed topology without a certificate is valid IR intent");
+
+    let error = plan(&ir).expect_err("uncertified mixed topology must fail closed in planning");
+    let reason = error.reasons.join("\n");
+    assert!(
+        reason.contains("fem_mixed_p1_certificate_required"),
+        "{reason}"
+    );
+    assert!(reason.contains("prism6"), "{reason}");
+    assert!(reason.contains("pyramid5"), "{reason}");
+    assert!(reason.contains("fallback=none"), "{reason}");
+}
+
+#[test]
+fn fem_planner_rejects_uncertified_mixed_per_object_asset_before_backend_startup() {
+    let mut ir = fem_minimal_test_ir();
+    let mesh = valid_mixed_certificate_asset()
+        .mesh
+        .expect("fixture carries inline mixed mesh");
+    let assets = ir.geometry_assets.as_mut().expect("geometry assets");
+    assets.fem_domain_mesh_asset = None;
+    assets.fem_mesh_assets = vec![fullmag_ir::FemMeshAssetIR {
+        geometry_name: "strip".to_string(),
+        mesh_source: None,
+        mesh: Some(mesh),
+    }];
+    ir.validate()
+        .expect("typed per-object mixed topology is valid IR intent");
+
+    let reason = plan(&ir)
+        .expect_err("per-object mixed topology must not bypass the shared-domain guard")
+        .reasons
+        .join("\n");
+    assert!(
+        reason.contains("fem_mixed_p1_certificate_required"),
+        "{reason}"
+    );
+    assert!(reason.contains("prism6"), "{reason}");
+    assert!(reason.contains("pyramid5"), "{reason}");
+}
+
+#[test]
+fn fem_planner_reports_exact_missing_mixed_p1_operator_for_requested_device() {
+    for (device, expected_capability) in [
+        ("cpu", "fem.cpu.exchange_demag.mixed_p1"),
+        ("gpu", "fem.gpu.exchange_demag.mixed_p1"),
+        (
+            "auto",
+            "fem.cpu.exchange_demag.mixed_p1,fem.gpu.exchange_demag.mixed_p1",
+        ),
+    ] {
+        let mut ir = fem_minimal_test_ir();
+        ir.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({"device": device}),
+        );
+        ir.geometry_assets
+            .as_mut()
+            .expect("geometry assets")
+            .fem_domain_mesh_asset = Some(valid_mixed_certificate_asset());
+
+        let reason = plan(&ir)
+            .expect_err("mixed P1 operators are not executable yet")
+            .reasons
+            .join("\n");
+        assert!(
+            reason.contains(expected_capability),
+            "device={device}: {reason}"
+        );
+        assert!(
+            reason.contains(&format!("requested_device={device}")),
+            "device={device}: {reason}"
+        );
+        assert!(reason.contains("production_executable=false"), "{reason}");
+        assert!(reason.contains("validated=false"), "{reason}");
+    }
+}
+
+#[test]
+fn auto_backend_rejects_mixed_fem_topology_for_all_modes_and_devices() {
+    let fdm_hint = ProblemIR::bootstrap_example()
+        .backend_policy
+        .discretization_hints
+        .and_then(|hints| hints.fdm)
+        .expect("bootstrap fixture carries an FDM hint");
+
+    for mode in [
+        fullmag_ir::ExecutionMode::Strict,
+        fullmag_ir::ExecutionMode::Extended,
+    ] {
+        for (device, expected_capability) in [
+            ("cpu", "fem.cpu.exchange_demag.mixed_p1"),
+            ("gpu", "fem.gpu.exchange_demag.mixed_p1"),
+            (
+                "auto",
+                "fem.cpu.exchange_demag.mixed_p1,fem.gpu.exchange_demag.mixed_p1",
+            ),
+        ] {
+            let mut ir = fem_minimal_test_ir();
+            ir.backend_policy.requested_backend = BackendTarget::Auto;
+            ir.backend_policy
+                .discretization_hints
+                .as_mut()
+                .expect("FEM fixture carries discretization hints")
+                .fdm = Some(fdm_hint.clone());
+            ir.validation_profile.execution_mode = mode;
+            ir.problem_meta.runtime_metadata.insert(
+                "runtime_selection".to_string(),
+                serde_json::json!({"device": device}),
+            );
+            ir.geometry_assets
+                .as_mut()
+                .expect("geometry assets")
+                .fem_domain_mesh_asset = Some(valid_mixed_certificate_asset());
+
+            let reason = plan(&ir)
+                .expect_err("backend=auto must not route mixed FEM topology into FDM")
+                .reasons
+                .join("\n");
+            assert!(
+                reason.contains("fem_mixed_p1_capability_rejected"),
+                "mode={mode:?}, device={device}: {reason}"
+            );
+            assert!(
+                reason.contains(expected_capability),
+                "mode={mode:?}, device={device}: {reason}"
+            );
+            assert!(
+                reason.contains(&format!("requested_device={device}")),
+                "mode={mode:?}, device={device}: {reason}"
+            );
+            assert!(reason.contains("fallback=none"), "{reason}");
+        }
+    }
+}
+
+#[test]
+fn fem_planner_does_not_mislabel_hex8_as_qualified_mixed_p1() {
+    let mut mesh = fem_minimal_test_ir()
+        .geometry_assets
+        .and_then(|assets| assets.fem_domain_mesh_asset)
+        .and_then(|asset| asset.mesh)
+        .expect("baseline FEM mesh");
+    mesh.cells.types = vec![fullmag_ir::FemCellTypeIR::Hex8];
+    mesh.facets.types = vec![fullmag_ir::FemFacetTypeIR::Quad4];
+
+    let reason =
+        crate::mesh::reject_unsupported_mixed_topology(&fem_minimal_test_ir(), &mesh, None)
+            .expect_err("hex8 must remain fail-closed without mixed-P1 diagnostics");
+    assert!(reason.contains("fem_typed_topology_unsupported_before_backend"));
+    assert!(!reason.contains("mesh.transition.pyramid_tet"));
+}
+
+#[test]
+fn legacy_tetrahedral_plan_remains_compatible_without_mixed_topology_provenance() {
+    let plan = plan(&fem_minimal_test_ir()).expect("tetrahedral FEM baseline must plan");
+    let encoded = serde_json::to_value(&plan).expect("plan serializes");
+    let decoded: ExecutionPlanIR =
+        serde_json::from_value(encoded).expect("legacy-compatible plan deserializes");
+    let BackendPlanIR::Fem(fem) = decoded.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    assert!(fem.mesh_build_report.is_none());
 }
 
 #[test]

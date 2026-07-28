@@ -891,6 +891,39 @@ impl ResolvedFemDemagIR {
     }
 }
 
+/// Canonical FEM mesh-topology family preserved in plan provenance.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FemMeshTopologyFamilyIR {
+    MixedP1,
+}
+
+/// Capability status of a requested mixed-P1 FEM execution lane.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FemMixedTopologyCapabilityStatusIR {
+    Unsupported,
+    SourceVisible,
+    SemanticOnly,
+    ReferenceExecutable,
+    DevelopmentExecutable,
+    PartialProductionExecutable,
+    Implemented,
+    ProductionExecutable,
+    Validated,
+}
+
+/// Requested and resolved execution identity bound to an accepted mixed-mesh certificate.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FemMixedTopologyProvenanceIR {
+    pub requested_topology: FemMeshTopologyFamilyIR,
+    pub resolved_topology: FemMeshTopologyFamilyIR,
+    pub accepted_certificate_fingerprint: String,
+    pub requested_device: crate::ExecutionDevice,
+    pub precision: ExecutionPrecision,
+    pub capability_status: FemMixedTopologyCapabilityStatusIR,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FemPlanIR {
     pub mesh_name: String,
@@ -1485,9 +1518,40 @@ pub struct ProvenancePlanIR {
 #[cfg(test)]
 mod tests {
     use super::{
-        FdmGridCertificateIR, FdmRegionLegendEntryIR, RequestedFemDemagIR, ResolvedFemDemagIR,
+        FdmGridCertificateIR, FdmRegionLegendEntryIR, FemMeshTopologyFamilyIR,
+        FemMixedTopologyCapabilityStatusIR, FemMixedTopologyProvenanceIR, RequestedFemDemagIR,
+        ResolvedFemDemagIR,
     };
-    use crate::{validate_fdm_region_lut_indices, MAX_FDM_REGION_IDS};
+    use crate::{
+        validate_fdm_region_lut_indices, ExecutionDevice, ExecutionPrecision, MAX_FDM_REGION_IDS,
+    };
+
+    #[test]
+    fn fem_mixed_topology_provenance_round_trips_typed_execution_contract() {
+        let provenance = FemMixedTopologyProvenanceIR {
+            requested_topology: FemMeshTopologyFamilyIR::MixedP1,
+            resolved_topology: FemMeshTopologyFamilyIR::MixedP1,
+            accepted_certificate_fingerprint: format!("sha256:{}", "a".repeat(64)),
+            requested_device: ExecutionDevice::Auto,
+            precision: ExecutionPrecision::Double,
+            capability_status: FemMixedTopologyCapabilityStatusIR::Unsupported,
+        };
+
+        let encoded = serde_json::to_value(&provenance).expect("provenance serializes");
+        assert_eq!(encoded["requested_topology"], "mixed_p1");
+        assert_eq!(encoded["resolved_topology"], "mixed_p1");
+        assert_eq!(encoded["requested_device"], "auto");
+        assert_eq!(encoded["precision"], "double");
+        assert_eq!(encoded["capability_status"], "unsupported");
+        assert_eq!(
+            encoded["accepted_certificate_fingerprint"],
+            format!("sha256:{}", "a".repeat(64))
+        );
+
+        let decoded: FemMixedTopologyProvenanceIR =
+            serde_json::from_value(encoded.clone()).expect("provenance deserializes");
+        assert_eq!(decoded, provenance);
+    }
 
     #[test]
     fn fredkin_koehler_demag_is_body_only_and_executable() {

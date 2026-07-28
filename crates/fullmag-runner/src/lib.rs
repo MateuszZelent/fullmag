@@ -247,8 +247,11 @@ fn resolve_timestep_execution_identity(
     })
 }
 
-// Public re-exports (unchanged API surface).
-pub use capabilities::{BackendCapabilities, RuntimeEngineId};
+// Public re-exports.
+pub use capabilities::{
+    BackendCapabilities, FeatureCapability, FeatureCapabilityStatus, RuntimeEngineId,
+    MIXED_P1_FEATURE_CAPABILITY_IDS, MIXED_P1_MESH_FEATURE_CAPABILITY_IDS,
+};
 pub use interactive::backend::BackendGeometry;
 pub use interactive::checkpoints::RunOutcome;
 pub use interactive::commands::{
@@ -1281,10 +1284,186 @@ pub(crate) fn integrator_choice_name(integrator: fullmag_ir::IntegratorChoice) -
     }
 }
 
+fn require_supported_fem_topology(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> Result<(), RunError> {
+    let (mesh, build_report, precision, study_kind) = match &plan.backend_plan {
+        BackendPlanIR::Fem(fem) => (
+            &fem.mesh,
+            fem.mesh_build_report.as_ref(),
+            fem.precision,
+            "fem",
+        ),
+        BackendPlanIR::FemEigen(fem) => (
+            &fem.mesh,
+            fem.mesh_build_report.as_ref(),
+            fem.precision,
+            "fem_eigen",
+        ),
+        BackendPlanIR::FemFrequencyResponse(fem) => (
+            &fem.mesh,
+            fem.mesh_build_report.as_ref(),
+            fem.precision,
+            "fem_frequency_response",
+        ),
+        BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => return Ok(()),
+    };
+    let mut cell_families = mesh.cells.types.clone();
+    cell_families.sort_unstable();
+    cell_families.dedup();
+    let mut facet_families = mesh.facets.types.clone();
+    facet_families.sort_unstable();
+    facet_families.dedup();
+    let tetrahedral = !cell_families.is_empty()
+        && cell_families
+        .iter()
+        .all(|family| *family == fullmag_ir::FemCellTypeIR::Tet4)
+        && facet_families
+            .iter()
+            .all(|family| *family == fullmag_ir::FemFacetTypeIR::Tri3);
+    let has_mixed_metadata = build_report.is_some_and(|report| {
+        report.mixed_layer_topology_certificate.is_some()
+            || report.mixed_topology_provenance.is_some()
+    });
+    if tetrahedral {
+        return if has_mixed_metadata {
+            Err(RunError {
+                message: "fem_mixed_p1_runtime_metadata_without_mixed_topology: mixed certificate/provenance cannot be attached to a tetrahedral plan".to_string(),
+            })
+        } else {
+            Ok(())
+        };
+    }
+
+    let qualified_family = cell_families.len() == 3
+        && cell_families.contains(&fullmag_ir::FemCellTypeIR::Tet4)
+        && cell_families.contains(&fullmag_ir::FemCellTypeIR::Prism6)
+        && cell_families.contains(&fullmag_ir::FemCellTypeIR::Pyramid5)
+        && facet_families.iter().all(|family| {
+            matches!(
+                family,
+                fullmag_ir::FemFacetTypeIR::Tri3 | fullmag_ir::FemFacetTypeIR::Quad4
+            )
+        })
+        && facet_families.contains(&fullmag_ir::FemFacetTypeIR::Quad4);
+    if !qualified_family {
+        return Err(RunError {
+            message: format!(
+                "fem_typed_topology_unsupported_before_backend: cells={cell_families:?}; facets={facet_families:?}; study={study_kind}; fallback=none"
+            ),
+        });
+    }
+
+    let report = build_report.ok_or_else(|| RunError {
+        message: "fem_mixed_p1_runtime_certificate_required: shared-domain build report is missing; fallback=none".to_string(),
+    })?;
+    let certificate = report
+        .mixed_layer_topology_certificate
+        .as_ref()
+        .ok_or_else(|| RunError {
+            message: "fem_mixed_p1_runtime_certificate_required: accepted topology certificate is missing; fallback=none".to_string(),
+        })?;
+    let fingerprint = mesh.topology_fingerprint_v6();
+    if certificate.topology_fingerprint != fingerprint {
+        return Err(RunError {
+            message: format!(
+                "fem_mixed_p1_runtime_certificate_stale: certificate={} mesh={fingerprint}; fallback=none",
+                certificate.topology_fingerprint
+            ),
+        });
+    }
+    fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(certificate, mesh).map_err(
+        |reasons| RunError {
+            message: format!(
+                "fem_mixed_p1_runtime_certificate_rejected: {}; fallback=none",
+                reasons.join("; ")
+            ),
+        },
+    )?;
+    let provenance = report
+        .mixed_topology_provenance
+        .as_ref()
+        .ok_or_else(|| RunError {
+            message: "fem_mixed_p1_runtime_provenance_required: accepted certificate identity is not bound to the plan; fallback=none".to_string(),
+        })?;
+    if provenance.accepted_certificate_fingerprint != fingerprint
+        || provenance.precision != precision
+        || precision != problem.backend_policy.execution_precision
+        || provenance.requested_topology != fullmag_ir::FemMeshTopologyFamilyIR::MixedP1
+        || provenance.resolved_topology != fullmag_ir::FemMeshTopologyFamilyIR::MixedP1
+    {
+        return Err(RunError {
+            message: "fem_mixed_p1_runtime_provenance_stale: plan provenance does not match the exact mesh fingerprint/topology/precision; fallback=none".to_string(),
+        });
+    }
+    let requested_device = problem
+        .problem_meta
+        .runtime_metadata
+        .get("runtime_selection")
+        .and_then(|value| value.get("device"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("auto");
+    let expected_device = match requested_device {
+        "cpu" => fullmag_ir::ExecutionDevice::Cpu,
+        "gpu" | "cuda" => fullmag_ir::ExecutionDevice::Gpu,
+        _ => fullmag_ir::ExecutionDevice::Auto,
+    };
+    if provenance.requested_device != expected_device {
+        return Err(RunError {
+            message: "fem_mixed_p1_runtime_provenance_stale: requested device does not match ProblemIR; fallback=none".to_string(),
+        });
+    }
+    if provenance.capability_status
+        != fullmag_ir::FemMixedTopologyCapabilityStatusIR::Unsupported
+    {
+        return Err(RunError {
+            message: "fem_mixed_p1_runtime_provenance_stale: capability status must be unsupported until a mixed-P1 physics operator is production executable; fallback=none".to_string(),
+        });
+    }
+
+    Err(RunError {
+        message: format!(
+            "fem_mixed_p1_runtime_capability_rejected: study={study_kind}; requested_device={requested_device}; precision={precision:?}; missing_capabilities=[fem.cpu.exchange_demag.mixed_p1,fem.gpu.exchange_demag.mixed_p1]; fallback=none"
+        ),
+    })
+}
+
+fn require_tetrahedral_fem_plan_mesh(
+    mesh: &fullmag_ir::MeshIR,
+    build_report: Option<&fullmag_ir::FemSharedDomainBuildReportIR>,
+    study_kind: &str,
+) -> Result<(), RunError> {
+    let tetrahedral = !mesh.cells.types.is_empty()
+        && mesh
+        .cells
+        .types
+        .iter()
+        .all(|family| *family == fullmag_ir::FemCellTypeIR::Tet4)
+        && mesh
+            .facets
+            .types
+            .iter()
+            .all(|family| *family == fullmag_ir::FemFacetTypeIR::Tri3);
+    let has_mixed_metadata = build_report.is_some_and(|report| {
+        report.mixed_layer_topology_certificate.is_some()
+            || report.mixed_topology_provenance.is_some()
+    });
+    if tetrahedral && !has_mixed_metadata {
+        return Ok(());
+    }
+    Err(RunError {
+        message: format!(
+            "fem_typed_topology_unsupported_before_backend: study={study_kind}; supported_topology=tet4/tri3; fallback=none"
+        ),
+    })
+}
+
 pub(crate) fn require_resolved_runtime_sampling(
     problem: &ProblemIR,
     plan: &fullmag_ir::ExecutionPlanIR,
 ) -> Result<(), RunError> {
+    require_supported_fem_topology(problem, plan)?;
     schedules::require_resolved_periodic_outputs(&plan.output_plan.outputs)
         .map_err(|message| RunError { message })?;
     if let Some(table) = problem.study.sampling().table_autosave.as_ref() {
@@ -1657,6 +1836,7 @@ pub fn fem_observables_for_magnetization(
     plan: &fullmag_ir::FemPlanIR,
     magnetization: &[[f64; 3]],
 ) -> Result<fullmag_engine::EffectiveFieldObservables, RunError> {
+    require_tetrahedral_fem_plan_mesh(&plan.mesh, plan.mesh_build_report.as_ref(), "fem")?;
     fem_baseline::fem_observables_for_magnetization(plan, magnetization)
 }
 
@@ -2775,6 +2955,7 @@ pub fn create_planned_interactive_runtime_with_stage_fem_mesh_asset_and_preview_
     field_every_n: u64,
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> Result<InteractiveRuntime, RunError> {
+    require_supported_fem_topology(problem, plan)?;
     let backend: Box<dyn InteractiveBackend> = match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => Box::new(InteractiveFdmPreviewRuntime::create_from_plan(
             problem, fdm,
@@ -2940,6 +3121,7 @@ pub fn resolve_planned_runtime_engine(
     problem: &ProblemIR,
     plan: &fullmag_ir::ExecutionPlanIR,
 ) -> Result<RuntimeEngineInfo, RunError> {
+    require_supported_fem_topology(problem, plan)?;
     match &plan.backend_plan {
         BackendPlanIR::Fdm(_) => {
             let engine = dispatch::resolve_fdm_engine(problem)?;
@@ -3121,6 +3303,7 @@ pub fn resolve_planned_runtime_capabilities(
     problem: &ProblemIR,
     plan: &fullmag_ir::ExecutionPlanIR,
 ) -> Result<BackendCapabilities, RunError> {
+    require_supported_fem_topology(problem, plan)?;
     match &plan.backend_plan {
         BackendPlanIR::Fdm(_) => Ok(capabilities_for_fdm_engine(
             dispatch::resolve_fdm_engine_with_trail(problem)?.engine,
@@ -3440,6 +3623,11 @@ pub fn run_reference_fem_eigen(
     plan: &fullmag_ir::FemEigenPlanIR,
     outputs: &[OutputIR],
 ) -> Result<types::FemEigenRunResult, RunError> {
+    require_tetrahedral_fem_plan_mesh(
+        &plan.mesh,
+        plan.mesh_build_report.as_ref(),
+        "fem_eigen_reference",
+    )?;
     let executed = dispatch::execute_fem_eigen(dispatch::FemEngine::CpuNative, plan, outputs)?;
     Ok(types::FemEigenRunResult {
         status: executed.result.status,
@@ -3783,6 +3971,282 @@ mod tests {
             },
         };
         problem
+    }
+
+    fn topology_guard_frequency_plan_mut(
+        plan: &mut fullmag_ir::ExecutionPlanIR,
+    ) -> &mut fullmag_ir::FemFrequencyResponsePlanIR {
+        let BackendPlanIR::FemFrequencyResponse(fem) = &mut plan.backend_plan else {
+            panic!("topology guard fixture must produce a FEM frequency-response plan");
+        };
+        fem
+    }
+
+    fn certified_mixed_topology_guard_fixture(
+    ) -> (fullmag_ir::ProblemIR, fullmag_ir::ExecutionPlanIR) {
+        let mut problem = fem_frequency_response_validation_problem(vec![1.0e9]);
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert("runtime_selection".to_string(), json!({"device": "cpu"}));
+        let mut plan = fullmag_plan::plan(&problem)
+            .expect("tetrahedral FEM frequency-response fixture should plan");
+        let golden: serde_json::Value = serde_json::from_str(include_str!(
+            "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+        ))
+        .expect("mixed topology golden fixture should be valid JSON");
+        let mesh: fullmag_ir::MeshIR = serde_json::from_value(golden["mesh"].clone())
+            .expect("mixed topology golden mesh should deserialize");
+        let certificate: fullmag_ir::MixedLayerTopologyCertificateV1IR =
+            serde_json::from_value(golden["certificate"].clone())
+                .expect("mixed topology golden certificate should deserialize");
+        let fingerprint = mesh.topology_fingerprint_v6();
+        assert_eq!(certificate.topology_fingerprint, fingerprint);
+        fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(&certificate, &mesh)
+            .expect("mixed topology golden certificate should bind to its mesh");
+
+        let fem = topology_guard_frequency_plan_mut(&mut plan);
+        let mut report: fullmag_ir::FemSharedDomainBuildReportIR = serde_json::from_value(json!({
+            "build_mode": "shared_domain",
+            "mixed_layer_topology_certificate": certificate,
+        }))
+        .expect("minimal shared-domain report should deserialize");
+        report.mixed_topology_provenance = Some(fullmag_ir::FemMixedTopologyProvenanceIR {
+            requested_topology: fullmag_ir::FemMeshTopologyFamilyIR::MixedP1,
+            resolved_topology: fullmag_ir::FemMeshTopologyFamilyIR::MixedP1,
+            accepted_certificate_fingerprint: fingerprint,
+            requested_device: fullmag_ir::ExecutionDevice::Cpu,
+            precision: fem.precision,
+            capability_status: fullmag_ir::FemMixedTopologyCapabilityStatusIR::Unsupported,
+        });
+        fem.mesh = mesh;
+        fem.mesh_build_report = Some(report);
+        (problem, plan)
+    }
+
+    fn topology_guard_error(
+        problem: &fullmag_ir::ProblemIR,
+        plan: &fullmag_ir::ExecutionPlanIR,
+    ) -> String {
+        require_supported_fem_topology(problem, plan)
+            .expect_err("fixture must be rejected before FEM backend startup")
+            .message
+    }
+
+    #[test]
+    fn fem_topology_guard_rejects_mixed_metadata_on_tetrahedral_plan() {
+        let (problem, mixed_plan) = certified_mixed_topology_guard_fixture();
+        let mixed_report = match &mixed_plan.backend_plan {
+            BackendPlanIR::FemFrequencyResponse(fem) => fem
+                .mesh_build_report
+                .clone()
+                .expect("mixed fixture should carry a build report"),
+            _ => unreachable!(),
+        };
+        let mut tetrahedral_plan = fullmag_plan::plan(&problem)
+            .expect("tetrahedral FEM frequency-response fixture should plan");
+        topology_guard_frequency_plan_mut(&mut tetrahedral_plan).mesh_build_report =
+            Some(mixed_report);
+
+        assert_eq!(
+            topology_guard_error(&problem, &tetrahedral_plan),
+            "fem_mixed_p1_runtime_metadata_without_mixed_topology: mixed certificate/provenance cannot be attached to a tetrahedral plan"
+        );
+    }
+
+    #[test]
+    fn fem_topology_guard_requires_report_certificate_and_provenance() {
+        let (problem, mut missing_report) = certified_mixed_topology_guard_fixture();
+        topology_guard_frequency_plan_mut(&mut missing_report).mesh_build_report = None;
+        assert_eq!(
+            topology_guard_error(&problem, &missing_report),
+            "fem_mixed_p1_runtime_certificate_required: shared-domain build report is missing; fallback=none"
+        );
+
+        let (_, mut missing_certificate) = certified_mixed_topology_guard_fixture();
+        topology_guard_frequency_plan_mut(&mut missing_certificate)
+            .mesh_build_report
+            .as_mut()
+            .expect("mixed fixture should carry a build report")
+            .mixed_layer_topology_certificate = None;
+        assert_eq!(
+            topology_guard_error(&problem, &missing_certificate),
+            "fem_mixed_p1_runtime_certificate_required: accepted topology certificate is missing; fallback=none"
+        );
+
+        let (_, mut missing_provenance) = certified_mixed_topology_guard_fixture();
+        topology_guard_frequency_plan_mut(&mut missing_provenance)
+            .mesh_build_report
+            .as_mut()
+            .expect("mixed fixture should carry a build report")
+            .mixed_topology_provenance = None;
+        assert_eq!(
+            topology_guard_error(&problem, &missing_provenance),
+            "fem_mixed_p1_runtime_provenance_required: accepted certificate identity is not bound to the plan; fallback=none"
+        );
+    }
+
+    #[test]
+    fn fem_topology_guard_rejects_stale_certificate_and_provenance_bindings() {
+        let (problem, mut stale_certificate) = certified_mixed_topology_guard_fixture();
+        topology_guard_frequency_plan_mut(&mut stale_certificate)
+            .mesh_build_report
+            .as_mut()
+            .expect("mixed fixture should carry a build report")
+            .mixed_layer_topology_certificate
+            .as_mut()
+            .expect("mixed fixture should carry a certificate")
+            .topology_fingerprint = "0".repeat(64);
+        let certificate_error = topology_guard_error(&problem, &stale_certificate);
+        assert!(
+            certificate_error.starts_with(
+                "fem_mixed_p1_runtime_certificate_stale: certificate=0000000000000000000000000000000000000000000000000000000000000000 mesh="
+            ),
+            "{certificate_error}"
+        );
+        assert!(certificate_error.ends_with("; fallback=none"));
+
+        let (_, mut stale_fingerprint) = certified_mixed_topology_guard_fixture();
+        topology_guard_frequency_plan_mut(&mut stale_fingerprint)
+            .mesh_build_report
+            .as_mut()
+            .expect("mixed fixture should carry a build report")
+            .mixed_topology_provenance
+            .as_mut()
+            .expect("mixed fixture should carry provenance")
+            .accepted_certificate_fingerprint = "0".repeat(64);
+        assert_eq!(
+            topology_guard_error(&problem, &stale_fingerprint),
+            "fem_mixed_p1_runtime_provenance_stale: plan provenance does not match the exact mesh fingerprint/topology/precision; fallback=none"
+        );
+
+        let (_, mut stale_precision) = certified_mixed_topology_guard_fixture();
+        topology_guard_frequency_plan_mut(&mut stale_precision)
+            .mesh_build_report
+            .as_mut()
+            .expect("mixed fixture should carry a build report")
+            .mixed_topology_provenance
+            .as_mut()
+            .expect("mixed fixture should carry provenance")
+            .precision = fullmag_ir::ExecutionPrecision::Single;
+        assert_eq!(
+            topology_guard_error(&problem, &stale_precision),
+            "fem_mixed_p1_runtime_provenance_stale: plan provenance does not match the exact mesh fingerprint/topology/precision; fallback=none"
+        );
+
+        let (_, mut stale_device) = certified_mixed_topology_guard_fixture();
+        topology_guard_frequency_plan_mut(&mut stale_device)
+            .mesh_build_report
+            .as_mut()
+            .expect("mixed fixture should carry a build report")
+            .mixed_topology_provenance
+            .as_mut()
+            .expect("mixed fixture should carry provenance")
+            .requested_device = fullmag_ir::ExecutionDevice::Gpu;
+        assert_eq!(
+            topology_guard_error(&problem, &stale_device),
+            "fem_mixed_p1_runtime_provenance_stale: requested device does not match ProblemIR; fallback=none"
+        );
+
+        for status in [
+            fullmag_ir::FemMixedTopologyCapabilityStatusIR::SourceVisible,
+            fullmag_ir::FemMixedTopologyCapabilityStatusIR::ProductionExecutable,
+            fullmag_ir::FemMixedTopologyCapabilityStatusIR::Validated,
+        ] {
+            let (_, mut promoted) = certified_mixed_topology_guard_fixture();
+            topology_guard_frequency_plan_mut(&mut promoted)
+                .mesh_build_report
+                .as_mut()
+                .expect("mixed fixture should carry a build report")
+                .mixed_topology_provenance
+                .as_mut()
+                .expect("mixed fixture should carry provenance")
+                .capability_status = status;
+            assert_eq!(
+                topology_guard_error(&problem, &promoted),
+                "fem_mixed_p1_runtime_provenance_stale: capability status must be unsupported until a mixed-P1 physics operator is production executable; fallback=none"
+            );
+        }
+    }
+
+    #[test]
+    fn fem_topology_guard_rejects_hex8_as_unsupported_typed_topology() {
+        let (problem, mut plan) = certified_mixed_topology_guard_fixture();
+        topology_guard_frequency_plan_mut(&mut plan)
+            .mesh
+            .cells
+            .types = vec![fullmag_ir::FemCellTypeIR::Hex8];
+
+        assert_eq!(
+            topology_guard_error(&problem, &plan),
+            "fem_typed_topology_unsupported_before_backend: cells=[Hex8]; facets=[Tri3, Quad4]; study=fem_frequency_response; fallback=none"
+        );
+    }
+
+    #[test]
+    fn fem_topology_guard_rejects_empty_typed_topology() {
+        let (problem, mut plan) = certified_mixed_topology_guard_fixture();
+        let fem = topology_guard_frequency_plan_mut(&mut plan);
+        fem.mesh.cells.types.clear();
+        fem.mesh.facets.types.clear();
+
+        let error = topology_guard_error(&problem, &plan);
+        assert!(
+            error.starts_with("fem_typed_topology_unsupported_before_backend:"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn fem_topology_guard_fully_bound_mixed_plan_reaches_exact_capability_rejection() {
+        let (problem, plan) = certified_mixed_topology_guard_fixture();
+
+        let expected = "fem_mixed_p1_runtime_capability_rejected: study=fem_frequency_response; requested_device=cpu; precision=Double; missing_capabilities=[fem.cpu.exchange_demag.mixed_p1,fem.gpu.exchange_demag.mixed_p1]; fallback=none";
+        assert_eq!(topology_guard_error(&problem, &plan), expected);
+        assert_eq!(
+            resolve_planned_runtime_engine(&problem, &plan)
+                .expect_err("engine resolution must reject mixed topology")
+                .message,
+            expected
+        );
+        assert_eq!(
+            resolve_planned_runtime_capabilities(&problem, &plan)
+                .expect_err("capability resolution must reject mixed topology")
+                .message,
+            expected
+        );
+        assert_eq!(
+            create_planned_interactive_runtime(&problem, &plan, None)
+                .err()
+                .expect("interactive startup must reject mixed topology")
+                .message,
+            expected
+        );
+
+        let mut stale_problem = problem.clone();
+        stale_problem.backend_policy.execution_precision =
+            fullmag_ir::ExecutionPrecision::Single;
+        assert_eq!(
+            topology_guard_error(&stale_problem, &plan),
+            "fem_mixed_p1_runtime_provenance_stale: plan provenance does not match the exact mesh fingerprint/topology/precision; fallback=none"
+        );
+    }
+
+    #[test]
+    fn fem_topology_guard_allows_tetrahedral_plan_at_capability_boundary() {
+        let problem = fem_frequency_response_validation_problem(vec![1.0e9]);
+        let mut plan = fullmag_plan::plan(&problem)
+            .expect("tetrahedral FEM frequency-response fixture should plan");
+
+        require_supported_fem_topology(&problem, &plan)
+            .expect("tetrahedral plan must remain compatible");
+        resolve_planned_runtime_capabilities(&problem, &plan)
+            .expect("tetrahedral plan must cross the capability boundary");
+
+        let fem = topology_guard_frequency_plan_mut(&mut plan);
+        fem.mesh.facets = fullmag_ir::FemFacetConnectivityIR::empty();
+        require_supported_fem_topology(&problem, &plan)
+            .expect("legacy tetrahedral plan without explicit facets must remain compatible");
     }
 
     #[cfg(not(feature = "fem-gpu"))]
