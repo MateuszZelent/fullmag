@@ -682,6 +682,8 @@ pub struct SamplingIR {
     pub outputs: Vec<OutputIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub table_autosave: Option<TableAutosaveIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_autosave: Option<StageAutosaveIR>,
 }
 
 pub const AUTO_SINC_NYQUIST_GUARD_FACTOR: f64 = 1.3;
@@ -751,6 +753,178 @@ impl TableAutosaveIR {
     pub fn set_resolved_sample_period_s(&mut self, period_s: f64) {
         self.resolved_sample_period_s = Some(period_s);
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutosaveLayoutIR {
+    Continuous,
+    Separate,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutosaveFormatIR {
+    Zarr,
+    Hdf5,
+    Txt,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct FieldAutosaveIR {
+    #[serde(default = "default_field_autosave_kind")]
+    pub kind: String,
+    pub quantity: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub every_seconds: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_period_policy: Option<SamplingPeriodPolicyIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub every_steps: Option<u64>,
+}
+
+impl FieldAutosaveIR {
+    pub fn accepted_step_cadence(&self) -> Option<u64> {
+        if self.every_seconds.is_none() && self.sample_period_policy.is_none() {
+            self.every_steps
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct StageAutosaveIR {
+    #[serde(default = "default_stage_autosave_kind")]
+    pub kind: String,
+    pub target: String,
+    pub layout: AutosaveLayoutIR,
+    pub format: AutosaveFormatIR,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table: Option<TableAutosaveIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<FieldAutosaveIR>,
+}
+
+impl StageAutosaveIR {
+    pub fn validate_for_study(&self, study: &StudyIR) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        if self.kind != "stage_autosave" {
+            errors.push("sampling.stage_autosave.kind must be 'stage_autosave'".to_string());
+        }
+        if !is_safe_autosave_target(&self.target) {
+            errors.push(
+                "sampling.stage_autosave.target must start with an alphanumeric character and contain only letters, digits, '.', '_', or '-'"
+                    .to_string(),
+            );
+        }
+        if self.table.is_none() && self.fields.is_empty() {
+            errors.push("sampling.stage_autosave requires a table or field policy".to_string());
+        }
+        if self.format == AutosaveFormatIR::Txt && !self.fields.is_empty() {
+            errors
+                .push("sampling.stage_autosave txt format supports scalar tables only".to_string());
+        }
+        let is_relaxation = matches!(study, StudyIR::Relaxation { .. });
+        if let Some(table) = &self.table {
+            validate_stage_table_autosave(table, is_relaxation, &mut errors);
+        }
+        let mut quantities = std::collections::BTreeSet::new();
+        for field in &self.fields {
+            if field.kind != "field_autosave" {
+                errors.push(
+                    "sampling.stage_autosave.fields.kind must be 'field_autosave'".to_string(),
+                );
+            }
+            if field.quantity.trim().is_empty() {
+                errors.push("sampling.stage_autosave field quantity must not be empty".to_string());
+            } else if !quantities.insert(field.quantity.as_str()) {
+                errors.push(format!(
+                    "sampling.stage_autosave contains duplicate field quantity '{}'",
+                    field.quantity
+                ));
+            }
+            match (
+                field.every_seconds,
+                field.sample_period_policy.as_ref(),
+                field.every_steps,
+            ) {
+                (Some(period), None, None) if period.is_finite() && period > 0.0 => {}
+                (None, Some(_), None) => {}
+                (None, None, Some(steps)) if steps > 0 => {}
+                _ => errors.push(format!(
+                    "sampling.stage_autosave field '{}' requires exactly one finite positive time cadence or accepted-step cadence",
+                    field.quantity
+                )),
+            }
+            if is_relaxation && field.accepted_step_cadence().is_none() {
+                errors.push(format!(
+                    "relaxation field autosave '{}' must use every_steps",
+                    field.quantity
+                ));
+            }
+            if !is_relaxation && field.accepted_step_cadence().is_some() {
+                errors.push(format!(
+                    "field autosave '{}' every_steps is only valid for relaxation studies",
+                    field.quantity
+                ));
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+fn validate_stage_table_autosave(
+    table: &TableAutosaveIR,
+    is_relaxation: bool,
+    errors: &mut Vec<String>,
+) {
+    if table.quantities.is_empty() {
+        errors.push("sampling.stage_autosave.table.quantities must not be empty".to_string());
+    }
+    let mut quantities = std::collections::BTreeSet::new();
+    for quantity in &table.quantities {
+        if quantity.trim().is_empty() {
+            errors.push(
+                "sampling.stage_autosave.table.quantities must not contain empty ids".to_string(),
+            );
+        } else if !quantities.insert(quantity.as_str()) {
+            errors.push(format!(
+                "sampling.stage_autosave.table contains duplicate quantity '{}'",
+                quantity
+            ));
+        }
+    }
+    if is_relaxation && table.accepted_step_cadence().is_none() {
+        errors.push("relaxation stage autosave table must use every_steps".to_string());
+    }
+    if !is_relaxation && table.accepted_step_cadence().is_some() {
+        errors.push(
+            "stage autosave table every_steps is only valid for relaxation studies".to_string(),
+        );
+    }
+}
+
+fn is_safe_autosave_target(target: &str) -> bool {
+    let mut chars = target.chars();
+    matches!(chars.next(), Some(first) if first.is_ascii_alphanumeric())
+        && chars.all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+        })
+}
+
+fn default_field_autosave_kind() -> String {
+    "field_autosave".to_string()
+}
+
+fn default_stage_autosave_kind() -> String {
+    "stage_autosave".to_string()
 }
 
 #[cfg(test)]
