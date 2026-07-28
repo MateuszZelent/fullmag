@@ -68,6 +68,108 @@ study.stages.add_run(stage_id="excite", until=4e-12)
 
 
 class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
+    def test_stage_autosave_roundtrips_for_relax_and_run(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("stage-autosave-roundtrip")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.add_relax(
+            stage_id="relax",
+            algorithm="projected_gradient_bb",
+            max_steps=20,
+        ).autosave(fm.StageAutosave(
+            table=fm.TableAutosave(every_steps=10, quantities=["step", "mx"]),
+            fields=[fm.FieldAutosave("m", every_steps=20)],
+        ))
+        study.stages.add_run(stage_id="run", until=2e-12).autosave(
+            fm.StageAutosave(
+                target="reversal",
+                layout="separate",
+                format="hdf5",
+                table=fm.TableAutosave(t_sampl=1e-12, quantities=["step", "t", "mx"]),
+                fields=[fm.FieldAutosave("m", every=2e-12)],
+            )
+        )
+        """
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "source.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "rewritten.py")
+
+        self.assertIn(".autosave(fm.StageAutosave(", rendered)
+        self.assertIn('target="reversal"', rendered)
+        self.assertIn('layout="separate"', rendered)
+        self.assertIn('format="hdf5"', rendered)
+        self.assertEqual(
+            [node["payload"]["autosave"] for node in loaded.study_pipeline_document()["nodes"]],
+            [node["payload"]["autosave"] for node in rewritten.study_pipeline_document()["nodes"]],
+        )
+
+    def test_txt_table_only_stage_autosave_roundtrips(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("txt-autosave-roundtrip")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        study.stages.add_run(stage_id="run", until=2e-12).autosave(
+            fm.StageAutosave(
+                target="table",
+                layout="separate",
+                format="txt",
+                table=fm.TableAutosave(t_sampl=1e-12, quantities=["step", "t", "mx"]),
+            )
+        )
+        """
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "source.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "rewritten.py")
+
+        self.assertEqual(
+            loaded.study_pipeline_document()["nodes"][0]["payload"]["autosave"],
+            rewritten.study_pipeline_document()["nodes"][0]["payload"]["autosave"],
+        )
+
+    def test_relax_stage_table_autosave_roundtrips_as_fluent_chain(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("relax-table-roundtrip")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.add_relax(
+            stage_id="relax",
+            algorithm="projected_gradient_bb",
+            max_steps=20,
+        ).tableautosave(every_steps=10, quantities=["step", "mx"])
+        study.stages.add_run(stage_id="after", until=2e-12)
+        """
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "source.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "rewritten.py")
+
+        self.assertIn(
+            ').tableautosave(every_steps=10, quantities=["step", "mx"])',
+            rendered,
+        )
+        self.assertEqual(
+            loaded.study_pipeline_document()["nodes"][0]["payload"]["table_autosave"],
+            rewritten.study_pipeline_document()["nodes"][0]["payload"]["table_autosave"],
+        )
+        self.assertNotIn(
+            "table_autosave",
+            rewritten.study_pipeline_document()["nodes"][1]["payload"],
+        )
+
     def test_planar_monitors_roundtrip_through_scene_and_canonical_python(self) -> None:
         script = """
         import fullmag as fm

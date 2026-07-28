@@ -81,6 +81,7 @@ from fullmag.model.study import (
     Hysteresis,
     RelaxStop,
     Relaxation,
+    StageAutosave,
     TableAutosave,
     TimeEvolution,
 )
@@ -591,7 +592,14 @@ def _export_study_pipeline_node(stage: LoadedStage, *, index: int) -> dict[str, 
     if stage_kind == "run":
         draft = {
             key: draft[key]
-            for key in ("kind", "entrypoint_kind", "stage_id", "until_seconds")
+            for key in (
+                "kind",
+                "entrypoint_kind",
+                "stage_id",
+                "until_seconds",
+                "output_every_seconds",
+                "autosave",
+            )
             if key in draft
         }
     return {
@@ -745,6 +753,10 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
             "energy_tolerance": _text_number(study.energy_tolerance),
             "max_steps": str(study.max_steps),
         }
+        if stage.table_autosave is not None:
+            payload["table_autosave"] = stage.table_autosave.to_ir()
+        if stage.autosave is not None:
+            payload["autosave"] = stage.autosave.to_ir()
         if study.dynamics is not None:
             payload.update(
                 {
@@ -842,7 +854,7 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
                 else ""
             ),
         }
-    return {
+    payload = {
         "kind": "run",
         "entrypoint_kind": stage.entrypoint_kind,
         "integrator": dynamics.integrator,
@@ -863,6 +875,9 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
         )
         or None,
     }
+    if stage.autosave is not None:
+        payload["autosave"] = stage.autosave.to_ir()
+    return payload
 
 
 def _render_header(script_path: Path, entrypoint_kind: str) -> list[str]:
@@ -3806,7 +3821,20 @@ def _render_stages(
                         )
                     )
             if is_study_surface:
-                lines.append(f"study.stages.add_relax({', '.join(call_parts)})")
+                relax_call = f"study.stages.add_relax({', '.join(call_parts)})"
+                if stage.table_autosave is not None:
+                    table = stage.table_autosave
+                    table_parts = [f"every_steps={table.every_steps}"]
+                    if table.quantities is not None:
+                        table_parts.append(
+                            f"quantities={_py_literal(list(table.quantities))}"
+                        )
+                    if table.table_id != "default":
+                        table_parts.append(f"table_id={_py_repr(table.table_id)}")
+                    relax_call += f".tableautosave({', '.join(table_parts)})"
+                if stage.autosave is not None:
+                    relax_call += _render_stage_autosave(stage.autosave)
+                lines.append(relax_call)
             else:
                 lines.append(f"{_surface_call(surface, 'relax')}({', '.join(call_parts)})")
             continue
@@ -3825,10 +3853,57 @@ def _render_stages(
             if stage.stage_id is not None:
                 run_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
             run_parts.append(f"until={_py_number(until_seconds)}")
-            lines.append(f"study.stages.add_run({', '.join(run_parts)})")
+            run_call = f"study.stages.add_run({', '.join(run_parts)})"
+            if stage.autosave is not None:
+                run_call += _render_stage_autosave(stage.autosave)
+            lines.append(run_call)
         else:
             lines.append(f"{_surface_call(surface, 'run')}({_py_number(until_seconds)})")
     return lines
+
+
+def _render_stage_autosave(policy: StageAutosave) -> str:
+    parts: list[str] = []
+    if policy.target != "main":
+        parts.append(f"target={_py_repr(policy.target)}")
+    if policy.layout != "continuous":
+        parts.append(f"layout={_py_repr(policy.layout)}")
+    if policy.format != "zarr":
+        parts.append(f"format={_py_repr(policy.format)}")
+    if policy.table is not None:
+        parts.append(f"table={_render_stage_table_autosave(policy.table)}")
+    if policy.fields:
+        fields = ", ".join(
+            _render_field_autosave(field_policy)
+            for field_policy in policy.fields
+        )
+        parts.append(f"fields=[{fields}]")
+    return f".autosave(fm.StageAutosave({', '.join(parts)}))"
+
+
+def _render_stage_table_autosave(table: TableAutosave) -> str:
+    parts: list[str] = []
+    if table.every_steps is not None:
+        parts.append(f"every_steps={table.every_steps}")
+    else:
+        parts.append(f"t_sampl={_py_sampling_period(table.t_sampl)}")
+    if table.quantities is not None:
+        parts.append(f"quantities={_py_literal(list(table.quantities))}")
+    if table.table_id != "default":
+        parts.append(f"table_id={_py_repr(table.table_id)}")
+    return f"fm.TableAutosave({', '.join(parts)})"
+
+
+def _render_field_autosave(field_policy: object) -> str:
+    quantity = getattr(field_policy, "quantity")
+    every_steps = getattr(field_policy, "every_steps")
+    every = getattr(field_policy, "every")
+    cadence = (
+        f"every_steps={every_steps}"
+        if every_steps is not None
+        else f"every={_py_sampling_period(every)}"
+    )
+    return f"fm.FieldAutosave({_py_repr(quantity)}, {cadence})"
 
 
 def _render_hysteresis_stage_args(study: Hysteresis) -> list[str]:
