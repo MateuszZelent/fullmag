@@ -261,6 +261,7 @@ def _topology_byte_count(mesh_data: Any) -> int:
         + mesh_data.cell_offsets.nbytes
         + mesh_data.cell_nodes.nbytes
         + mesh_data.cell_global_ordinals.nbytes
+        + mesh_data.cell_mesh_parts.nbytes
         + mesh_data.element_markers.nbytes
         + mesh_data.facet_types.nbytes
         + mesh_data.facet_roles.nbytes
@@ -307,6 +308,7 @@ def _write_topology_artifact_if_needed(
         "cell_offsets": mesh_data.cell_offsets.tolist(),
         "cell_nodes": mesh_data.cell_nodes.tolist(),
         "cell_global_ordinals": mesh_data.cell_global_ordinals.tolist(),
+        "cell_mesh_parts": mesh_data.cell_mesh_parts.tolist(),
         "element_markers": mesh_data.element_markers.tolist(),
         "facet_types": mesh_data.facet_types.tolist(),
         "facet_roles": mesh_data.facet_roles.tolist(),
@@ -317,6 +319,11 @@ def _write_topology_artifact_if_needed(
         "periodic_boundary_pairs": list(mesh_data.periodic_boundary_pairs),
         "periodic_node_pairs": list(mesh_data.periodic_node_pairs),
         "periodic_mesh_certificate": mesh_data.periodic_mesh_certificate,
+        "mixed_layer_topology_certificate": (
+            mesh_data.mixed_layer_topology_certificate.to_dict()
+            if mesh_data.mixed_layer_topology_certificate is not None
+            else None
+        ),
     }
     with os.fdopen(handle, "w", encoding="utf-8") as fp:
         json.dump(payload, fp, separators=(",", ":"))
@@ -440,6 +447,7 @@ def _mesh_result_payload(
         "cell_offsets": mesh.cell_offsets.tolist() if inline_topology else [0],
         "cell_nodes": mesh.cell_nodes.tolist() if inline_topology else [],
         "cell_global_ordinals": mesh.cell_global_ordinals.tolist() if inline_topology else [],
+        "cell_mesh_parts": mesh.cell_mesh_parts.tolist() if inline_topology else [],
         "element_markers": mesh.element_markers.tolist() if inline_topology else [],
         "facet_types": mesh.facet_types.tolist() if inline_topology else [],
         "facet_roles": mesh.facet_roles.tolist() if inline_topology else [],
@@ -450,6 +458,11 @@ def _mesh_result_payload(
         "periodic_boundary_pairs": list(mesh.periodic_boundary_pairs) if inline_topology else [],
         "periodic_node_pairs": list(mesh.periodic_node_pairs) if inline_topology else [],
         "periodic_mesh_certificate": mesh.periodic_mesh_certificate,
+        "mixed_layer_topology_certificate": (
+            mesh.mixed_layer_topology_certificate.to_dict()
+            if inline_topology and mesh.mixed_layer_topology_certificate is not None
+            else None
+        ),
         "generation_mode": generation_mode,
         "mesh_provenance": mesh_provenance,
     }

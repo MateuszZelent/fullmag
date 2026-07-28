@@ -254,6 +254,14 @@ pub enum FemFacetRoleIR {
     PeriodicSeam,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum FemCellMeshPartIR {
+    Magnetic,
+    TransitionAir,
+    FarAir,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FemConnectivityIR {
     pub types: Vec<FemCellTypeIR>,
@@ -261,6 +269,8 @@ pub struct FemConnectivityIR {
     pub nodes: Vec<u32>,
     #[serde(default)]
     pub global_ordinals: Vec<u64>,
+    #[serde(default)]
+    pub mesh_parts: Vec<FemCellMeshPartIR>,
 }
 
 impl FemConnectivityIR {
@@ -270,6 +280,7 @@ impl FemConnectivityIR {
             offsets: vec![0],
             nodes: Vec::new(),
             global_ordinals: Vec::new(),
+            mesh_parts: Vec::new(),
         }
     }
 
@@ -285,6 +296,7 @@ impl FemConnectivityIR {
                 .collect(),
             nodes,
             global_ordinals: (0..elements.len() as u64).collect(),
+            mesh_parts: Vec::new(),
         }
     }
 
@@ -729,15 +741,53 @@ pub fn fem_mesh_topology_fingerprint_v2(
     periodic_boundary_pairs: &[MeshPeriodicBoundaryPairIR],
     periodic_node_pairs: &[MeshPeriodicNodePairIR],
 ) -> String {
-    let payload = serde_json::json!({
-        "nodes": nodes,
-        "cells": cells,
-        "element_markers": element_markers,
-        "facets": facets,
-        "boundary_markers": boundary_markers,
-        "periodic_boundary_pairs": periodic_boundary_pairs,
-        "periodic_node_pairs": periodic_node_pairs,
-    });
+    #[derive(Serialize)]
+    struct CanonicalCells<'a> {
+        types: &'a [FemCellTypeIR],
+        offsets: &'a [u32],
+        nodes: &'a [u32],
+        global_ordinals: &'a [u64],
+        mesh_parts: &'a [FemCellMeshPartIR],
+    }
+    #[derive(Serialize)]
+    struct CanonicalFacets<'a> {
+        types: &'a [FemFacetTypeIR],
+        roles: &'a [FemFacetRoleIR],
+        offsets: &'a [u32],
+        nodes: &'a [u32],
+        global_ordinals: &'a [u64],
+    }
+    #[derive(Serialize)]
+    struct CanonicalTopology<'a> {
+        nodes: &'a [[f64; 3]],
+        cells: CanonicalCells<'a>,
+        element_markers: &'a [u32],
+        facets: CanonicalFacets<'a>,
+        boundary_markers: &'a [u32],
+        periodic_boundary_pairs: &'a [MeshPeriodicBoundaryPairIR],
+        periodic_node_pairs: &'a [MeshPeriodicNodePairIR],
+    }
+    let payload = CanonicalTopology {
+        nodes,
+        cells: CanonicalCells {
+            types: &cells.types,
+            offsets: &cells.offsets,
+            nodes: &cells.nodes,
+            global_ordinals: &cells.global_ordinals,
+            mesh_parts: &cells.mesh_parts,
+        },
+        element_markers,
+        facets: CanonicalFacets {
+            types: &facets.types,
+            roles: &facets.roles,
+            offsets: &facets.offsets,
+            nodes: &facets.nodes,
+            global_ordinals: &facets.global_ordinals,
+        },
+        boundary_markers,
+        periodic_boundary_pairs,
+        periodic_node_pairs,
+    };
     let encoded = serde_json::to_vec(&payload).unwrap_or_default();
     let mut hasher = Sha256::new();
     hasher.update(FEM_MESH_TOPOLOGY_FINGERPRINT_V2_DOMAIN);
@@ -2122,6 +2172,12 @@ fn validate_cell_connectivity(
     node_count: u32,
     errors: &mut Vec<String>,
 ) {
+    if !cells.mesh_parts.is_empty() && cells.mesh_parts.len() != cells.types.len() {
+        errors.push(
+            "mesh.cells.mesh_parts must be empty for legacy meshes or match mesh.cells.types length"
+                .to_string(),
+        );
+    }
     if cells.global_ordinals.len() != cells.types.len() {
         errors.push(
             "mesh.cells.global_ordinals length must match mesh.cells.types length".to_string(),
@@ -2391,22 +2447,98 @@ mod mesh_validation_tests {
     use super::*;
 
     #[test]
+    fn connectivity_round_trip_preserves_mesh_parts_and_rejects_unknown_parts() {
+        let payload = serde_json::json!({
+            "types": ["tet4"],
+            "offsets": [0, 4],
+            "nodes": [0, 1, 2, 3],
+            "global_ordinals": [0],
+            "mesh_parts": ["magnetic"]
+        });
+        let connectivity: FemConnectivityIR = serde_json::from_value(payload).unwrap();
+        assert_eq!(
+            serde_json::to_value(&connectivity).unwrap()["mesh_parts"],
+            serde_json::json!(["magnetic"])
+        );
+
+        let unknown = serde_json::json!({
+            "types": ["tet4"],
+            "offsets": [0, 4],
+            "nodes": [0, 1, 2, 3],
+            "global_ordinals": [0],
+            "mesh_parts": ["unknown_part"]
+        });
+        assert!(serde_json::from_value::<FemConnectivityIR>(unknown).is_err());
+    }
+
+    #[test]
+    fn mesh_parts_have_exact_cell_count_and_participate_in_the_fingerprint() {
+        let mut mesh = certified_airbox_mesh();
+        let mut payload = serde_json::to_value(&mesh).unwrap();
+        payload["cells"]["mesh_parts"] = serde_json::json!(["magnetic"]);
+        mesh = serde_json::from_value(payload).unwrap();
+        assert!(mesh.validate().is_err());
+
+        let mut magnetic = certified_airbox_mesh();
+        let mut magnetic_payload = serde_json::to_value(&magnetic).unwrap();
+        magnetic_payload["cells"]["mesh_parts"] = serde_json::json!(["magnetic", "far_air"]);
+        magnetic = serde_json::from_value(magnetic_payload).unwrap();
+        let mut transition = magnetic.clone();
+        let mut transition_payload = serde_json::to_value(&transition).unwrap();
+        transition_payload["cells"]["mesh_parts"] =
+            serde_json::json!(["transition_air", "far_air"]);
+        transition = serde_json::from_value(transition_payload).unwrap();
+        assert_ne!(
+            magnetic.topology_fingerprint_v6(),
+            transition.topology_fingerprint_v6()
+        );
+    }
+
+    #[test]
+    fn topology_fingerprint_matches_the_exact_python_v2_encoding() {
+        let mesh: MeshIR = serde_json::from_value(serde_json::json!({
+            "mesh_name": "python-parity",
+            "nodes": [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0]
+            ],
+            "cells": {
+                "types": ["tet4"],
+                "offsets": [0, 4],
+                "nodes": [0, 1, 2, 3],
+                "global_ordinals": [0],
+                "mesh_parts": ["magnetic"]
+            },
+            "element_markers": [1],
+            "facets": {
+                "types": [],
+                "roles": [],
+                "offsets": [0],
+                "nodes": [],
+                "global_ordinals": []
+            },
+            "boundary_markers": [],
+            "periodic_boundary_pairs": [],
+            "periodic_node_pairs": [],
+            "per_domain_quality": {}
+        }))
+        .unwrap();
+
+        assert_eq!(
+            mesh.topology_fingerprint_v6(),
+            "sha256:2071f6b9a2bf468fc82296f34744b07475315a5f0d26c5b06e52b54064f474e2"
+        );
+    }
+
+    #[test]
     fn topology_fingerprint_uses_the_exact_v2_domain() {
         let mesh = certified_airbox_mesh();
-        let payload = serde_json::json!({
-            "nodes": mesh.nodes,
-            "cells": mesh.cells,
-            "element_markers": mesh.element_markers,
-            "facets": mesh.facets,
-            "boundary_markers": mesh.boundary_markers,
-            "periodic_boundary_pairs": mesh.periodic_boundary_pairs,
-            "periodic_node_pairs": mesh.periodic_node_pairs,
-        });
-        let mut hasher = Sha256::new();
-        hasher.update(b"fullmag:fem-mesh-topology-fingerprint:v2");
-        hasher.update(serde_json::to_vec(&payload).unwrap());
-        let expected = format!("sha256:{:x}", hasher.finalize());
-        assert_eq!(mesh.topology_fingerprint_v6(), expected);
+        assert_eq!(
+            mesh.topology_fingerprint_v6(),
+            "sha256:bd80117b87596ab52cb86956c1dca2eb3fd2c07d5a912602884e3a1334586d67"
+        );
     }
 
     #[test]
@@ -2470,6 +2602,7 @@ mod mesh_validation_tests {
                 offsets: vec![0, 3],
                 nodes: vec![0, 1, 2],
                 global_ordinals: vec![73],
+                mesh_parts: Vec::new(),
             },
             element_markers: vec![1],
             facets: FemFacetConnectivityIR::empty(),

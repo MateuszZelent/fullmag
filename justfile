@@ -2052,6 +2052,9 @@ verify-fem-preview-energy-qualification:
 verify-fem-preview-json-roundtrip-contract:
     docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-api terminal_preview_json_transport_preserves_f64_bits -- --nocapture'
 
+verify-fem-mixed-wire-cli-contract:
+    docker compose --project-name fullmag --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'cd /workspace && FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-cli --features "cuda fem-gpu" python_bridge::tests::mixed_wire_ -- --nocapture'
+
 verify-fem-preparation-clock-contract:
     docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-cli simulation_preparation::tests::backward_wall_clock_adjustment_preserves_raw_time_and_monotonic_ordering -- --exact --nocapture'
 

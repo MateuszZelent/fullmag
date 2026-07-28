@@ -463,6 +463,7 @@ class SharedDomainBuildReport:
     degraded: bool = False
     authored_regions_count: int = 0
     realized_regions_count: int = 0
+    mixed_layer_topology_certificate: dict[str, object] | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Serialize to a plain-dict form suitable for JSON / IR embedding."""
@@ -518,6 +519,11 @@ class SharedDomainBuildReport:
             "degraded": self.degraded,
             "authored_regions_count": self.authored_regions_count,
             "realized_regions_count": self.realized_regions_count,
+            "mixed_layer_topology_certificate": (
+                dict(self.mixed_layer_topology_certificate)
+                if self.mixed_layer_topology_certificate is not None
+                else None
+            ),
         }
 
 

@@ -6770,6 +6770,7 @@ async fn all_fmmt_v1_topology_routes_reject_mixed_cells() {
             offsets: vec![0, 6],
             nodes: vec![0, 1, 2, 3, 4, 5],
             global_ordinals: vec![901],
+            mesh_parts: Vec::new(),
         };
         snapshot.fem_mesh = Some(mesh);
     }

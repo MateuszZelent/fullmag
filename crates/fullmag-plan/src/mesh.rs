@@ -705,6 +705,7 @@ pub(crate) fn pack_mesh_by_analysis(
 
     let mut reordered_cell_types = Vec::with_capacity(mesh.cell_count());
     let mut reordered_cell_global_ordinals = Vec::with_capacity(mesh.cell_count());
+    let mut reordered_cell_mesh_parts = Vec::with_capacity(mesh.cells.mesh_parts.len());
     let mut reordered_cell_offsets = vec![0u32];
     let mut reordered_cell_nodes = Vec::with_capacity(mesh.cells.nodes.len());
     let mut reordered_markers = Vec::with_capacity(mesh.element_markers.len());
@@ -719,6 +720,9 @@ pub(crate) fn pack_mesh_by_analysis(
             }
             reordered_cell_types.push(cell.cell_type);
             reordered_cell_global_ordinals.push(cell.global_ordinal);
+            if let Some(mesh_part) = mesh.cells.mesh_parts.get(cell.ordinal) {
+                reordered_cell_mesh_parts.push(*mesh_part);
+            }
             for node in cell.nodes {
                 reordered_cell_nodes.push(remap_node(*node, marker)?);
             }
@@ -736,6 +740,9 @@ pub(crate) fn pack_mesh_by_analysis(
         }
         reordered_cell_types.push(cell.cell_type);
         reordered_cell_global_ordinals.push(cell.global_ordinal);
+        if let Some(mesh_part) = mesh.cells.mesh_parts.get(cell.ordinal) {
+            reordered_cell_mesh_parts.push(*mesh_part);
+        }
         for node in cell.nodes {
             reordered_cell_nodes.push(remap_node(*node, 0)?);
         }
@@ -887,6 +894,7 @@ pub(crate) fn pack_mesh_by_analysis(
             offsets: reordered_cell_offsets,
             nodes: reordered_cell_nodes,
             global_ordinals: reordered_cell_global_ordinals,
+            mesh_parts: reordered_cell_mesh_parts,
         },
         element_markers: reordered_markers,
         facets: FemFacetConnectivityIR {
@@ -1627,6 +1635,18 @@ pub(crate) fn merge_fem_meshes(
     let mut nodes = Vec::new();
     let mut cell_types = Vec::new();
     let mut cell_global_ordinals = Vec::new();
+    let has_mesh_parts = meshes
+        .first()
+        .is_some_and(|(_, mesh)| !mesh.cells.mesh_parts.is_empty());
+    if meshes
+        .iter()
+        .any(|(_, mesh)| !mesh.cells.mesh_parts.is_empty() != has_mesh_parts)
+    {
+        return Err(
+            "cannot merge FEM meshes with mixed legacy-empty and classified mesh_parts".to_string(),
+        );
+    }
+    let mut cell_mesh_parts = Vec::new();
     let mut cell_offsets = vec![0u32];
     let mut cell_nodes = Vec::new();
     let mut element_markers = Vec::new();
@@ -1650,6 +1670,9 @@ pub(crate) fn merge_fem_meshes(
             cell_global_ordinals.push(cell_types.len() as u64 - 1);
             cell_nodes.extend(cell.nodes.iter().map(|node| node + node_offset));
             cell_offsets.push(cell_nodes.len() as u32);
+            if let Some(mesh_part) = mesh.cells.mesh_parts.get(cell.ordinal) {
+                cell_mesh_parts.push(*mesh_part);
+            }
         }
         element_markers.extend(remapped_markers);
         for facet in mesh.facets.iter() {
@@ -1697,6 +1720,7 @@ pub(crate) fn merge_fem_meshes(
             offsets: cell_offsets,
             nodes: cell_nodes,
             global_ordinals: cell_global_ordinals,
+            mesh_parts: cell_mesh_parts,
         },
         element_markers,
         facets: FemFacetConnectivityIR {

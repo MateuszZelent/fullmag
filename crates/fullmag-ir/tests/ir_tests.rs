@@ -4363,6 +4363,7 @@ fn problem_ir_validation_accepts_valid_mesh_semantics() {
                 degraded: false,
                 authored_regions_count: None,
                 realized_regions_count: None,
+                mixed_layer_topology_certificate: None,
             }),
         }),
     });
@@ -4908,6 +4909,7 @@ fn mixed_topology_mesh() -> MeshIR {
             offsets: vec![0, 6, 11, 15],
             nodes: vec![0, 1, 2, 3, 4, 5, 0, 1, 6, 2, 7, 0, 1, 2, 3],
             global_ordinals: vec![41, 7, 99],
+            mesh_parts: Vec::new(),
         },
         element_markers: vec![11, 12, 13],
         facets: FemFacetConnectivityIR {

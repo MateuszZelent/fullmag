@@ -4342,6 +4342,7 @@ mod tests {
             offsets: vec![0,4,10],
             nodes: vec![0,1,2,3,4,5,6,7,8,9],
             global_ordinals: vec![41,99],
+            mesh_parts: Vec::new(),
         };
         plan.mesh.element_markers = vec![7,8];
         plan.mesh.facets = fullmag_ir::FemFacetConnectivityIR {

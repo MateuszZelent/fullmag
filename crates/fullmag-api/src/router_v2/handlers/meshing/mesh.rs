@@ -4271,6 +4271,7 @@ fn subset_part_payload(
     let mut cell_offsets = vec![0];
     let mut cell_nodes = Vec::new();
     let mut cell_global_ordinals = Vec::new();
+    let mut cell_mesh_parts = Vec::new();
     let mut element_markers = Vec::new();
     for source_element_index in element_start..element_end {
         let cell_type = *mesh.cells.types.get(source_element_index).ok_or_else(|| {
@@ -4306,6 +4307,9 @@ fn subset_part_payload(
         cell_types.push(cell_type);
         cell_offsets.push(cell_nodes.len() as u32);
         cell_global_ordinals.push(global_ordinal);
+        if let Some(mesh_part) = mesh.cells.mesh_parts.get(source_element_index) {
+            cell_mesh_parts.push(*mesh_part);
+        }
         if let Some(marker) = mesh.element_markers.get(source_element_index) {
             element_markers.push(*marker);
         }
@@ -4315,6 +4319,7 @@ fn subset_part_payload(
         offsets: cell_offsets,
         nodes: cell_nodes,
         global_ordinals: cell_global_ordinals,
+        mesh_parts: cell_mesh_parts,
     };
 
     let mut face_indices = if part.boundary_face_indices.is_empty() {

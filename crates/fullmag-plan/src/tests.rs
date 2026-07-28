@@ -833,6 +833,11 @@ fn pack_mixed_topology_keeps_each_type_connectivity_role_and_marker_together() {
             offsets: vec![0, 6, 11, 15],
             nodes: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
             global_ordinals: vec![91, 12, 44],
+            mesh_parts: vec![
+                fullmag_ir::FemCellMeshPartIR::Magnetic,
+                fullmag_ir::FemCellMeshPartIR::TransitionAir,
+                fullmag_ir::FemCellMeshPartIR::FarAir,
+            ],
         },
         element_markers: vec![2, 1, 0],
         facets: fullmag_ir::FemFacetConnectivityIR {
@@ -883,6 +888,14 @@ fn pack_mixed_topology_keeps_each_type_connectivity_role_and_marker_together() {
     );
     assert_eq!(packed.element_markers, vec![1, 2, 0]);
     assert_eq!(packed.cells.global_ordinals, vec![12, 91, 44]);
+    assert_eq!(
+        packed.cells.mesh_parts,
+        vec![
+            fullmag_ir::FemCellMeshPartIR::TransitionAir,
+            fullmag_ir::FemCellMeshPartIR::Magnetic,
+            fullmag_ir::FemCellMeshPartIR::FarAir,
+        ]
+    );
     assert_eq!(packed.cells.offsets, vec![0, 5, 11, 15]);
     assert_eq!(
         packed.facets.types,
@@ -931,6 +944,7 @@ fn adjacent_hex_interface_mesh(right_marker: u32) -> MeshIR {
             offsets: vec![0, 8, 16],
             nodes: vec![0, 1, 2, 3, 4, 5, 6, 7, 1, 8, 9, 2, 5, 10, 11, 6],
             global_ordinals: vec![501, 902],
+            mesh_parts: Vec::new(),
         },
         element_markers: vec![1, right_marker],
         facets: fullmag_ir::FemFacetConnectivityIR {
@@ -1014,6 +1028,7 @@ fn mixed_mesh_part_slice_retains_global_ordinals_and_variable_arity() {
             offsets: vec![0, 6, 10, 15],
             nodes: (0..15).collect(),
             global_ordinals: vec![80, 12, 44],
+            mesh_parts: vec![fullmag_ir::FemCellMeshPartIR::TransitionAir],
         },
         element_markers: vec![1, 0, 0],
         facets: fullmag_ir::FemFacetConnectivityIR::empty(),
@@ -1088,6 +1103,7 @@ fn merge_mixed_meshes_preserves_input_order_and_typed_offsets() {
             offsets: vec![0, 6],
             nodes: vec![0, 1, 2, 3, 4, 5],
             global_ordinals: vec![40],
+            mesh_parts: vec![fullmag_ir::FemCellMeshPartIR::Magnetic],
         },
         element_markers: vec![1],
         facets: fullmag_ir::FemFacetConnectivityIR {
@@ -1116,6 +1132,7 @@ fn merge_mixed_meshes_preserves_input_order_and_typed_offsets() {
             offsets: vec![0, 5],
             nodes: vec![0, 1, 2, 3, 4],
             global_ordinals: vec![40],
+            mesh_parts: vec![fullmag_ir::FemCellMeshPartIR::TransitionAir],
         },
         element_markers: vec![1],
         facets: fullmag_ir::FemFacetConnectivityIR {
@@ -1146,6 +1163,13 @@ fn merge_mixed_meshes_preserves_input_order_and_typed_offsets() {
     );
     assert_eq!(merged.cells.offsets, vec![0, 6, 11]);
     assert_eq!(merged.cells.global_ordinals, vec![0, 1]);
+    assert_eq!(
+        merged.cells.mesh_parts,
+        vec![
+            fullmag_ir::FemCellMeshPartIR::Magnetic,
+            fullmag_ir::FemCellMeshPartIR::TransitionAir,
+        ]
+    );
     assert_eq!(merged.cells.item_nodes(0), Some(&[0, 1, 2, 3, 4, 5][..]));
     assert_eq!(merged.cells.item_nodes(1), Some(&[6, 7, 8, 9, 10][..]));
     assert_eq!(
@@ -9831,6 +9855,7 @@ fn fem_domain_mesh_asset_accepts_optional_build_report() {
             selector_resolution: Vec::new(),
             orphan_entities: Vec::new(),
             rejected_element_types: Vec::new(),
+            mixed_layer_topology_certificate: None,
         }),
     };
     assert!(asset.validate().is_ok());

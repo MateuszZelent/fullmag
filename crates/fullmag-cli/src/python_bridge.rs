@@ -228,6 +228,8 @@ pub(crate) struct RemeshCliResponse {
     pub periodic_boundary_pairs: Vec<fullmag_ir::MeshPeriodicBoundaryPairIR>,
     pub periodic_node_pairs: Vec<fullmag_ir::MeshPeriodicNodePairIR>,
     pub periodic_mesh_certificate: Option<serde_json::Value>,
+    pub mixed_layer_topology_certificate: Option<fullmag_ir::MixedLayerTopologyCertificateV1IR>,
+    pub shared_domain_build_report: Option<fullmag_ir::FemSharedDomainBuildReportIR>,
     pub quality: Option<RemeshQualitySummary>,
     pub generation_mode: Option<String>,
     pub mesh_provenance: Option<serde_json::Value>,
@@ -251,6 +253,8 @@ struct RemeshTopologyWire {
     cell_nodes: Option<Vec<u32>>,
     #[serde(default)]
     cell_global_ordinals: Option<Vec<u64>>,
+    #[serde(default)]
+    cell_mesh_parts: Option<Vec<fullmag_ir::FemCellMeshPartIR>>,
     #[serde(default)]
     facet_types: Option<Vec<fullmag_ir::FemFacetTypeIR>>,
     #[serde(default)]
@@ -281,6 +285,7 @@ impl RemeshTopologyWire {
             || self.cell_offsets.is_some()
             || self.cell_nodes.is_some()
             || self.cell_global_ordinals.is_some()
+            || self.cell_mesh_parts.is_some()
             || self.facet_types.is_some()
             || self.facet_roles.is_some()
             || self.facet_offsets.is_some()
@@ -309,6 +314,7 @@ impl RemeshTopologyWire {
                     nodes: self
                         .cell_nodes
                         .ok_or_else(|| "v2 remesh topology requires cell_nodes".to_string())?,
+                    mesh_parts: self.cell_mesh_parts.unwrap_or_default(),
                 },
                 fullmag_ir::FemFacetConnectivityIR {
                     global_ordinals: self
@@ -358,6 +364,8 @@ struct RemeshCliResponseWire {
     periodic_node_pairs: Vec<fullmag_ir::MeshPeriodicNodePairIR>,
     #[serde(default)]
     periodic_mesh_certificate: Option<serde_json::Value>,
+    #[serde(default)]
+    mixed_layer_topology_certificate: Option<fullmag_ir::MixedLayerTopologyCertificateV1IR>,
     quality: Option<RemeshQualitySummary>,
     #[serde(default)]
     generation_mode: Option<String>,
@@ -389,6 +397,14 @@ impl<'de> serde::Deserialize<'de> for RemeshCliResponse {
             .topology
             .normalize()
             .map_err(serde::de::Error::custom)?;
+        let shared_domain_build_report = wire
+            .mesh_provenance
+            .as_ref()
+            .and_then(|value| value.get("shared_domain_build_report"))
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(serde::de::Error::custom)?;
         Ok(Self {
             mesh_name: wire.mesh_name,
             nodes: wire.nodes,
@@ -399,6 +415,8 @@ impl<'de> serde::Deserialize<'de> for RemeshCliResponse {
             periodic_boundary_pairs: wire.periodic_boundary_pairs,
             periodic_node_pairs: wire.periodic_node_pairs,
             periodic_mesh_certificate: wire.periodic_mesh_certificate,
+            mixed_layer_topology_certificate: wire.mixed_layer_topology_certificate,
+            shared_domain_build_report,
             quality: wire.quality,
             generation_mode: wire.generation_mode,
             mesh_provenance: wire.mesh_provenance,
@@ -431,6 +449,8 @@ struct RemeshTopologyArtifactPayload {
     periodic_node_pairs: Vec<fullmag_ir::MeshPeriodicNodePairIR>,
     #[serde(default)]
     periodic_mesh_certificate: Option<serde_json::Value>,
+    #[serde(default)]
+    mixed_layer_topology_certificate: Option<fullmag_ir::MixedLayerTopologyCertificateV1IR>,
 }
 
 impl RemeshCliResponse {
@@ -460,6 +480,7 @@ impl RemeshCliResponse {
         self.periodic_boundary_pairs = topology.periodic_boundary_pairs;
         self.periodic_node_pairs = topology.periodic_node_pairs;
         self.periodic_mesh_certificate = topology.periodic_mesh_certificate;
+        self.mixed_layer_topology_certificate = topology.mixed_layer_topology_certificate;
         Ok(self)
     }
 
@@ -473,6 +494,74 @@ impl RemeshCliResponse {
         if let Some(object) = provenance.as_object_mut() {
             object.insert("periodic_mesh_certificate".to_string(), certificate);
         }
+    }
+
+    fn retain_mixed_certificate_in_provenance(&mut self) -> Result<()> {
+        let Some(certificate) = self.mixed_layer_topology_certificate.clone() else {
+            return Ok(());
+        };
+        let typed_report = self.shared_domain_build_report.as_mut().ok_or_else(|| {
+            anyhow::anyhow!(
+                "mixed layer topology certificate requires a shared-domain build report"
+            )
+        })?;
+        match typed_report.mixed_layer_topology_certificate.as_ref() {
+            Some(in_report) => anyhow::ensure!(
+                in_report == &certificate,
+                "mixed layer topology certificate differs between topology and build report"
+            ),
+            None => typed_report.mixed_layer_topology_certificate = Some(certificate.clone()),
+        }
+        let report = self
+            .mesh_provenance
+            .as_mut()
+            .and_then(|value| value.get_mut("shared_domain_build_report"))
+            .and_then(serde_json::Value::as_object_mut)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "mixed layer topology certificate requires a shared-domain build report in provenance"
+                )
+            })?;
+        report.insert(
+            "mixed_layer_topology_certificate".to_string(),
+            serde_json::to_value(certificate).expect("typed certificate must serialize"),
+        );
+        Ok(())
+    }
+
+    fn validate_mixed_certificate_binding(&self) -> Result<()> {
+        let report_certificate = self
+            .shared_domain_build_report
+            .as_ref()
+            .and_then(|report| report.mixed_layer_topology_certificate.as_ref());
+        if let (Some(top_level), Some(in_report)) = (
+            self.mixed_layer_topology_certificate.as_ref(),
+            report_certificate,
+        ) {
+            anyhow::ensure!(
+                top_level == in_report,
+                "mixed layer topology certificate differs between topology and build report"
+            );
+        }
+        if self
+            .mixed_layer_topology_certificate
+            .as_ref()
+            .or(report_certificate)
+            .is_none()
+        {
+            return Ok(());
+        }
+        let asset = fullmag_ir::FemDomainMeshAssetIR {
+            mesh_source: None,
+            mesh: Some(self.clone().into_mesh_ir()),
+            region_markers: self.region_markers.clone(),
+            object_region_markers: self.object_region_markers.clone(),
+            build_report: self.shared_domain_build_report.clone(),
+        };
+        asset
+            .validate()
+            .map_err(|errors| anyhow::anyhow!(errors.join("; ")))?;
+        Ok(())
     }
 
     pub(crate) fn into_mesh_ir(self) -> fullmag_ir::MeshIR {
@@ -806,6 +895,8 @@ fn parse_remesh_cli_response(stdout: &[u8], output_label: &str) -> Result<Remesh
     })?;
     let mut mesh = mesh.hydrate_topology_artifact()?;
     mesh.retain_periodic_certificate_in_provenance();
+    mesh.retain_mixed_certificate_in_provenance()?;
+    mesh.validate_mixed_certificate_binding()?;
     Ok(mesh)
 }
 
@@ -1361,6 +1452,91 @@ mod tests {
     use super::*;
     use crate::simulation_preparation::PreparationStageId;
 
+    fn valid_mixed_remesh_payload() -> serde_json::Value {
+        let mut payload = serde_json::json!({
+            "mesh_name": "qualified_mixed",
+            "nodes": [
+                [0.0,0.0,0.0],[1.0,0.0,0.0],[0.0,1.0,0.0],
+                [0.0,0.0,1.0],[1.0,0.0,1.0],[0.0,1.0,1.0],
+                [3.0,-1.0,0.0],[5.0,-1.0,0.0],[5.0,1.0,0.0],
+                [3.0,1.0,0.0],[4.0,0.0,1.0],
+                [7.0,0.0,0.0],[8.0,0.0,0.0],[7.0,1.0,0.0],[7.0,0.0,1.0]
+            ],
+            "cell_types": ["prism6","pyramid5","tet4"],
+            "cell_offsets": [0,6,11,15],
+            "cell_nodes": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14],
+            "cell_global_ordinals": [0,1,2],
+            "cell_mesh_parts": ["magnetic","transition_air","far_air"],
+            "element_markers": [1,0,0],
+            "facet_types": ["tri3","quad4","quad4","tri3"],
+            "facet_roles": ["material_interface","exterior","exterior","exterior"],
+            "facet_offsets": [0,3,7,11,14],
+            "facet_nodes": [0,1,2,0,1,4,3,6,7,8,9,11,12,13],
+            "facet_global_ordinals": [0,1,2,3],
+            "boundary_markers": [2,3,3,3],
+            "periodic_boundary_pairs": [],
+            "periodic_node_pairs": [],
+            "periodic_mesh_certificate": null,
+            "quality": null
+        });
+        let mesh: fullmag_ir::MeshIR = serde_json::from_value(serde_json::json!({
+            "mesh_name": payload["mesh_name"].clone(),
+            "nodes": payload["nodes"].clone(),
+            "cells": {
+                "types": payload["cell_types"].clone(), "offsets": payload["cell_offsets"].clone(),
+                "nodes": payload["cell_nodes"].clone(), "global_ordinals": payload["cell_global_ordinals"].clone(),
+                "mesh_parts": payload["cell_mesh_parts"].clone()
+            },
+            "element_markers": payload["element_markers"].clone(),
+            "facets": {
+                "types": payload["facet_types"].clone(), "roles": payload["facet_roles"].clone(),
+                "offsets": payload["facet_offsets"].clone(), "nodes": payload["facet_nodes"].clone(),
+                "global_ordinals": payload["facet_global_ordinals"].clone()
+            },
+            "boundary_markers": payload["boundary_markers"].clone(),
+            "periodic_boundary_pairs": [], "periodic_node_pairs": [], "per_domain_quality": {}
+        }))
+        .unwrap();
+        let mut certificate: serde_json::Value = serde_json::from_str(r#"{
+            "schema_version":"mixed_layer_topology_certificate.v1","certificate_status":"accepted",
+            "requested_sweep_direction":"z","resolved_sweep_direction":"z",
+            "requested_layer_count":1,"realized_layer_count":1,
+            "magnetic_plane_coordinates_m":[0.0,1.0],"plane_tolerance_m":1e-12,
+            "transition_shell_thickness_m":1.0,"transition_shell_interface_tri3_count":1,
+            "interface_marker":2,"outer_boundary_marker":3,
+            "magnetic_bounds_min_m":[0.0,0.0,0.0],"magnetic_bounds_max_m":[1.0,1.0,1.0],
+            "airbox_bounds_min_m":[-1.0,-1.0,-1.0],"airbox_bounds_max_m":[2.0,2.0,2.0],
+            "magnetic_bounds_relative_error":0.0,"airbox_bounds_relative_error":0.0,
+            "cell_family_counts_by_marker":{"0":{"pyramid5":1,"tet4":1},"1":{"prism6":1}},
+            "cell_family_counts_by_part":{"magnetic":{"prism6":1},"transition_air":{"pyramid5":1},"far_air":{"tet4":1}},
+            "facet_family_counts_by_role_marker":{"exterior:3":{"quad4":2,"tri3":1},"material_interface:2":{"tri3":1}},
+            "jacobian_minima_m3_by_family":{"prism6":1.0,"pyramid5":1.0,"tet4":1.0},
+            "quality_metric":"tetra_decomposition_scaled_jacobian.v1",
+            "scaled_jacobian_minima_by_family":{"prism6":1.0,"pyramid5":1.0,"tet4":1.0},
+            "scaled_jacobian_p05_by_family":{"prism6":1.0,"pyramid5":1.0,"tet4":1.0},
+            "magnetic_volume_m3":1.0,"expected_magnetic_volume_m3":1.0,"magnetic_relative_volume_error":0.0,
+            "air_volume_m3":1.0,"shared_domain_volume_m3":2.0,"expected_shared_domain_volume_m3":2.0,
+            "shared_domain_relative_volume_error":0.0,"marker_coverage_complete":true,
+            "nonconforming_face_count":0,"orphan_face_count":0,"nonmanifold_face_count":0,"coincident_interface_face_count":0,
+            "topology_fingerprint_version":"v2","topology_fingerprint":"placeholder","gmsh_version":"4.15.2",
+            "strategy":"shared_geo_extrusion_partitioned_pyramid_tet.v2","effective_gmsh_thread_count":1,
+            "deterministic_inputs":{"algorithm_2d":6,"algorithm_3d":1,"element_order":1,"gmsh_version":"4.15.2",
+              "random_factor":0.0,"thread_count":1,"transition_partition":"cartesian_3x3x3_minus_magnetic_center",
+              "transition_volume_count":26,"pyramid_apex_optimizer":"bounded_per_apex_outward_scale_line_search",
+              "pyramid_apex_scale_step":0.001,"pyramid_apex_scale_max":1.25,"scaled_jacobian_p05_min":0.1},
+            "fallbacks_triggered":[]
+        }"#).unwrap();
+        certificate["topology_fingerprint"] = serde_json::json!(mesh.topology_fingerprint_v6());
+        payload["mixed_layer_topology_certificate"] = certificate.clone();
+        payload["mesh_provenance"] = serde_json::json!({
+            "shared_domain_build_report": {
+                "build_mode": "shared_domain",
+                "mixed_layer_topology_certificate": certificate
+            }
+        });
+        payload
+    }
+
     #[test]
     fn syntax_check_python_args_do_not_import_fullmag_runtime_helper() {
         let args = syntax_check_python_args(Path::new("example.py"));
@@ -1634,9 +1810,17 @@ mod tests {
             serde_json::json!({
                 "mesh_name": "large_mesh",
                 "nodes": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
-                "elements": [[0, 1, 2, 3]],
+                "cell_types": ["tet4"],
+                "cell_offsets": [0, 4],
+                "cell_nodes": [0, 1, 2, 3],
+                "cell_global_ordinals": [0],
+                "cell_mesh_parts": ["magnetic"],
                 "element_markers": [7],
-                "boundary_faces": [[0, 1, 2]],
+                "facet_types": ["tri3"],
+                "facet_roles": ["exterior"],
+                "facet_offsets": [0, 3],
+                "facet_nodes": [0, 1, 2],
+                "facet_global_ordinals": [0],
                 "boundary_markers": [11],
                 "periodic_boundary_pairs": [],
                 "periodic_node_pairs": [],
@@ -1667,6 +1851,10 @@ mod tests {
 
         assert_eq!(parsed.nodes.len(), 4);
         assert_eq!(parsed.cells.require_tet4().unwrap(), vec![[0, 1, 2, 3]]);
+        assert_eq!(
+            parsed.cells.mesh_parts,
+            vec![fullmag_ir::FemCellMeshPartIR::Magnetic]
+        );
         assert_eq!(parsed.element_markers, vec![7]);
         assert_eq!(parsed.facets.require_tri3().unwrap(), vec![[0, 1, 2]]);
         assert_eq!(parsed.boundary_markers, vec![11]);
@@ -1697,6 +1885,7 @@ mod tests {
             "cell_types": ["tet4", "prism6"],
             "cell_offsets": [0, 4, 10],
             "cell_nodes": [0, 1, 2, 3, 0, 1, 2, 4, 5, 6],
+            "cell_mesh_parts": ["magnetic", "transition_air"],
             "element_markers": [1, 2],
             "facet_types": ["tri3", "quad4"],
             "facet_roles": ["exterior", "material_interface"],
@@ -1722,6 +1911,14 @@ mod tests {
                 fullmag_ir::FemFacetTypeIR::Quad4
             ]
         );
+        assert_eq!(
+            serde_json::to_value(&parsed.cells).unwrap()["mesh_parts"],
+            serde_json::json!(["magnetic", "transition_air"])
+        );
+        assert_eq!(
+            serde_json::to_value(&parsed.clone().into_mesh_ir()).unwrap()["cells"]["mesh_parts"],
+            serde_json::json!(["magnetic", "transition_air"])
+        );
 
         payload
             .as_object_mut()
@@ -1730,6 +1927,96 @@ mod tests {
         let error = parse_remesh_cli_response(payload.to_string().as_bytes(), "dual remesh output")
             .unwrap_err();
         assert!(format!("{error:#}").contains("both legacy and v2 topology"));
+    }
+
+    #[test]
+    fn mixed_wire_preserves_typed_report_and_rejects_top_level_only() {
+        let payload = valid_mixed_remesh_payload();
+        let parsed = parse_remesh_cli_response(
+            payload.to_string().as_bytes(),
+            "qualified mixed remesh output",
+        )
+        .unwrap();
+        assert!(parsed
+            .shared_domain_build_report
+            .as_ref()
+            .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
+            .is_some());
+        assert!(parsed
+            .mesh_provenance
+            .as_ref()
+            .and_then(|value| value.get("shared_domain_build_report"))
+            .and_then(|value| value.get("mixed_layer_topology_certificate"))
+            .is_some());
+        assert_eq!(parsed.clone().into_mesh_ir().cells.mesh_parts.len(), 3);
+
+        let mut top_level_only = payload;
+        top_level_only
+            .as_object_mut()
+            .unwrap()
+            .remove("mesh_provenance");
+        let error = parse_remesh_cli_response(
+            top_level_only.to_string().as_bytes(),
+            "top-level-only mixed remesh output",
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("shared-domain build report"));
+    }
+
+    #[test]
+    fn mixed_wire_hydrates_artifact_certificate_into_typed_report() {
+        let payload = valid_mixed_remesh_payload();
+        let artifact_path = std::env::temp_dir().join(format!(
+            "fullmag-mixed-topology-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut artifact = payload.clone();
+        artifact.as_object_mut().unwrap().remove("mesh_provenance");
+        artifact.as_object_mut().unwrap().remove("quality");
+        std::fs::write(&artifact_path, artifact.to_string()).unwrap();
+        let stdout = serde_json::json!({
+            "mesh_name": "qualified_mixed",
+            "nodes": [], "elements": [], "element_markers": [],
+            "boundary_faces": [], "boundary_markers": [], "quality": null,
+            "mesh_provenance": {"shared_domain_build_report": {"build_mode": "shared_domain"}},
+            "topology_artifact": {"path": artifact_path}
+        });
+
+        let parsed = parse_remesh_cli_response(
+            stdout.to_string().as_bytes(),
+            "artifact mixed remesh output",
+        )
+        .unwrap();
+        assert_eq!(parsed.cells.mesh_parts.len(), 3);
+        assert!(parsed
+            .shared_domain_build_report
+            .as_ref()
+            .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
+            .is_some());
+        assert!(parsed
+            .mesh_provenance
+            .as_ref()
+            .and_then(|value| value.get("shared_domain_build_report"))
+            .and_then(|value| value.get("mixed_layer_topology_certificate"))
+            .is_some());
+        let _ = std::fs::remove_file(artifact_path);
+    }
+
+    #[test]
+    fn mixed_wire_rejects_mismatched_topology_and_report_certificates() {
+        let mut payload = valid_mixed_remesh_payload();
+        payload["mixed_layer_topology_certificate"]["topology_fingerprint"] =
+            serde_json::json!(format!("sha256:{}", "0".repeat(64)));
+        let error = parse_remesh_cli_response(
+            payload.to_string().as_bytes(),
+            "mismatched mixed remesh output",
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("differs"));
     }
 
     #[test]

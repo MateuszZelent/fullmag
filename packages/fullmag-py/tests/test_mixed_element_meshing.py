@@ -33,6 +33,7 @@ from fullmag.meshing._gmsh_swept import (
     generate_swept_cylinder_mesh,
     generate_swept_mesh,
 )
+from fullmag.meshing.remesh_cli import _mesh_result_payload
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "gmsh" / "mixed_prism_pyramid_airbox.geo"
@@ -1624,6 +1625,121 @@ def test_mixed_layer_topology_certificate_survives_owned_mesh_paths(
     assert mesh.to_ir("shared_domain")["mixed_layer_topology_certificate"] == (
         certificate.to_dict()
     )
+
+
+def _mixed_remesh_transport_mesh() -> Mock:
+    mesh = Mock()
+    mesh.nodes = np.asarray(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [0.0, 1.0, 1.0],
+            [3.0, -1.0, 0.0],
+            [5.0, -1.0, 0.0],
+            [5.0, 1.0, 0.0],
+            [3.0, 1.0, 0.0],
+            [4.0, 0.0, 1.0],
+            [7.0, 0.0, 0.0],
+            [8.0, 0.0, 0.0],
+            [7.0, 1.0, 0.0],
+            [7.0, 0.0, 1.0],
+        ]
+    )
+    mesh.cell_types = np.asarray(["prism6", "pyramid5", "tet4"])
+    mesh.cell_offsets = np.asarray([0, 6, 11, 15])
+    mesh.cell_nodes = np.arange(15)
+    mesh.cell_global_ordinals = np.asarray([0, 1, 2])
+    mesh.cell_mesh_parts = np.asarray(["magnetic", "transition_air", "far_air"])
+    mesh.element_markers = np.asarray([1, 0, 0])
+    mesh.facet_types = np.asarray(["tri3", "quad4", "quad4", "tri3"])
+    mesh.facet_roles = np.asarray(
+        ["material_interface", "exterior", "exterior", "exterior"]
+    )
+    mesh.facet_offsets = np.asarray([0, 3, 7, 11, 14])
+    mesh.facet_nodes = np.asarray(
+        [0, 1, 2, 0, 1, 4, 3, 6, 7, 8, 9, 11, 12, 13]
+    )
+    mesh.facet_global_ordinals = np.asarray([0, 1, 2, 3])
+    mesh.boundary_markers = np.asarray([2, 3, 3, 3])
+    mesh.periodic_boundary_pairs = []
+    mesh.periodic_node_pairs = []
+    mesh.periodic_mesh_certificate = None
+    mesh.quality = None
+    mesh.mixed_layer_topology_certificate.to_dict.return_value = {
+        "schema_version": "mixed_layer_topology_certificate.v1",
+        "certificate_status": "accepted",
+        "topology_fingerprint_version": "v2",
+        "topology_fingerprint": "sha256:" + "1" * 64,
+    }
+    mesh.oriented_copy.return_value = mesh
+    return mesh
+
+
+def test_topology_fingerprint_v2_matches_the_frozen_cross_language_fixture() -> None:
+    mesh = MeshData(
+        nodes=np.asarray(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ]
+        ),
+        cell_types=np.asarray(["tet4"]),
+        cell_offsets=np.asarray([0, 4]),
+        cell_nodes=np.asarray([0, 1, 2, 3]),
+        cell_global_ordinals=np.asarray([0]),
+        cell_mesh_parts=np.asarray(["magnetic"]),
+        element_markers=np.asarray([1]),
+        facet_types=np.asarray([], dtype=np.str_),
+        facet_roles=np.asarray([], dtype=np.str_),
+        facet_offsets=np.asarray([0]),
+        facet_nodes=np.asarray([], dtype=np.int64),
+        facet_global_ordinals=np.asarray([], dtype=np.int64),
+        boundary_markers=np.asarray([], dtype=np.int64),
+    )
+
+    assert mesh.topology_fingerprint_v2() == (
+        "sha256:2071f6b9a2bf468fc82296f34744b07475315a5f0d26c5b06e52b54064f474e2"
+    )
+
+
+def test_mixed_remesh_inline_payload_preserves_parts_and_certificate() -> None:
+    mesh = _mixed_remesh_transport_mesh()
+    certificate = mesh.mixed_layer_topology_certificate
+
+    payload = _mesh_result_payload(
+        mesh,
+        mesh_name="shared_domain",
+        generation_mode="generated",
+        mesh_provenance={},
+    )
+
+    assert payload["cell_mesh_parts"] == mesh.cell_mesh_parts.tolist()
+    assert payload["mixed_layer_topology_certificate"] == certificate.to_dict()
+
+
+def test_mixed_remesh_artifact_preserves_parts_and_certificate(tmp_path: Path) -> None:
+    mesh = _mixed_remesh_transport_mesh()
+    certificate = mesh.mixed_layer_topology_certificate
+
+    payload = _mesh_result_payload(
+        mesh,
+        mesh_name="shared_domain",
+        generation_mode="generated",
+        mesh_provenance={},
+        topology_artifact_dir=tmp_path,
+        inline_topology_max_bytes=1,
+    )
+    artifact = json.loads(
+        Path(payload["topology_artifact"]["path"]).read_text(encoding="utf-8")
+    )
+
+    assert artifact["cell_mesh_parts"] == mesh.cell_mesh_parts.tolist()
+    assert artifact["mixed_layer_topology_certificate"] == certificate.to_dict()
 
 
 def _rewrite_persisted_mixed_certificate(

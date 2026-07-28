@@ -3002,6 +3002,13 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             orphan_entities=result.orphan_entities if result is not None else [],
             magnetic_submesh_signatures=magnetic_submesh_signatures,
         )
+        if classified_mesh.mixed_layer_topology_certificate is not None:
+            report = _dc_replace(
+                report,
+                mixed_layer_topology_certificate=(
+                    classified_mesh.mixed_layer_topology_certificate.to_dict()
+                ),
+            )
         if object_regions is not None:
             report = _dc_replace(
                 report,
