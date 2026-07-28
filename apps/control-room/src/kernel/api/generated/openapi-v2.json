@@ -3773,6 +3773,36 @@
         ],
         "type": "string"
       },
+      "FieldAutosaveResource": {
+        "additionalProperties": false,
+        "properties": {
+          "every_seconds": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "every_steps": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "quantity"
+        ],
+        "type": "object"
+      },
       "FieldCatalog": {
         "properties": {
           "domain_generation_id": {
@@ -19118,6 +19148,60 @@
         ],
         "type": "object"
       },
+      "StageAutosaveFormatResource": {
+        "enum": [
+          "zarr",
+          "hdf5",
+          "txt"
+        ],
+        "type": "string"
+      },
+      "StageAutosaveLayoutResource": {
+        "enum": [
+          "continuous",
+          "separate"
+        ],
+        "type": "string"
+      },
+      "StageAutosaveResource": {
+        "additionalProperties": false,
+        "properties": {
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/FieldAutosaveResource"
+            },
+            "type": "array"
+          },
+          "format": {
+            "$ref": "#/components/schemas/StageAutosaveFormatResource"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "layout": {
+            "$ref": "#/components/schemas/StageAutosaveLayoutResource"
+          },
+          "table": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StageTableAutosaveResource"
+              }
+            ]
+          },
+          "target": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "layout",
+          "format"
+        ],
+        "type": "object"
+      },
       "StageExecutionRecordResource": {
         "properties": {
           "action": {
@@ -19447,6 +19531,42 @@
           "gradient"
         ],
         "type": "string"
+      },
+      "StageTableAutosaveResource": {
+        "additionalProperties": false,
+        "properties": {
+          "every_steps": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "quantities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sample_period_s": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "table_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "quantities"
+        ],
+        "type": "object"
       },
       "StructuredCommandRequest": {
         "oneOf": [
