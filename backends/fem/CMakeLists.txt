@@ -132,6 +132,7 @@ set(FEM_SOURCES
     cpu/mfem/integrators/rk4.cpp
     cpu/mfem/integrators/rk23.cpp
     cpu/mfem/integrators/rk45.cpp
+    cpu/mfem/relaxation/direct_energy_increment.cpp
     cpu/mfem/relaxation/nonlinear_cg.cpp
     cpu/mfem/relaxation/projected_gradient_bb.cpp
     cpu/mfem/relaxation/relaxation_math.cpp

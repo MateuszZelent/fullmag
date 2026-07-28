@@ -630,7 +630,7 @@ int gpu_relax_projected_gradient_bb_step(
                     reason,
                     error);
             }
-            if (!gpu_pgbb_precompute_representable_chord_increment(
+            if (!gpu_direct_minimizer_precompute_representable_chord_increment(
                     ctx,
                     stream,
                     n,
@@ -670,7 +670,7 @@ int gpu_relax_projected_gradient_bb_step(
             logical_rhs_evaluations += 1u;
 
             GpuDirectArmijoResult armijo_result{};
-            if (!gpu_direct_pgbb_armijo_evaluate(
+            if (!gpu_direct_minimizer_armijo_evaluate(
                     ctx, stream, n, blocks, gpu.rk.m_backup, gpu.rk.error,
                     current_snapshot, kArmijoCoefficient, true, armijo_result,
                     reason)) {

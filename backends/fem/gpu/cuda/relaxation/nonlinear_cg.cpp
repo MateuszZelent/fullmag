@@ -73,6 +73,13 @@ static_assert(
     kFemGpuAcceptedEnergyTermSlots == kGpuFinalScalarSlots,
     "GPU nonlinear-CG accepted endpoint token must store every energy term");
 
+struct GpuNcgArmijoState {
+    relaxation::EnergyDifference last_difference{};
+    relaxation::EnergyDifference accepted_difference{};
+    double last_increment_rhs_j = 0.0;
+    double accepted_increment_rhs_j = 0.0;
+};
+
 std::string format_gpu_relax_ncg_scalar(double value)
 {
     std::ostringstream out;
@@ -392,6 +399,12 @@ bool gpu_relax_ncg_preflight(
         gpu.relaxation.nonlinear_cg_direction_backup.y == nullptr ||
         gpu.relaxation.nonlinear_cg_direction_backup.z == nullptr) {
         reason = "GPU nonlinear-CG requires persistent device search-direction state";
+        return false;
+    }
+    if (gpu.relaxation.projected_gradient_accepted_h_eff.x == nullptr ||
+        gpu.relaxation.projected_gradient_accepted_h_eff.y == nullptr ||
+        gpu.relaxation.projected_gradient_accepted_h_eff.z == nullptr) {
+        reason = "GPU nonlinear-CG requires persistent accepted H_eff scratch";
         return false;
     }
     return true;
@@ -875,6 +888,7 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
     uint32_t &logical_rhs_evaluations,
     uint32_t &refinement_rhs_evaluations,
     bool &every_permitted_trial_unchanged,
+    GpuNcgArmijoState &armijo_state,
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
@@ -925,6 +939,15 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
                     stream);
             }
             if (!cuda_launch_ok("launch GPU nonlinear-CG recovery retraction", reason) ||
+                !gpu_direct_minimizer_precompute_representable_chord_increment(
+                    ctx,
+                    stream,
+                    n,
+                    blocks,
+                    gpu.rk.m_backup,
+                    gpu.rk.m_stage,
+                    gpu.relaxation.projected_gradient_accepted_h_eff,
+                    reason) ||
                 !gpu_rk_copy_component_device(
                     gpu.rk.m_stage,
                     gpu.magnetization.m,
@@ -942,10 +965,8 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
             }
             logical_rhs_evaluations += 1u;
 
-            const double armijo_rhs =
-                kArmijoCoefficient * trial_step * p_dot_g;
             GpuDirectArmijoResult armijo_result{};
-            if (!gpu_direct_armijo_evaluate(
+            if (!gpu_direct_minimizer_armijo_evaluate(
                     ctx,
                     stream,
                     n,
@@ -953,12 +974,14 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
                     gpu.rk.m_backup,
                     base_h_demag,
                     current_snapshot,
-                    armijo_rhs,
+                    kArmijoCoefficient,
                     true,
                     armijo_result,
                     reason)) {
                 return false;
             }
+            armijo_state.last_difference = armijo_result.difference;
+            armijo_state.last_increment_rhs_j = armijo_result.armijo_rhs_j;
             const bool trial_unchanged =
                 armijo_result.trial_active_state_unchanged;
             every_permitted_trial_unchanged =
@@ -972,7 +995,7 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
                     gpu.rk.m_backup,
                     gpu.rk.m_stage,
                     base_h_demag,
-                    armijo_rhs,
+                    armijo_result.armijo_rhs_j,
                     armijo_result,
                     reason)) {
                 return false;
@@ -995,6 +1018,9 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
                  armijo_result.refinement_accepted)) {
                 accepted_snapshot = armijo_result.trial_snapshot;
                 accepted_refined = armijo_result.refinement_accepted;
+                armijo_state.accepted_difference = armijo_result.difference;
+                armijo_state.accepted_increment_rhs_j =
+                    armijo_result.armijo_rhs_j;
                 return true;
             }
             if (backtracks >= 2u * kMaxBacktracks) {
@@ -1220,6 +1246,13 @@ int gpu_relax_nonlinear_cg_step(
             gpu.lifecycle.node_count,
             stream,
             "cudaMemcpyAsync GPU nonlinear-CG backup current H_demag",
+            reason) ||
+        !gpu_rk_copy_component_device(
+            gpu.fields.h_eff,
+            gpu.relaxation.projected_gradient_accepted_h_eff,
+            gpu.lifecycle.node_count,
+            stream,
+            "cudaMemcpyAsync GPU nonlinear-CG backup accepted H_eff",
             reason)) {
         return gpu_relax_restore_previous_state_after_failure(
             ctx,
@@ -1238,6 +1271,7 @@ int gpu_relax_nonlinear_cg_step(
     bool every_permitted_trial_unchanged = true;
     uint32_t refinement_rhs_evaluations = 0;
     GpuDirectEnergySnapshot accepted_snapshot{};
+    GpuNcgArmijoState armijo_state;
     {
         FULLMAG_NVTX_RANGE("fem.relax.armijo");
         while (true) {
@@ -1265,6 +1299,15 @@ int gpu_relax_nonlinear_cg_step(
                     stream);
             }
             if (!cuda_launch_ok("launch GPU nonlinear-CG trial retraction", reason) ||
+                !gpu_direct_minimizer_precompute_representable_chord_increment(
+                    ctx,
+                    stream,
+                    n,
+                    blocks,
+                    gpu.rk.m_backup,
+                    gpu.rk.m_stage,
+                    gpu.relaxation.projected_gradient_accepted_h_eff,
+                    reason) ||
                 !gpu_rk_copy_component_device(
                     gpu.rk.m_stage,
                     gpu.magnetization.m,
@@ -1288,10 +1331,8 @@ int gpu_relax_nonlinear_cg_step(
             }
             logical_rhs_evaluations += 1u;
 
-            const double armijo_rhs =
-                kArmijoCoefficient * trial_step * p_dot_g;
             GpuDirectArmijoResult armijo_result{};
-            if (!gpu_direct_armijo_evaluate(
+            if (!gpu_direct_minimizer_armijo_evaluate(
                     ctx,
                     stream,
                     n,
@@ -1299,7 +1340,7 @@ int gpu_relax_nonlinear_cg_step(
                     gpu.rk.m_backup,
                     gpu.rk.error,
                     current_snapshot,
-                    armijo_rhs,
+                    kArmijoCoefficient,
                     true,
                     armijo_result,
                     reason)) {
@@ -1311,6 +1352,8 @@ int gpu_relax_nonlinear_cg_step(
                     reason,
                     error);
             }
+            armijo_state.last_difference = armijo_result.difference;
+            armijo_state.last_increment_rhs_j = armijo_result.armijo_rhs_j;
             const bool trial_unchanged =
                 armijo_result.trial_active_state_unchanged;
             every_permitted_trial_unchanged =
@@ -1324,7 +1367,7 @@ int gpu_relax_nonlinear_cg_step(
                     gpu.rk.m_backup,
                     gpu.rk.m_stage,
                     gpu.rk.error,
-                    armijo_rhs,
+                    armijo_result.armijo_rhs_j,
                     armijo_result,
                     reason)) {
                 return gpu_relax_restore_previous_state_after_failure(
@@ -1362,6 +1405,9 @@ int gpu_relax_nonlinear_cg_step(
                 accepted_snapshot = armijo_result.trial_snapshot;
                 accepted_snapshot_valid = true;
                 accepted_refined = armijo_result.refinement_accepted;
+                armijo_state.accepted_difference = armijo_result.difference;
+                armijo_state.accepted_increment_rhs_j =
+                    armijo_result.armijo_rhs_j;
                 break;
             }
             if (backtracks >= kMaxBacktracks) {
@@ -1390,6 +1436,7 @@ int gpu_relax_nonlinear_cg_step(
                     logical_rhs_evaluations,
                     refinement_rhs_evaluations,
                     every_permitted_trial_unchanged,
+                    armijo_state,
                     reason)) {
                 line_search_accepted = true;
                 accepted_snapshot_valid = true;
@@ -1459,7 +1506,7 @@ int gpu_relax_nonlinear_cg_step(
             return FULLMAG_FEM_OK;
         }
         const double armijo_rhs =
-            current_energy + kArmijoCoefficient * trial_step * p_dot_g;
+            current_energy + armijo_state.last_increment_rhs_j;
         const double trial_energy_increment_j =
             last_trial_energy_j - current_energy;
         const double energy_scale_j = std::max(
@@ -1483,7 +1530,14 @@ int gpu_relax_nonlinear_cg_step(
             format_gpu_relax_ncg_scalar(energy_scale_j) +
             " armijo_rhs_j=" + format_gpu_relax_ncg_scalar(armijo_rhs) +
             " armijo_increment_rhs_j=" + format_gpu_relax_ncg_scalar(
-                kArmijoCoefficient * trial_step * p_dot_g) +
+                armijo_state.last_increment_rhs_j) +
+            " direct_delta_j=" + format_gpu_relax_ncg_scalar(
+                armijo_state.last_difference.delta_joules) +
+            " direct_roundoff_bound_j=" + format_gpu_relax_ncg_scalar(
+                armijo_state.last_difference.roundoff_bound_joules) +
+            " direct_upper_j=" + format_gpu_relax_ncg_scalar(
+                armijo_state.last_difference.delta_joules +
+                armijo_state.last_difference.roundoff_bound_joules) +
             " last_trial_step=" + format_gpu_relax_ncg_scalar(trial_step) +
             " direction_dot_gradient=" +
             format_gpu_relax_ncg_scalar(p_dot_g) +
@@ -1501,6 +1555,24 @@ int gpu_relax_nonlinear_cg_step(
             rollback,
             "exhausted Armijo line search",
             original_error,
+            error);
+    }
+
+    const double accepted_energy_delta_upper_j =
+        armijo_state.accepted_difference.delta_joules +
+        armijo_state.accepted_difference.roundoff_bound_joules;
+    const double armijo_increment_rhs_j =
+        armijo_state.accepted_increment_rhs_j;
+    if (!std::isfinite(accepted_energy_delta_upper_j) ||
+        !std::isfinite(armijo_increment_rhs_j) ||
+        !(accepted_energy_delta_upper_j <= armijo_increment_rhs_j &&
+          armijo_increment_rhs_j <= 0.0)) {
+        return gpu_relax_restore_previous_state_after_failure(
+            ctx,
+            stream,
+            rollback,
+            "accepted Armijo proof validation failure",
+            "GPU nonlinear-CG accepted Armijo proof is invalid",
             error);
     }
 
@@ -1601,6 +1673,15 @@ int gpu_relax_nonlinear_cg_step(
     out_stats.rejected_attempts = backtracks;
     out_stats.rhs_evaluations =
         logical_rhs_evaluations + refinement_rhs_evaluations;
+    ctx.relaxation.accepted_energy_proof.available = true;
+    ctx.relaxation.accepted_energy_proof.delta_j =
+        armijo_state.accepted_difference.delta_joules;
+    ctx.relaxation.accepted_energy_proof.roundoff_bound_j =
+        armijo_state.accepted_difference.roundoff_bound_joules;
+    ctx.relaxation.accepted_energy_proof.delta_upper_j =
+        accepted_energy_delta_upper_j;
+    ctx.relaxation.accepted_energy_proof.armijo_rhs_j =
+        armijo_increment_rhs_j;
     publish_ncg_accepted_evaluation(
         ctx, accepted_step, accepted_snapshot, accepted_refined);
     update_stage_completion_from_stats(ctx, out_stats);

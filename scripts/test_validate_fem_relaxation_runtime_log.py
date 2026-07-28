@@ -1228,7 +1228,7 @@ def test_run_json_artifacts_supply_authoritative_benchmark_payload(tmp_path) -> 
         }
 
 
-def test_native_pgbb_accepted_armijo_proof_is_plumbed_to_solver_steps() -> None:
+def test_native_direct_minimizer_accepted_armijo_proof_is_plumbed_to_solver_steps() -> None:
     header = (REPO_ROOT / "native" / "include" / "fullmag_fem.h").read_text(
         encoding="utf-8"
     )
@@ -1262,6 +1262,24 @@ def test_native_pgbb_accepted_armijo_proof_is_plumbed_to_solver_steps() -> None:
         / "relaxation"
         / "pgbb.cpp"
     ).read_text(encoding="utf-8")
+    cpu_ncg = (
+        REPO_ROOT
+        / "backends"
+        / "fem"
+        / "cpu"
+        / "mfem"
+        / "relaxation"
+        / "nonlinear_cg.cpp"
+    ).read_text(encoding="utf-8")
+    gpu_ncg = (
+        REPO_ROOT
+        / "backends"
+        / "fem"
+        / "gpu"
+        / "cuda"
+        / "relaxation"
+        / "nonlinear_cg.cpp"
+    ).read_text(encoding="utf-8")
 
     fields = [
         "accepted_energy_proof_available",
@@ -1286,7 +1304,7 @@ def test_native_pgbb_accepted_armijo_proof_is_plumbed_to_solver_steps() -> None:
         assert field in runner_types
         assert field in native_fem
         assert field in artifacts
-    for source in (cpu_pgbb, gpu_pgbb):
+    for source in (cpu_pgbb, gpu_pgbb, cpu_ncg, gpu_ncg):
         assert "accepted_energy_proof.available = true" in source
         assert "accepted_energy_proof.delta_j" in source
         assert "accepted_energy_proof.roundoff_bound_j" in source
@@ -1296,8 +1314,12 @@ def test_native_pgbb_accepted_armijo_proof_is_plumbed_to_solver_steps() -> None:
 
     assert "accepted_energy_delta_upper_j <= armijo_increment_rhs_j" in cpu_pgbb
     assert "accepted_energy_delta_upper_j <= armijo_increment_rhs_j" in gpu_pgbb
+    assert "accepted_energy_delta_upper_j <= armijo_increment_rhs_j" in cpu_ncg
+    assert "accepted_energy_delta_upper_j <= armijo_increment_rhs_j" in gpu_ncg
     assert "accepted_energy_proof.available = true" in cpu_pgbb
     assert "accepted_energy_proof.available = true" in gpu_pgbb
+    assert "accepted_energy_proof.available = true" in cpu_ncg
+    assert "accepted_energy_proof.available = true" in gpu_ncg
 
 
 def test_authoritative_payload_uses_requested_precision_only_as_fallback(

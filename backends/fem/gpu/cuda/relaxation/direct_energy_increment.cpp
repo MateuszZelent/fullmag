@@ -726,7 +726,7 @@ bool gpu_direct_armijo_evaluate(
     return true;
 }
 
-bool gpu_pgbb_precompute_representable_chord_increment(
+bool gpu_direct_minimizer_precompute_representable_chord_increment(
     Context &ctx,
     cudaStream_t stream,
     int node_count,
@@ -745,15 +745,15 @@ bool gpu_pgbb_precompute_representable_chord_increment(
         gpu.mesh_regions.magnetic_node_mask,
         gpu.reductions.scalar_workspace, node_count, stream);
     return cuda_launch_ok(
-               "launch GPU PG-BB representable-chord increment", reason) &&
+               "launch GPU direct minimizer representable-chord increment", reason) &&
         reduce_scalar_sum(
             ctx, stream, gpu.reductions.scalar_workspace, block_count,
             gpu.reductions.scalar_result + kGpuFinalScalarSlots +
                 kDirectRepresentableChordTailSlot,
-            "launch GPU PG-BB representable-chord reduction", reason);
+            "launch GPU direct minimizer representable-chord reduction", reason);
 }
 
-bool gpu_direct_pgbb_armijo_evaluate(
+bool gpu_direct_minimizer_armijo_evaluate(
     Context &ctx,
     cudaStream_t stream,
     int node_count,
