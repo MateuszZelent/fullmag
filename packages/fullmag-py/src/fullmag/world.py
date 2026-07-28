@@ -96,6 +96,7 @@ from fullmag.model.study import (
     SaturationProbe,
     SettlePipeline,
     SettleTree,
+    StageAutosave,
     TableAutosave,
     TimeEvolution,
     DEFAULT_RELAXATION_MAX_STEPS,
@@ -2224,6 +2225,8 @@ class CapturedStage:
     action: dict[str, object] | None = None
     stage_id: str | None = None
     output_every_seconds: float | None = None
+    table_autosave: TableAutosave | None = None
+    autosave: StageAutosave | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -3304,6 +3307,94 @@ def capture_declared_stages() -> list[CapturedStage]:
     return list(_state._declared_stages)
 
 
+class RelaxStageBuilder:
+    """Configuration handle for one declared relaxation stage."""
+
+    def __init__(self, stage_id: str) -> None:
+        self._stage_id = stage_id
+
+    def autosave(self, policy: StageAutosave) -> "RelaxStageBuilder":
+        _attach_stage_autosave(self._stage_id, "relax", policy)
+        return self
+
+    def tableautosave(
+        self,
+        *,
+        every_steps: int,
+        quantities: Sequence[str] | None = None,
+        table_id: str = "default",
+    ) -> "RelaxStageBuilder":
+        configured = TableAutosave(
+            every_steps=every_steps,
+            quantities=quantities,
+            table_id=table_id,
+        )
+        for index, stage in enumerate(_state._declared_stages):
+            if stage.stage_id != self._stage_id:
+                continue
+            if stage.entrypoint_kind != "flat_relax":
+                raise ValueError(
+                    f"stage {self._stage_id!r} is not a relaxation stage"
+                )
+            if stage.table_autosave is not None:
+                raise ValueError(
+                    f"relax stage {self._stage_id!r} already has table autosave configured"
+                )
+            _state._declared_stages[index] = replace(
+                stage,
+                table_autosave=configured,
+            )
+            return self
+        raise ValueError(f"relax stage {self._stage_id!r} is no longer declared")
+
+
+class RunStageBuilder:
+    """Configuration handle for one declared physical-time stage."""
+
+    def __init__(self, stage_id: str) -> None:
+        self._stage_id = stage_id
+
+    def autosave(self, policy: StageAutosave) -> "RunStageBuilder":
+        _attach_stage_autosave(self._stage_id, "run", policy)
+        return self
+
+
+def _attach_stage_autosave(
+    stage_id: str,
+    stage_kind: str,
+    policy: StageAutosave,
+) -> None:
+    if not isinstance(policy, StageAutosave):
+        raise TypeError("autosave policy must be StageAutosave")
+    _validate_stage_autosave_clock(stage_kind, policy)
+    expected_entrypoint = f"flat_{stage_kind}"
+    for index, stage in enumerate(_state._declared_stages):
+        if stage.stage_id != stage_id:
+            continue
+        if stage.entrypoint_kind != expected_entrypoint:
+            raise ValueError(f"stage {stage_id!r} is not a {stage_kind} stage")
+        if stage.autosave is not None:
+            raise ValueError(
+                f"{stage_kind} stage {stage_id!r} already has autosave configured"
+            )
+        _state._declared_stages[index] = replace(stage, autosave=policy)
+        return
+    raise ValueError(f"{stage_kind} stage {stage_id!r} is no longer declared")
+
+
+def _validate_stage_autosave_clock(stage_kind: str, policy: StageAutosave) -> None:
+    cadences = [
+        *((policy.table,) if policy.table is not None else ()),
+        *policy.fields,
+    ]
+    if stage_kind == "relax":
+        if any(cadence.every_steps is None for cadence in cadences):
+            raise ValueError("relax stage autosave requires accepted-step cadence")
+        return
+    if any(cadence.every_steps is not None for cadence in cadences):
+        raise ValueError("run stage autosave requires physical-time cadence")
+
+
 class StudyStagesBuilder:
     """Declarative stage authoring facade for the flat study builder."""
 
@@ -3364,8 +3455,8 @@ class StudyStagesBuilder:
         adaptive_timestep: AdaptiveTimestep | None = None,
         field_refresh: FieldRefreshPolicy | None = None,
         stop: RelaxStop | None = None,
-    ) -> "StudyStagesBuilder":
-        return self.add_stage(
+    ) -> RelaxStageBuilder:
+        captured_stage = _capture_stage(
             relax_stage(
                 tol=tol,
                 max_steps=max_steps,
@@ -3385,10 +3476,15 @@ class StudyStagesBuilder:
                 adaptive_timestep=adaptive_timestep,
                 field_refresh=field_refresh,
                 stop=stop,
-            ),
-            stage_id=stage_id,
-            id_kind="relax",
+            )
         )
+        resolved_id = self._allocate_stage_id("relax", stage_id)
+        _state._declared_stages.append(
+            replace(captured_stage, stage_id=resolved_id)
+        )
+        if _state._interactive:
+            _state._wait_for_solve = True
+        return RelaxStageBuilder(resolved_id)
 
     def add_run(
         self,
@@ -3396,16 +3492,19 @@ class StudyStagesBuilder:
         *,
         stage_id: str | None = None,
         **legacy_run_configuration: object,
-    ) -> "StudyStagesBuilder":
+    ) -> RunStageBuilder:
         if until is None:
             raise TypeError("add_run() requires until")
         if legacy_run_configuration:
             self._expand_legacy_run_configuration(legacy_run_configuration)
-        return self.add_stage(
-            run_stage(until),
-            stage_id=stage_id,
-            id_kind="run",
+        captured_stage = _capture_stage(run_stage(until))
+        resolved_id = self._allocate_stage_id("run", stage_id)
+        _state._declared_stages.append(
+            replace(captured_stage, stage_id=resolved_id)
         )
+        if _state._interactive:
+            _state._wait_for_solve = True
+        return RunStageBuilder(resolved_id)
 
     def _expand_legacy_run_configuration(
         self,
@@ -3551,6 +3650,14 @@ class StudyStagesBuilder:
         stage_id: str | None = None,
     ) -> "StudyStagesBuilder":
         """Enable or disable the scalar table clock for subsequent stages."""
+        if every_steps is not None:
+            warnings.warn(
+                "Persistent study.stages.tableautosave() is deprecated for relaxation; "
+                "use study.stages.add_relax(...).tableautosave(...) to bind accepted-step "
+                "sampling to one relaxation stage.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         configured: TableAutosave | None
         if enabled:
             configured = TableAutosave(

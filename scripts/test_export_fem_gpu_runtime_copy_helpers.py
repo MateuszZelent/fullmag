@@ -422,9 +422,9 @@ def test_export_script_recreates_unversioned_fullmag_native_library_links() -> N
     assert 'copy_native_library_group "$FDM_LIB" libfullmag_fdm' in script
 
 
-def test_export_script_forces_fem_sys_native_rebuild_before_copying_libraries() -> None:
+def test_export_script_cleans_workspace_release_artifacts_before_building() -> None:
     script = EXPORT_SCRIPT.read_text(encoding="utf-8")
-    clean_index = script.find("cargo +nightly clean -p fullmag-fem-sys")
+    clean_index = script.find("cargo +nightly clean --workspace --release")
     build_index = script.find("cargo +nightly build")
     copy_index = script.find('FEM_LIB="$(only_native_lib_dir')
 

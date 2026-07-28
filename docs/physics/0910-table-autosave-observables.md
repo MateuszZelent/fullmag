@@ -1,8 +1,8 @@
 # Table Autosave Observables
 
-- Status: draft
+- Status: canonical
 - Owners: Fullmag core
-- Last updated: 2026-07-27
+- Last updated: 2026-07-28
 - Related ADRs: `docs/adr/0011-resource-first-api.md`, `docs/adr/0013-frontend-v2-module-kernel.md`
 - Related specs: `docs/specs/resource-first-control-room-api-v2.md`, `docs/specs/frontend-v2/16-charts-analysis-module.md`
 
@@ -18,6 +18,11 @@ The first production table is `default`. It records solver-state scalar
 observables at a simulation-time cadence or an accepted-relaxation-step
 cadence. The live UI may display the data as 1D, 2D, or 3D charts, but the
 chart state never owns the physical samples.
+
+`Relax` and `Run` stages may also own a complete autosave policy. That policy
+selects a named result target, storage layout, file format, table sampling, and
+field snapshots. Stage ownership is strict: a policy is active only while its
+owning stage executes and cannot leak into a following stage.
 
 ## 2. Physical Model
 
@@ -142,9 +147,28 @@ The public DSL adds:
 fm.TableAutosave(t_sampl=1e-12)
 study.table_autosave(t_sampl=1e-12)
 
-# relaxation
-fm.TableAutosave(every_steps=10)
-study.table_autosave(every_steps=10)
+# relaxation stage (canonical table-only shorthand)
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="projected_gradient_bb",
+    max_steps=50_000,
+).tableautosave(every_steps=10)
+
+# complete stage-local autosave policy
+study.stages.add_relax(
+    stage_id="relax-2",
+    algorithm="projected_gradient_bb",
+    max_steps=50_000,
+).autosave(fm.StageAutosave(
+    target="main",
+    layout="continuous",
+    format="zarr",
+    table=fm.TableAutosave(
+        every_steps=10,
+        quantities=["step", "mx", "my", "mz", "e_total"],
+    ),
+    fields=[fm.FieldAutosave("m", every_steps=100)],
+))
 ```
 
 `TimeEvolution` accepts only a physical-time cadence; `Relaxation` accepts
@@ -154,9 +178,20 @@ only `every_steps`. The default column set is:
 step, t, mx, my, mz, e_total, max_torque
 ```
 
+Persistent `study.stages.tableautosave(...)` actions remain readable for
+compatibility. New relaxation scripts attach accepted-step sampling directly
+to the owning relaxation stage so the cadence cannot leak into later stages.
+
+`FieldAutosave` requires exactly one cadence: `every` for physical-time Run
+stages or `every_steps` for accepted-step Relax stages. `StageAutosave`
+defaults to `target="main"`, `layout="continuous"`, and `format="zarr"`.
+At least one table or field policy is required.
+
 ### 4.2 ProblemIR Representation
 
-`SamplingIR` gains an optional `table_autosave` field with:
+`SamplingIR` exposes an optional stage autosave policy containing `target`,
+`layout = continuous | separate`, `format = zarr | hdf5 | txt`, an optional
+table policy, and zero or more field policies. The nested table policy keeps:
 
 - exactly one cadence: `sample_period_s` / `sample_period_policy` or
   `every_steps`
@@ -169,9 +204,45 @@ and Python-authored studies must lower to the same IR.
 ### 4.3 Planner and Capability-Matrix Impact
 
 Planners validate that time cadence is used for physical time evolution and
-that `every_steps` is positive. Each requested quantity must be supported by
-the resolved backend. Unsupported columns fail clearly or are reported as
-degraded in provenance; they are not silently omitted.
+that accepted-step cadence is used for relaxation. Each requested quantity
+must be supported by the resolved backend. Unsupported columns fail clearly;
+they are not silently omitted.
+
+Stages joining one continuous target must agree on format and compatible table
+and field schemas. Mesh identity, value type, component count, quantity
+identity, and chunking must remain compatible. Strict execution rejects a
+conflict before opening the target and never silently forks it.
+
+### 4.4 Storage formats and stage layout
+
+| Format | Scalar tables | Spatial fields | Default |
+|---|---:|---:|---:|
+| Zarr | yes | yes | yes |
+| HDF5 | yes | yes | no |
+| TXT | yes | no | no |
+
+TXT field autosave is invalid at every public boundary. The error must retain
+the user's field configuration for correction; UI authoring must not silently
+delete it.
+
+Zarr and HDF5 store numerical payloads once under explicit stage groups:
+
+```text
+stages/<stage-index>-<stage-id>/table/<quantity>
+stages/<stage-index>-<stage-id>/fields/<quantity>
+```
+
+For `layout="continuous"`, the same target also contains a `continuous`
+hierarchy with ordered indexes and manifests only. It does not duplicate table
+or field arrays. Readers reconstruct the logical sequence from stage-owned
+payloads. `layout="separate"` produces one target per stage using the same
+internal stage schema.
+
+Every logical sample carries `sample_index`, `stage_index`, `stage_id`,
+`stage_kind`, `stage_sample_index`, and `stage_step`. It also carries exactly
+the applicable clock coordinate: physical `time_s` for Run or
+`accepted_step` for Relax. Relaxation pseudotime is never merged with physical
+Run time.
 
 ## 5. Runtime, OpenAPI, and UI Impact
 
@@ -205,6 +276,18 @@ Chart zoom, series visibility, axis assignment, and trim range are UI state.
 Table samples stay in resource hooks/cache and are fetched by cursor or visible
 range with bounded row counts.
 
+Selecting a Relax or Run node exposes the same stage-local policy in its
+Inspector Autosave section: enablement, target, continuous/separate layout,
+format, table cadence and quantities, and field snapshot entries. It submits a
+canonical authoring transaction through the typed API facade. No direct
+component transport or separate autosave endpoint is introduced.
+
+At stage entry the runtime activates only the owning policy. At stage exit it
+flushes and drains the existing bounded artifact pipeline before committing
+the stage manifest. Encoding, compression, HDF5/Zarr writes, and TXT writes
+remain outside solver callbacks and GPU control fences. Failed stages preserve
+completed samples and record an incomplete marker and stop reason.
+
 ## 6. Validation Strategy
 
 ### 6.1 Analytical Checks
@@ -226,7 +309,14 @@ range with bounded row counts.
 ### 6.3 Regression Tests
 
 - Python DSL serialization for default and custom `TableAutosave`.
+- Python DSL serialization for `StageAutosave` and `FieldAutosave` in Relax
+  and Run, including canonical script round-trip.
 - ProblemIR serde round-trip for `sampling.table_autosave`.
+- Cross-stage continuous-target compatibility and stage-leakage tests.
+- Zarr and HDF5 layout/readback tests proving that `continuous` contains no
+  duplicate numerical payload.
+- TXT continuous/separate tests and TXT/field rejection.
+- Bounded artifact-pipeline and solver-callback timing regression tests.
 - v2 route tests for cursor, columns, limit, unit metadata, and scalar
   compatibility.
 - frontend API facade and resource-hook tests proving bounded fetches and no
@@ -246,7 +336,7 @@ range with bounded row counts.
 - [ ] FDM backend
 - [ ] FEM backend
 - [ ] Hybrid backend
-- [ ] Outputs / observables
+- [x] Outputs / observables contract
 - [ ] OpenAPI v2 and generated frontend transport
 - [ ] ECharts control-room UI
 - [ ] Tests / benchmarks
@@ -260,6 +350,9 @@ range with bounded row counts.
   acceptable for the first small-window route tests.
 - ECharts GL 3D series must stay behind a capability/config gate until the
   installed `echarts-gl` package is verified in `apps/control-room`.
+- HDF5 execution is capability-gated by the managed runtime. Strict mode fails
+  closed when the writer dependency is unavailable and never falls back to
+  Zarr.
 
 ## 9. References
 

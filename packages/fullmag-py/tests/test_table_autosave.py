@@ -15,6 +15,72 @@ from fullmag.runtime.script_builder import export_builder_draft
 from fullmag.runtime.script_builder import rewrite_loaded_problem_script
 
 
+def test_stage_autosave_defaults_to_continuous_zarr() -> None:
+    policy = fm.StageAutosave(
+        table=fm.TableAutosave(every_steps=10, quantities=["step", "mx"]),
+        fields=[fm.FieldAutosave("m", every_steps=100)],
+    )
+
+    assert policy.to_ir() == {
+        "kind": "stage_autosave",
+        "target": "main",
+        "layout": "continuous",
+        "format": "zarr",
+        "table": {
+            "kind": "table_autosave",
+            "table_id": "default",
+            "every_steps": 10,
+            "quantities": ["step", "mx"],
+        },
+        "fields": [
+            {"kind": "field_autosave", "quantity": "m", "every_steps": 100},
+        ],
+    }
+
+
+def test_field_autosave_requires_exactly_one_valid_cadence() -> None:
+    assert fm.FieldAutosave("m", every=1e-12).to_ir() == {
+        "kind": "field_autosave",
+        "quantity": "m",
+        "every_seconds": 1e-12,
+    }
+
+    with pytest.raises(ValueError, match="exactly one of every or every_steps"):
+        fm.FieldAutosave("m")
+    with pytest.raises(ValueError, match="exactly one of every or every_steps"):
+        fm.FieldAutosave("m", every=1e-12, every_steps=10)
+    with pytest.raises(ValueError, match="every_steps must be a positive integer"):
+        fm.FieldAutosave("m", every_steps=0)
+
+
+@pytest.mark.parametrize("target", ["", "../escape", "a/b", "white space"])
+def test_stage_autosave_rejects_unsafe_targets(target: str) -> None:
+    with pytest.raises(ValueError, match="target"):
+        fm.StageAutosave(
+            target=target,
+            table=fm.TableAutosave(every_steps=10),
+        )
+
+
+def test_stage_autosave_rejects_invalid_layout_format_and_empty_policy() -> None:
+    table = fm.TableAutosave(every_steps=10)
+    with pytest.raises(ValueError, match="layout must be one of"):
+        fm.StageAutosave(layout="joined", table=table)
+    with pytest.raises(ValueError, match="format must be one of"):
+        fm.StageAutosave(format="csv", table=table)
+    with pytest.raises(ValueError, match="at least one table or field"):
+        fm.StageAutosave()
+
+
+def test_stage_autosave_rejects_duplicate_fields_and_txt_fields() -> None:
+    first = fm.FieldAutosave("m", every_steps=10)
+    duplicate = fm.FieldAutosave("m", every_steps=20)
+    with pytest.raises(ValueError, match="duplicate field autosave quantity 'm'"):
+        fm.StageAutosave(fields=[first, duplicate])
+    with pytest.raises(ValueError, match="txt supports scalar tables only"):
+        fm.StageAutosave(format="txt", fields=[first])
+
+
 def test_time_evolution_table_autosave_lowers_default_columns_to_sampling_ir() -> None:
     study = fm.TimeEvolution(
         dynamics=fm.LLG(),
