@@ -3,6 +3,7 @@
  */
 
 #include "core/fem_mesh.hpp"
+#include "core/fem_material_fields.hpp"
 #include "core/fem_material_runtime.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -24,6 +25,7 @@
 #include <cstdlib>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <string>
 #include <vector>
 
@@ -324,6 +326,83 @@ void initialize_mfem_and_check_magnetic_volume(
           "compatibility node volumes must be synchronized from MFEM mass row sums");
 }
 
+std::vector<double> independent_magnetic_mass_row_sums(
+    const FemMeshRuntimeState &source,
+    const std::vector<uint8_t> &magnetic_element_mask)
+{
+    auto mesh = build(source);
+    mfem::H1_FECollection fec(1, mesh->Dimension());
+    mfem::FiniteElementSpace fes(mesh.get(), &fec);
+    mfem::Array<int> magnetic_attributes(mesh->attributes.Max());
+    magnetic_attributes = 0;
+    for (int element = 0; element < mesh->GetNE(); ++element) {
+        if (magnetic_element_mask[static_cast<size_t>(element)] == 0u) continue;
+        magnetic_attributes[mesh->GetAttribute(element) - 1] = 1;
+    }
+
+    mfem::BilinearForm mass(&fes);
+    mass.SetAssemblyLevel(mfem::AssemblyLevel::LEGACY);
+    mass.AddDomainIntegrator(new mfem::MassIntegrator(), magnetic_attributes);
+    mass.Assemble();
+    mass.Finalize();
+    mfem::Vector ones(fes.GetNDofs());
+    mfem::Vector row_sums(fes.GetNDofs());
+    ones = 1.0;
+    mass.Mult(ones, row_sums);
+    const double *row_sums_host = row_sums.HostRead();
+    return std::vector<double>(row_sums_host, row_sums_host + row_sums.Size());
+}
+
+void distorted_prism_mass_weights_match_independent_mfem_oracle()
+{
+    auto source = make_mesh(
+        {0,0,0, 1,0,0, 0,1,0,
+         0,0,1.00, 1,0,1.50, 0,1,0.80},
+        {FULLMAG_FEM_CELL_PRISM6}, {0,6}, {0,1,2,3,4,5}, {7});
+    const std::vector<uint8_t> magnetic_elements{1};
+    const auto oracle = independent_magnetic_mass_row_sums(source, magnetic_elements);
+    check(oracle.size() == 6u,
+          "independent MFEM prism mass oracle must publish all six row sums");
+    const double pre_initialize_oracle_volume =
+        std::accumulate(oracle.begin(), oracle.end(), 0.0);
+    const auto [minimum, maximum] = std::minmax_element(oracle.begin(), oracle.end());
+    check(*maximum - *minimum > 1.0e-6 * pre_initialize_oracle_volume,
+          "distorted prism oracle must distinguish MFEM row sums from volume over arity");
+
+    fullmag::fem::Context ctx{};
+    ctx.mesh = std::move(source);
+    ctx.mesh.magnetic_element_mask = magnetic_elements;
+    ctx.mesh.magnetic_node_mask = {1,1,1,1,1,1};
+    initialize_uniform_material(ctx);
+    std::string error;
+    const bool material_ready = fullmag::fem::initialize_material_runtime(ctx, error);
+    check(material_ready, error.c_str());
+    const bool mfem_ready = fullmag::fem::context_initialize_mfem(ctx, error);
+    check(mfem_ready, error.c_str());
+    const auto &actual = ctx.integration_weights.mfem_lumped_mass;
+    check(actual.size() == oracle.size(),
+          "production and independent MFEM mass vectors must have the same extent");
+    check(ctx.mesh.node_volumes == actual,
+          "distorted-prism compatibility node volumes must mirror canonical MFEM row sums");
+    for (size_t node = 0; node < actual.size(); ++node) {
+        const double scale = std::max({1.0, std::abs(actual[node]), std::abs(oracle[node])});
+        if (std::abs(actual[node] - oracle[node]) >
+            1024.0 * std::numeric_limits<double>::epsilon() * scale) {
+            std::fprintf(stderr,
+                         "distorted prism mass mismatch node=%zu actual=%.17g oracle=%.17g\n",
+                         node, actual[node], oracle[node]);
+        }
+        check(std::abs(actual[node] - oracle[node]) <=
+                  1024.0 * std::numeric_limits<double>::epsilon() * scale,
+              "production distorted-prism weights must match independent MassIntegrator times one");
+    }
+    check(close_volume(
+              std::accumulate(actual.begin(), actual.end(), 0.0),
+              std::accumulate(oracle.begin(), oracle.end(), 0.0)),
+          "production distorted-prism row sums must conserve the independent MFEM volume");
+    fullmag::fem::context_destroy_mfem(ctx);
+}
+
 void mfem_mass_weights_cover_tet_prism_and_mixed_magnetic_domains()
 {
     struct Case {
@@ -372,23 +451,83 @@ void mixed_core_measure_over_arity_is_not_published_as_runtime_node_volume()
           "mixed topology must wait for generic MFEM mass row sums instead of measure over arity");
 }
 
-void mixed_nodal_ms_average_uses_mfem_mass_weights()
+void check_nodal_mfem_coefficient(
+    fullmag::fem::Context &ctx,
+    const std::vector<double> &payload,
+    void *grid_function_handle,
+    void *coefficient_handle,
+    const char *name)
+{
+    auto &mesh = *static_cast<mfem::Mesh *>(ctx.mfem_context.mesh);
+    auto &fes = *static_cast<mfem::FiniteElementSpace *>(ctx.mfem_context.fes);
+    auto &field = *static_cast<mfem::GridFunction *>(grid_function_handle);
+    auto &coefficient = *static_cast<mfem::Coefficient *>(coefficient_handle);
+    check(dynamic_cast<mfem::GridFunctionCoefficient *>(&coefficient) != nullptr,
+          "nodal-P1 material must be realized as an MFEM GridFunctionCoefficient");
+    check(field.Size() == static_cast<int>(payload.size()),
+          "MFEM nodal material GridFunction must preserve payload extent");
+    for (int node = 0; node < field.Size(); ++node) {
+        check(field[node] == payload[static_cast<size_t>(node)], name);
+    }
+
+    mfem::Array<int> dofs;
+    fes.GetElementDofs(0, dofs);
+    const mfem::FiniteElement &element = *fes.GetFE(0);
+    mfem::Vector shape(element.GetDof());
+    mfem::ElementTransformation &transformation = *mesh.GetElementTransformation(0);
+    const mfem::IntegrationRule &rule = mfem::IntRules.Get(mfem::Geometry::PRISM, 4);
+    for (int point = 0; point < rule.GetNPoints(); ++point) {
+        const mfem::IntegrationPoint &integration_point = rule.IntPoint(point);
+        element.CalcShape(integration_point, shape);
+        double expected = 0.0;
+        for (int local = 0; local < dofs.Size(); ++local) {
+            check(dofs[local] >= 0,
+                  "scalar H1 P1 material coefficient must use unsigned vertex DOFs");
+            expected += payload[static_cast<size_t>(dofs[local])] * shape[local];
+        }
+        transformation.SetIntPoint(&integration_point);
+        const double actual = coefficient.Eval(transformation, integration_point);
+        const double scale = std::max({1.0, std::abs(actual), std::abs(expected)});
+        check(std::abs(actual - expected) <=
+                  512.0 * std::numeric_limits<double>::epsilon() * scale,
+              name);
+    }
+}
+
+void mixed_nodal_ms_and_a_follow_validated_mfem_realization()
 {
     fullmag::fem::Context ctx{};
     ctx.mesh = conforming_prism_pyramid_tet();
     ctx.mesh.magnetic_element_mask = {1,0,0};
     ctx.mesh.magnetic_node_mask = {1,1,1,1,1,1,0,0};
     initialize_uniform_material(ctx);
-    ctx.material_fields.Ms_field = {1,1,1,2,2,2,0,0};
+    ctx.material_fields.Ms_field = {1,2,3,4,5,6,101,103};
+    ctx.material_fields.A_field = {
+        11e-12, 12e-12, 13e-12, 14e-12, 15e-12, 16e-12, 91e-12, 93e-12};
     for (uint32_t node = 0; node < ctx.mesh.n_nodes; ++node) {
         const size_t base = 3u * static_cast<size_t>(node);
         ctx.state.m_xyz[base + 0u] = node < 3u ? 1.0 : 0.0;
         ctx.state.m_xyz[base + 1u] = node >= 3u && node < 6u ? 1.0 : 0.0;
     }
+    std::string error;
+    const bool material_valid = fullmag::fem::validate_material_fields(ctx, error);
+    check(material_valid, error.c_str());
     initialize_mfem_and_check_magnetic_volume(ctx, 0.5);
+    check_nodal_mfem_coefficient(
+        ctx,
+        ctx.material_fields.Ms_field,
+        ctx.mfem_context.gf_ms,
+        ctx.mfem_context.ms_coeff,
+        "validated nodal Ms payload must survive its MFEM realization");
+    check_nodal_mfem_coefficient(
+        ctx,
+        ctx.material_fields.A_field,
+        ctx.mfem_context.gf_a,
+        ctx.mfem_context.a_coeff,
+        "validated nodal A payload must survive its MFEM realization");
     const auto average = fullmag::fem::average_magnetization_components(ctx);
-    check(close_volume(average[0], 1.0 / 3.0) &&
-              close_volume(average[1], 2.0 / 3.0) && close_volume(average[2], 0.0),
+    check(close_volume(average[0], 2.0 / 7.0) &&
+              close_volume(average[1], 5.0 / 7.0) && close_volume(average[2], 0.0),
           "nodal Ms average magnetization must use Ms times MFEM magnetic mass weights");
     fullmag::fem::context_destroy_mfem(ctx);
 }
@@ -763,8 +902,9 @@ int main()
     repeated_incomplete_facets_fail_before_runtime_publication();
     repeated_post_device_fes_failure_rolls_back_runtime_state();
     mfem_mass_weights_cover_tet_prism_and_mixed_magnetic_domains();
+    distorted_prism_mass_weights_match_independent_mfem_oracle();
     mixed_core_measure_over_arity_is_not_published_as_runtime_node_volume();
-    mixed_nodal_ms_average_uses_mfem_mass_weights();
+    mixed_nodal_ms_and_a_follow_validated_mfem_realization();
     mixed_element_dg0_material_rejects_without_tetrahedral_realization();
     return 0;
 }
