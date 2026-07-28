@@ -1,8 +1,8 @@
 # FEM mixed prism/pyramid shared-domain mesh
 
-- Status: canonical target contract; feasibility fixture only
+- Status: canonical target contract; typed topology/transport implemented; native operators fail closed
 - Owners: Fullmag core
-- Last updated: 2026-07-27
+- Last updated: 2026-07-28
 - Related ADRs: `docs/adr/0021-native-mixed-p1-fem-topology.md`
 - Related specs:
   - `docs/specs/capability-matrix-v0.md`
@@ -26,10 +26,13 @@ scale. The target solver mesh is one conforming shared domain with:
 - `tet4` cells in the remaining air;
 - `tri3 | quad4` boundary and interface facets.
 
-This note makes that topology implementation-ready. It does not make mixed
-elements executable in Fullmag. The current Python extraction, `MeshIR`, native
-ABI, MFEM spaces/operators, FMMT v1 transport, and control-room decoder remain
-tetrahedral contracts until later slices replace or version them.
+This note makes that topology implementation-ready. Python authoring and Gmsh
+extraction, `MeshIR`, the runner/native ABI, the mixed-layer certificate, FMMT
+v2 transport, OpenAPI resources, and the control-room decoder/viewport already
+preserve typed variable-width topology. That transport implementation does not
+make mixed elements executable in Fullmag: current MFEM CPU and GPU physics
+operators remain tet4/tri3-only and the planner rejects mixed P1 before native
+backend startup.
 
 The first qualification target is deliberately narrow: one axis-aligned
 `Box`, P1, one conforming shared-domain airbox, uniform `Ms` and `Aex`, exchange,
@@ -207,13 +210,14 @@ later implementation slice must define the canonical enum values and export
 them without exposing Gmsh element IDs or algorithm names. Python-to-IR-to-UI-
 to-Python round-trip must preserve requested topology and exact layer count.
 
-This note adds no executable Python API. Existing tetrahedral lowering remains
-the only public executable path and must reject, not pretend to realize, the
-new strict mixed-P1 request until implementation lands.
+The public Python API and its lowering preserve the requested prismatic
+topology, transition policy, and exact layer count. Existing tetrahedral
+lowering remains the only public executable path: a strict mixed-P1 request
+must reject, not pretend to execute, until the native operators land.
 
 ### 4.2 ProblemIR representation and normalization
 
-The target `ProblemIR` needs backend-neutral enums for:
+`ProblemIR` uses backend-neutral enums for:
 
 ```text
 cell topology: prism6 | pyramid5 | tet4
@@ -223,9 +227,9 @@ exact layer count: positive integer
 ```
 
 Gmsh numeric element IDs are import details and must not enter the public IR.
-Validation must keep requested topology, sweep direction, and exact layer count
-separate from the realized certificate. No migration may reinterpret an old
-tetrahedral mesh as mixed-P1.
+Validation keeps requested topology, sweep direction, and exact layer count
+separate from the realized certificate. Legacy tetrahedral input normalizes to
+the typed representation; no migration may reinterpret it as mixed-P1.
 
 ### 4.3 Planner and capability matrix
 
@@ -259,21 +263,19 @@ Rust runner code owns orchestration, typed ABI lowering, requested/resolved
 provenance, artifacts, and rejection before startup; it must not implement a
 second FEM solver or hidden element conversion.
 
-The native ABI must carry typed, variable-width cell/facet connectivity or an
-equivalent versioned descriptor. Fixed `tet4`/`tri3` buffers cannot encode this
-contract. CPU and GPU readiness probes must reject an ABI/topology version they
-do not understand before allocating solver state.
+The native ABI carries typed, variable-width cell/facet connectivity. CPU and
+GPU readiness probes reject an ABI/topology version they do not understand
+before allocating solver state, and the current physics gate rejects every
+non-`tet4`/`tri3` mesh before operator allocation.
 
 ### 4.5 API, binary transport, and control room
 
-FMMT v1 fixes every volume element at four indices and every boundary face at
-three. Mixed topology therefore requires an FMMT v2 design with explicit
-canonical type enums, offsets plus connectivity, per-cell/per-facet markers,
-and versioned byte-range metadata. The OpenAPI descriptions, server serializer,
-header/range reader, generated TypeScript, decoder, domain adapter, viewport
-triangulation, selection, histogram, and inspector surfaces must change in one
-later resource-first slice. FMMT v1 remains readable for tetrahedral sessions;
-it must never carry disguised or truncated mixed cells.
+FMMT v2 carries explicit canonical type enums, offsets plus connectivity,
+per-cell/per-facet markers, and versioned byte-range metadata. OpenAPI,
+serializer, header/range reader, generated TypeScript, decoder, domain adapter,
+viewport triangulation, selection, histogram, and inspector surfaces consume
+that typed representation. FMMT v1 remains readable only for tetrahedral
+sessions; it must never carry disguised or truncated mixed cells.
 
 The UI must show requested topology, realized topology counts, certificate
 status, quality metric identity, exact-layer result, and explicit rejection or
@@ -355,13 +357,13 @@ No lower level implies a higher one.
 - [x] First-slice legality and fail-closed unsupported matrix
 - [x] Exact-layer/shared-domain certificate target
 - [x] Frozen Gmsh 4.15.2 feasibility fixture
-- [ ] Executable Python API and round-trip
-- [ ] ProblemIR enums, validation, and migration
-- [ ] Planner implementation and machine-readable capabilities
-- [ ] Variable-width mesh container and native ABI
+- [x] Python API and round-trip preserve requested mixed topology
+- [x] ProblemIR enums, validation, and legacy-tetra migration
+- [x] Fail-closed planner and machine-readable capabilities
+- [x] Variable-width mesh container and native ABI
 - [ ] FEM CPU mixed-element operators
 - [ ] FEM GPU mixed-element operators
-- [ ] FMMT v2, OpenAPI, generated client, and viewport
+- [x] FMMT v2, OpenAPI, generated client, and typed viewport transport
 - [ ] Managed runtime and physics validation
 - [ ] Production qualification report
 

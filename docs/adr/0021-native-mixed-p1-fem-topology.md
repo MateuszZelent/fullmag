@@ -1,6 +1,6 @@
 # ADR 0021 - Native mixed-P1 FEM topology
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-07-27
 **Decision makers:** Fullmag core
 
@@ -66,18 +66,20 @@ Positive:
 - conforming shared-node exchange/Poisson assembly remains possible;
 - CPU/GPU can implement one topology, sign, unit, and certificate contract.
 
-Costs and risks:
+Remaining costs and risks:
 
-- mesh containers, native ABI, MFEM/libCEED operators, quadrature, quality,
-  artifacts, transport, and viewport code must become variable-topology aware;
+- MFEM/libCEED operators, quadrature, and quality validation must become
+  mixed-topology aware; typed mesh containers, native ABI, artifacts,
+  transport, and viewport code already preserve variable-width topology;
 - `pyramid5` needs an explicit first-order reference basis and quadrature/Jacobian
   validation, not tetrahedral truncation;
-- FMMT v1 and current tetrahedral readers cannot represent mixed cells safely.
+- FMMT v1 cannot represent mixed cells safely; v2 is the typed transport path
+  while v1 remains a tetrahedral compatibility reader.
 
 ## Implementation obligations
 
-1. Define canonical cell/facet enums and variable-width connectivity in Python,
-   `ProblemIR`, mesh artifacts, and the native ABI.
+1. Canonical cell/facet enums and variable-width connectivity are implemented
+   in Python, `ProblemIR`, mesh artifacts, and the native ABI.
 2. Validate topology/physics legality before backend startup. Until separately
    qualified, reject FEM/BEM, PBC/Floquet, DMI/STT/thermal/magnetoelastic,
    regional projections, eigen/frequency-domain, DG0/material interfaces,
@@ -91,10 +93,10 @@ Costs and risks:
    including plane count/tolerance, cell/facet ownership, shared node IDs,
    manifoldness, positive order-2-or-higher Jacobians, relative volume error,
    honest quality metric, and fallback list.
-6. Design FMMT v2 with canonical type enums, offsets plus connectivity,
-   per-cell/per-facet markers, and range-readable versioned metadata. Update the
-   OpenAPI descriptions, serializer, range/header logic, generated frontend
-   types, decoder, adapters, viewport, selection, and mesh inspectors together.
+6. FMMT v2 implements canonical type enums, offsets plus connectivity,
+   per-cell/per-facet markers, and range-readable versioned metadata. OpenAPI,
+   serializer, range/header logic, generated frontend types, decoder, adapters,
+   viewport, selection, and mesh inspectors consume that representation.
 7. Preserve FMMT v1 and the tetrahedral reader only for version-1 tetrahedral
    sessions. Remove the temporary legacy reader after all supported writers emit
    v2, API and control-room consumers decode v2, persisted v1 compatibility has
@@ -105,17 +107,17 @@ Costs and risks:
 
 ## Migration and rollback
 
-Migration is additive and fail-closed:
+Migration is additive and fail-closed. Completed transport slices and remaining
+operator slices are deliberately separate:
 
 1. freeze the physics contract and Gmsh 4.15.2 feasibility fixture;
-2. add typed enums and versioned containers without changing the default
-   tetrahedral path;
-3. add planner rejection and exact certificate;
+2. add typed enums, versioned containers, planner rejection, and exact
+   certificate without changing the default tetrahedral execution path;
+3. add FMMT v2/OpenAPI/control-room support;
 4. add CPU mixed-P1 operators and managed validation;
 5. add GPU double operators and same-mesh parity;
-6. add FMMT v2/OpenAPI/control-room support;
-7. enable the narrow qualified workload only after all layer gates pass;
-8. retire the v1-only reader under the criterion above.
+6. enable the narrow qualified workload only after all layer gates pass;
+7. retire the v1-only reader under the criterion above.
 
 Rollback before promotion disables the mixed-P1 capability and continues to
 read existing tetrahedral FMMT v1 sessions. Rollback must not reinterpret a

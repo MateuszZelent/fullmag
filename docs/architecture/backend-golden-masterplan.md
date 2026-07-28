@@ -308,11 +308,12 @@ DMI/STT/thermal/magnetoelastic, regional projections, eigen/frequency-domain,
 DG0/material interfaces, order>1, arbitrary OCC, multi-body i multilayer
 pozostają fail-closed do osobnej kwalifikacji.
 
-Obecny stan to wyłącznie kontrakt dokumentacyjny i fixture wykonalności Gmsh
-4.15.2. Nie jest to `production_executable` ani `validated`. Implementacja
-wymaga wersjonowanego, zmiennego connectivity w ABI i artefaktach oraz FMMT v2
-z aktualizacją OpenAPI, serializera, klienta, dekodera i unified viewport;
-tetrahedralny FMMT v1 nie może maskować albo obcinać komórek mieszanych.
+Obecny stan obejmuje typowaną topologię w Pythonie, `ProblemIR`, runnerze i
+ABI, certyfikat, generator Gmsh oraz FMMT v2 z OpenAPI i unified viewport.
+Nie jest to `production_executable` ani `validated`: MFEM CPU oraz GPU
+MFEM/libCEED/CUDA nadal odrzucają mixed P1 przed alokacją operatorów.
+Tetrahedralny FMMT v1 pozostaje wyłącznie readerem kompatybilności i nie może
+maskować ani obcinać komórek mieszanych.
 
 ## 7.1 Architektura FEM Frequency-Domain I Eigenmodes
 
