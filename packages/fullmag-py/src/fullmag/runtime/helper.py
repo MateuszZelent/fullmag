@@ -81,6 +81,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[precision.value for precision in ExecutionPrecision],
     )
     export_run_config.add_argument(
+        "--runtime-device",
+        choices=["cpu", "gpu"],
+        help="Explicit execution-device override supplied by the managed runtime launcher.",
+    )
+    export_run_config.add_argument(
         "--skip-geometry-assets",
         action="store_true",
         help="Export a lightweight IR without materializing geometry assets.",
@@ -179,6 +184,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             execution_precision=execution_precision,
             asset_cache=asset_cache,
             include_geometry_assets=not getattr(args, "skip_geometry_assets", False),
+            runtime_device_override=getattr(args, "runtime_device", None),
         )
         _write_executed_problem_ir_identity(ir)
         shared_geometry_assets = copy.deepcopy(ir.get("geometry_assets"))
@@ -194,7 +200,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         stage_start_time_s = 0.0
         for stage in loaded.stages or ():
             action_device = _change_device_action_device(stage.action)
-            stage_device_override = action_device or device_override
+            stage_device_override = (
+                getattr(args, "runtime_device", None) or action_device or device_override
+            )
             stage_ir = stage.to_ir(
                 requested_backend=requested_backend,
                 execution_mode=execution_mode,

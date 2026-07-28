@@ -28,11 +28,26 @@ LANES = {
     "fem_gpu_public",
 }
 MARKDOWN_STATUS = {
-    "mesh.topology.mixed_p1": ("`semantic_only` on FEM; `unsupported` on FDM", "semantic_only"),
-    "mesh.swept.prism": ("`semantic_only` on FEM; `unsupported` on FDM", "semantic_only"),
-    "mesh.transition.pyramid_tet": ("`semantic_only` on FEM; `unsupported` on FDM", "semantic_only"),
-    "mesh.exact_layer_count": ("`semantic_only` on FEM; `unsupported` on FDM", "semantic_only"),
-    "fem.cpu.exchange_demag.mixed_p1": ("`unsupported`", "source_visible"),
+    "mesh.topology.mixed_p1": (
+        "CPU `production_executable`; GPU `semantic_only`; FDM `unsupported`",
+        "production_executable",
+    ),
+    "mesh.swept.prism": (
+        "CPU `production_executable`; GPU `semantic_only`; FDM `unsupported`",
+        "production_executable",
+    ),
+    "mesh.transition.pyramid_tet": (
+        "CPU `production_executable`; GPU `semantic_only`; FDM `unsupported`",
+        "production_executable",
+    ),
+    "mesh.exact_layer_count": (
+        "CPU `production_executable`; GPU `semantic_only`; FDM `unsupported`",
+        "production_executable",
+    ),
+    "fem.cpu.exchange_demag.mixed_p1": (
+        "`production_executable`",
+        "production_executable",
+    ),
     "fem.gpu.exchange_demag.mixed_p1": ("`unsupported`", "source_visible"),
 }
 STATUS_VOCABULARY = {
@@ -51,8 +66,10 @@ STATUS_VOCABULARY = {
 def expected_lanes(capability_id: str) -> dict[str, str]:
     lanes = {lane: "unsupported" for lane in LANES}
     if capability_id in MESH_CAPABILITIES:
-        lanes["fem_cpu_public"] = "semantic_only"
+        lanes["fem_cpu_public"] = "production_executable"
         lanes["fem_gpu_public"] = "semantic_only"
+    elif capability_id == CPU_OPERATOR_CAPABILITY:
+        lanes["fem_cpu_public"] = "production_executable"
     return lanes
 
 

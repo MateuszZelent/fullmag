@@ -11347,61 +11347,233 @@ fn valid_mixed_certificate_asset() -> fullmag_ir::FemDomainMeshAssetIR {
     }
 }
 
-#[test]
-fn fem_planner_rejects_certified_mixed_p1_before_backend_startup() {
+fn mixed_cpu_relaxation_ir(
+    algorithm: fullmag_ir::RelaxationAlgorithmIR,
+    demag_realization: fullmag_ir::RequestedFemDemagIR,
+) -> ProblemIR {
     let mut ir = fem_minimal_test_ir();
     ir.problem_meta.runtime_metadata.insert(
         "runtime_selection".to_string(),
         serde_json::json!({"device": "cpu"}),
     );
-    let asset = valid_mixed_certificate_asset();
-    asset
-        .validate()
-        .expect("mixed certificate fixture must be valid");
-    let source_mesh = asset
-        .mesh
-        .as_ref()
-        .expect("fixture must carry an inline mesh");
-    let source_fingerprint = source_mesh.topology_fingerprint_v6();
-    let analysis = crate::mesh::analyze_shared_domain_mesh(source_mesh, &asset.region_markers)
-        .expect("valid mixed fixture must be analyzable");
-    let (packed_mesh, _, _) = crate::mesh::pack_mesh_by_analysis(source_mesh, &analysis)
-        .expect("valid mixed fixture must be packable");
-    assert_ne!(
-        source_mesh.topology_fingerprint_v6(),
-        packed_mesh.topology_fingerprint_v6()
-    );
-    ir.geometry_assets.as_mut().unwrap().fem_domain_mesh_asset = Some(asset);
-    ir.validate()
-        .expect("problem with valid mixed certificate must pass IR validation");
+    let dynamics = ir.study.dynamics().clone();
+    let sampling = ir.study.sampling().clone();
+    ir.energy_terms = vec![
+        fullmag_ir::EnergyTermIR::Exchange,
+        fullmag_ir::EnergyTermIR::Demag {
+            realization: demag_realization,
+        },
+    ];
+    ir.study = fullmag_ir::StudyIR::Relaxation {
+        algorithm,
+        dynamics: (algorithm == fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped)
+            .then_some(dynamics),
+        stop: fullmag_ir::RelaxStopIR {
+            torque_tolerance_apm: Some(1.0e-4),
+            energy_tolerance_j: None,
+            max_steps: Some(16),
+            max_relaxation_time_s: None,
+        },
+        sampling,
+    };
+    ir.geometry_assets
+        .as_mut()
+        .expect("geometry assets")
+        .fem_domain_mesh_asset = Some(valid_mixed_certificate_asset());
+    ir
+}
 
-    let error = plan(&ir).expect_err(
-        "mixed P1 must remain capability-gated until native mixed operators are executable",
-    );
-    let reason = error.reasons.join("\n");
-    assert!(
-        reason.contains("fem_mixed_p1_capability_rejected"),
-        "{reason}"
-    );
-    assert!(reason.contains("prism6"), "{reason}");
-    assert!(reason.contains("pyramid5"), "{reason}");
-    assert!(
-        reason.contains("fem.cpu.exchange_demag.mixed_p1"),
-        "{reason}"
-    );
-    assert!(reason.contains("fallback=none"), "{reason}");
-    assert!(reason.contains("free_tetrahedral"), "{reason}");
-    assert_eq!(
-        source_fingerprint,
-        ir.geometry_assets
+#[test]
+fn fem_planner_accepts_certified_mixed_p1_cpu_double_and_rebinds_packed_certificate() {
+    for (algorithm, demag_realization) in [
+        (
+            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+        ),
+        (
+            fullmag_ir::RelaxationAlgorithmIR::NonlinearCg,
+            fullmag_ir::RequestedFemDemagIR::PoissonDirichlet,
+        ),
+        (
+            fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+            fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+        ),
+    ] {
+        let ir = mixed_cpu_relaxation_ir(algorithm, demag_realization);
+        let asset = ir
+            .geometry_assets
             .as_ref()
             .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
-            .and_then(|asset| asset.mesh.as_ref())
+            .expect("mixed fixture must carry a domain asset");
+        asset
+            .validate()
+            .expect("mixed certificate fixture must be valid");
+        let source_mesh = asset
+            .mesh
             .as_ref()
-            .expect("source asset remains present")
-            .topology_fingerprint_v6(),
-        "capability rejection must not repack or mutate certified topology",
-    );
+            .expect("fixture must carry an inline mesh");
+        let source_fingerprint = source_mesh.topology_fingerprint_v6();
+        let analysis = crate::mesh::analyze_shared_domain_mesh(source_mesh, &asset.region_markers)
+            .expect("valid mixed fixture must be analyzable");
+        let (packed_mesh, _, _) = crate::mesh::pack_mesh_by_analysis(source_mesh, &analysis)
+            .expect("valid mixed fixture must be packable");
+        assert_ne!(
+            source_mesh.topology_fingerprint_v6(),
+            packed_mesh.topology_fingerprint_v6()
+        );
+        ir.validate()
+            .expect("problem with valid mixed certificate must pass IR validation");
+
+        let planned = plan(&ir).expect("qualified mixed P1 CPU relaxation must plan");
+        let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+            panic!("qualified mixed P1 relaxation must resolve to FEM");
+        };
+        let final_fingerprint = fem.mesh.topology_fingerprint_v6();
+        assert_ne!(source_fingerprint, final_fingerprint);
+        let report = fem
+            .mesh_build_report
+            .expect("qualified mixed P1 plan must preserve its build report");
+        let certificate = report
+            .mixed_layer_topology_certificate
+            .expect("qualified mixed P1 plan must carry a final certificate");
+        assert_eq!(certificate.topology_fingerprint, final_fingerprint);
+        fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(&certificate, &fem.mesh)
+            .expect("rebound certificate must validate against the final packed mesh");
+        let provenance = report
+            .mixed_topology_provenance
+            .expect("qualified mixed P1 plan must bind requested and resolved intent");
+        assert_eq!(
+            provenance.requested_topology,
+            fullmag_ir::FemMeshTopologyFamilyIR::MixedP1
+        );
+        assert_eq!(
+            provenance.resolved_topology,
+            fullmag_ir::FemMeshTopologyFamilyIR::MixedP1
+        );
+        assert_eq!(
+            provenance.accepted_certificate_fingerprint,
+            final_fingerprint
+        );
+        assert_eq!(
+            provenance.requested_device,
+            fullmag_ir::ExecutionDevice::Cpu
+        );
+        assert_eq!(
+            provenance.capability_status,
+            fullmag_ir::FemMixedTopologyCapabilityStatusIR::ProductionExecutable
+        );
+        assert_eq!(
+            source_fingerprint,
+            ir.geometry_assets
+                .as_ref()
+                .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+                .and_then(|asset| asset.mesh.as_ref())
+                .as_ref()
+                .expect("source asset remains present")
+                .topology_fingerprint_v6(),
+            "planning must pack a clone and never mutate the certified source asset",
+        );
+    }
+}
+
+#[test]
+fn fem_planner_rejects_every_mixed_p1_execution_tuple_outside_cpu_double_strict_sp4_scope() {
+    for case in [
+        "backend_auto",
+        "device_auto",
+        "device_gpu",
+        "single",
+        "extended",
+        "time_evolution",
+        "missing_exchange",
+        "dmi",
+        "fem_bem",
+        "high_order",
+        "non_box",
+        "pbc",
+    ] {
+        let mut ir = mixed_cpu_relaxation_ir(
+            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+        );
+        match case {
+            "backend_auto" => ir.backend_policy.requested_backend = BackendTarget::Auto,
+            "device_auto" => {
+                ir.problem_meta.runtime_metadata.insert(
+                    "runtime_selection".to_string(),
+                    serde_json::json!({"device": "auto"}),
+                );
+            }
+            "device_gpu" => {
+                ir.problem_meta.runtime_metadata.insert(
+                    "runtime_selection".to_string(),
+                    serde_json::json!({"device": "gpu"}),
+                );
+            }
+            "single" => {
+                ir.backend_policy.execution_precision = fullmag_ir::ExecutionPrecision::Single;
+            }
+            "extended" => {
+                ir.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Extended;
+            }
+            "time_evolution" => {
+                ir.study = ProblemIR::bootstrap_example().study;
+            }
+            "missing_exchange" => {
+                ir.energy_terms
+                    .retain(|term| !matches!(term, fullmag_ir::EnergyTermIR::Exchange));
+            }
+            "dmi" => ir
+                .energy_terms
+                .push(fullmag_ir::EnergyTermIR::BulkDmi { d: 1.0 }),
+            "fem_bem" => {
+                ir.energy_terms = vec![
+                    fullmag_ir::EnergyTermIR::Exchange,
+                    fullmag_ir::EnergyTermIR::Demag {
+                        realization: fullmag_ir::RequestedFemDemagIR::FredkinKoehler,
+                    },
+                ];
+            }
+            "high_order" => {
+                ir.backend_policy
+                    .discretization_hints
+                    .as_mut()
+                    .and_then(|hints| hints.fem.as_mut())
+                    .expect("mixed fixture has FEM hints")
+                    .order = 2;
+            }
+            "non_box" => {
+                ir.geometry.entries = vec![fullmag_ir::GeometryEntryIR::Cylinder {
+                    name: "strip".to_string(),
+                    radius: 10e-9,
+                    height: 6e-9,
+                    axis: [0.0, 0.0, 1.0],
+                }];
+            }
+            "pbc" => {
+                ir.pbc = Some(fullmag_ir::FdmPeriodicityIR {
+                    axes: [
+                        fullmag_ir::AxisBoundary::Periodic,
+                        fullmag_ir::AxisBoundary::Open,
+                        fullmag_ir::AxisBoundary::Open,
+                    ],
+                    demag: fullmag_ir::FdmDemagPeriodicityIR::PeriodicAirboxK0,
+                    image_counts: None,
+                });
+            }
+            _ => unreachable!(),
+        }
+
+        let reason = plan(&ir)
+            .expect_err("unsupported mixed P1 tuple must fail closed")
+            .reasons
+            .join("\n");
+        assert!(
+            reason.contains("fem_mixed_p1_scope_rejected"),
+            "case={case}: {reason}"
+        );
+        assert!(reason.contains("fallback=none"), "case={case}: {reason}");
+    }
 }
 
 #[test]
@@ -11457,39 +11629,30 @@ fn fem_planner_rejects_uncertified_mixed_per_object_asset_before_backend_startup
 }
 
 #[test]
-fn fem_planner_reports_exact_missing_mixed_p1_operator_for_requested_device() {
-    for (device, expected_capability) in [
-        ("cpu", "fem.cpu.exchange_demag.mixed_p1"),
-        ("gpu", "fem.gpu.exchange_demag.mixed_p1"),
-        (
-            "auto",
-            "fem.cpu.exchange_demag.mixed_p1,fem.gpu.exchange_demag.mixed_p1",
-        ),
-    ] {
-        let mut ir = fem_minimal_test_ir();
+fn fem_planner_rejects_non_cpu_mixed_p1_requested_devices_without_fallback() {
+    for device in ["gpu", "auto"] {
+        let mut ir = mixed_cpu_relaxation_ir(
+            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+        );
         ir.problem_meta.runtime_metadata.insert(
             "runtime_selection".to_string(),
             serde_json::json!({"device": device}),
         );
-        ir.geometry_assets
-            .as_mut()
-            .expect("geometry assets")
-            .fem_domain_mesh_asset = Some(valid_mixed_certificate_asset());
 
         let reason = plan(&ir)
-            .expect_err("mixed P1 operators are not executable yet")
+            .expect_err("non-CPU mixed P1 execution must fail closed")
             .reasons
             .join("\n");
         assert!(
-            reason.contains(expected_capability),
+            reason.contains("fem_mixed_p1_scope_rejected"),
             "device={device}: {reason}"
         );
         assert!(
             reason.contains(&format!("requested_device={device}")),
             "device={device}: {reason}"
         );
-        assert!(reason.contains("production_executable=false"), "{reason}");
-        assert!(reason.contains("validated=false"), "{reason}");
+        assert!(reason.contains("fallback=none"), "{reason}");
     }
 }
 
@@ -11505,15 +11668,11 @@ fn auto_backend_rejects_mixed_fem_topology_for_all_modes_and_devices() {
         fullmag_ir::ExecutionMode::Strict,
         fullmag_ir::ExecutionMode::Extended,
     ] {
-        for (device, expected_capability) in [
-            ("cpu", "fem.cpu.exchange_demag.mixed_p1"),
-            ("gpu", "fem.gpu.exchange_demag.mixed_p1"),
-            (
-                "auto",
-                "fem.cpu.exchange_demag.mixed_p1,fem.gpu.exchange_demag.mixed_p1",
-            ),
-        ] {
-            let mut ir = fem_minimal_test_ir();
+        for device in ["cpu", "gpu", "auto"] {
+            let mut ir = mixed_cpu_relaxation_ir(
+                fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+                fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+            );
             ir.backend_policy.requested_backend = BackendTarget::Auto;
             ir.backend_policy
                 .discretization_hints
@@ -11525,21 +11684,12 @@ fn auto_backend_rejects_mixed_fem_topology_for_all_modes_and_devices() {
                 "runtime_selection".to_string(),
                 serde_json::json!({"device": device}),
             );
-            ir.geometry_assets
-                .as_mut()
-                .expect("geometry assets")
-                .fem_domain_mesh_asset = Some(valid_mixed_certificate_asset());
-
             let reason = plan(&ir)
                 .expect_err("backend=auto must not route mixed FEM topology into FDM")
                 .reasons
                 .join("\n");
             assert!(
-                reason.contains("fem_mixed_p1_capability_rejected"),
-                "mode={mode:?}, device={device}: {reason}"
-            );
-            assert!(
-                reason.contains(expected_capability),
+                reason.contains("fem_mixed_p1_scope_rejected"),
                 "mode={mode:?}, device={device}: {reason}"
             );
             assert!(

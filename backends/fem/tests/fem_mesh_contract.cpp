@@ -205,8 +205,25 @@ void exported_mesh_abi_query_matches_compiled_layout() {
           "runtime query returns the embedded mesh ABI record");
 }
 
-void backend_create_rejects_mixed_mesh_at_explicit_physics_gate() {
+MeshBuffers qualified_mixed_operator_mesh() {
     MeshBuffers source;
+    source.cell_types.resize(3u);
+    source.cell_offsets.resize(4u);
+    source.cell_nodes.resize(15u);
+    source.cell_global_ordinals.resize(3u);
+    source.cell_markers = {0u, 1u, 0u};
+    source.facet_types.resize(2u);
+    source.facet_roles.resize(2u);
+    source.facet_offsets.resize(3u);
+    source.facet_nodes.resize(7u);
+    source.facet_global_ordinals.resize(2u);
+    source.facet_markers.resize(2u);
+    source.periodic_node_pairs.clear();
+    source.periodic_boundary_pair_markers.clear();
+    return source;
+}
+
+fullmag_fem_plan_desc qualified_mixed_operator_plan(const MeshBuffers &source) {
     fullmag_fem_plan_desc plan{};
     plan.mesh = source.desc();
     plan.material = {8.0e5, 1.3e-11, 0.1, 2.211e5};
@@ -215,15 +232,78 @@ void backend_create_rejects_mixed_mesh_at_explicit_physics_gate() {
     plan.precision = FULLMAG_FEM_PRECISION_DOUBLE;
     plan.integrator = FULLMAG_FEM_INTEGRATOR_HEUN;
     plan.dt_seconds = 1e-15;
-    std::vector<double> magnetization(3u * source.nodes_xyz.size() / 3u, 0.0);
-    for (size_t node = 0; node < source.nodes_xyz.size() / 3u; ++node) magnetization[3u*node] = 1.0;
-    plan.initial_magnetization_xyz = magnetization.data();
-    plan.initial_magnetization_len = magnetization.size();
-    fullmag_fem_backend *backend = fullmag_fem_backend_create(&plan);
-    check(backend == nullptr, "mixed mesh must reject before current tet-only physics");
-    const char *error = fullmag_fem_backend_last_error(nullptr);
-    check(error != nullptr && std::string(error).find("current MFEM/libCEED/CUDA physics modules are gated to tet4/tri3") != std::string::npos,
-          "mixed mesh rejection must name explicit tet-only physics gate");
+    plan.enable_exchange = 1;
+    plan.enable_demag = 1;
+    plan.demag_realization = FULLMAG_FEM_DEMAG_AIRBOX_ROBIN;
+    plan.mfem_device_string = "cpu";
+    return plan;
+}
+
+void native_physics_gate_accepts_only_qualified_cpu_mixed_p1_operator_scope() {
+    MeshBuffers source = qualified_mixed_operator_mesh();
+    fullmag::fem::Context ctx;
+    std::string error;
+    check(fullmag::fem::initialize_mesh_plan_fields(ctx, source.desc(), error), error.c_str());
+    auto plan = qualified_mixed_operator_plan(source);
+    check(fullmag::fem::validate_supported_physics_topology(ctx, plan, error), error.c_str());
+
+    struct Case {
+        const char *name;
+        void (*mutate)(fullmag_fem_plan_desc &, MeshBuffers &);
+    };
+    const Case cases[] = {
+        {"gpu", [](fullmag_fem_plan_desc &value, MeshBuffers &) {
+             value.mfem_device_string = "cuda";
+         }},
+        {"single", [](fullmag_fem_plan_desc &value, MeshBuffers &) {
+             value.precision = FULLMAG_FEM_PRECISION_SINGLE;
+         }},
+        {"no exchange", [](fullmag_fem_plan_desc &value, MeshBuffers &) {
+             value.enable_exchange = 0;
+         }},
+        {"no demag", [](fullmag_fem_plan_desc &value, MeshBuffers &) {
+             value.enable_demag = 0;
+         }},
+        {"FEM-BEM", [](fullmag_fem_plan_desc &value, MeshBuffers &) {
+             value.demag_realization = FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER;
+         }},
+        {"DMI", [](fullmag_fem_plan_desc &value, MeshBuffers &) {
+             value.has_bulk_dmi = 1;
+         }},
+        {"STT", [](fullmag_fem_plan_desc &value, MeshBuffers &) {
+             value.has_zhang_li_stt = 1;
+         }},
+        {"thermal", [](fullmag_fem_plan_desc &value, MeshBuffers &) {
+             value.temperature = 300.0;
+         }},
+        {"DG0", [](fullmag_fem_plan_desc &value, MeshBuffers &) {
+             value.ms_element_field_len = value.mesh.cell_types_len;
+         }},
+        {"PBC", [](fullmag_fem_plan_desc &value, MeshBuffers &mesh) {
+             mesh.periodic_node_pairs = {0u, 1u};
+             value.mesh = mesh.desc();
+         }},
+        {"hex", [](fullmag_fem_plan_desc &value, MeshBuffers &mesh) {
+             mesh.cell_types[0] = FULLMAG_FEM_CELL_HEX8;
+             value.mesh = mesh.desc();
+         }},
+    };
+    for (const Case &item : cases) {
+        MeshBuffers rejected_source = qualified_mixed_operator_mesh();
+        fullmag::fem::Context rejected_ctx;
+        error.clear();
+        check(fullmag::fem::initialize_mesh_plan_fields(
+                  rejected_ctx, rejected_source.desc(), error),
+              "qualified mixed fixture must import before scope mutation");
+        auto rejected = qualified_mixed_operator_plan(rejected_source);
+        item.mutate(rejected, rejected_source);
+        error.clear();
+        check(!fullmag::fem::validate_supported_physics_topology(
+                  rejected_ctx, rejected, error),
+              item.name);
+        check(error.find("mixed P1") != std::string::npos, error.c_str());
+        check(error.find("fallback=none") != std::string::npos, error.c_str());
+    }
 }
 
 void typed_mesh_import_accepts_empty_optional_buffers() {
@@ -438,7 +518,7 @@ void element_family_tables_cover_all_supported_cells() {
 int main() {
     typed_mesh_import_copies_every_canonical_buffer();
     exported_mesh_abi_query_matches_compiled_layout();
-    backend_create_rejects_mixed_mesh_at_explicit_physics_gate();
+    native_physics_gate_accepts_only_qualified_cpu_mixed_p1_operator_scope();
     typed_mesh_import_accepts_empty_optional_buffers();
     typed_mesh_import_rejects_bad_version_pointers_and_lengths();
     typed_mesh_import_rejects_invalid_csr_enums_indices_duplicates_and_jacobians();

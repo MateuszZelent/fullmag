@@ -38,11 +38,11 @@
       "lanes": {
         "fdm_cpu_reference": "unsupported",
         "fdm_gpu_production": "unsupported",
-        "fem_cpu_public": "semantic_only",
+        "fem_cpu_public": "production_executable",
         "fem_gpu_public": "semantic_only"
       },
       "validated_workloads": [],
-      "notes": "Typed CSR MeshIR, strict mixed topology validation, and the accepted mixed-layer certificate exist. Planning rejects before repacking or backend startup while native mixed operators remain unavailable, so no public execution lane is advertised.",
+      "notes": "The certificate-bound explicit FEM CPU strict double P1 relaxation tuple is production executable. Planning validates the source certificate, packs a clone, rebinds and validates the final fingerprint, and runner/native guards reject every wider scope without fallback. GPU remains semantic-only.",
       "validation_state": "unvalidated"
     },
     {
@@ -51,11 +51,11 @@
       "lanes": {
         "fdm_cpu_reference": "unsupported",
         "fdm_gpu_production": "unsupported",
-        "fem_cpu_public": "semantic_only",
+        "fem_cpu_public": "production_executable",
         "fem_gpu_public": "semantic_only"
       },
       "validated_workloads": [],
-      "notes": "Python authoring and native meshing preserve prism6 cells and bypass tetrahedral compatibility conversion. No FEM solver lane executes the certified mixed mesh yet.",
+      "notes": "Python authoring and native meshing preserve prism6 cells. The bounded explicit CPU lane executes the certified mesh without tetrahedral conversion; GPU remains unavailable.",
       "validation_state": "unvalidated"
     },
     {
@@ -64,11 +64,11 @@
       "lanes": {
         "fdm_cpu_reference": "unsupported",
         "fdm_gpu_production": "unsupported",
-        "fem_cpu_public": "semantic_only",
+        "fem_cpu_public": "production_executable",
         "fem_gpu_public": "semantic_only"
       },
       "validated_workloads": [],
-      "notes": "The native mesher and certificate preserve a conforming pyramid5 transition and tet4 far-air region. Planner and solver execution remain fail-closed.",
+      "notes": "The native mesher and certificate preserve a conforming pyramid5 transition and tet4 far-air region. Only the bounded explicit CPU lane executes it; wider scopes fail closed.",
       "validation_state": "unvalidated"
     },
     {
@@ -77,11 +77,11 @@
       "lanes": {
         "fdm_cpu_reference": "unsupported",
         "fdm_gpu_production": "unsupported",
-        "fem_cpu_public": "semantic_only",
+        "fem_cpu_public": "production_executable",
         "fem_gpu_public": "semantic_only"
       },
       "validated_workloads": [],
-      "notes": "Authoring, ProblemIR, and the mixed-layer certificate preserve requested and realized layer counts and magnetic node planes. Solver execution is not yet legal.",
+      "notes": "Authoring, ProblemIR, and the accepted mixed-layer certificate preserve one requested and realized layer and exactly two magnetic node planes. The bounded CPU lane is executable without fallback.",
       "validation_state": "unvalidated"
     },
     {
@@ -90,11 +90,11 @@
       "lanes": {
         "fdm_cpu_reference": "unsupported",
         "fdm_gpu_production": "unsupported",
-        "fem_cpu_public": "unsupported",
+        "fem_cpu_public": "production_executable",
         "fem_gpu_public": "unsupported"
       },
       "validated_workloads": [],
-      "notes": "The typed runner/native ABI and native core mixed-topology import exist, but no mixed CPU physics operator exists. The MFEM execution mesh builder remains tet-only, so CPU exchange and Poisson demagnetization are unsupported on mixed P1.",
+      "notes": "Production executable only for explicit FEM CPU strict double P1, one axis-aligned Box, one accepted exact layer, uniform material, exchange, optional uniform Zeeman, Poisson Robin or Dirichlet, and PG-BB, NCG, or overdamped LLG. Auto, GPU, single, extended, FEM-BEM, DMI, STT, DG0, PBC, time/eigen/frequency and wider geometry fail closed without fallback.",
       "validation_state": "unvalidated"
     },
     {

@@ -1137,6 +1137,12 @@ pub(crate) fn export_script_execution_config_via_python_with_options(
                 .to_string(),
         );
     }
+    if let Some(device) =
+        managed_fem_execution_device(std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref())
+    {
+        helper_args.push("--runtime-device".to_string());
+        helper_args.push(device.to_string());
+    }
     if skip_geometry_assets {
         helper_args.push("--skip-geometry-assets".to_string());
     }
@@ -1153,6 +1159,14 @@ pub(crate) fn export_script_execution_config_via_python_with_options(
     let json_str = extract_json_from_stdout(&stdout)?;
     serde_json::from_str(json_str)
         .context("failed to deserialize script execution config from python helper")
+}
+
+pub(crate) fn managed_fem_execution_device(value: Option<&str>) -> Option<&'static str> {
+    match value.map(str::trim) {
+        Some("cpu") => Some("cpu"),
+        Some("gpu" | "cuda" | "all_in_gpu") => Some("gpu"),
+        _ => None,
+    }
 }
 
 pub(crate) fn read_magnetization_state(
@@ -1484,6 +1498,19 @@ pub(crate) fn invoke_adaptive_remesh_full(
 mod tests {
     use super::*;
     use crate::simulation_preparation::PreparationStageId;
+
+    #[test]
+    fn managed_fem_execution_device_maps_only_explicit_cpu_or_gpu_modes() {
+        assert_eq!(managed_fem_execution_device(Some("cpu")), Some("cpu"));
+        assert_eq!(managed_fem_execution_device(Some("gpu")), Some("gpu"));
+        assert_eq!(managed_fem_execution_device(Some("cuda")), Some("gpu"));
+        assert_eq!(
+            managed_fem_execution_device(Some("all_in_gpu")),
+            Some("gpu")
+        );
+        assert_eq!(managed_fem_execution_device(Some("auto")), None);
+        assert_eq!(managed_fem_execution_device(None), None);
+    }
 
     fn valid_mixed_remesh_payload() -> serde_json::Value {
         let mut payload: serde_json::Value = serde_json::from_str(r#"{

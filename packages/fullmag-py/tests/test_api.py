@@ -9061,6 +9061,34 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(payload["ir"]["problem_meta"]["name"], "runtime_config_problem")
         self.assertIn("shared_geometry_assets", payload)
 
+    def test_helper_exports_sp4_run_config_with_explicit_runtime_device_override(self) -> None:
+        scenario = Path(
+            "tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py"
+        )
+
+        for device in ("cpu", "gpu"):
+            with self.subTest(device=device):
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = runtime_helper.main(
+                        [
+                            "export-run-config",
+                            "--script",
+                            str(scenario),
+                            "--runtime-device",
+                            device,
+                            "--skip-geometry-assets",
+                        ]
+                    )
+
+                self.assertEqual(exit_code, 0)
+                payload = json.loads(stdout.getvalue())
+                self.assertEqual(
+                    payload["ir"]["problem_meta"]["runtime_metadata"]
+                    ["runtime_selection"]["device"],
+                    device,
+                )
+
     def test_helper_exports_run_config_with_flat_stage_sequence(self) -> None:
         script = """
         import fullmag as fm

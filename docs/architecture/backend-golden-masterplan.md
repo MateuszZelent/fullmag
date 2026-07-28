@@ -308,10 +308,12 @@ DMI/STT/thermal/magnetoelastic, regional projections, eigen/frequency-domain,
 DG0/material interfaces, order>1, arbitrary OCC, multi-body i multilayer
 pozostają fail-closed do osobnej kwalifikacji.
 
-Obecny stan obejmuje typowaną topologię w Pythonie, `ProblemIR`, runnerze i
-ABI, certyfikat, generator Gmsh oraz FMMT v2 z OpenAPI i unified viewport.
-Nie jest to `production_executable` ani `validated`: MFEM CPU oraz GPU
-MFEM/libCEED/CUDA nadal odrzucają mixed P1 przed alokacją operatorów.
+Obecny stan kwalifikuje jako `production_executable` wyłącznie jawny FEM
+CPU/strict/double P1 dla jednego osiowego Boxa i jednej certyfikowanej warstwy,
+z exchange, opcjonalnym jednorodnym Zeemanem, Poisson Robin/Dirichlet oraz
+PG-BB/NCG/overdamped LLG. Nie jest to jeszcze `validated`. GPU, auto
+device/backend, single, extended i wszystkie szersze kontrakty nadal są
+odrzucane przed alokacją operatorów bez fallbacku.
 Tetrahedralny FMMT v1 pozostaje wyłącznie readerem kompatybilności i nie może
 maskować ani obcinać komórek mieszanych.
 

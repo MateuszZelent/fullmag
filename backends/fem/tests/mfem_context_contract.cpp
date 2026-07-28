@@ -436,7 +436,7 @@ void mfem_context_uses_elementwise_material_coefficients_when_present() {
         "exchange operator must accept generic MFEM coefficients, not only GridFunctionCoefficient");
 }
 
-void mixed_mesh_builder_owns_topology_translation_without_unlocking_physics() {
+void mixed_mesh_builder_owns_topology_translation_with_selective_physics_gate() {
     const std::filesystem::path root = fem_source_root();
     const std::string runtime =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "mfem_context.cpp");
@@ -480,7 +480,7 @@ void mixed_mesh_builder_owns_topology_translation_without_unlocking_physics() {
         "mixed mesh builder must use general MFEM finalization without orientation repair");
 
     const size_t topology_gate =
-        context_builder.find("validate_tetra_only_physics_topology(ctx, error)");
+        context_builder.find("validate_supported_physics_topology(ctx, plan, error)");
     const size_t material_runtime =
         context_builder.find("initialize_material_runtime(ctx, error)");
     const size_t mfem_runtime = context_builder.find("context_initialize_mfem(ctx, error)");
@@ -490,7 +490,7 @@ void mixed_mesh_builder_owns_topology_translation_without_unlocking_physics() {
             mfem_runtime != std::string::npos && gpu_runtime != std::string::npos &&
             topology_gate < material_runtime && topology_gate < mfem_runtime &&
             topology_gate < gpu_runtime,
-        "public tetra-only physics gate must remain before material, MFEM, and GPU initialization");
+        "public selective topology gate must remain before material, MFEM, and GPU initialization");
 }
 
 } // namespace
@@ -499,7 +499,7 @@ int main() {
     mfem_context_lifecycle_is_owned_by_runtime_module();
     mfem_runtime_pointers_are_typed();
     mfem_context_uses_elementwise_material_coefficients_when_present();
-    mixed_mesh_builder_owns_topology_translation_without_unlocking_physics();
+    mixed_mesh_builder_owns_topology_translation_with_selective_physics_gate();
     runtime_source_files_document_module_boundaries();
     runtime_headers_document_module_boundaries();
     return 0;

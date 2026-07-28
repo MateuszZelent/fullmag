@@ -185,15 +185,17 @@ fn mixed_p1_feature_capabilities(
     const OPERATOR_SCOPE: &str =
         "double; one axis-aligned P1 Box; one conforming shared-domain airbox; uniform Ms/Aex; exchange; uniform Zeeman; Poisson Robin|Dirichlet; PG-BB|NCG|overdamped LLG; no fallback";
 
-    let mesh_status = if fem_engine.is_some() {
-        FeatureCapabilityStatus::SemanticOnly
-    } else {
-        FeatureCapabilityStatus::Unsupported
+    let mesh_status = match fem_engine {
+        Some(FemEngine::CpuNative) => FeatureCapabilityStatus::ProductionExecutable,
+        Some(FemEngine::NativeGpu) => FeatureCapabilityStatus::SemanticOnly,
+        None => FeatureCapabilityStatus::Unsupported,
     };
-    let mesh_reason = if fem_engine.is_some() {
-        NON_EXECUTABLE_REASON
-    } else {
-        FDM_REASON
+    let mesh_reason = match fem_engine {
+        Some(FemEngine::CpuNative) => {
+            "Executable only in the certificate-bound explicit CPU/double strict relaxation scope."
+        }
+        Some(FemEngine::NativeGpu) => NON_EXECUTABLE_REASON,
+        None => FDM_REASON,
     };
     let mut features = BTreeMap::from([
         (
@@ -234,8 +236,15 @@ fn mixed_p1_feature_capabilities(
         ("fem.cpu.exchange_demag.mixed_p1", FemEngine::CpuNative),
         ("fem.gpu.exchange_demag.mixed_p1", FemEngine::NativeGpu),
     ] {
-        let status = FeatureCapabilityStatus::Unsupported;
+        let status = if fem_engine == Some(FemEngine::CpuNative) && owner == FemEngine::CpuNative {
+            FeatureCapabilityStatus::ProductionExecutable
+        } else {
+            FeatureCapabilityStatus::Unsupported
+        };
         let reason = match fem_engine {
+            Some(FemEngine::CpuNative) if owner == FemEngine::CpuNative => {
+                "Production executable only for the bounded certified CPU mixed-P1 relaxation lane."
+            }
             Some(engine) if engine == owner => {
                 "Typed mixed-topology import is visible, but the lane-specific mixed-P1 physics operator is not implemented."
             }
@@ -518,7 +527,7 @@ mod tests {
     }
 
     #[test]
-    fn fem_cpu_reports_mixed_p1_semantics_and_unsupported_operators() {
+    fn fem_cpu_reports_bounded_mixed_p1_production_execution() {
         let capabilities = capabilities_for_fem_engine(FemEngine::CpuNative);
 
         assert_eq!(
@@ -526,20 +535,23 @@ mod tests {
             BTreeMap::from([
                 (
                     "mesh.topology.mixed_p1",
-                    FeatureCapabilityStatus::SemanticOnly
+                    FeatureCapabilityStatus::ProductionExecutable
                 ),
-                ("mesh.swept.prism", FeatureCapabilityStatus::SemanticOnly),
+                (
+                    "mesh.swept.prism",
+                    FeatureCapabilityStatus::ProductionExecutable
+                ),
                 (
                     "mesh.transition.pyramid_tet",
-                    FeatureCapabilityStatus::SemanticOnly,
+                    FeatureCapabilityStatus::ProductionExecutable,
                 ),
                 (
                     "mesh.exact_layer_count",
-                    FeatureCapabilityStatus::SemanticOnly,
+                    FeatureCapabilityStatus::ProductionExecutable,
                 ),
                 (
                     "fem.cpu.exchange_demag.mixed_p1",
-                    FeatureCapabilityStatus::Unsupported,
+                    FeatureCapabilityStatus::ProductionExecutable,
                 ),
                 (
                     "fem.gpu.exchange_demag.mixed_p1",
@@ -547,15 +559,10 @@ mod tests {
                 ),
             ]),
         );
-        assert!(capabilities.feature_capabilities.values().all(|feature| {
-            !feature.reason.is_empty()
-                && !feature.scope.is_empty()
-                && !matches!(
-                    feature.status,
-                    FeatureCapabilityStatus::ProductionExecutable
-                        | FeatureCapabilityStatus::Validated
-                )
-        }));
+        assert!(capabilities
+            .feature_capabilities
+            .values()
+            .all(|feature| !feature.reason.is_empty() && !feature.scope.is_empty()));
         assert!(MIXED_P1_FEATURE_CAPABILITY_IDS.iter().all(|feature_id| {
             !capabilities
                 .supported_terms
@@ -628,11 +635,11 @@ mod tests {
         assert_eq!(features.len(), 6);
         assert_eq!(
             features["mesh.topology.mixed_p1"]["status"],
-            "semantic_only"
+            "production_executable"
         );
         assert_eq!(
             features["fem.cpu.exchange_demag.mixed_p1"]["status"],
-            "unsupported"
+            "production_executable"
         );
         for id in MIXED_P1_FEATURE_CAPABILITY_IDS {
             assert!(features[id]["reason"]

@@ -1,6 +1,6 @@
 # FEM mixed prism/pyramid shared-domain mesh
 
-- Status: canonical target contract; typed topology/transport implemented; native operators fail closed
+- Status: bounded FEM CPU/double mixed-P1 relaxation lane production-executable; GPU and wider scopes fail closed
 - Owners: Fullmag core
 - Last updated: 2026-07-28
 - Related ADRs: `docs/adr/0021-native-mixed-p1-fem-topology.md`
@@ -29,16 +29,18 @@ scale. The target solver mesh is one conforming shared domain with:
 This note makes that topology implementation-ready. Python authoring and Gmsh
 extraction, `MeshIR`, the runner/native ABI, the mixed-layer certificate, FMMT
 v2 transport, OpenAPI resources, and the control-room decoder/viewport already
-preserve typed variable-width topology. That transport implementation does not
-make mixed elements executable in Fullmag: current MFEM CPU and GPU physics
-operators remain tet4/tri3-only and the planner rejects mixed P1 before native
-backend startup.
+preserve typed variable-width topology. The certified topology is executable
+only through the bounded CPU lane below. The GPU path and every wider physics,
+geometry, precision, or workflow tuple remain fail-closed before native
+operator startup.
 
 The first qualification target is deliberately narrow: one axis-aligned
 `Box`, P1, one conforming shared-domain airbox, uniform `Ms` and `Aex`, exchange,
-uniform Zeeman, Poisson Robin or Dirichlet demag, FEM CPU/GPU double precision,
-and PG-BB, NCG, or overdamped LLG relaxation. No status in this slice advances
-from `unsupported` or `semantic_only` to `production_executable` or `validated`.
+uniform Zeeman, Poisson Robin or Dirichlet demag, explicit FEM CPU double
+precision, strict execution, and PG-BB, NCG, or overdamped LLG relaxation.
+That exact certificate-bound tuple is `production_executable`, not `validated`.
+GPU, `auto`, single/extended/hybrid execution, and wider tuples remain
+`unsupported`; no fallback is permitted.
 
 ## 2. Physical model
 
@@ -201,10 +203,10 @@ contract. They may use different kernels or assembly strategies, but must agree
 on connectivity order, basis traces, signs, material masks, energy ownership,
 quadrature sufficiency, requested/resolved provenance, and rejection reasons.
 
-The target is double precision only. No CPU or GPU runtime claim exists until
-the lane has topology-aware import, assembly, operator, relaxation, artifact,
-and managed-runtime validation. Forced GPU cannot fall back to CPU, and neither
-lane may call the legacy prism-to-tet compatibility splitter in strict mode.
+The target is double precision only. The bounded explicit CPU lane is
+`production_executable`; the GPU lane has no runtime claim and forced GPU
+cannot fall back to CPU. Neither lane may call the legacy prism-to-tet
+compatibility splitter in strict mode.
 
 ### 3.4 Exact-layer and shared-domain certificate
 
@@ -354,7 +356,8 @@ It freezes topology invariants, not incidental air-tet counts.
 
 ### 5.2 Operator checks
 
-Before executable promotion, each lane needs:
+The CPU executable slice is backed by the following operator contracts; GPU
+promotion and any future `validated` promotion require their own fresh evidence:
 
 - reference basis/gradient/Jacobian and quadrature tests for prism6, pyramid5,
   tet4, tri3, and quad4;

@@ -64,7 +64,7 @@ bool build_context_from_plan(
     if (!initialize_mesh_plan_fields(ctx, plan.mesh, error)) {
         return false;
     }
-    if (!validate_tetra_only_physics_topology(ctx, error)) {
+    if (!validate_supported_physics_topology(ctx, plan, error)) {
         return false;
     }
     initialize_magnetic_masks(ctx);

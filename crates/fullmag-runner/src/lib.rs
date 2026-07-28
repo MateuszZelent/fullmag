@@ -1293,24 +1293,27 @@ fn require_supported_fem_topology(
     problem: &ProblemIR,
     plan: &fullmag_ir::ExecutionPlanIR,
 ) -> Result<(), RunError> {
-    let (mesh, build_report, precision, study_kind) = match &plan.backend_plan {
+    let (mesh, build_report, precision, study_kind, relaxation_plan) = match &plan.backend_plan {
         BackendPlanIR::Fem(fem) => (
             &fem.mesh,
             fem.mesh_build_report.as_ref(),
             fem.precision,
             "fem",
+            Some(fem),
         ),
         BackendPlanIR::FemEigen(fem) => (
             &fem.mesh,
             fem.mesh_build_report.as_ref(),
             fem.precision,
             "fem_eigen",
+            None,
         ),
         BackendPlanIR::FemFrequencyResponse(fem) => (
             &fem.mesh,
             fem.mesh_build_report.as_ref(),
             fem.precision,
             "fem_frequency_response",
+            None,
         ),
         BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => return Ok(()),
     };
@@ -1420,18 +1423,139 @@ fn require_supported_fem_topology(
         });
     }
     if provenance.capability_status
-        != fullmag_ir::FemMixedTopologyCapabilityStatusIR::Unsupported
+        != fullmag_ir::FemMixedTopologyCapabilityStatusIR::ProductionExecutable
     {
         return Err(RunError {
-            message: "fem_mixed_p1_runtime_provenance_stale: capability status must be unsupported until a mixed-P1 physics operator is production executable; fallback=none".to_string(),
+            message: "fem_mixed_p1_runtime_provenance_stale: capability status must be production_executable for the qualified CPU mixed-P1 relaxation lane; fallback=none".to_string(),
         });
     }
-
-    Err(RunError {
-        message: format!(
-            "fem_mixed_p1_runtime_capability_rejected: study={study_kind}; requested_device={requested_device}; precision={precision:?}; missing_capabilities=[fem.cpu.exchange_demag.mixed_p1,fem.gpu.exchange_demag.mixed_p1]; fallback=none"
-        ),
-    })
+    let supported_relaxation = relaxation_plan.is_some_and(|fem| {
+        fem.fe_order == 1
+            && fem.precision == fullmag_ir::ExecutionPrecision::Double
+            && fem.enable_exchange
+            && fem.enable_demag
+            && matches!(
+                fem.demag_realization,
+                Some(
+                    fullmag_ir::ResolvedFemDemagIR::PoissonRobin
+                        | fullmag_ir::ResolvedFemDemagIR::PoissonDirichlet
+                )
+            )
+            && fem.relaxation.as_ref().is_some_and(|relaxation| {
+                matches!(
+                    relaxation.algorithm,
+                    fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+                        | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
+                        | fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped
+                )
+            })
+            && fem.interfacial_dmi.is_none()
+            && fem.bulk_dmi.is_none()
+            && fem.current_modules.is_empty()
+            && fem.field_drives.is_empty()
+            && fem.temperature.is_none()
+            && fem.magnetoelastic.is_none()
+            && fem.mechanics.is_none()
+    });
+    let mut exchange_count = 0usize;
+    let mut demag_count = 0usize;
+    let mut energy_supported = true;
+    for term in &problem.energy_terms {
+        match term {
+            fullmag_ir::EnergyTermIR::Exchange => exchange_count += 1,
+            fullmag_ir::EnergyTermIR::Demag { realization }
+                if matches!(
+                    realization,
+                    fullmag_ir::RequestedFemDemagIR::PoissonRobin
+                        | fullmag_ir::RequestedFemDemagIR::PoissonDirichlet
+                ) =>
+            {
+                demag_count += 1
+            }
+            fullmag_ir::EnergyTermIR::Zeeman { .. } => {}
+            _ => energy_supported = false,
+        }
+    }
+    let material_supported = problem.materials.len() == 1
+        && problem.materials.iter().all(|material| {
+            material.uniaxial_anisotropy.is_none()
+                && material.uniaxial_anisotropy_k2.is_none()
+                && material.anisotropy_axis.is_none()
+                && material.cubic_anisotropy_kc1.is_none()
+                && material.cubic_anisotropy_kc2.is_none()
+                && material.cubic_anisotropy_kc3.is_none()
+                && material.cubic_anisotropy_axis1.is_none()
+                && material.cubic_anisotropy_axis2.is_none()
+                && material.ms_field.is_none()
+                && material.a_field.is_none()
+                && material.alpha_field.is_none()
+                && material.ku_field.is_none()
+                && material.ku2_field.is_none()
+                && material.kc1_field.is_none()
+                && material.kc2_field.is_none()
+                && material.kc3_field.is_none()
+                && material.interfacial_dmi.is_none()
+                && material.bulk_dmi.is_none()
+                && material.dind_field.is_none()
+                && material.dbulk_field.is_none()
+        });
+    let problem_scope = problem.backend_policy.requested_backend == fullmag_ir::BackendTarget::Fem
+        && problem.backend_policy.execution_precision == fullmag_ir::ExecutionPrecision::Double
+        && problem.validation_profile.execution_mode == fullmag_ir::ExecutionMode::Strict
+        && requested_device == "cpu"
+        && problem.geometry.entries.len() == 1
+        && matches!(
+            problem.geometry.entries[0],
+            fullmag_ir::GeometryEntryIR::Box { .. }
+        )
+        && problem.regions.len() == 1
+        && material_supported
+        && problem.magnets.len() == 1
+        && problem.object_regions.is_empty()
+        && problem.material_parameter_fields.is_empty()
+        && problem.couplings.is_empty()
+        && problem.current_modules.is_empty()
+        && problem.field_drives.is_empty()
+        && problem.spin_torque_modules.is_empty()
+        && problem.current_density.is_none()
+        && problem.stt_degree.is_none()
+        && problem.stt_beta.is_none()
+        && problem.stt_spin_polarization.is_none()
+        && problem.stt_lambda.is_none()
+        && problem.stt_epsilon_prime.is_none()
+        && problem.stt_thickness.is_none()
+        && problem.stt_fixed_layer_position.is_none()
+        && problem.temperature.is_none()
+        && problem.elastic_materials.is_empty()
+        && problem.elastic_bodies.is_empty()
+        && problem.magnetostriction_laws.is_empty()
+        && problem.mechanical_bcs.is_empty()
+        && problem.mechanical_loads.is_empty()
+        && problem.pbc.is_none()
+        && exchange_count == 1
+        && demag_count == 1
+        && energy_supported
+        && certificate.requested_layer_count == 1
+        && certificate.realized_layer_count == 1
+        && certificate.magnetic_plane_coordinates_m.len() == 2
+        && certificate.fallbacks_triggered.is_empty()
+        && matches!(
+            problem.study,
+            fullmag_ir::StudyIR::Relaxation {
+                algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+                    | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
+                    | fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+                ..
+            }
+        );
+    if !supported_relaxation || !problem_scope {
+        return Err(RunError {
+            message: format!(
+                "fem_mixed_p1_runtime_scope_rejected: study={study_kind}; requested_device={requested_device}; precision={precision:?}; required=explicit_cpu+strict+double+P1+exchange+poisson_robin_or_dirichlet+PG_BB_or_NCG_or_LLG_overdamped; fallback=none"
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn require_tetrahedral_fem_plan_mesh(
@@ -4028,9 +4152,79 @@ mod tests {
             accepted_certificate_fingerprint: fingerprint,
             requested_device: fullmag_ir::ExecutionDevice::Cpu,
             precision: fem.precision,
-            capability_status: fullmag_ir::FemMixedTopologyCapabilityStatusIR::Unsupported,
+            capability_status: fullmag_ir::FemMixedTopologyCapabilityStatusIR::ProductionExecutable,
         });
         fem.mesh = mesh;
+        fem.mesh_build_report = Some(report);
+        (problem, plan)
+    }
+
+    fn certified_mixed_cpu_relaxation_guard_fixture(
+    ) -> (fullmag_ir::ProblemIR, fullmag_ir::ExecutionPlanIR) {
+        let mut problem = fem_session_runtime_problem();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            json!({"device": "cpu", "precision": "double"}),
+        );
+        let mut plan =
+            fullmag_plan::plan(&problem).expect("tetrahedral FEM runtime fixture should plan");
+        problem.energy_terms = vec![
+            fullmag_ir::EnergyTermIR::Exchange,
+            fullmag_ir::EnergyTermIR::Demag {
+                realization: fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+            },
+        ];
+        problem.study = fullmag_ir::StudyIR::Relaxation {
+            algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            dynamics: None,
+            stop: fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: Some(1.0e-4),
+                energy_tolerance_j: None,
+                max_steps: Some(16),
+                max_relaxation_time_s: None,
+            },
+            sampling: problem.study.sampling().clone(),
+        };
+        let golden: serde_json::Value = serde_json::from_str(include_str!(
+            "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+        ))
+        .expect("mixed topology golden fixture should be valid JSON");
+        let mesh: fullmag_ir::MeshIR = serde_json::from_value(golden["mesh"].clone())
+            .expect("mixed topology golden mesh should deserialize");
+        let certificate: fullmag_ir::MixedLayerTopologyCertificateV1IR =
+            serde_json::from_value(golden["certificate"].clone())
+                .expect("mixed topology golden certificate should deserialize");
+        let fingerprint = mesh.topology_fingerprint_v6();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("relaxation topology guard fixture must produce a FEM plan");
+        };
+        fem.enable_demag = true;
+        fem.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+        fem.relaxation = Some(fullmag_ir::RelaxationControlIR {
+            algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            stop: fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: Some(1.0e-4),
+                energy_tolerance_j: None,
+                max_steps: Some(16),
+                max_relaxation_time_s: None,
+            },
+        });
+        fem.mfem_device_string = Some("cpu".to_string());
+        fem.mesh = mesh;
+        fem.initial_magnetization = vec![[1.0, 0.0, 0.0]; fem.mesh.nodes.len()];
+        let mut report: fullmag_ir::FemSharedDomainBuildReportIR = serde_json::from_value(json!({
+            "build_mode": "shared_domain",
+            "mixed_layer_topology_certificate": certificate,
+        }))
+        .expect("minimal shared-domain report should deserialize");
+        report.mixed_topology_provenance = Some(fullmag_ir::FemMixedTopologyProvenanceIR {
+            requested_topology: fullmag_ir::FemMeshTopologyFamilyIR::MixedP1,
+            resolved_topology: fullmag_ir::FemMeshTopologyFamilyIR::MixedP1,
+            accepted_certificate_fingerprint: fingerprint,
+            requested_device: fullmag_ir::ExecutionDevice::Cpu,
+            precision: fem.precision,
+            capability_status: fullmag_ir::FemMixedTopologyCapabilityStatusIR::ProductionExecutable,
+        });
         fem.mesh_build_report = Some(report);
         (problem, plan)
     }
@@ -4160,8 +4354,8 @@ mod tests {
         );
 
         for status in [
+            fullmag_ir::FemMixedTopologyCapabilityStatusIR::Unsupported,
             fullmag_ir::FemMixedTopologyCapabilityStatusIR::SourceVisible,
-            fullmag_ir::FemMixedTopologyCapabilityStatusIR::ProductionExecutable,
             fullmag_ir::FemMixedTopologyCapabilityStatusIR::Validated,
         ] {
             let (_, mut promoted) = certified_mixed_topology_guard_fixture();
@@ -4175,7 +4369,7 @@ mod tests {
                 .capability_status = status;
             assert_eq!(
                 topology_guard_error(&problem, &promoted),
-                "fem_mixed_p1_runtime_provenance_stale: capability status must be unsupported until a mixed-P1 physics operator is production executable; fallback=none"
+                "fem_mixed_p1_runtime_provenance_stale: capability status must be production_executable for the qualified CPU mixed-P1 relaxation lane; fallback=none"
             );
         }
     }
@@ -4209,10 +4403,10 @@ mod tests {
     }
 
     #[test]
-    fn fem_topology_guard_fully_bound_mixed_plan_reaches_exact_capability_rejection() {
+    fn fem_topology_guard_fully_bound_mixed_frequency_plan_reaches_scope_rejection() {
         let (problem, plan) = certified_mixed_topology_guard_fixture();
 
-        let expected = "fem_mixed_p1_runtime_capability_rejected: study=fem_frequency_response; requested_device=cpu; precision=Double; missing_capabilities=[fem.cpu.exchange_demag.mixed_p1,fem.gpu.exchange_demag.mixed_p1]; fallback=none";
+        let expected = "fem_mixed_p1_runtime_scope_rejected: study=fem_frequency_response; requested_device=cpu; precision=Double; required=explicit_cpu+strict+double+P1+exchange+poisson_robin_or_dirichlet+PG_BB_or_NCG_or_LLG_overdamped; fallback=none";
         assert_eq!(topology_guard_error(&problem, &plan), expected);
         assert_eq!(
             resolve_planned_runtime_engine(&problem, &plan)
@@ -4235,12 +4429,77 @@ mod tests {
         );
 
         let mut stale_problem = problem.clone();
-        stale_problem.backend_policy.execution_precision =
-            fullmag_ir::ExecutionPrecision::Single;
+        stale_problem.backend_policy.execution_precision = fullmag_ir::ExecutionPrecision::Single;
         assert_eq!(
             topology_guard_error(&stale_problem, &plan),
             "fem_mixed_p1_runtime_provenance_stale: plan provenance does not match the exact mesh fingerprint/topology/precision; fallback=none"
         );
+    }
+
+    #[test]
+    fn fem_topology_guard_accepts_only_bound_cpu_double_relaxation_scope() {
+        let (problem, plan) = certified_mixed_cpu_relaxation_guard_fixture();
+        require_supported_fem_topology(&problem, &plan)
+            .expect("bound CPU-double mixed P1 relaxation must cross the runner guard");
+
+        for case in [
+            "gpu",
+            "single",
+            "extended",
+            "time_evolution",
+            "unsupported_status",
+        ] {
+            let mut rejected_problem = problem.clone();
+            let mut rejected_plan = plan.clone();
+            match case {
+                "gpu" => {
+                    rejected_problem.problem_meta.runtime_metadata.insert(
+                        "runtime_selection".to_string(),
+                        json!({"device": "gpu", "precision": "double"}),
+                    );
+                }
+                "single" => {
+                    rejected_problem.backend_policy.execution_precision =
+                        fullmag_ir::ExecutionPrecision::Single;
+                }
+                "extended" => {
+                    rejected_problem.validation_profile.execution_mode =
+                        fullmag_ir::ExecutionMode::Extended;
+                }
+                "time_evolution" => {
+                    rejected_problem.study = fullmag_ir::ProblemIR::bootstrap_example().study;
+                }
+                "unsupported_status" => {
+                    let BackendPlanIR::Fem(fem) = &mut rejected_plan.backend_plan else {
+                        unreachable!()
+                    };
+                    fem.mesh_build_report
+                        .as_mut()
+                        .and_then(|report| report.mixed_topology_provenance.as_mut())
+                        .expect("fixture carries mixed provenance")
+                        .capability_status =
+                        fullmag_ir::FemMixedTopologyCapabilityStatusIR::Unsupported;
+                }
+                _ => unreachable!(),
+            }
+            let error = require_supported_fem_topology(&rejected_problem, &rejected_plan)
+                .expect_err("runner must fail closed outside the qualified mixed P1 tuple");
+            assert!(
+                error
+                    .message
+                    .contains("fem_mixed_p1_runtime_scope_rejected")
+                    || error
+                        .message
+                        .contains("fem_mixed_p1_runtime_provenance_stale"),
+                "case={case}: {}",
+                error.message
+            );
+            assert!(
+                error.message.contains("fallback=none"),
+                "case={case}: {}",
+                error.message
+            );
+        }
     }
 
     #[test]

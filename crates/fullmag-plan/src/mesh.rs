@@ -1300,11 +1300,123 @@ fn requested_runtime_device(problem: &ProblemIR) -> &str {
         .unwrap_or("auto")
 }
 
-fn mixed_p1_operator_capability(device: &str) -> &'static str {
-    match device {
-        "cpu" => "fem.cpu.exchange_demag.mixed_p1",
-        "cuda" | "gpu" => "fem.gpu.exchange_demag.mixed_p1",
-        _ => "fem.cpu.exchange_demag.mixed_p1,fem.gpu.exchange_demag.mixed_p1",
+fn validate_mixed_p1_cpu_scope(
+    problem: &ProblemIR,
+    certificate: &fullmag_ir::MixedLayerTopologyCertificateV1IR,
+) -> Result<(), String> {
+    let fem_order = problem
+        .backend_policy
+        .discretization_hints
+        .as_ref()
+        .and_then(|hints| hints.fem.as_ref())
+        .map(|hints| hints.order);
+    let relaxation_supported = matches!(
+        problem.study,
+        fullmag_ir::StudyIR::Relaxation {
+            algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+                | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
+                | fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+            ..
+        }
+    );
+    let mut exchange_count = 0usize;
+    let mut demag_count = 0usize;
+    let mut energy_supported = true;
+    for term in &problem.energy_terms {
+        match term {
+            fullmag_ir::EnergyTermIR::Exchange => exchange_count += 1,
+            fullmag_ir::EnergyTermIR::Demag { realization }
+                if matches!(
+                    realization,
+                    fullmag_ir::RequestedFemDemagIR::PoissonRobin
+                        | fullmag_ir::RequestedFemDemagIR::PoissonDirichlet
+                ) =>
+            {
+                demag_count += 1
+            }
+            fullmag_ir::EnergyTermIR::Zeeman { .. } => {}
+            _ => energy_supported = false,
+        }
+    }
+    let material_supported = problem.materials.len() == 1
+        && problem.materials.iter().all(|material| {
+            material.uniaxial_anisotropy.is_none()
+                && material.uniaxial_anisotropy_k2.is_none()
+                && material.anisotropy_axis.is_none()
+                && material.cubic_anisotropy_kc1.is_none()
+                && material.cubic_anisotropy_kc2.is_none()
+                && material.cubic_anisotropy_kc3.is_none()
+                && material.cubic_anisotropy_axis1.is_none()
+                && material.cubic_anisotropy_axis2.is_none()
+                && material.ms_field.is_none()
+                && material.a_field.is_none()
+                && material.alpha_field.is_none()
+                && material.ku_field.is_none()
+                && material.ku2_field.is_none()
+                && material.kc1_field.is_none()
+                && material.kc2_field.is_none()
+                && material.kc3_field.is_none()
+                && material.interfacial_dmi.is_none()
+                && material.bulk_dmi.is_none()
+                && material.dind_field.is_none()
+                && material.dbulk_field.is_none()
+        });
+    let exact_single_box = problem.geometry.entries.len() == 1
+        && matches!(
+            problem.geometry.entries[0],
+            fullmag_ir::GeometryEntryIR::Box { .. }
+        );
+    let no_extended_modules = problem.object_regions.is_empty()
+        && problem.material_parameter_fields.is_empty()
+        && problem.couplings.is_empty()
+        && problem.current_modules.is_empty()
+        && problem.field_drives.is_empty()
+        && problem.spin_torque_modules.is_empty()
+        && problem.current_density.is_none()
+        && problem.stt_degree.is_none()
+        && problem.stt_beta.is_none()
+        && problem.stt_spin_polarization.is_none()
+        && problem.stt_lambda.is_none()
+        && problem.stt_epsilon_prime.is_none()
+        && problem.stt_thickness.is_none()
+        && problem.stt_fixed_layer_position.is_none()
+        && problem.temperature.is_none()
+        && problem.elastic_materials.is_empty()
+        && problem.elastic_bodies.is_empty()
+        && problem.magnetostriction_laws.is_empty()
+        && problem.mechanical_bcs.is_empty()
+        && problem.mechanical_loads.is_empty()
+        && problem.pbc.is_none();
+    let qualified = problem.backend_policy.requested_backend == fullmag_ir::BackendTarget::Fem
+        && problem.validation_profile.execution_mode == fullmag_ir::ExecutionMode::Strict
+        && problem.backend_policy.execution_precision == fullmag_ir::ExecutionPrecision::Double
+        && requested_runtime_device(problem) == "cpu"
+        && fem_order == Some(1)
+        && exact_single_box
+        && problem.regions.len() == 1
+        && problem.magnets.len() == 1
+        && material_supported
+        && no_extended_modules
+        && relaxation_supported
+        && exchange_count == 1
+        && demag_count == 1
+        && energy_supported
+        && certificate.requested_layer_count == 1
+        && certificate.realized_layer_count == 1
+        && certificate.magnetic_plane_coordinates_m.len() == 2
+        && certificate.fallbacks_triggered.is_empty();
+    if qualified {
+        Ok(())
+    } else {
+        Err(format!(
+            "fem_mixed_p1_scope_rejected: required=explicit_fem+explicit_cpu+strict+double+P1+one_axis_aligned_box+one_exact_layer+uniform_material+exchange+poisson_robin_or_dirichlet+PG_BB_or_NCG_or_LLG_overdamped; requested_backend={:?}; requested_device={}; requested_precision={:?}; execution_mode={:?}; fe_order={fem_order:?}; study={:?}; energy_terms={:?}; fallback=none",
+            problem.backend_policy.requested_backend,
+            requested_runtime_device(problem),
+            problem.backend_policy.execution_precision,
+            problem.validation_profile.execution_mode,
+            problem.study,
+            problem.energy_terms,
+        ))
     }
 }
 
@@ -1340,20 +1452,15 @@ pub(crate) fn reject_unsupported_mixed_topology(
              select topology='free_tetrahedral' explicitly to use the qualified tetrahedral lane"
         ));
     };
-
-    let device = requested_runtime_device(problem);
-    let missing_operator = mixed_p1_operator_capability(device);
-    Err(format!(
-        "fem_mixed_p1_capability_rejected: actual_topology={topology}; \
-         accepted_certificate_fingerprint={}; requested_device={device}; requested_precision={:?}; \
-         requested_physics={:?}; requested_study={:?}; missing_capabilities=[{missing_operator}]; \
-         implementation_state=source_visible; production_executable=false; validated=false; \
-         fallback=none; select topology='free_tetrahedral' explicitly to use the qualified tetrahedral lane",
-        certificate.topology_fingerprint,
-        problem.backend_policy.execution_precision,
-        problem.energy_terms,
-        problem.study,
-    ))
+    fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(certificate, mesh).map_err(
+        |reasons| {
+            format!(
+                "fem_mixed_p1_certificate_rejected: {}; fallback=none",
+                reasons.join("; ")
+            )
+        },
+    )?;
+    validate_mixed_p1_cpu_scope(problem, certificate)
 }
 
 pub(crate) fn reject_auto_backend_mixed_fem_topology(problem: &ProblemIR) -> Result<(), String> {
@@ -1409,23 +1516,48 @@ pub(crate) fn resolve_fem_domain_mesh_asset(
     let region_entries = shared_domain_region_entries_for_problem(&mesh, problem, asset);
     let analysis = analyze_shared_domain_mesh_with_entries(&mesh, region_entries)?;
     validate_packing_constraints(&analysis, &mesh.mesh_name, solver_supports_conformal)?;
-    if let Some(certificate) = asset
+    let source_certificate = asset
         .build_report
         .as_ref()
-        .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
-    {
-        return Err(format!(
-            "shared-domain FEM mesh '{}' cannot pack/reorder certified topology '{}' without canonical certificate preservation",
-            mesh.mesh_name, certificate.topology_fingerprint
-        ));
-    }
+        .and_then(|report| report.mixed_layer_topology_certificate.as_ref());
     let (mesh, object_segments, mesh_parts) = pack_mesh_by_analysis(&mesh, &analysis)?;
+    let mut build_report = asset.build_report.clone();
+    if source_certificate.is_some() {
+        let fingerprint = mesh.topology_fingerprint_v6();
+        let report = build_report.as_mut().ok_or_else(|| {
+            "fem_mixed_p1_certificate_required: shared-domain build report is missing; fallback=none"
+                .to_string()
+        })?;
+        let certificate = report
+            .mixed_layer_topology_certificate
+            .as_mut()
+            .ok_or_else(|| {
+                "fem_mixed_p1_certificate_required: accepted topology certificate is missing; fallback=none"
+                    .to_string()
+            })?;
+        certificate.topology_fingerprint = fingerprint.clone();
+        fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(certificate, &mesh)
+            .map_err(|reasons| {
+                format!(
+                    "fem_mixed_p1_packed_certificate_rejected: {}; fallback=none",
+                    reasons.join("; ")
+                )
+            })?;
+        report.mixed_topology_provenance = Some(fullmag_ir::FemMixedTopologyProvenanceIR {
+            requested_topology: fullmag_ir::FemMeshTopologyFamilyIR::MixedP1,
+            resolved_topology: fullmag_ir::FemMeshTopologyFamilyIR::MixedP1,
+            accepted_certificate_fingerprint: fingerprint,
+            requested_device: fullmag_ir::ExecutionDevice::Cpu,
+            precision: fullmag_ir::ExecutionPrecision::Double,
+            capability_status: fullmag_ir::FemMixedTopologyCapabilityStatusIR::ProductionExecutable,
+        });
+    }
     Ok(Some(ResolvedFemDomainMeshAsset {
         mesh,
         mesh_source: asset.mesh_source.clone(),
         object_segments,
         mesh_parts,
-        build_report: asset.build_report.clone(),
+        build_report,
     }))
 }
 
@@ -1501,7 +1633,26 @@ fn extent_from_bounds(bounds: ([f64; 3], [f64; 3])) -> [f64; 3] {
     ]
 }
 
-fn certified_airbox_boundary_marker(mesh: &MeshIR) -> Result<(u32, &'static str), String> {
+fn certified_airbox_boundary_marker(
+    problem: &ProblemIR,
+    mesh: &MeshIR,
+) -> Result<(u32, &'static str), String> {
+    if mixed_topology_families(mesh).is_some() {
+        let certificate = problem
+            .geometry_assets
+            .as_ref()
+            .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+            .and_then(|asset| asset.build_report.as_ref())
+            .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
+            .ok_or_else(|| {
+                "fem_mixed_p1_certificate_required: outer airbox marker is not certified; fallback=none"
+                    .to_string()
+            })?;
+        return Ok((
+            certificate.outer_boundary_marker,
+            "mixed_topology_certificate",
+        ));
+    }
     let roles = mesh
         .certify_airbox_boundary_roles()
         .map_err(|errors| errors.join("; "))?;
@@ -1599,7 +1750,7 @@ pub(crate) fn build_air_box_config(
         "mesh_auto"
     };
 
-    let (certified_marker, _certified_source) = certified_airbox_boundary_marker(mesh)?;
+    let (certified_marker, _certified_source) = certified_airbox_boundary_marker(problem, mesh)?;
     let explicit_policy_marker = policy.and_then(|p| p.boundary_marker);
     let (boundary_marker, boundary_marker_source): (u32, &'static str) = if let Some(marker) =
         explicit_policy_marker

@@ -74,8 +74,15 @@ bool initialize_mesh_plan_fields(
     const fullmag_fem_mesh_desc &mesh,
     std::string &error);
 
-/* Current physics modules are tet4/tri3-only until their mixed-P1 slices land. */
-bool validate_tetra_only_physics_topology(const Context &ctx, std::string &error);
+/*
+ * Admit the legacy tet4/tri3 lane and the narrowly qualified mixed-P1 CPU
+ * operator tuple. All other mixed-topology plans fail closed before backend
+ * operator construction.
+ */
+bool validate_supported_physics_topology(
+    const Context &ctx,
+    const fullmag_fem_plan_desc &plan,
+    std::string &error);
 
 /*
  * Initialize magnetic element and node masks from imported FEM mesh markers.

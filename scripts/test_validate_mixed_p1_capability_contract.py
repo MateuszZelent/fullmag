@@ -40,7 +40,7 @@ class MixedP1CapabilityContractTest(unittest.TestCase):
         result = self._run(REPO_ROOT)
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_rejects_executable_or_validated_promotion(self) -> None:
+    def test_rejects_cpu_operator_demotion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._copy_contract(root)
@@ -52,23 +52,23 @@ class MixedP1CapabilityContractTest(unittest.TestCase):
                 for item in matrix["features"]
                 if item["id"] == "fem.cpu.exchange_demag.mixed_p1"
             )
-            feature["lanes"]["fem_cpu_public"] = "production_executable"
+            feature["lanes"]["fem_cpu_public"] = "unsupported"
             matrix_path.write_text(json.dumps(matrix), encoding="utf-8")
 
             result = self._run(root)
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("must be unsupported", result.stderr)
+        self.assertIn("must be production_executable", result.stderr)
 
-    def test_rejects_markdown_promotion(self) -> None:
+    def test_rejects_markdown_cpu_operator_demotion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._copy_contract(root)
             markdown = root / "docs/specs/capability-matrix-v0.md"
             markdown.write_text(
                 markdown.read_text(encoding="utf-8").replace(
+                    "| `fem.cpu.exchange_demag.mixed_p1` | `production_executable` | production_executable |",
                     "| `fem.cpu.exchange_demag.mixed_p1` | `unsupported` | source_visible |",
-                    "| `fem.cpu.exchange_demag.mixed_p1` | `production_executable` | source_visible |",
                     1,
                 ),
                 encoding="utf-8",
@@ -99,7 +99,7 @@ class MixedP1CapabilityContractTest(unittest.TestCase):
             root = Path(directory)
             self._copy_contract(root)
             markdown = root / "docs/specs/capability-matrix-v0.md"
-            row = "| `mesh.topology.mixed_p1` | `semantic_only` on FEM; `unsupported` on FDM | semantic_only | duplicate | none |\n"
+            row = "| `mesh.topology.mixed_p1` | CPU `production_executable`; GPU `semantic_only`; FDM `unsupported` | production_executable | duplicate | none |\n"
             markdown.write_text(
                 markdown.read_text(encoding="utf-8") + row,
                 encoding="utf-8",

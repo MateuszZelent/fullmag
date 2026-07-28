@@ -6187,6 +6187,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let phase1_backend = args.backend;
     let phase1_mode = args.mode;
     let phase1_precision = args.precision;
+    let phase1_runtime_device = crate::python_bridge::managed_fem_execution_device(
+        std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
+    );
     let phase1_handle = own_preparation_boundary_failure(
         &live_workspace,
         "script_materialization_thread_start_failed",
@@ -6220,6 +6223,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             .get_name()
                             .to_string(),
                     );
+                }
+                if let Some(device) = phase1_runtime_device {
+                    helper_args.push("--runtime-device".to_string());
+                    helper_args.push(device.to_string());
                 }
                 let output = run_python_helper_with_progress(&helper_args, None)
                     .context("phase-1 python helper failed")?;

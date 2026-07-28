@@ -47,17 +47,18 @@ validation:
 
 | Capability | Current product status | implementation_state | Evidence now | First promotion scope |
 |---|---|---|---|---|
-| `mesh.topology.mixed_p1` | `semantic_only` on FEM; `unsupported` on FDM | semantic_only | typed CSR `MeshIR`, strict mixed topology validation, and accepted certificate exist; planner rejects before repacking or backend startup while native mixed operators remain unavailable | one axis-aligned P1 Box in one conforming airbox |
-| `mesh.swept.prism` | `semantic_only` on FEM; `unsupported` on FDM | semantic_only | native Python meshing preserves `prism6` and bypasses tet compatibility; no legal solver execution lane yet | `prism6` magnetic cells with no tet conversion |
-| `mesh.transition.pyramid_tet` | `semantic_only` on FEM; `unsupported` on FDM | semantic_only | conforming `pyramid5` transition and `tet4` far-air topology plus certificate evidence exist | `pyramid5` air transition and `tet4` far air |
-| `mesh.exact_layer_count` | `semantic_only` on FEM; `unsupported` on FDM | semantic_only | authoring, ProblemIR, and certificate preserve requested/realized layers and magnetic node planes | `layers=1` gives exactly two magnetic node planes |
-| `fem.cpu.exchange_demag.mixed_p1` | `unsupported` | source_visible | typed runner/native ABI and core mixed import exist, but MFEM execution remains tet-only and no mixed CPU physics operator exists | MFEM/hypre CPU double, exchange + uniform Zeeman + Poisson Robin/Dirichlet |
+| `mesh.topology.mixed_p1` | CPU `production_executable`; GPU `semantic_only`; FDM `unsupported` | production_executable | source certificate validation, deterministic clone packing, final fingerprint rebinding, and runner/native gates enforce the bounded CPU tuple | one axis-aligned P1 Box in one conforming airbox |
+| `mesh.swept.prism` | CPU `production_executable`; GPU `semantic_only`; FDM `unsupported` | production_executable | native Python meshing preserves `prism6`; the explicit CPU lane consumes it without tet conversion | `prism6` magnetic cells with no tet conversion |
+| `mesh.transition.pyramid_tet` | CPU `production_executable`; GPU `semantic_only`; FDM `unsupported` | production_executable | conforming `pyramid5` transition and `tet4` far-air topology remain certificate-bound | `pyramid5` air transition and `tet4` far air |
+| `mesh.exact_layer_count` | CPU `production_executable`; GPU `semantic_only`; FDM `unsupported` | production_executable | accepted certificate requires `layers=1`, exactly two magnetic planes, and no fallback | `layers=1` gives exactly two magnetic node planes |
+| `fem.cpu.exchange_demag.mixed_p1` | `production_executable` | production_executable | explicit CPU/strict/double P1 relaxation admits uniform material, exchange, optional uniform Zeeman, and Poisson Robin/Dirichlet; wider tuples fail closed | MFEM/hypre CPU double, exchange + uniform Zeeman + Poisson Robin/Dirichlet |
 | `fem.gpu.exchange_demag.mixed_p1` | `unsupported` | source_visible | typed runner/native ABI and core mixed import exist, but mixed GPU operators and device proof do not | MFEM/libCEED/CUDA GPU double on the same certified mesh |
 
-The future first-slice legality is strict or extended FEM, CPU/GPU/auto device,
-double precision, one Box, one shared-domain airbox, uniform `Ms`/`Aex`, and
-PG-BB, NCG, or overdamped LLG. `auto` may resolve only to a lane advertising
-the complete capability set and must preserve requested and resolved intent.
+The current first-slice legality is explicit FEM, explicit CPU, strict mode,
+double precision, P1, one Box, one exact layer, one shared-domain airbox,
+uniform `Ms`/`Aex`, exchange, optional uniform Zeeman, Poisson Robin/Dirichlet,
+and PG-BB, NCG, or overdamped LLG. `auto`, GPU, single, extended, and hidden
+fallback remain illegal.
 Strict execution requires `fallbacks_triggered=[]`; no prism-to-tet, GPU-to-CPU,
 or mixed-to-free-tetrahedral fallback is legal.
 
