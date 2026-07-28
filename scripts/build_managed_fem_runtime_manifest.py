@@ -127,6 +127,17 @@ def build_manifest(args: argparse.Namespace) -> Mapping[str, object]:
         }
 
     cuda_toolkit, cuda_compiler = nvcc_metadata(args.nvcc)
+    hypre_build_metadata = json.loads(
+        args.hypre_build_metadata.read_text(encoding="utf-8")
+    )
+    for key in (
+        "hypre_gpu_architectures",
+        "hypre_memory_variant",
+        "hypre_configure_flags",
+        "hypre_config_macros",
+    ):
+        if key not in hypre_build_metadata:
+            raise ValueError(f"HYPRE build metadata is missing {key}")
     loader_contract = {
         "worker": {
             fullmag_loaded_soname: relative_to_runtime(fullmag_path, runtime_root),
@@ -153,12 +164,20 @@ def build_manifest(args: argparse.Namespace) -> Mapping[str, object]:
             "runtime diagnostics require device name, compute capability, and CUDA driver version"
         )
     created_at = args.created_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    built_image_id = args.docker_image_id or previous.get("docker_image_id", "")
+    observed_image_id = args.observed_docker_image_id or None
     manifest: dict[str, object] = {
         "schema": 2,
         "runtime": "fem-gpu-host",
         "variant": args.variant,
         "docker_image": "fullmag/fem-gpu:local",
-        "docker_image_id": args.docker_image_id or previous.get("docker_image_id", ""),
+        "docker_image_id": built_image_id,
+        "docker_image_tag_observation": {
+            "ref": "fullmag/fem-gpu:local",
+            "built_image_id": built_image_id,
+            "observed_image_id": observed_image_id,
+            "drift_observed": observed_image_id != built_image_id,
+        },
         "created_at": created_at,
         "source_manifest_sha256": previous_manifest_sha256,
         "binaries": {name: str(binaries[name]) for name in resolved_binaries},
@@ -175,6 +194,7 @@ def build_manifest(args: argparse.Namespace) -> Mapping[str, object]:
             "cuda_compiler": cuda_compiler,
             "requested_cuda_architectures": args.requested_cuda_architectures,
             "effective_cuda_architectures": sorted(effective_architectures),
+            **hypre_build_metadata,
         },
         "runtime_diagnostics": {
             "device_name": device_name,
@@ -197,11 +217,13 @@ def main() -> None:
     parser.add_argument("--runtime-root", type=Path, required=True)
     parser.add_argument("--variant", required=True)
     parser.add_argument("--requested-cuda-architectures", required=True)
+    parser.add_argument("--hypre-build-metadata", type=Path, required=True)
     parser.add_argument("--device-name")
     parser.add_argument("--compute-capability")
     parser.add_argument("--driver-version")
     parser.add_argument("--runtime-diagnostics-json", type=Path)
     parser.add_argument("--docker-image-id")
+    parser.add_argument("--observed-docker-image-id")
     parser.add_argument("--created-at")
     parser.add_argument("--cuobjdump", default="cuobjdump")
     parser.add_argument("--ldd", default="ldd")

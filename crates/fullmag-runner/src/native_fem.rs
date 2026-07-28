@@ -173,8 +173,44 @@ fn validate_native_step_stats(stats: &ffi::fullmag_fem_step_stats) -> Result<f64
         ("max_demag_field_amplitude", stats.max_demag_field_amplitude),
         ("error_estimate", stats.error_estimate),
         ("demag_linear_residual", stats.demag_linear_residual),
+        (
+            "demag_amg_strength_threshold",
+            stats.demag_amg_strength_threshold,
+        ),
     ] {
         checked_native_nonnegative(label, value)?;
+    }
+    for (label, value) in [
+        ("demag_amg_relax_type", stats.demag_amg_relax_type),
+        ("demag_amg_coarsening", stats.demag_amg_coarsening),
+        ("demag_amg_interpolation", stats.demag_amg_interpolation),
+        (
+            "demag_amg_aggressive_coarsening",
+            stats.demag_amg_aggressive_coarsening,
+        ),
+        ("demag_amg_max_levels", stats.demag_amg_max_levels),
+    ] {
+        if value < 0 {
+            return Err(RunError {
+                message: format!("native FEM returned negative {label}: {value}"),
+            });
+        }
+    }
+    for (label, value) in [
+        (
+            "demag_amg_strength_threshold_is_set",
+            stats.demag_amg_strength_threshold_is_set,
+        ),
+        (
+            "demag_amg_max_levels_is_set",
+            stats.demag_amg_max_levels_is_set,
+        ),
+    ] {
+        if !matches!(value, 0 | 1) {
+            return Err(RunError {
+                message: format!("native FEM returned invalid {label}: {value}"),
+            });
+        }
     }
     checked_native_nonnegative("max_torque_Apm", stats.max_torque_Apm)
 }
@@ -2473,7 +2509,17 @@ impl NativeFemBackend {
             fsal_reused: 0,
             requested_omp_threads: 0,
             effective_omp_threads: 0,
-            cpu_thread_cap_reason: 0,
+            cpu_thread_cap_reason:
+                ffi::fullmag_fem_host_thread_policy_reason::FULLMAG_FEM_HOST_THREAD_POLICY_NONE
+                    as i32,
+            demag_amg_relax_type: 0,
+            demag_amg_coarsening: 0,
+            demag_amg_interpolation: 0,
+            demag_amg_aggressive_coarsening: 0,
+            demag_amg_strength_threshold: 0.0,
+            demag_amg_strength_threshold_is_set: 0,
+            demag_amg_max_levels: 0,
+            demag_amg_max_levels_is_set: 0,
         };
 
         let ffi_wall_start = std::time::Instant::now();
@@ -2527,6 +2573,14 @@ impl NativeFemBackend {
             demag_solver_setup_wall_time_ns: stats.demag_solver_setup_wall_time_ns,
             demag_solver_apply_wall_time_ns: stats.demag_solver_apply_wall_time_ns,
             demag_solver_setup_reused: stats.demag_solver_setup_reused != 0,
+            demag_amg_relax_type: stats.demag_amg_relax_type,
+            demag_amg_coarsening: stats.demag_amg_coarsening,
+            demag_amg_interpolation: stats.demag_amg_interpolation,
+            demag_amg_aggressive_coarsening: stats.demag_amg_aggressive_coarsening,
+            demag_amg_strength_threshold: stats.demag_amg_strength_threshold,
+            demag_amg_strength_threshold_is_set: stats.demag_amg_strength_threshold_is_set != 0,
+            demag_amg_max_levels: stats.demag_amg_max_levels,
+            demag_amg_max_levels_is_set: stats.demag_amg_max_levels_is_set != 0,
             demag_recover_wall_time_ns: stats.demag_recover_wall_time_ns,
             demag_energy_wall_time_ns: stats.demag_energy_wall_time_ns,
             rhs_wall_time_ns: stats.rhs_wall_time_ns,
@@ -2799,7 +2853,17 @@ impl NativeFemBackend {
             fsal_reused: 0,
             requested_omp_threads: 0,
             effective_omp_threads: 0,
-            cpu_thread_cap_reason: 0,
+            cpu_thread_cap_reason:
+                ffi::fullmag_fem_host_thread_policy_reason::FULLMAG_FEM_HOST_THREAD_POLICY_NONE
+                    as i32,
+            demag_amg_relax_type: 0,
+            demag_amg_coarsening: 0,
+            demag_amg_interpolation: 0,
+            demag_amg_aggressive_coarsening: 0,
+            demag_amg_strength_threshold: 0.0,
+            demag_amg_strength_threshold_is_set: 0,
+            demag_amg_max_levels: 0,
+            demag_amg_max_levels_is_set: 0,
         };
 
         let ffi_wall_start = std::time::Instant::now();
@@ -2861,6 +2925,14 @@ impl NativeFemBackend {
             demag_solver_setup_wall_time_ns: stats.demag_solver_setup_wall_time_ns,
             demag_solver_apply_wall_time_ns: stats.demag_solver_apply_wall_time_ns,
             demag_solver_setup_reused: stats.demag_solver_setup_reused != 0,
+            demag_amg_relax_type: stats.demag_amg_relax_type,
+            demag_amg_coarsening: stats.demag_amg_coarsening,
+            demag_amg_interpolation: stats.demag_amg_interpolation,
+            demag_amg_aggressive_coarsening: stats.demag_amg_aggressive_coarsening,
+            demag_amg_strength_threshold: stats.demag_amg_strength_threshold,
+            demag_amg_strength_threshold_is_set: stats.demag_amg_strength_threshold_is_set != 0,
+            demag_amg_max_levels: stats.demag_amg_max_levels,
+            demag_amg_max_levels_is_set: stats.demag_amg_max_levels_is_set != 0,
             demag_recover_wall_time_ns: stats.demag_recover_wall_time_ns,
             demag_energy_wall_time_ns: stats.demag_energy_wall_time_ns,
             rhs_wall_time_ns: stats.rhs_wall_time_ns,
@@ -3099,7 +3171,17 @@ impl NativeFemBackend {
             fsal_reused: 0,
             requested_omp_threads: 0,
             effective_omp_threads: 0,
-            cpu_thread_cap_reason: 0,
+            cpu_thread_cap_reason:
+                ffi::fullmag_fem_host_thread_policy_reason::FULLMAG_FEM_HOST_THREAD_POLICY_NONE
+                    as i32,
+            demag_amg_relax_type: 0,
+            demag_amg_coarsening: 0,
+            demag_amg_interpolation: 0,
+            demag_amg_aggressive_coarsening: 0,
+            demag_amg_strength_threshold: 0.0,
+            demag_amg_strength_threshold_is_set: 0,
+            demag_amg_max_levels: 0,
+            demag_amg_max_levels_is_set: 0,
         };
 
         let rc = unsafe { ffi::fullmag_fem_backend_snapshot_stats(self.handle, &mut stats) };
@@ -3141,6 +3223,14 @@ impl NativeFemBackend {
             demag_solver_setup_wall_time_ns: stats.demag_solver_setup_wall_time_ns,
             demag_solver_apply_wall_time_ns: stats.demag_solver_apply_wall_time_ns,
             demag_solver_setup_reused: stats.demag_solver_setup_reused != 0,
+            demag_amg_relax_type: stats.demag_amg_relax_type,
+            demag_amg_coarsening: stats.demag_amg_coarsening,
+            demag_amg_interpolation: stats.demag_amg_interpolation,
+            demag_amg_aggressive_coarsening: stats.demag_amg_aggressive_coarsening,
+            demag_amg_strength_threshold: stats.demag_amg_strength_threshold,
+            demag_amg_strength_threshold_is_set: stats.demag_amg_strength_threshold_is_set != 0,
+            demag_amg_max_levels: stats.demag_amg_max_levels,
+            demag_amg_max_levels_is_set: stats.demag_amg_max_levels_is_set != 0,
             demag_recover_wall_time_ns: stats.demag_recover_wall_time_ns,
             demag_energy_wall_time_ns: stats.demag_energy_wall_time_ns,
             rhs_wall_time_ns: stats.rhs_wall_time_ns,
@@ -7117,45 +7207,105 @@ mod tests {
     }
 
     #[test]
-    fn native_fem_demag_amg_profile_reads_recorded_env_overrides() {
+    fn native_fem_demag_amg_policy_has_one_owner_and_effective_abi_provenance() {
+        let policy_header = include_str!("../../../backends/fem/core/demag_solver_policy.hpp");
+        let policy_source = include_str!("../../../backends/fem/core/demag_solver_policy.cpp");
         let cpu_source =
             include_str!("../../../backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp");
         let gpu_source =
             include_str!("../../../backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp");
-        for source in [cpu_source, gpu_source] {
+        let abi_header = include_str!("../../../native/include/fullmag_fem.h");
+        let abi_source = include_str!("../../../backends/fem/src/api.cpp");
+        let sys_bindings = include_str!("../../fullmag-fem-sys/src/lib.rs");
+        let runner_types = include_str!("types.rs");
+        let artifacts_source = include_str!("artifacts.rs");
+
+        assert!(
+            policy_header.contains("struct ResolvedDemagAmgPolicy")
+                && policy_header.contains("resolve_demag_amg_policy_from_environment()"),
+            "the backend-neutral FEM core must own the resolved AMG policy contract"
+        );
+        for field in ["strength_threshold_is_set", "max_levels_is_set"] {
             assert!(
-                source.contains("FULLMAG_FEM_DEMAG_AMG_RELAX_TYPE") &&
-                    source.contains("demag_amg_int_env(\"FULLMAG_FEM_DEMAG_AMG_RELAX_TYPE\", 18)"),
-                "native demag AMG profile must read the recorded relax_type env override with default"
+                policy_header.contains(field),
+                "resolved AMG policy must preserve optional override presence for {field}"
             );
             assert!(
-                source.contains("FULLMAG_FEM_DEMAG_AMG_COARSENING") &&
-                    source.contains("demag_amg_int_env(\"FULLMAG_FEM_DEMAG_AMG_COARSENING\", 8)"),
-                "native demag AMG profile must read the recorded coarsening env override with default"
-            );
-            assert!(
-                source.contains("FULLMAG_FEM_DEMAG_AMG_INTERPOLATION") &&
-                    source.contains("demag_amg_int_env(\"FULLMAG_FEM_DEMAG_AMG_INTERPOLATION\", 6)"),
-                "native demag AMG profile must read the recorded interpolation env override with default"
-            );
-            assert!(
-                source.contains("FULLMAG_FEM_DEMAG_AMG_AGGRESSIVE_COARSENING") &&
-                    source.contains(
-                        "demag_amg_int_env(\"FULLMAG_FEM_DEMAG_AMG_AGGRESSIVE_COARSENING\", 1)"
-                    ),
-                "native demag AMG profile must read the recorded aggressive coarsening env override with default"
-            );
-            assert!(
-                source.contains("FULLMAG_FEM_DEMAG_AMG_STRENGTH_THRESHOLD")
-                    && source.contains("amg.SetStrengthThresh(strength_threshold)"),
-                "native demag AMG profile must apply the optional strength threshold env override"
-            );
-            assert!(
-                source.contains("FULLMAG_FEM_DEMAG_AMG_MAX_LEVELS")
-                    && source.contains("amg.SetMaxLevels(max_levels)"),
-                "native demag AMG profile must apply the optional max-levels env override"
+                abi_source.contains(&format!("policy.{field}")),
+                "native stats publication must copy resolved optional presence for {field}"
             );
         }
+        for (env_name, default_literal) in [
+            ("FULLMAG_FEM_DEMAG_AMG_RELAX_TYPE", "18"),
+            ("FULLMAG_FEM_DEMAG_AMG_COARSENING", "8"),
+            ("FULLMAG_FEM_DEMAG_AMG_INTERPOLATION", "6"),
+            ("FULLMAG_FEM_DEMAG_AMG_AGGRESSIVE_COARSENING", "1"),
+            ("FULLMAG_FEM_DEMAG_AMG_STRENGTH_THRESHOLD", "0.0"),
+            ("FULLMAG_FEM_DEMAG_AMG_MAX_LEVELS", "0"),
+        ] {
+            assert!(
+                policy_source.contains(env_name) && policy_source.contains(default_literal),
+                "central demag AMG policy owner must resolve {env_name} with its canonical default"
+            );
+            for (consumer, source) in [("CPU", cpu_source), ("GPU", gpu_source)] {
+                assert!(
+                    !source.contains(env_name),
+                    "{consumer} solver must not independently resolve {env_name}"
+                );
+            }
+            assert!(
+                !artifacts_source.contains(env_name),
+                "Rust artifacts must copy effective AMG values from the native ABI instead of reading {env_name}"
+            );
+        }
+
+        for source in [cpu_source, gpu_source] {
+            assert!(
+                source.contains("ctx.demag.amg_policy"),
+                "CPU and GPU solvers must consume the single policy resolved into demag runtime state"
+            );
+            assert!(
+                source.contains("policy.strength_threshold_is_set")
+                    && source.contains("policy.max_levels_is_set"),
+                "CPU and GPU AMG consumers must distinguish explicit zero overrides from unset values"
+            );
+        }
+
+        for field in [
+            "demag_amg_relax_type",
+            "demag_amg_coarsening",
+            "demag_amg_interpolation",
+            "demag_amg_aggressive_coarsening",
+            "demag_amg_strength_threshold",
+            "demag_amg_strength_threshold_is_set",
+            "demag_amg_max_levels",
+            "demag_amg_max_levels_is_set",
+        ] {
+            assert!(
+                abi_header.contains(field),
+                "native step stats ABI must expose {field}"
+            );
+            assert!(
+                sys_bindings.contains(field),
+                "Rust sys bindings must expose {field}"
+            );
+            assert!(
+                runner_types.contains(field),
+                "Rust StepStats must preserve {field}"
+            );
+        }
+        assert!(
+            artifacts_source.contains("demag_amg_strength_threshold_is_set")
+                && artifacts_source.contains("demag_amg_max_levels_is_set"),
+            "artifact provenance must preserve explicit zero optional AMG overrides"
+        );
+        assert_eq!(
+            abi_source
+                .matches("apply_demag_solver_policy_to_step_stats(handle->context, *out_stats)")
+                .count(),
+            3,
+            "step, relax_step, and snapshot ABI entrypoints must all publish the effective policy"
+        );
     }
 
     #[test]

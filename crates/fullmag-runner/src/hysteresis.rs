@@ -2605,8 +2605,11 @@ fn execute_settle_step_at_field(
                 mutated_fem.adaptive_timestep = None;
             }
 
-            let resolution =
-                dispatch::resolve_fem_engine_for_plan_with_trail(problem, &mutated_fem)?;
+            let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(
+                problem,
+                &mutated_fem,
+                field_every_n != u64::MAX,
+            )?;
             let mut live_on_step = |update: StepUpdate| {
                 let update = annotate_hysteresis_live_update(update, hysteresis_progress);
                 (*on_step)(update)
@@ -2620,7 +2623,7 @@ fn execute_settle_step_at_field(
                 interrupt_requested,
                 on_step: &mut live_on_step,
             };
-            fem::relax::execute_fem_relax_with_context(
+            let mut executed = fem::relax::execute_fem_relax_with_context(
                 fem_engine_kind(resolution.engine),
                 &mutated_fem,
                 &stage_context,
@@ -2628,7 +2631,13 @@ fn execute_settle_step_at_field(
                 &[],
                 Some(live),
                 None,
-            )
+            )?;
+            crate::attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            crate::attach_fem_crossover_decision_to_executed_run(
+                &mut executed,
+                resolution.fem_crossover_decision,
+            );
+            Ok(executed)
         }
         _ => Err(RunError {
             message: "Unsupported backend plan in settle step".to_string(),

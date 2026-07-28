@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -314,7 +315,8 @@ def scenario_body_size(scenario: str) -> tuple[float, float, float]:
 
 def scenario_airbox_size(scenario: str) -> tuple[float, float, float]:
     if scenario_is_box500_airbox(scenario):
-        return BOX500_AIRBOX_SIZE
+        scale = env_float("FULLMAG_BENCH_AIRBOX_EXTENT_SCALE", 1.0)
+        return tuple(component * scale for component in BOX500_AIRBOX_SIZE)
     return DEFAULT_AIRBOX_SIZE
 
 
@@ -480,6 +482,15 @@ def build(
     )
 
 
+def executed_problem_ir_sha256(problem: fm.Problem) -> str:
+    canonical_bytes = json.dumps(
+        problem.to_ir(include_geometry_assets=True),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical_bytes).hexdigest()
+
+
 def emit_summary(
     result: fm.Result,
     mesh_path: Path,
@@ -488,6 +499,8 @@ def emit_summary(
     scenario: str,
     integrator: str,
     timestep_policy: str = "fixed",
+    *,
+    executed_problem_ir_sha256: str | None = None,
 ) -> None:
     final = result.steps[-1] if result.steps else None
     total_rhs_evals = sum(
@@ -501,6 +514,7 @@ def emit_summary(
         "scenario": scenario,
         "integrator": integrator,
         "timestep_policy": timestep_policy,
+        "executed_problem_ir_sha256": executed_problem_ir_sha256,
         "relaxation_algorithm": (
             env_relaxation_algorithm() if scenario_uses_relaxation(scenario) else None
         ),
@@ -625,5 +639,15 @@ if __name__ == "__main__":
         )
         raise SystemExit(0)
     problem = build(mesh_path, dt, steps, scenario, integrator, timestep_policy)
+    problem_ir_sha256 = executed_problem_ir_sha256(problem)
     result = fm.Simulation(problem, backend="fem").run(until=steps * dt)
-    emit_summary(result, mesh_path, steps, dt, scenario, integrator, timestep_policy)
+    emit_summary(
+        result,
+        mesh_path,
+        steps,
+        dt,
+        scenario,
+        integrator,
+        timestep_policy,
+        executed_problem_ir_sha256=problem_ir_sha256,
+    )

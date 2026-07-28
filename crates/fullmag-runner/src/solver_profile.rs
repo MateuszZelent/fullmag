@@ -135,7 +135,7 @@ fn cpu_thread_cap_reason_label(code: i32) -> &'static str {
         1 => "external-auto-resolved",
         2 => "auto-small-mesh-cap",
         3 => "auto-medium-mesh-cap",
-        4 => "gpu-bypass",
+        4 => "gpu-default-one",
         5 => "auto-uncapped",
         _ => "none",
     }
@@ -706,6 +706,10 @@ pub struct SolverProfileOverheadDiagnostics {
     pub total_record_wall_time_ns: u64,
     pub last_persist_wall_time_ns: u64,
     pub total_persist_wall_time_ns: u64,
+    #[serde(default)]
+    pub persist_enqueued_count: u64,
+    #[serde(default)]
+    pub persist_completed_count: u64,
     pub last_publisher_replace_wall_time_ns: u64,
     pub total_publisher_replace_wall_time_ns: u64,
     pub heartbeat_seed_deep_clone_count: u64,
@@ -1120,6 +1124,18 @@ impl SolverProfileState {
         self.revision = self.revision.wrapping_add(1);
     }
 
+    pub fn record_persist_enqueued(&mut self) {
+        self.overhead.persist_enqueued_count =
+            self.overhead.persist_enqueued_count.saturating_add(1);
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    pub fn record_persist_completed(&mut self) {
+        self.overhead.persist_completed_count =
+            self.overhead.persist_completed_count.saturating_add(1);
+        self.revision = self.revision.wrapping_add(1);
+    }
+
     pub fn complete_overhead_record(&mut self, record_ns: u64) {
         let delta = record_ns.saturating_sub(self.overhead.last_record_wall_time_ns);
         self.overhead.last_record_wall_time_ns = record_ns;
@@ -1385,7 +1401,7 @@ mod tests {
 
     use super::{
         native_solver_wall_time_ns, phase_time, SolverProfileConfig, SolverProfileState,
-        SolverProfileStepSample,
+        SolverProfileStepSample, SolverProfileThreading,
     };
     use crate::types::StepStats;
 
@@ -1398,6 +1414,19 @@ mod tests {
             emit_engine_log: false,
             persist_artifact: false,
         })
+    }
+
+    #[test]
+    fn gpu_default_one_is_reported_as_a_deliberate_resolved_policy() {
+        let threading = SolverProfileThreading::from_stats(&StepStats {
+            requested_fem_omp_threads: 40,
+            effective_fem_omp_threads: 1,
+            fem_cpu_thread_cap_reason: 4,
+            ..StepStats::default()
+        });
+
+        assert_eq!(threading.thread_mode, "resolved");
+        assert_eq!(threading.cap_reason, "gpu-default-one");
     }
 
     #[test]

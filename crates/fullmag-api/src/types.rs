@@ -263,6 +263,8 @@ pub(crate) struct SessionManifest {
     pub resolved_cpu_threads: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_fallback: Option<fullmag_runner::ResolvedFallback>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_crossover_decision: Option<fullmag_runner::FemCrossoverDecision>,
     pub artifact_dir: String,
     pub started_at_unix_ms: u128,
     pub finished_at_unix_ms: u128,
@@ -1503,6 +1505,7 @@ mod tests {
                 resolved_worker: None,
                 resolved_cpu_threads: None,
                 resolved_fallback: None,
+                fem_crossover_decision: None,
                 artifact_dir: String::new(),
                 started_at_unix_ms: 0,
                 finished_at_unix_ms: 0,

@@ -93,7 +93,12 @@ const status: LiveStatusResource = {
     workspace_revision: 0,
   },
   run: {
+    calibration_id: "rtx4080-qualified-v1",
+    requested_device: "auto",
+    resolved_device: "gpu",
     run_id: "run-1",
+    selection_confidence: 0.94,
+    selection_reason: "calibrated_above_upper_bound",
     solver_steps: 12,
     solver_time: 3601,
     stage_count: 1,
@@ -166,6 +171,13 @@ describe("FooterTelemetry", () => {
     expect(byId.step?.value).toBe("99");
     expect(byId.rate?.label).toBe("End-to-end rate");
     expect(byId.rate?.detail).toBe("Closed profiler span");
+    expect(byId["fem-device-selection"]?.value).toBe("auto → gpu");
+    expect(byId["fem-device-selection"]?.detail).toBe(
+      "calibrated_above_upper_bound",
+    );
+    expect(byId["fem-device-selection"]?.subdetail).toContain(
+      "rtx4080-qualified-v1",
+    );
   });
 
   it("uses detailed runtime state for the visible compute status", () => {

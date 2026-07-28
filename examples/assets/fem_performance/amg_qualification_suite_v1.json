@@ -6,33 +6,33 @@
       "domain_hmax_m": 2.5e-07,
       "element_count": 149,
       "node_count": 52,
-      "problem_ir_sha256": "5f1bc3d23110465a226d2c70a1d3b083ad8fe9f813567770f1955aeba43d7cea",
+      "problem_ir_sha256": "9f8a0d0d2fc4516c2852bb5a1a6d1839285ba31d14644ae78bc011eee8032578",
       "resolution": "coarse",
       "solver_mesh_path": "box500_airbox_exchange_demag_amg_coarse_v1.mesh.json",
       "solver_mesh_sha256": "6a8e43689f913a99a10791a45f2d8c2f3ab2e06c5c5692ce82fe767464308e7b",
-      "solver_mesh_signature": "339cf9e80122aa40093da65430feb8b2fc9feebfbb73c3cade0210787549d73e"
+      "solver_mesh_signature": "ffe9595b4f6b6fc44fab022e733f2fbf2457ee8189929859a7f137f65dd10f11"
     },
     {
       "airbox_hmax_m": 2.5e-07,
       "domain_hmax_m": 1e-07,
       "element_count": 473,
       "node_count": 153,
-      "problem_ir_sha256": "721ab8fb5d1072f70463b7e04700739ff0f6d35283c90ca81e9996a871801fc5",
+      "problem_ir_sha256": "f3efdecb3b39df3ea900e0fd838cfd8ccd5823f96053d3c85a22a6620213a5b3",
       "resolution": "medium",
       "solver_mesh_path": "box500_airbox_exchange_demag_amg_medium_v1.mesh.json",
       "solver_mesh_sha256": "6e981384f52474fb54f396516603e705bb484ef729298d37eba74b16ed1f0765",
-      "solver_mesh_signature": "08fd82ea7d164c4d3ae343c34c1ddd6db3c614216b54985ee272bac1d7531ba7"
+      "solver_mesh_signature": "085353a503c3377a241c56a4dda85ee23e3673e45c24fd6d6d6cb5892a4b9a1e"
     },
     {
       "airbox_hmax_m": 1e-07,
       "domain_hmax_m": 5e-08,
       "element_count": 5138,
       "node_count": 1200,
-      "problem_ir_sha256": "ec36a24123cfa8d1d84e6da0987628e5da537c63fc5de44d91d15e1bd1c8ac25",
+      "problem_ir_sha256": "403afa1214681d3317e23b14f4095dfea6141197cea813655c07d24104fbcc08",
       "resolution": "fine",
       "solver_mesh_path": "box500_airbox_exchange_demag_v1.mesh.json",
       "solver_mesh_sha256": "9c410c3b02cc86d3a832b923f13b5f9b0ec18c4be2babda148697c6dbc9c105a",
-      "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41"
+      "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431"
     }
   ],
   "scenario": "box500_airbox_exchange_demag",

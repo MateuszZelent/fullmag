@@ -193,12 +193,22 @@ fn attach_resolved_fallback_to_provenance(
     }
 }
 
+#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
+fn attach_fem_crossover_decision_to_provenance(
+    provenance: &mut ExecutionProvenance,
+    crossover_decision: Option<crate::types::FemCrossoverDecision>,
+) {
+    if provenance.fem_crossover_decision.is_none() {
+        provenance.fem_crossover_decision = crossover_decision;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        attach_resolved_fallback_to_provenance, cached_display_refresh_due,
-        cpu_execution_provenance, display_refresh_due, InteractiveFdmPreviewRuntime,
-        InteractiveFdmPreviewRuntimeInner,
+        attach_fem_crossover_decision_to_provenance, attach_resolved_fallback_to_provenance,
+        cached_display_refresh_due, cpu_execution_provenance, display_refresh_due,
+        InteractiveFdmPreviewRuntime, InteractiveFdmPreviewRuntimeInner,
     };
     use crate::dispatch::FdmEngine;
     use crate::fdm::cpu::reference::{
@@ -312,6 +322,214 @@ mod tests {
         assert_eq!(fallback.original_engine, "fem_native_gpu");
         assert_eq!(fallback.fallback_engine, "fem_cpu_native");
         assert_eq!(fallback.reason, "native_fem_gpu_unavailable");
+    }
+
+    #[test]
+    fn persistent_interactive_fem_provenance_keeps_the_pinned_crossover_decision() {
+        let decision = crate::FemCrossoverDecision {
+            requested: "auto".to_string(),
+            resolved: "cpu".to_string(),
+            reason: "calibrated_below_lower_bound".to_string(),
+            calibration_id: Some("calibration-a".to_string()),
+            confidence: Some(0.97),
+        };
+        let mut provenance = crate::ExecutionProvenance {
+            execution_engine: "fem_cpu_native".to_string(),
+            precision: "double".to_string(),
+            ..crate::ExecutionProvenance::default()
+        };
+
+        attach_fem_crossover_decision_to_provenance(&mut provenance, Some(decision.clone()));
+
+        assert_eq!(provenance.fem_crossover_decision, Some(decision));
+        let artifact_json = serde_json::to_value(&provenance).expect("serialize provenance");
+        let crossover = &artifact_json["fem_crossover_decision"];
+        assert_eq!(crossover["requested"], "auto");
+        assert_eq!(crossover["resolved"], "cpu");
+        assert_eq!(crossover["reason"], "calibrated_below_lower_bound");
+        assert_eq!(crossover["calibration_id"], "calibration-a");
+        assert_eq!(crossover["confidence"], 0.97);
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn persistent_fem_runtime_keeps_resolved_crossover_after_profile_mutation_and_removal() {
+        use crate::solver_runtime::fem_crossover::{
+            features_from_plan, profile_payload_sha256, resolve_auto_fem_device,
+            validate_fem_crossover_profile, FemCrossoverHardwareIdentity, FemCrossoverProfileV1,
+            FemCrossoverRuntimeIdentity, FemCrossoverSample, FemCrossoverSampleDistribution,
+            FemCrossoverStratum, FEM_CROSSOVER_SCHEMA_V1,
+        };
+        use fullmag_ir::{
+            BackendTarget, DiscretizationHintsIR, FdmHintsIR, FemHintsIR, FemMeshAssetIR,
+            GeometryAssetsIR, MeshIR, ProblemIR,
+        };
+        use std::collections::BTreeMap;
+
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = BackendTarget::Fem;
+        problem.backend_policy.discretization_hints = Some(DiscretizationHintsIR {
+            fdm: Some(FdmHintsIR {
+                cell: [2e-9, 2e-9, 2e-9],
+                default_cell: None,
+                per_magnet: None,
+                demag: None,
+                boundary_correction: None,
+                boundary_phi_floor: None,
+                boundary_delta_min: None,
+            }),
+            fem: Some(FemHintsIR {
+                order: 1,
+                hmax: 2e-9,
+                mesh: Some("meshes/unit_tet.msh".to_string()),
+                demag_solver_policy: None,
+            }),
+            hybrid: None,
+        });
+        problem.geometry_assets = Some(GeometryAssetsIR {
+            fdm_grid_assets: Vec::new(),
+            fem_mesh_assets: vec![FemMeshAssetIR {
+                geometry_name: "strip".to_string(),
+                mesh_source: Some("meshes/unit_tet.msh".to_string()),
+                mesh: Some(MeshIR {
+                    mesh_name: "strip".to_string(),
+                    nodes: vec![
+                        [0.0, 0.0, 0.0],
+                        [1.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0],
+                        [0.0, 0.0, 1.0],
+                    ],
+                    elements: vec![[0, 1, 2, 3]],
+                    element_markers: vec![1],
+                    boundary_faces: vec![[0, 1, 2]],
+                    boundary_markers: vec![1],
+                    periodic_boundary_pairs: Vec::new(),
+                    periodic_node_pairs: Vec::new(),
+                    per_domain_quality: std::collections::HashMap::new(),
+                }),
+            }],
+            fem_domain_mesh_asset: None,
+        });
+        let planned = fullmag_plan::plan(&problem).expect("build FEM persistence test plan");
+        let fullmag_ir::BackendPlanIR::Fem(plan) = planned.backend_plan else {
+            panic!("persistence test requires a FEM plan");
+        };
+        let features = features_from_plan(&plan, false);
+        let runtime_identity = FemCrossoverRuntimeIdentity {
+            bundle_sha256: "bundle-pinned".to_string(),
+            library_sha256: BTreeMap::from([
+                ("libmfem.so".to_string(), "mfem-pinned".to_string()),
+                ("libHYPRE.so".to_string(), "hypre-pinned".to_string()),
+            ]),
+            hardware: FemCrossoverHardwareIdentity {
+                gpu_uuid: "GPU-pinned".to_string(),
+                gpu_name: "Pinned test GPU".to_string(),
+                compute_capability: "8.9".to_string(),
+                driver_version: "590.48".to_string(),
+                cuda_toolkit_version: "13.1".to_string(),
+                cpu_identity: "Pinned test CPU".to_string(),
+            },
+        };
+        let sample = FemCrossoverSample {
+            fixture_id: "persistence-fixture".to_string(),
+            node_count: features.node_count,
+            matrix_nnz: None,
+            cpu: FemCrossoverSampleDistribution {
+                p50_seconds: 1.0,
+                p95_seconds: 1.1,
+                stddev_seconds: 0.05,
+                count: 3,
+            },
+            gpu: FemCrossoverSampleDistribution {
+                p50_seconds: 2.0,
+                p95_seconds: 2.1,
+                stddev_seconds: 0.05,
+                count: 3,
+            },
+        };
+        let mut profile = FemCrossoverProfileV1 {
+            schema_version: FEM_CROSSOVER_SCHEMA_V1.to_string(),
+            calibration_id: "pinned-calibration".to_string(),
+            qualified: true,
+            qualification_notes: Vec::new(),
+            evidence_sources: vec!["persistence-fixture".to_string()],
+            confidence: 0.96,
+            warmup_runs: 1,
+            repeat_runs: 3,
+            runtime: runtime_identity.clone(),
+            strata: vec![FemCrossoverStratum {
+                id: "persistent-runtime".to_string(),
+                demag_enabled: features.demag_enabled,
+                relaxation_algorithm: features.relaxation_algorithm.clone(),
+                preview_enabled: features.preview_enabled,
+                requires_matrix_nnz: false,
+                minimum_matrix_nnz: None,
+                maximum_matrix_nnz: None,
+                lower_node_count: features.node_count + 1,
+                upper_node_count: features.node_count + 2,
+                within_band_device: "gpu".to_string(),
+                samples: vec![sample],
+            }],
+            signature: None,
+            profile_sha256: String::new(),
+        };
+        profile.profile_sha256 = profile_payload_sha256(&profile);
+
+        let profile_path = std::env::temp_dir().join(format!(
+            "fullmag-pinned-crossover-{}-{:?}.json",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(
+            &profile_path,
+            serde_json::to_vec(&profile).expect("serialize qualified profile"),
+        )
+        .expect("write qualified profile");
+        let loaded: FemCrossoverProfileV1 = serde_json::from_slice(
+            &std::fs::read(&profile_path).expect("read qualified profile once"),
+        )
+        .expect("parse qualified profile");
+        let loaded = validate_fem_crossover_profile(loaded, &runtime_identity)
+            .expect("validate qualified profile once");
+        let decision = resolve_auto_fem_device(&features, Some(&loaded));
+        assert_eq!(decision.resolved, "cpu");
+
+        std::fs::write(&profile_path, b"{\"mutated\":true}").expect("mutate profile");
+        std::fs::remove_file(&profile_path).expect("remove profile");
+
+        let fallback = crate::ResolvedFallback {
+            occurred: true,
+            original_engine: "fem_native_gpu".to_string(),
+            fallback_engine: "fem_cpu_native".to_string(),
+            reason: decision.reason.clone(),
+            message: "pinned crossover selected CPU for persistence test".to_string(),
+        };
+        let runtime = super::InteractiveFemPreviewRuntime::from_fem_plan(
+            &plan,
+            crate::dispatch::FemEngine::CpuNative,
+            Some(fallback),
+            Some(decision.clone()),
+            None,
+        )
+        .expect("construct persistent FEM runtime from the pinned decision");
+        let serialized = serde_json::to_value(runtime.execution_provenance())
+            .expect("serialize persistent runtime provenance");
+
+        assert_eq!(serialized["fem_crossover_decision"]["requested"], "auto");
+        assert_eq!(serialized["fem_crossover_decision"]["resolved"], "cpu");
+        assert_eq!(
+            serialized["fem_crossover_decision"]["reason"],
+            "calibrated_below_lower_bound"
+        );
+        assert_eq!(
+            serialized["fem_crossover_decision"]["calibration_id"],
+            "pinned-calibration"
+        );
+        assert_eq!(serialized["fem_crossover_decision"]["confidence"], 0.96);
+        assert_eq!(
+            runtime.execution_provenance().fem_crossover_decision,
+            Some(decision)
+        );
     }
 
     #[test]
@@ -828,38 +1046,53 @@ impl InteractiveFemPreviewRuntime {
                         .to_string(),
             });
         };
-        let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?;
+        let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem, false)?;
         eprintln!(
             "[fullmag-runner] interactive FEM engine: resolved_engine_id={} fallback={:?}",
             dispatch::fem_engine_label(resolution.engine),
             resolution.fallback.as_ref().map(|f| &f.reason),
         );
-        Self::from_fem_plan(fem, resolution.engine, resolution.fallback, None)
+        Self::from_fem_plan(
+            fem,
+            resolution.engine,
+            resolution.fallback,
+            resolution.fem_crossover_decision,
+            None,
+        )
     }
 
     pub(crate) fn create_from_plan(
         problem: &ProblemIR,
         plan: &FemPlanIR,
         stage_asset: Option<&crate::types::StageFemMeshAsset>,
+        preview_enabled: bool,
     ) -> Result<Self, RunError> {
-        let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, plan)?;
+        let resolution =
+            dispatch::resolve_fem_engine_for_plan_with_trail(problem, plan, preview_enabled)?;
         eprintln!(
             "[fullmag-runner] interactive FEM engine: resolved_engine_id={} fallback={:?}",
             dispatch::fem_engine_label(resolution.engine),
             resolution.fallback.as_ref().map(|f| &f.reason),
         );
-        Self::from_fem_plan(plan, resolution.engine, resolution.fallback, stage_asset)
+        Self::from_fem_plan(
+            plan,
+            resolution.engine,
+            resolution.fallback,
+            resolution.fem_crossover_decision,
+            stage_asset,
+        )
     }
 
     fn from_fem_plan(
         plan: &FemPlanIR,
         engine: FemEngine,
         fallback: Option<ResolvedFallback>,
+        crossover_decision: Option<crate::types::FemCrossoverDecision>,
         stage_asset: Option<&crate::types::StageFemMeshAsset>,
     ) -> Result<Self, RunError> {
         #[cfg(not(feature = "fem-gpu"))]
         {
-            let _ = (plan, engine, fallback, stage_asset);
+            let _ = (plan, engine, fallback, crossover_decision, stage_asset);
             return Err(RunError {
                 message:
                     "interactive native FEM runtime requested but the runner was built without fem-gpu"
@@ -888,6 +1121,7 @@ impl InteractiveFemPreviewRuntime {
             let antenna_field = crate::antenna_fields::compute_antenna_field(&effective_plan)?;
             let mut provenance = fem_gpu_execution_provenance(&effective_plan, &device_info)?;
             attach_resolved_fallback_to_provenance(&mut provenance, fallback);
+            attach_fem_crossover_decision_to_provenance(&mut provenance, crossover_decision);
             let inner = InteractiveFemPreviewRuntimeInner::Gpu(GpuInteractiveFemPreviewRuntime {
                 backend,
                 mesh,
@@ -4469,6 +4703,7 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         cuda_runtime_version: None,
         lossy_fallback_used: false,
         resolved_fallback: None,
+        fem_crossover_decision: None,
         ignored_terms: Vec::new(),
         random_seed: None,
         requested_integrator: None,
@@ -4564,6 +4799,7 @@ fn cuda_execution_provenance(
         cuda_runtime_version: Some(device_info.runtime_version),
         lossy_fallback_used: false,
         resolved_fallback: None,
+        fem_crossover_decision: None,
         ignored_terms: Vec::new(),
         random_seed: None,
         requested_integrator: None,
@@ -4665,6 +4901,7 @@ fn fem_gpu_execution_provenance(
         cuda_runtime_version: Some(device_info.runtime_version),
         lossy_fallback_used: false,
         resolved_fallback: None,
+        fem_crossover_decision: None,
         ignored_terms: Vec::new(),
         random_seed: None,
         requested_integrator: plan.integrator.map(|integrator| format!("{integrator:?}")),

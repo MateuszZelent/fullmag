@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Sequence
 
@@ -15,6 +17,22 @@ from fullmag.runtime.scene_document import (
     builder_overrides_from_scene_document,
 )
 from fullmag.runtime.script_builder import export_builder_draft, rewrite_loaded_problem_script
+
+
+def _write_executed_problem_ir_identity(problem_ir: dict[str, object]) -> None:
+    output = os.environ.get("FULLMAG_BENCH_EXECUTED_PROBLEM_IR_SHA256_FILE")
+    if output is None:
+        return
+    canonical_bytes = json.dumps(
+        problem_ir,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    problem_ir_sha256 = hashlib.sha256(canonical_bytes).hexdigest()
+    path = Path(output)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(problem_ir_sha256 + "\n", encoding="ascii")
+    os.replace(temporary, path)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -162,6 +180,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             asset_cache=asset_cache,
             include_geometry_assets=not getattr(args, "skip_geometry_assets", False),
         )
+        _write_executed_problem_ir_identity(ir)
         shared_geometry_assets = copy.deepcopy(ir.get("geometry_assets"))
         if loaded.stages and shared_geometry_assets is not None:
             ir = copy.deepcopy(ir)

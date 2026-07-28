@@ -2,7 +2,7 @@
 
 use crate::artifact_pipeline::ArtifactPipelineSummary;
 use crate::dispatch::{
-    requested_registry_device_for_fdm, requested_registry_device_for_fem, runtime_device,
+    effective_fem_device_request, requested_registry_device_for_fdm, runtime_device,
     runtime_precision,
 };
 use fullmag_ir::BackendPlanIR;
@@ -16,7 +16,6 @@ use crate::types::{
 };
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::env;
 use std::fs;
 use std::io::{Error, ErrorKind, Write};
 use std::path::Path;
@@ -50,7 +49,7 @@ fn requested_execution_metadata(problem: &fullmag_ir::ProblemIR) -> serde_json::
         fullmag_ir::BackendTarget::Hybrid => "hybrid",
     };
     let device = match backend {
-        "fem" => requested_registry_device_for_fem(problem),
+        "fem" => effective_fem_device_request(problem),
         "fdm" => requested_registry_device_for_fdm(problem),
         _ => runtime_device(problem)
             .unwrap_or("auto")
@@ -270,44 +269,26 @@ fn thermal_execution_provenance(
     }))
 }
 
-fn demag_amg_env_i64(name: &str, default_value: i64) -> i64 {
-    env::var(name)
-        .ok()
-        .and_then(|raw| raw.parse::<i64>().ok())
-        .filter(|value| *value >= 0)
-        .unwrap_or(default_value)
-}
-
-fn demag_amg_env_i64_optional(name: &str) -> serde_json::Value {
-    env::var(name)
-        .ok()
-        .and_then(|raw| raw.parse::<i64>().ok())
-        .filter(|value| *value >= 0)
-        .map(serde_json::Value::from)
-        .unwrap_or(serde_json::Value::Null)
-}
-
-fn demag_amg_env_f64_optional(name: &str) -> serde_json::Value {
-    env::var(name)
-        .ok()
-        .and_then(|raw| raw.parse::<f64>().ok())
-        .filter(|value| *value >= 0.0)
-        .map(serde_json::Value::from)
-        .unwrap_or(serde_json::Value::Null)
-}
-
-fn demag_amg_profile_metadata(preconditioner: &str) -> serde_json::Value {
+fn demag_amg_profile_metadata(
+    preconditioner: &str,
+    stats: Option<&StepStats>,
+) -> serde_json::Value {
     if preconditioner != "AMG" {
         return serde_json::Value::Null;
     }
+    let Some(stats) = stats else {
+        return serde_json::Value::Null;
+    };
     serde_json::json!({
         "provider": "mfem_hypre_boomeramg",
-        "relax_type": demag_amg_env_i64("FULLMAG_FEM_DEMAG_AMG_RELAX_TYPE", 18),
-        "coarsening": demag_amg_env_i64("FULLMAG_FEM_DEMAG_AMG_COARSENING", 8),
-        "interpolation": demag_amg_env_i64("FULLMAG_FEM_DEMAG_AMG_INTERPOLATION", 6),
-        "aggressive_coarsening": demag_amg_env_i64("FULLMAG_FEM_DEMAG_AMG_AGGRESSIVE_COARSENING", 1),
-        "strength_threshold": demag_amg_env_f64_optional("FULLMAG_FEM_DEMAG_AMG_STRENGTH_THRESHOLD"),
-        "max_levels": demag_amg_env_i64_optional("FULLMAG_FEM_DEMAG_AMG_MAX_LEVELS"),
+        "relax_type": stats.demag_amg_relax_type,
+        "coarsening": stats.demag_amg_coarsening,
+        "interpolation": stats.demag_amg_interpolation,
+        "aggressive_coarsening": stats.demag_amg_aggressive_coarsening,
+        "strength_threshold": stats.demag_amg_strength_threshold_is_set
+            .then_some(stats.demag_amg_strength_threshold),
+        "max_levels": stats.demag_amg_max_levels_is_set
+            .then_some(stats.demag_amg_max_levels),
     })
 }
 
@@ -379,7 +360,7 @@ fn demag_runtime_metadata(
             let relative_tolerance = resolved_policy.map_or(policy.rtol, |entry| entry.rtol);
             let max_iterations =
                 resolved_policy.map_or(policy.max_iterations, |entry| entry.max_iterations);
-            let amg_profile = demag_amg_profile_metadata(&preconditioner);
+            let amg_profile = demag_amg_profile_metadata(&preconditioner, last);
 
             serde_json::json!({
                 "model": resolved_demag.model_name(),
@@ -4300,6 +4281,14 @@ mod tests {
                 demag_solver_setup_wall_time_ns: 17,
                 demag_solver_apply_wall_time_ns: 19,
                 demag_solver_setup_reused: true,
+                demag_amg_relax_type: 6,
+                demag_amg_coarsening: 10,
+                demag_amg_interpolation: 7,
+                demag_amg_aggressive_coarsening: 2,
+                demag_amg_strength_threshold: 0.25,
+                demag_amg_strength_threshold_is_set: true,
+                demag_amg_max_levels: 42,
+                demag_amg_max_levels_is_set: true,
                 demag_recover_wall_time_ns: 7,
                 demag_energy_wall_time_ns: 11,
                 poisson_iterations: 13,
@@ -4324,18 +4313,29 @@ mod tests {
         assert_eq!(metadata["print_level"], 0);
         assert_eq!(metadata["policy_source"], "resolved_default");
         assert_eq!(metadata["amg_profile"]["provider"], "mfem_hypre_boomeramg");
-        assert_eq!(metadata["amg_profile"]["relax_type"], 18);
-        assert_eq!(metadata["amg_profile"]["coarsening"], 8);
-        assert_eq!(metadata["amg_profile"]["interpolation"], 6);
-        assert_eq!(metadata["amg_profile"]["aggressive_coarsening"], 1);
-        assert_eq!(
-            metadata["amg_profile"]["strength_threshold"],
-            serde_json::Value::Null
+        assert_eq!(metadata["amg_profile"]["relax_type"], 6);
+        assert_eq!(metadata["amg_profile"]["coarsening"], 10);
+        assert_eq!(metadata["amg_profile"]["interpolation"], 7);
+        assert_eq!(metadata["amg_profile"]["aggressive_coarsening"], 2);
+        assert_eq!(metadata["amg_profile"]["strength_threshold"], 0.25);
+        assert_eq!(metadata["amg_profile"]["max_levels"], 42);
+
+        let explicit_zero = demag_amg_profile_metadata(
+            "AMG",
+            Some(&StepStats {
+                demag_amg_strength_threshold: 0.0,
+                demag_amg_strength_threshold_is_set: true,
+                demag_amg_max_levels: 0,
+                demag_amg_max_levels_is_set: true,
+                ..StepStats::default()
+            }),
         );
-        assert_eq!(
-            metadata["amg_profile"]["max_levels"],
-            serde_json::Value::Null
-        );
+        assert_eq!(explicit_zero["strength_threshold"], 0.0);
+        assert_eq!(explicit_zero["max_levels"], 0);
+
+        let unset = demag_amg_profile_metadata("AMG", Some(&StepStats::default()));
+        assert_eq!(unset["strength_threshold"], serde_json::Value::Null);
+        assert_eq!(unset["max_levels"], serde_json::Value::Null);
         assert_eq!(metadata["requested_linear_solver"], serde_json::Value::Null);
         assert_eq!(
             metadata["requested_preconditioner"],
@@ -5332,6 +5332,7 @@ mod tests {
             ignored_terms: Vec::new(),
             random_seed: None,
             resolved_fallback: None,
+            fem_crossover_decision: None,
             requested_integrator: None,
             resolved_integrator: None,
             requested_energy_minimizer: None,
@@ -6202,6 +6203,7 @@ mod tests {
             ignored_terms: Vec::new(),
             random_seed: None,
             resolved_fallback: None,
+            fem_crossover_decision: None,
             requested_integrator: None,
             resolved_integrator: None,
             requested_energy_minimizer: None,

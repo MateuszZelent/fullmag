@@ -18,6 +18,7 @@ use crate::dev_smoke::run_post_materialization_dev_smoke_tests;
 use crate::formatting::*;
 use crate::interactive_runtime_host::{CurrentLiveDisplaySelectionHandle, InteractiveRuntimeHost};
 use crate::live_workspace::*;
+use crate::nvtx_range;
 use crate::python_bridge::*;
 use crate::simulation_preparation::{
     PreparationLogLevel, PreparationStageId, PreparationStatus, SimulationPreparationState,
@@ -2182,11 +2183,13 @@ pub(crate) fn requested_runtime_selection(
         resolved_worker: None,
         resolved_cpu_threads: None,
         resolved_fallback: None,
+        fem_crossover_decision: None,
     }
 }
 
 fn session_runtime_selection_for_problem(
     problem: &ProblemIR,
+    field_every_n: u64,
     fallback_requested_backend: &str,
     fallback_requested_mode: &str,
     fallback_requested_precision: &str,
@@ -2205,7 +2208,7 @@ fn session_runtime_selection_for_problem(
         requested_mode,
         requested_cpu_threads,
     );
-    match fullmag_runner::resolve_session_runtime(problem) {
+    match fullmag_runner::resolve_session_runtime_for_preview(problem, field_every_n) {
         Ok(resolved) => {
             selection.requested_cpu_threads = resolved
                 .requested_cpu_threads
@@ -2220,6 +2223,7 @@ fn session_runtime_selection_for_problem(
             selection.resolved_worker = resolved.resolved_worker;
             selection.resolved_cpu_threads = u32::try_from(resolved.resolved_cpu_threads).ok();
             selection.resolved_fallback = resolved.resolved_fallback;
+            selection.fem_crossover_decision = resolved.fem_crossover_decision;
         }
         Err(_) => {
             selection.requested_backend = fallback_requested_backend.to_string();
@@ -4915,6 +4919,7 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
             field_every_n,
             |update| {
                 let callback_start = solver_profile_callback_start(live_workspace);
+                let _callback_nvtx = nvtx_range::Range::new(b"fem.host.callback\0");
                 let mut adjusted = offset_step_update(
                     update,
                     global_step_offset + local_step_offset,
@@ -5035,6 +5040,7 @@ pub(crate) fn build_session_manifest(
         resolved_worker: runtime.resolved_worker.clone(),
         resolved_cpu_threads: runtime.resolved_cpu_threads,
         resolved_fallback: runtime.resolved_fallback.clone(),
+        fem_crossover_decision: runtime.fem_crossover_decision.clone(),
         artifact_dir: artifact_dir.display().to_string(),
         started_at_unix_ms,
         finished_at_unix_ms,
@@ -6601,6 +6607,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         .map(|stage| {
             session_runtime_selection_for_problem(
                 &stage.ir,
+                field_every_n,
                 backend_target_name(final_requested_backend),
                 execution_mode_name(final_execution_mode),
                 execution_precision_name(final_precision),
@@ -6620,6 +6627,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let previous_workspace = live_workspace.snapshot();
     let initial_runtime = session_runtime_selection_for_problem(
         &stages[0].ir,
+        field_every_n,
         backend_target_name(final_requested_backend),
         execution_mode_name(final_execution_mode),
         execution_precision_name(final_precision),
@@ -7766,6 +7774,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         live_workspace.update(|state| {
             let stage_runtime = session_runtime_selection_for_problem(
                 &stage.ir,
+                field_every_n,
                 backend_target_name(stage.ir.backend_policy.requested_backend),
                 execution_mode_name(stage.ir.validation_profile.execution_mode),
                 execution_precision_name(stage.ir.backend_policy.execution_precision),
@@ -7827,6 +7836,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     let mut snapshot = live_workspace.snapshot();
                     let failed_runtime = session_runtime_selection_for_problem(
                         &stage.ir,
+                        field_every_n,
                         backend_target_name(final_requested_backend),
                         execution_mode_name(final_execution_mode),
                         execution_precision_name(final_precision),
@@ -7986,6 +7996,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     Some(&current_stage_id),
                     |update| {
                         let callback_start = solver_profile_callback_start(&live_workspace);
+                        let _callback_nvtx = nvtx_range::Range::new(b"fem.host.callback\0");
                         let finished = update.finished && is_session_final_stage;
                         let mut adjusted = offset_step_update(
                             update,
@@ -8079,6 +8090,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     Some(&current_stage_id),
                     |update| {
                         let callback_start = solver_profile_callback_start(&live_workspace);
+                        let _callback_nvtx = nvtx_range::Range::new(b"fem.host.callback\0");
                         let finished = update.finished && is_session_final_stage;
                         let mut adjusted =
                             offset_step_update(update, step_offset, time_offset, finished);
@@ -8141,6 +8153,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 let mut snapshot = live_workspace.snapshot();
                 let failed_runtime = session_runtime_selection_for_problem(
                     &stage.ir,
+                    field_every_n,
                     backend_target_name(final_requested_backend),
                     execution_mode_name(final_execution_mode),
                     execution_precision_name(final_precision),
@@ -9184,6 +9197,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     let interrupt_signal = running_control.running_interrupt_signal();
                     let mut on_step = |update| {
                         let callback_start = solver_profile_callback_start(&live_workspace);
+                        let _callback_nvtx = nvtx_range::Range::new(b"fem.host.callback\0");
                         let mut adjusted =
                             offset_step_update(update, step_offset, time_offset, false);
                         if let Some(heartbeat) = stage_heartbeat.as_mut() {
@@ -9272,6 +9286,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             &stage.ir,
                             &execution_plan,
                             stage_fem_mesh_asset.as_ref(),
+                            field_every_n,
                             continuation_magnetization.as_deref(),
                             &live_workspace,
                         ) {
@@ -9338,6 +9353,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         Some(&current_stage_id),
                         |update| {
                             let callback_start = solver_profile_callback_start(&live_workspace);
+                            let _callback_nvtx = nvtx_range::Range::new(b"fem.host.callback\0");
                             let mut adjusted =
                                 offset_step_update(update, step_offset, time_offset, false);
                             if let Some(heartbeat) = stage_heartbeat.as_mut() {
@@ -10824,6 +10840,7 @@ mod tests {
                 resolved_worker: None,
                 resolved_cpu_threads: None,
                 resolved_fallback: None,
+                fem_crossover_decision: None,
                 artifact_dir: "/tmp/artifacts".to_string(),
                 started_at_unix_ms: 0,
                 finished_at_unix_ms: 0,
@@ -12054,12 +12071,16 @@ mod tests {
         let runner = include_str!("../../fullmag-runner/src/lib.rs");
 
         assert!(orchestrator.contains(
-            "ensure_runtime_for_problem(\n                            &stage.ir,\n                            &execution_plan,\n                            stage_fem_mesh_asset.as_ref(),"
+            "ensure_runtime_for_problem(\n                            &stage.ir,\n                            &execution_plan,\n                            stage_fem_mesh_asset.as_ref(),\n                            field_every_n,"
         ));
         assert!(host.contains("stage_fem_mesh_asset: Option<&fullmag_runner::StageFemMeshAsset>"));
-        assert!(host.contains("create_planned_interactive_runtime_with_stage_fem_mesh_asset("));
+        assert!(host.contains(
+            "create_planned_interactive_runtime_with_stage_fem_mesh_asset_and_preview_cadence("
+        ));
         assert!(
-            runner.contains("pub fn create_planned_interactive_runtime_with_stage_fem_mesh_asset(")
+            runner.contains(
+                "pub fn create_planned_interactive_runtime_with_stage_fem_mesh_asset_and_preview_cadence("
+            )
         );
     }
 

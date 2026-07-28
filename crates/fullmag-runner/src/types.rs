@@ -443,6 +443,23 @@ pub struct StepStats {
     pub demag_solver: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub demag_preconditioner: Option<String>,
+    /// Effective native BoomerAMG policy copied from the native step-stats ABI.
+    #[serde(default)]
+    pub demag_amg_relax_type: i32,
+    #[serde(default)]
+    pub demag_amg_coarsening: i32,
+    #[serde(default)]
+    pub demag_amg_interpolation: i32,
+    #[serde(default)]
+    pub demag_amg_aggressive_coarsening: i32,
+    #[serde(default)]
+    pub demag_amg_strength_threshold: f64,
+    #[serde(default)]
+    pub demag_amg_strength_threshold_is_set: bool,
+    #[serde(default)]
+    pub demag_amg_max_levels: i32,
+    #[serde(default)]
+    pub demag_amg_max_levels_is_set: bool,
     #[serde(default)]
     pub demag_recover_wall_time_ns: u64,
     #[serde(default)]
@@ -733,6 +750,14 @@ impl Default for StepStats {
             demag_solver_setup_reused: false,
             demag_solver: None,
             demag_preconditioner: None,
+            demag_amg_relax_type: 0,
+            demag_amg_coarsening: 0,
+            demag_amg_interpolation: 0,
+            demag_amg_aggressive_coarsening: 0,
+            demag_amg_strength_threshold: 0.0,
+            demag_amg_strength_threshold_is_set: false,
+            demag_amg_max_levels: 0,
+            demag_amg_max_levels_is_set: false,
             demag_recover_wall_time_ns: 0,
             demag_energy_wall_time_ns: 0,
             rhs_wall_time_ns: 0,
@@ -2459,6 +2484,18 @@ pub struct FdmMultilayerTransferTelemetry {
 }
 
 /// Included in artifact metadata for reproducibility.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FemCrossoverDecision {
+    pub requested: String,
+    pub resolved: String,
+    pub reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calibration_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
+}
+
+/// Included in artifact metadata for reproducibility.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExecutionProvenance {
     /// Engine that executed the run: e.g. "cpu_reference", "cuda_fdm",
@@ -2500,6 +2537,9 @@ pub struct ExecutionProvenance {
     pub random_seed: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_fallback: Option<ResolvedFallback>,
+    /// Qualified FEM auto-device crossover decision, if requested device was auto.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fem_crossover_decision: Option<FemCrossoverDecision>,
     /// Integrator that was requested by the user/plan.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requested_integrator: Option<String>,

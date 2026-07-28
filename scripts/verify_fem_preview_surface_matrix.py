@@ -19,8 +19,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,6 +66,9 @@ ENERGY_DENSITY_TO_SCALAR = {
     "eden_total": "E_total",
 }
 ENERGY_QUALIFICATION = os.environ.get("FULLMAG_TASK5_ENERGY_QUALIFICATION", "")
+PROFILE_PERSIST_ARTIFACT = os.environ.get(
+    "FULLMAG_MATRIX_PROFILE_PERSIST_ARTIFACT", "0"
+).strip().lower() in {"1", "true", "yes", "on"}
 FULL_CACHE_TERMINAL_QUANTITIES = (
     "m",
     "H_ex",
@@ -78,6 +82,12 @@ FULL_CACHE_TERMINAL_QUANTITIES = (
     "eden_ext",
     "eden_ani",
     "eden_total",
+)
+PROFILE_PERSIST_OVERHEAD_FIELDS = (
+    "last_persist_wall_time_ns",
+    "total_persist_wall_time_ns",
+    "persist_enqueued_count",
+    "persist_completed_count",
 )
 
 
@@ -216,6 +226,23 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def matrix_api_batches(
+    *,
+    modes: tuple[str, ...],
+    cadences: tuple[int, ...],
+    surfaces: tuple[str, ...],
+    repeats: int,
+) -> Iterator[tuple[tuple[str, int, str, int], ...]]:
+    """Keep one warmup and its measured repeats on one bounded API lifecycle."""
+    for mode in modes:
+        for cadence in cadences:
+            for surface in surfaces:
+                yield tuple(
+                    (mode, cadence, surface, repeat)
+                    for repeat in range(repeats + 1)
+                )
+
+
 def require_inputs() -> None:
     required = (RUNTIME, API, PYTHON, FIXTURE, CONTROL_ROOM_SMOKE, CONTROL_ROOM_ROOT / "index.html")
     missing = [str(path) for path in required if not path.exists()]
@@ -224,9 +251,16 @@ def require_inputs() -> None:
 
 
 def request_bytes(base: str, path: str, *, timeout: float = 10.0) -> bytes:
-    request = urllib.request.Request(base + path, headers={"Accept": "application/octet-stream"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read()
+    url = base + path
+    request = urllib.request.Request(url, headers={"Accept": "application/octet-stream"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.read()
+    except urllib.error.HTTPError as error:
+        body = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"GET {url} failed: HTTP {error.code}: {body}"
+        ) from error
 
 
 def get_json(base: str, path: str, *, timeout: float = 10.0) -> dict[str, Any]:
@@ -297,6 +331,44 @@ def wait_api(base: str, process: subprocess.Popen[str], timeout_seconds: float) 
     request_bytes(base, "/workspace", timeout=10.0)
 
 
+def stop_api_process(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    process.send_signal(signal.SIGTERM)
+    try:
+        process.wait(timeout=10.0)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=10.0)
+
+
+@contextmanager
+def api_lifecycle(
+    *,
+    api_base: str,
+    api_env: dict[str, str],
+    api_log_path: Path,
+    label: str,
+    timeout_seconds: float,
+) -> Iterator[None]:
+    with api_log_path.open("a", encoding="utf-8") as api_log:
+        api_log.write(f"\n[preview-matrix-api-lifecycle] start {label}\n")
+        api_log.flush()
+        api = subprocess.Popen(
+            [str(API)],
+            cwd=ROOT,
+            env=api_env,
+            stdout=api_log,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        try:
+            wait_api(api_base, api, timeout_seconds)
+            yield
+        finally:
+            stop_api_process(api)
+
+
 def session_id_or_none(base: str) -> str | None:
     try:
         status = get_json(base, "/v2/sessions/current/status")
@@ -359,7 +431,7 @@ def enable_solver_profile(base: str, timeout_seconds: float) -> None:
                 "sample_interval_wall_ms": 0,
                 "max_samples": 256,
                 "emit_engine_log": False,
-                "persist_artifact": False,
+                "persist_artifact": PROFILE_PERSIST_ARTIFACT,
             },
             "reason": "fem_preview_surface_matrix_production_callback_proof",
             "requested_at_unix_ms": int(time.time() * 1000),
@@ -377,6 +449,7 @@ def enable_solver_profile(base: str, timeout_seconds: float) -> None:
             and isinstance(config, dict)
             and config.get("enabled") is True
             and config.get("sample_every") == 1
+            and config.get("persist_artifact") is PROFILE_PERSIST_ARTIFACT
         )
 
     poll("enabled production solver profiler", timeout_seconds, enabled)
@@ -491,11 +564,96 @@ def observe_preterminal_field_resources(
     )
 
 
-def callback_profile_proof(base: str, mode: str) -> dict[str, Any]:
+def solver_profile_persistence_contract_error(
+    *,
+    expected: bool,
+    configured: object,
+    artifact_refs: object,
+    persistence_failed: object,
+    overhead: object,
+) -> str | None:
+    if configured is not expected:
+        return f"config.persist_artifact={configured!r}, expected {expected}"
+    if not isinstance(persistence_failed, bool):
+        return f"persistence_failed must be a boolean, got {persistence_failed!r}"
+    if persistence_failed:
+        return "persistence_failed=true"
+    if not isinstance(artifact_refs, list):
+        return f"artifact_refs must be a list, got {artifact_refs!r}"
+    if not expected:
+        return None
+    if not artifact_refs or any(
+        not isinstance(artifact_ref, str) or not artifact_ref.strip()
+        for artifact_ref in artifact_refs
+    ):
+        return f"persist-on artifact_refs must contain nonempty strings, got {artifact_refs!r}"
+    if not isinstance(overhead, dict):
+        return f"persist-on overhead must be an object, got {overhead!r}"
+    for field in PROFILE_PERSIST_OVERHEAD_FIELDS:
+        value = overhead.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return f"persist-on overhead.{field} must be a non-negative integer, got {value!r}"
+    if overhead["total_persist_wall_time_ns"] < overhead["last_persist_wall_time_ns"]:
+        return "persist-on overhead total_persist_wall_time_ns is below last_persist_wall_time_ns"
+    enqueued = overhead["persist_enqueued_count"]
+    completed = overhead["persist_completed_count"]
+    if enqueued == 0:
+        return "persist-on overhead.persist_enqueued_count must be greater than zero"
+    if completed != enqueued:
+        return (
+            "persist-on overhead.persist_completed_count must acknowledge every enqueue: "
+            f"completed={completed} enqueued={enqueued}"
+        )
+    return None
+
+
+def callback_profile_proof(
+    base: str, mode: str, persistence_timeout_seconds: float = 0.0
+) -> dict[str, Any]:
     profile = get_json(base, "/v2/sessions/current/diagnostics/solver-profile")
     if mode == "disabled":
         if profile.get("preview_3d_disabled") is not True:
             raise RuntimeError("disabled row did not expose preview_3d_disabled=true")
+    config = profile.get("config")
+    if profile.get("state") != "active" or not isinstance(config, dict) or not config.get("enabled"):
+        raise RuntimeError(f"enabled row lacks an enabled production solver profile: {profile}")
+    persistence_deadline = time.monotonic() + persistence_timeout_seconds
+    while True:
+        config = profile.get("config")
+        persistence_error = solver_profile_persistence_contract_error(
+            expected=PROFILE_PERSIST_ARTIFACT,
+            configured=config.get("persist_artifact") if isinstance(config, dict) else None,
+            artifact_refs=profile.get("artifact_refs"),
+            persistence_failed=profile.get("persistence_failed"),
+            overhead=profile.get("overhead"),
+        )
+        overhead = profile.get("overhead")
+        persistence_pending = (
+            PROFILE_PERSIST_ARTIFACT
+            and isinstance(overhead, dict)
+            and isinstance(overhead.get("persist_enqueued_count"), int)
+            and not isinstance(overhead.get("persist_enqueued_count"), bool)
+            and isinstance(overhead.get("persist_completed_count"), int)
+            and not isinstance(overhead.get("persist_completed_count"), bool)
+            and overhead["persist_enqueued_count"] > overhead["persist_completed_count"] >= 0
+            and profile.get("persistence_failed") is False
+        )
+        if persistence_error is None or not persistence_pending or time.monotonic() >= persistence_deadline:
+            break
+        time.sleep(0.02)
+        profile = get_json(base, "/v2/sessions/current/diagnostics/solver-profile")
+    if persistence_error is not None:
+        raise RuntimeError(
+            "enabled row lacks terminal solver-profile persistence proof: "
+            f"{persistence_error}"
+        )
+    persistence_proof = {
+        "solver_profile_artifact_refs": profile.get("artifact_refs", []),
+        "solver_profile_overhead": profile.get("overhead"),
+        "solver_profile_persist_artifact": config.get("persist_artifact") is True,
+        "solver_profile_persistence_failed": profile.get("persistence_failed"),
+    }
+    if mode == "disabled":
         return {
             "callback_deadline_ns": PRODUCTION_CALLBACK_DEADLINE_NS,
             "callback_handoff_count": 0,
@@ -509,12 +667,10 @@ def callback_profile_proof(base: str, mode: str) -> dict[str, Any]:
             "callback_wall_outlier_count": 0,
             "callback_wall_outlier_max_ns": None,
             "callback_wall_outlier_details": [],
+            **persistence_proof,
             "worst_callback_detail": None,
             "worst_submit_detail": None,
         }
-    config = profile.get("config")
-    if profile.get("state") != "active" or not isinstance(config, dict) or not config.get("enabled"):
-        raise RuntimeError(f"enabled row lacks an enabled production solver profile: {profile}")
     samples = profile.get("latest_samples")
     if not isinstance(samples, list):
         raise RuntimeError("production solver profile latest_samples is not a list")
@@ -666,6 +822,7 @@ def callback_profile_proof(base: str, mode: str) -> dict[str, Any]:
             wall_outliers[0]["total_ns"] if wall_outliers else None
         ),
         "callback_wall_outlier_details": wall_outliers,
+        **persistence_proof,
         "worst_callback_detail": worst_callback_detail,
         "worst_submit_detail": worst_submit_detail,
     }
@@ -1160,6 +1317,20 @@ def browser_smoke(
     return process
 
 
+def stop_browser_process(process: subprocess.Popen[str]) -> None:
+    try:
+        process.terminate()
+        try:
+            process.wait(timeout=10.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=10.0)
+    finally:
+        log = getattr(process, "_fullmag_log", None)
+        if log is not None and not log.closed:
+            log.close()
+
+
 def wait_browser_smoke_ready(
     process: subprocess.Popen[str],
     log_path: Path,
@@ -1378,7 +1549,7 @@ def run_row(
                         timeout_seconds,
                     )
                 field_proof = terminal_field_resource_proof(api_base, mode, timeout_seconds)
-                callback_proof = callback_profile_proof(api_base, mode)
+                callback_proof = callback_profile_proof(api_base, mode, timeout_seconds)
                 if browser is not None:
                     browser_proof = finish_browser_smoke(browser, browser_log_path, timeout_seconds)
                     browser = None
@@ -1410,11 +1581,7 @@ def run_row(
                         )
             finally:
                 if browser is not None:
-                    browser.terminate()
-                    try:
-                        browser.wait(timeout=10.0)
-                    except subprocess.TimeoutExpired:
-                        browser.kill()
+                    stop_browser_process(browser)
                 close_interactive_runtime(api_base, runtime, timeout_seconds)
 
     primary_live = None
@@ -1539,6 +1706,7 @@ def run_row(
 
 
 def assert_equivalence(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    interactive_rows = [row for row in rows if row["surface"] != "headless"]
     enabled_interactive = [
         row for row in rows if row["mode"] != "disabled" and row["surface"] != "headless"
     ]
@@ -1556,6 +1724,30 @@ def assert_equivalence(rows: list[dict[str, Any]]) -> dict[str, Any]:
     ]
     if bad_callbacks:
         raise RuntimeError(f"production callback proof missing for rows: {bad_callbacks}")
+    bad_profile_persistence = []
+    for row in interactive_rows:
+        persistence_error = solver_profile_persistence_contract_error(
+            expected=PROFILE_PERSIST_ARTIFACT,
+            configured=row.get("solver_profile_persist_artifact"),
+            artifact_refs=row.get("solver_profile_artifact_refs"),
+            persistence_failed=row.get("solver_profile_persistence_failed"),
+            overhead=row.get("solver_profile_overhead"),
+        )
+        if persistence_error is not None:
+            bad_profile_persistence.append(
+                (
+                    row["mode"],
+                    row["cadence"],
+                    row["surface"],
+                    row["repeat"],
+                    persistence_error,
+                )
+            )
+    if bad_profile_persistence:
+        raise RuntimeError(
+            "terminal solver-profile persistence proof missing for rows: "
+            f"{bad_profile_persistence}"
+        )
     primary_live_rows = [
         row for row in enabled_interactive if requires_primary_live_proof(str(row["mode"]))
     ]
@@ -1905,105 +2097,126 @@ def main() -> int:
     api_env["LD_LIBRARY_PATH"] = str(runtime_lib) + (
         os.pathsep + previous_library_path if previous_library_path else ""
     )
+    api_log_path.write_text("", encoding="utf-8")
+    batches = list(
+        matrix_api_batches(
+            modes=modes,
+            cadences=cadences,
+            surfaces=surfaces,
+            repeats=args.repeats,
+        )
+    )
+    api_lifecycle_labels: list[str] = []
 
     with tempfile.TemporaryDirectory(prefix="fullmag-preview-no-opener-") as no_opener_dir:
         which_wrapper = Path(no_opener_dir) / "which"
         which_wrapper.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
         which_wrapper.chmod(0o755)
-        with api_log_path.open("w", encoding="utf-8") as api_log:
-            api = subprocess.Popen(
-                [str(API)],
-                cwd=ROOT,
-                env=api_env,
-                stdout=api_log,
-                stderr=subprocess.STDOUT,
-                text=True,
+        rows: list[dict[str, Any]] = []
+        warmup_count = 0
+        retention_proof: dict[str, Any] | None = None
+        if not args.skip_retention_proof:
+            retention_label = "retention-H_demag-c10-control_room"
+            api_lifecycle_labels.append(retention_label)
+            print(
+                f"[fem-preview-matrix] {retention_label} (dedicated 80ms delayed production-path proof)",
+                flush=True,
             )
-            rows: list[dict[str, Any]] = []
-            warmup_count = 0
-            retention_proof: dict[str, Any] | None = None
-            try:
-                wait_api(api_base, api, args.timeout_seconds)
-                if not args.skip_retention_proof:
-                    retention_label = "retention-H_demag-c10-control_room"
-                    print(
-                        f"[fem-preview-matrix] {retention_label} (dedicated 80ms delayed production-path proof)",
-                        flush=True,
+            with api_lifecycle(
+                api_base=api_base,
+                api_env=api_env,
+                api_log_path=api_log_path,
+                label=retention_label,
+                timeout_seconds=args.timeout_seconds,
+            ):
+                retention_proof = run_row(
+                    api_base=api_base,
+                    api_port=args.api_port,
+                    cadence=min(CADENCES),
+                    materialization_delay_ms=80,
+                    mode="H_demag",
+                    no_opener_path=no_opener_dir,
+                    output_dir=outputs_dir / retention_label,
+                    require_retained_interval=True,
+                    row_log_dir=logs_dir / retention_label,
+                    surface="control_room",
+                    timeout_seconds=args.timeout_seconds,
+                )
+                if (
+                    retention_proof.get("browser_observed_before_terminal") is not True
+                    or retention_proof.get("browser_retained_frame_observed") is not True
+                    or retention_proof.get("browser_retained_materialization_state")
+                    not in {"pending", "stale_complete"}
+                    or not retention_proof.get("browser_retained_canvas_sha256")
+                    or not retention_proof.get("browser_response_payload_sha256")
+                ):
+                    raise RuntimeError(
+                        "dedicated delayed Control Room retained-frame proof is incomplete: "
+                        f"{retention_proof}"
                     )
-                    retention_proof = run_row(
+                serialized_retention_proof = {
+                    key: value
+                    for key, value in retention_proof.items()
+                    if not key.startswith("_")
+                }
+                (report_dir / "retention_proof.json").write_text(
+                    json.dumps(serialized_retention_proof, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+        for batch in batches:
+            mode, cadence, surface, _ = batch[0]
+            lifecycle_label = f"{mode}-c{cadence}-{surface}"
+            api_lifecycle_labels.append(lifecycle_label)
+            with api_lifecycle(
+                api_base=api_base,
+                api_env=api_env,
+                api_log_path=api_log_path,
+                label=lifecycle_label,
+                timeout_seconds=args.timeout_seconds,
+            ):
+                for mode, cadence, surface, repeat in batch:
+                    warmup = repeat == 0
+                    label = f"{mode}-c{cadence}-{surface}-r{repeat}"
+                    print(f"[fem-preview-matrix] {label} ({'warmup' if warmup else 'measured'})", flush=True)
+                    proof = run_row(
                         api_base=api_base,
                         api_port=args.api_port,
-                        cadence=min(CADENCES),
-                        materialization_delay_ms=80,
-                        mode="H_demag",
+                        cadence=cadence,
+                        mode=mode,
                         no_opener_path=no_opener_dir,
-                        output_dir=outputs_dir / retention_label,
-                        require_retained_interval=True,
-                        row_log_dir=logs_dir / retention_label,
-                        surface="control_room",
+                        output_dir=outputs_dir / label,
+                        row_log_dir=logs_dir / label,
+                        surface=surface,
                         timeout_seconds=args.timeout_seconds,
                     )
-                    if (
-                        retention_proof.get("browser_observed_before_terminal") is not True
-                        or retention_proof.get("browser_retained_frame_observed") is not True
-                        or retention_proof.get("browser_retained_materialization_state")
-                        not in {"pending", "stale_complete"}
-                        or not retention_proof.get("browser_retained_canvas_sha256")
-                        or not retention_proof.get("browser_response_payload_sha256")
-                    ):
-                        raise RuntimeError(
-                            "dedicated delayed Control Room retained-frame proof is incomplete: "
-                            f"{retention_proof}"
-                        )
-                    serialized_retention_proof = {
-                        key: value
-                        for key, value in retention_proof.items()
-                        if not key.startswith("_")
+                    row = {
+                        "cadence": cadence,
+                        "mode": mode,
+                        "repeat": repeat,
+                        "surface": surface,
+                        "warmup": warmup,
+                        **proof,
                     }
-                    (report_dir / "retention_proof.json").write_text(
-                        json.dumps(serialized_retention_proof, indent=2) + "\n",
-                        encoding="utf-8",
-                    )
-                for mode in modes:
-                    for cadence in cadences:
-                        for surface in surfaces:
-                            for repeat in range(args.repeats + 1):
-                                warmup = repeat == 0
-                                label = f"{mode}-c{cadence}-{surface}-r{repeat}"
-                                print(f"[fem-preview-matrix] {label} ({'warmup' if warmup else 'measured'})", flush=True)
-                                proof = run_row(
-                                    api_base=api_base,
-                                    api_port=args.api_port,
-                                    cadence=cadence,
-                                    mode=mode,
-                                    no_opener_path=no_opener_dir,
-                                    output_dir=outputs_dir / label,
-                                    row_log_dir=logs_dir / label,
-                                    surface=surface,
-                                    timeout_seconds=args.timeout_seconds,
-                                )
-                                row = {
-                                    "cadence": cadence,
-                                    "mode": mode,
-                                    "repeat": repeat,
-                                    "surface": surface,
-                                    "warmup": warmup,
-                                    **proof,
-                                }
-                                if warmup:
-                                    warmup_count += 1
-                                else:
-                                    rows.append(row)
-            finally:
-                api.send_signal(signal.SIGTERM)
-                try:
-                    api.wait(timeout=10.0)
-                except subprocess.TimeoutExpired:
-                    api.kill()
-                    api.wait(timeout=10.0)
+                    if warmup:
+                        warmup_count += 1
+                    else:
+                        rows.append(row)
 
     if len(rows) != expected_measured_rows:
         raise RuntimeError(f"matrix row count mismatch: {len(rows)} != {expected_measured_rows}")
+    (report_dir / "api_lifecycles.json").write_text(
+        json.dumps(
+            {
+                "count": len(api_lifecycle_labels),
+                "labels": api_lifecycle_labels,
+                "max_rows_per_lifecycle": args.repeats + 1,
+                "retention_has_dedicated_lifecycle": not args.skip_retention_proof,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     (report_dir / "raw_rows.json").write_text(json.dumps(rows) + "\n", encoding="utf-8")
     equivalence = assert_equivalence(rows)
     columns = matrix_csv_columns(rows)
@@ -2045,6 +2258,8 @@ def main() -> int:
         if isinstance(row.get("callback_plus_fence_max_ns"), int)
     )
     summary = {
+        "api_lifecycle_count": len(api_lifecycle_labels),
+        "api_lifecycle_max_rows": args.repeats + 1,
         "cadences": list(cadences),
         "equivalence": equivalence,
         "measured_rows": len(rows),

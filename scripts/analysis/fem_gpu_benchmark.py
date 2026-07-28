@@ -10,8 +10,11 @@ import importlib.util
 import json
 import math
 import os
+import re
+import resource
 import shutil
 import statistics
+import struct
 import subprocess
 import sys
 import tempfile
@@ -209,6 +212,15 @@ SUPPORTED_RELAXATION_ALGORITHMS = (
     "nonlinear_cg",
     "tangent_plane_implicit",
 )
+RELAXATION_PRECONDITIONER_STRATEGIES = (
+    "none",
+    "diagonal_mass",
+    "lumped_exchange_mass_cg4",
+    "lumped_exchange_mass_cg8",
+    "stagnation_triggered_cg8",
+)
+RELAXATION_PRECONDITIONER_QUALIFICATION_MESHES = ("coarse", "medium", "fine")
+RELAXATION_PRECONDITIONER_REQUIRED_REPEATS = 5
 CPU_ONLY_RELAXATION_ALGORITHMS = {"tangent_plane_implicit"}
 NONCONSERVATIVE_RELAXATION_SCENARIOS = {"stt_oersted"}
 ENERGY_MINIMIZER_RELAXATION_ALGORITHMS = {
@@ -226,6 +238,10 @@ DEFAULT_CPU_GPU_TORQUE_RTOL = 1e-6
 DEFAULT_CPU_GPU_TORQUE_ATOL_APM = 1e-9
 DEFAULT_CPU_GPU_TORQUE_ATOL_T = 1e-15
 DEFAULT_CPU_GPU_MAX_STEP_DELTA = 0
+# Shared with validate_fem_relaxation_runtime_log.py's canonical relaxation
+# qualification contract.
+MAX_MAGNETIZATION_NORM_DEFECT = 1.0e-9
+TASK11_CPU_GPU_MAGNETIZATION_ATOL = 1.0e-9
 MIN_CONVERGED_DEMAG_POLICIES_FOR_BEST = 2
 DEFAULT_GPU_CONTROL_READBACK_BASE = 3
 DEFAULT_GPU_CONTROL_READBACK_PER_STEP = 4
@@ -261,6 +277,35 @@ PERFORMANCE_REGRESSION_METRICS = (
     "demag_energy_wall_time_ms",
 )
 PERFORMANCE_REGRESSION_OBJECTIVE_METRICS = ("wall_time_ms",)
+GPU_HOST_THREAD_QUALIFICATION_THREADS = (1, 2, 4, 8)
+GPU_HOST_THREAD_QUALIFICATION_PROFILER_STATES = (False, True)
+GPU_HOST_THREAD_QUALIFICATION_UI_SURFACES = ("headless", "interactive")
+GPU_HOST_THREAD_QUALIFICATION_REPEATS = 5
+GPU_HOST_THREAD_QUALIFICATION_METRICS = (
+    "wall_time_ms",
+    "backend_create_wall_time_ms",
+    "cumulative_step_interval_wall_time_ms",
+    "cumulative_native_solver_wall_time_ms",
+    "cumulative_publisher_replace_wall_time_ms",
+    "cumulative_publish_lag_wall_time_ms",
+    "cumulative_artifact_enqueue_block_wall_time_ms",
+    "artifact_queue_depth_max",
+)
+GPU_HOST_THREAD_QUALIFICATION_CPU_METRICS = (
+    "host_cpu_time_ms",
+    "host_cpu_average_core_count",
+)
+GPU_HOST_THREAD_QUALIFICATION_PINNED_IDENTITY_FIELDS = (
+    "runtime_manifest_sha256",
+    "source_manifest_sha256",
+    "libfullmag_fem_sha256",
+    "device_uuid",
+    "device_name",
+    "compute_capability",
+    "solver_mesh_signature",
+    "executed_problem_ir_sha256",
+    "host_cpu_capacity",
+)
 FEM_CPU_NO_PBC_ADAPTIVE_SCENARIOS = {
     "exchange_demag_anis_uniaxial",
     "exchange_demag_anis_cubic",
@@ -280,6 +325,15 @@ NATIVE_FEM_LIBRARY_NAMES = (
 )
 PERFORMANCE_FIXTURE_SCHEMA = "fullmag.fem_gpu.performance_fixture.v1"
 PERFORMANCE_FIXTURE_SUITE_SCHEMA = "fullmag.fem_gpu.performance_fixture_suite.v1"
+TASK11_QUALIFICATION_IDENTITY_SCHEMA = (
+    "fullmag.fem_gpu.relaxation_preconditioner_qualification_identity.v1"
+)
+TASK11_QUALIFICATION_FIXTURE_SUITE_SHA256 = (
+    "ac4f48dfc17baf092329be65b3baef454cb318e09efa258bf4091011ce0618e8"
+)
+TASK11_QUALIFICATION_ENVIRONMENT_SHA256 = (
+    "8346f0ddd3d85df294a672d132d9508c01eb3256c0a5c6fc6ab1e2a3d2cd17ef"
+)
 PERFORMANCE_FIXTURE_SCENARIO = "box500_airbox_exchange_demag"
 PERFORMANCE_FIXTURE_RELAXATION_ALGORITHM = "nonlinear_cg"
 PERFORMANCE_FIXTURE_STEPS = 64
@@ -318,6 +372,2163 @@ def summarize_distribution(values: Sequence[float]) -> dict[str, float | int]:
         "p95": ordered[p95_index],
         "stddev": statistics.pstdev(ordered),
     }
+
+
+def accepted_energy_trajectory_gate(
+    row: Mapping[str, object],
+) -> tuple[bool, str]:
+    algorithm = first_present(
+        row.get("reported_relaxation_algorithm"),
+        row.get("relaxation_algorithm"),
+    )
+    if algorithm == "projected_gradient_bb":
+        executed_steps = as_int(row.get("executed_steps"))
+        proof_count = as_int(row.get("accepted_energy_proof_count"))
+        invalid_count = as_int(row.get("accepted_energy_proof_invalid_count"))
+        invalid_details = row.get("accepted_energy_proof_invalid_details")
+        if isinstance(invalid_details, str):
+            try:
+                invalid_details = json.loads(invalid_details)
+            except json.JSONDecodeError:
+                invalid_details = None
+        valid = (
+            as_bool(row.get("accepted_energy_proof_available"))
+            and executed_steps is not None
+            and executed_steps > 0
+            and proof_count == executed_steps
+            and invalid_count == 0
+            and isinstance(invalid_details, Sequence)
+            and not isinstance(invalid_details, (str, bytes))
+            and len(invalid_details) == 0
+        )
+        return valid, "accepted Armijo proof is missing or invalid"
+    return (
+        as_bool(row.get("energy_monotonicity_satisfied")),
+        "lacks a monotone accepted-energy trajectory",
+    )
+
+
+def relaxation_preconditioner_row_failures(
+    row: Mapping[str, object],
+    *,
+    expected_strategy: str,
+) -> list[str]:
+    failures: list[str] = []
+    if row.get("backend") != "fem_gpu":
+        failures.append("backend must be fem_gpu")
+    if row.get("status") != "ok":
+        failures.append(f"status is not ok: {row.get('status')!r}")
+    if row_relaxation_algorithm(row) != "nonlinear_cg":
+        failures.append("relaxation algorithm must be nonlinear_cg")
+    requested = row.get("requested_relaxation_preconditioner_strategy")
+    resolved = row.get("relaxation_preconditioner_strategy")
+    if requested != expected_strategy:
+        failures.append(
+            f"requested strategy mismatch: expected {expected_strategy!r}, got {requested!r}"
+        )
+    if resolved != expected_strategy:
+        failures.append(
+            f"resolved strategy mismatch: expected {expected_strategy!r}, got {resolved!r}"
+        )
+    iterations = as_int(row.get("relaxation_preconditioner_iterations"))
+    allowed_iterations = {
+        "none": {0},
+        "diagonal_mass": {0},
+        "lumped_exchange_mass_cg4": {4},
+        "lumped_exchange_mass_cg8": {8},
+        "stagnation_triggered_cg8": {0, 8},
+    }[expected_strategy]
+    if iterations not in allowed_iterations:
+        failures.append(
+            f"resolved iteration count {iterations!r} is not one of {sorted(allowed_iterations)}"
+        )
+    if expected_strategy == "stagnation_triggered_cg8":
+        apply_count = as_int(row.get("relaxation_preconditioner_apply_count"))
+        if apply_count is None or apply_count <= 0:
+            failures.append("stagnation-triggered strategy never applied CG8")
+    lambda_m_per_a = as_float(row.get("relaxation_preconditioner_lambda_m_per_a"))
+    if (
+        lambda_m_per_a is None
+        or not math.isfinite(lambda_m_per_a)
+        or lambda_m_per_a < 0.0
+    ):
+        failures.append("preconditioner lambda is missing, non-finite, or negative")
+    for field in (
+        "relaxation_preconditioner_wall_time_ms",
+        "relaxation_preconditioner_cache_hits",
+        "relaxation_preconditioner_cache_misses",
+    ):
+        value = as_float(row.get(field))
+        if value is None or not math.isfinite(value) or value < 0.0:
+            failures.append(f"{field} is missing, non-finite, or negative")
+    wall_time_ms = as_float(row.get("wall_time_ms"))
+    if wall_time_ms is None or not math.isfinite(wall_time_ms) or wall_time_ms <= 0.0:
+        failures.append("time-to-tolerance wall_time_ms is missing or non-positive")
+    if not as_bool(row.get("converged")) or row.get("stop_reason") != "torque":
+        failures.append("run did not converge to the torque tolerance")
+    if not as_bool(row.get("energy_monotonicity_satisfied")):
+        failures.append("accepted energy trajectory is not monotone")
+    norm_defect = as_float(row.get("norm_defect"))
+    if (
+        norm_defect is None
+        or not math.isfinite(norm_defect)
+        or norm_defect < 0.0
+        or norm_defect > MAX_MAGNETIZATION_NORM_DEFECT
+    ):
+        failures.append(
+            f"norm_defect exceeds {MAX_MAGNETIZATION_NORM_DEFECT:.1e}: {row.get('norm_defect')!r}"
+        )
+    final_energy_j = as_float(row.get("final_e_total_j"))
+    if final_energy_j is None or not math.isfinite(final_energy_j):
+        failures.append("final_e_total_j is missing or non-finite")
+    for field in (
+        "final_torque_apm",
+        "executed_steps",
+        "rhs_evals",
+        "total_rhs_evals",
+        "demag_solves",
+    ):
+        value = as_float(row.get(field))
+        if value is None or not math.isfinite(value) or value < 0.0:
+            failures.append(f"{field} is missing, non-finite, or negative")
+    for field in (
+        "hot_loop_compute_host_sync_count",
+        "hot_loop_exchange_host_sync_count",
+    ):
+        if as_int(row.get(field)) != 0:
+            failures.append(f"{field} must remain zero")
+    return failures
+
+
+def relaxation_preconditioner_workload_failures(
+    row: Mapping[str, object],
+) -> list[str]:
+    failures: list[str] = []
+    exact_fields: tuple[tuple[str, object], ...] = (
+        ("scenario", "box500_airbox_exchange_demag"),
+        ("reported_precision", "double"),
+        ("requested_fem_execution", "gpu"),
+        ("requested_demag_solver", "CG"),
+        ("requested_demag_preconditioner", "AMG"),
+        ("demag_linear_solver", "CG"),
+        ("demag_preconditioner", "AMG"),
+        ("execution_engine", "fem_native_gpu"),
+        ("fem_assembly_mode", "legacy_sparse"),
+        ("fem_execution_mode", "all_in_gpu_legacy_sparse"),
+        ("fem_data_residency", "device_source_of_truth"),
+        ("hypre_execution_policy", "device"),
+        ("demag_residency", "device"),
+        ("fem_demag_operator_mode", "device_hypre_poisson"),
+        ("fem_gpu_qualification_status", "production_executable"),
+    )
+    for field, expected in exact_fields:
+        if row.get(field) != expected:
+            failures.append(
+                f"{field} must be {expected}, got {row.get(field)!r}"
+            )
+    if as_int(row.get("steps")) != 64:
+        failures.append(f"steps must be 64, got {row.get('steps')!r}")
+    torque_target = as_float(row.get("requested_relax_torque_tolerance_apm"))
+    if torque_target is None or not math.isclose(
+        torque_target,
+        8000.0,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        failures.append(
+            "requested_relax_torque_tolerance_apm must be 8000 A/m, "
+            f"got {row.get('requested_relax_torque_tolerance_apm')!r}"
+        )
+    for field in (
+        "requested_demag_relative_tolerance",
+        "demag_relative_tolerance",
+    ):
+        value = as_float(row.get(field))
+        if value is None or not math.isclose(
+            value,
+            1e-12,
+            rel_tol=1e-12,
+            abs_tol=0.0,
+        ):
+            failures.append(f"{field} must be 1e-12, got {row.get(field)!r}")
+    for field in ("requested_demag_amg_relax_type", "demag_amg_relax_type"):
+        if as_int(row.get(field)) != 6:
+            failures.append(f"{field} must be 6, got {row.get(field)!r}")
+    residual = as_float(row.get("demag_final_residual_norm"))
+    if (
+        residual is None
+        or not math.isfinite(residual)
+        or residual < 0.0
+        or residual > 1e-12
+    ):
+        failures.append(
+            "demag_final_residual_norm exceeds 1e-12 or is invalid, "
+            f"got {row.get('demag_final_residual_norm')!r}"
+        )
+    actual_iterations = as_int(row.get("demag_actual_iterations"))
+    requested_max_iterations = as_int(row.get("requested_demag_max_iterations"))
+    if (
+        actual_iterations is None
+        or actual_iterations < 0
+        or requested_max_iterations is None
+        or actual_iterations > requested_max_iterations
+    ):
+        failures.append(
+            "demag_actual_iterations must be non-negative and no greater than "
+            "requested_demag_max_iterations"
+        )
+    mfem_device = str(row.get("mfem_device") or "").lower()
+    if not mfem_device.startswith("ceed-cuda:"):
+        failures.append(
+            "mfem_device must resolve to ceed-cuda, "
+            f"got {row.get('mfem_device')!r}"
+        )
+    for field in (
+        "uses_cuda_kernels",
+        "uses_gpu_poisson",
+        "fem_gpu_state_allocated",
+        "step_profiler_enabled",
+        "phase2_compute_assertion_enabled",
+        "phase2_compute_hot_loop_sync_clean",
+    ):
+        if not as_bool(row.get(field)):
+            failures.append(f"{field} must be true")
+    for field in (
+        "hot_loop_compute_host_sync_count",
+        "hot_loop_exchange_host_sync_count",
+        "hot_loop_compute_h2d_bytes",
+        "hot_loop_compute_d2h_bytes",
+        "hot_loop_exchange_h2d_bytes",
+        "hot_loop_exchange_d2h_bytes",
+    ):
+        if as_int(row.get(field)) != 0:
+            failures.append(f"{field} must be zero")
+    executed_steps = as_int(row.get("executed_steps"))
+    total_rhs_evals = as_int(row.get("total_rhs_evals"))
+    control_syncs = as_int(row.get("hot_loop_control_scalar_host_sync_count"))
+    if executed_steps is None or total_rhs_evals is None or control_syncs is None:
+        failures.append(
+            "control-readback budget requires executed_steps, total_rhs_evals, "
+            "and hot_loop_control_scalar_host_sync_count"
+        )
+    else:
+        allowed = expected_control_sync_budget(
+            "nonlinear_cg",
+            executed_steps,
+            total_rhs_evals,
+            DEFAULT_GPU_CONTROL_READBACK_BASE,
+        )
+        if control_syncs > allowed:
+            failures.append(
+                "control-readback budget exceeded: "
+                f"hot_loop_control_scalar_host_sync_count={control_syncs} > {allowed}"
+            )
+    accepted_steps = as_int(row.get("accepted_steps"))
+    if (
+        accepted_steps is None
+        or accepted_steps <= 0
+        or accepted_steps != executed_steps
+    ):
+        failures.append(
+            "accepted_steps must be positive and equal executed_steps, "
+            f"got {row.get('accepted_steps')!r}"
+        )
+    cumulative_armijo_trials = as_int(row.get("cumulative_armijo_trials"))
+    if (
+        cumulative_armijo_trials is None
+        or accepted_steps is None
+        or cumulative_armijo_trials < accepted_steps
+    ):
+        failures.append(
+            "cumulative_armijo_trials must be present and at least accepted_steps, "
+            f"got {row.get('cumulative_armijo_trials')!r}"
+        )
+    cumulative_demag_solves = as_int(row.get("cumulative_demag_solves"))
+    if (
+        cumulative_demag_solves is None
+        or accepted_steps is None
+        or cumulative_demag_solves < accepted_steps
+    ):
+        failures.append(
+            "cumulative_demag_solves must be present and at least accepted_steps, "
+            f"got {row.get('cumulative_demag_solves')!r}"
+        )
+    for field, strictly_positive in (
+        ("cumulative_preconditioner_wall_time_ms", False),
+        ("cumulative_hypre_wall_time_ms", True),
+    ):
+        value = as_float(row.get(field))
+        if (
+            value is None
+            or not math.isfinite(value)
+            or value < 0.0
+            or (strictly_positive and value <= 0.0)
+        ):
+            qualifier = "positive" if strictly_positive else "non-negative"
+            failures.append(
+                f"{field} must be present, finite, and {qualifier}, "
+                f"got {row.get(field)!r}"
+            )
+    requested_strategy = str(
+        row.get("requested_relaxation_preconditioner_strategy") or ""
+    )
+    cumulative_preconditioner_wall_time_ms = as_float(
+        row.get("cumulative_preconditioner_wall_time_ms")
+    )
+    if (
+        requested_strategy != "none"
+        and cumulative_preconditioner_wall_time_ms is not None
+        and cumulative_preconditioner_wall_time_ms <= 0.0
+    ):
+        failures.append(
+            "cumulative_preconditioner_wall_time_ms must be positive for "
+            f"{requested_strategy}"
+        )
+    return failures
+
+
+def gpu_host_thread_contract_failures(
+    row: Mapping[str, object], *, expected_threads: int
+) -> list[str]:
+    """Validate the resolved FEM GPU host-thread and device-Hypre identity."""
+    failures: list[str] = []
+    requested = as_int(row.get("requested_fem_omp_threads"))
+    effective = as_int(row.get("effective_fem_omp_threads"))
+    if requested != expected_threads:
+        failures.append(
+            "requested_fem_omp_threads must equal requested value "
+            f"{expected_threads}, got {row.get('requested_fem_omp_threads')!r}"
+        )
+    if effective != expected_threads:
+        failures.append(
+            "effective_fem_omp_threads must equal requested value "
+            f"{expected_threads}, got {row.get('effective_fem_omp_threads')!r}"
+        )
+    if row.get("fem_cpu_thread_cap_reason") == "gpu-bypass":
+        failures.append("fem_cpu_thread_cap_reason must not resolve to gpu-bypass")
+    if row.get("fem_demag_operator_mode") != "device_hypre_poisson":
+        failures.append("fem_demag_operator_mode must be device_hypre_poisson")
+    if row.get("hypre_execution_policy") != "device":
+        failures.append("hypre_execution_policy must be device")
+    return failures
+
+
+def gpu_host_thread_qualification_identity_failures(
+    row: Mapping[str, object],
+) -> list[str]:
+    failures: list[str] = []
+
+    def valid_sha256(value: object) -> bool:
+        return (
+            isinstance(value, str)
+            and len(value) == 64
+            and all(character in "0123456789abcdef" for character in value)
+        )
+
+    for field in (
+        "runtime_manifest_sha256",
+        "source_manifest_sha256",
+        "libfullmag_fem_sha256",
+        "solver_mesh_signature",
+        "executed_problem_ir_sha256",
+    ):
+        if not valid_sha256(row.get(field)):
+            failures.append(f"{field} must be a canonical SHA-256")
+    for field in ("device_uuid", "device_name", "compute_capability"):
+        if not isinstance(row.get(field), str) or not str(row.get(field)).strip():
+            failures.append(f"{field} must be present")
+
+    exact_fields: tuple[tuple[str, object], ...] = (
+        ("backend", "fem_gpu"),
+        ("scenario", "box500_airbox_exchange_demag"),
+        ("reported_scenario", "box500_airbox_exchange_demag"),
+        ("integrator", "heun"),
+        ("reported_integrator", "heun"),
+        ("timestep_policy", "fixed"),
+        ("reported_timestep_policy", "fixed"),
+        ("relaxation_algorithm", "projected_gradient_bb"),
+        ("reported_relaxation_algorithm", "projected_gradient_bb"),
+        ("reported_precision", "double"),
+        ("requested_fem_execution", "gpu"),
+        ("requested_relaxation_preconditioner_strategy", "none"),
+        ("requested_demag_solver", "CG"),
+        ("requested_demag_preconditioner", "AMG"),
+        ("demag_linear_solver", "CG"),
+        ("demag_preconditioner", "AMG"),
+        ("execution_engine", "fem_native_gpu"),
+        ("fem_assembly_mode", "legacy_sparse"),
+        ("fem_execution_mode", "all_in_gpu_legacy_sparse"),
+        ("fem_data_residency", "device_source_of_truth"),
+        ("fem_demag_operator_mode", "device_hypre_poisson"),
+        ("hypre_execution_policy", "device"),
+        ("demag_residency", "device"),
+        ("fem_gpu_qualification_status", "production_executable"),
+    )
+    for field, expected in exact_fields:
+        if row.get(field) != expected:
+            failures.append(
+                f"{field} must be {expected!r}, got {row.get(field)!r}"
+            )
+    for field, expected in (
+        ("steps", 32),
+        ("executed_steps", 32),
+        ("requested_demag_amg_relax_type", 6),
+        ("demag_amg_relax_type", 6),
+    ):
+        if as_int(row.get(field)) != expected:
+            failures.append(
+                f"{field} must be {expected}, got {row.get(field)!r}"
+            )
+    dt_s = as_float(row.get("dt_s"))
+    if dt_s is None or not math.isclose(
+        dt_s,
+        1e-13,
+        rel_tol=0.0,
+        abs_tol=0.0,
+    ):
+        failures.append(f"dt_s must be exactly 1e-13, got {row.get('dt_s')!r}")
+    for field in (
+        "requested_demag_relative_tolerance",
+        "demag_relative_tolerance",
+    ):
+        value = as_float(row.get(field))
+        if value is None or not math.isclose(
+            value,
+            1e-12,
+            rel_tol=1e-12,
+            abs_tol=0.0,
+        ):
+            failures.append(f"{field} must be 1e-12, got {row.get(field)!r}")
+    mfem_device = str(row.get("mfem_device") or "").lower()
+    if not mfem_device.startswith("ceed-cuda:"):
+        failures.append(
+            f"mfem_device must resolve to ceed-cuda, got {row.get('mfem_device')!r}"
+        )
+    host_capacity = as_int(row.get("host_cpu_capacity"))
+    if host_capacity is None or host_capacity < 1:
+        failures.append("host_cpu_capacity must be a positive integer")
+    return failures
+
+
+def gpu_host_thread_policy_qualification_summary(
+    rows: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    def qualification_bool(value: object) -> bool | None:
+        if isinstance(value, bool):
+            return value
+        normalized = str(value).strip().lower()
+        if normalized in {"1", "on", "true", "yes"}:
+            return True
+        if normalized in {"0", "off", "false", "no"}:
+            return False
+        return None
+
+    expected_keys = {
+        (threads, profiler_enabled, ui_surface, repeat_index)
+        for threads in GPU_HOST_THREAD_QUALIFICATION_THREADS
+        for profiler_enabled in GPU_HOST_THREAD_QUALIFICATION_PROFILER_STATES
+        for ui_surface in GPU_HOST_THREAD_QUALIFICATION_UI_SURFACES
+        for repeat_index in range(GPU_HOST_THREAD_QUALIFICATION_REPEATS)
+    }
+    rows_by_key: dict[
+        tuple[int, bool, str, int], list[Mapping[str, object]]
+    ] = {}
+    failures: list[str] = []
+    for row in rows:
+        threads = as_int(row.get("requested_cpu_thread_spec"))
+        profiler_enabled = qualification_bool(row.get("step_profiler_enabled"))
+        ui_surface = str(row.get("ui_surface") or "")
+        repeat_index = as_int(row.get("repeat_index"))
+        key = (threads, profiler_enabled, ui_surface, repeat_index)
+        if (
+            threads not in GPU_HOST_THREAD_QUALIFICATION_THREADS
+            or profiler_enabled is None
+            or ui_surface not in GPU_HOST_THREAD_QUALIFICATION_UI_SURFACES
+            or repeat_index is None
+        ):
+            failures.append(f"invalid matrix row identity: {key!r}")
+            continue
+        typed_key = (threads, profiler_enabled, ui_surface, repeat_index)
+        rows_by_key.setdefault(typed_key, []).append(row)
+    for key in sorted(expected_keys):
+        count = len(rows_by_key.get(key, ()))
+        if count != 1:
+            failures.append(f"matrix key {key!r} has {count} rows; expected 1")
+    for key in sorted(set(rows_by_key) - expected_keys):
+        failures.append(f"unexpected matrix key {key!r}")
+
+    for field in GPU_HOST_THREAD_QUALIFICATION_PINNED_IDENTITY_FIELDS:
+        values = {str(row.get(field)) for row in rows}
+        if len(values) != 1:
+            failures.append(
+                f"{field} differs across the qualification matrix: {sorted(values)!r}"
+            )
+
+    for key, key_rows in sorted(rows_by_key.items()):
+        for row in key_rows:
+            if row.get("status") != "ok":
+                failures.append(f"matrix key {key!r}: status must be ok")
+            failures.extend(
+                f"matrix key {key!r}: {failure}"
+                for failure in gpu_host_thread_contract_failures(
+                    row, expected_threads=key[0]
+                )
+            )
+            failures.extend(
+                f"matrix key {key!r}: {failure}"
+                for failure in gpu_host_thread_qualification_identity_failures(row)
+            )
+            for metric in (
+                *GPU_HOST_THREAD_QUALIFICATION_METRICS,
+                *GPU_HOST_THREAD_QUALIFICATION_CPU_METRICS,
+            ):
+                value = as_float(row.get(metric))
+                if value is None or not math.isfinite(value) or value < 0.0:
+                    failures.append(
+                        f"matrix key {key!r}: {metric} must be finite and non-negative"
+                    )
+            average_cores = as_float(row.get("host_cpu_average_core_count"))
+            host_capacity = as_int(row.get("host_cpu_capacity"))
+            if (
+                average_cores is not None
+                and host_capacity is not None
+                and average_cores > host_capacity + 1e-12
+            ):
+                failures.append(
+                    f"matrix key {key!r}: host_cpu_average_core_count exceeds host_cpu_capacity"
+                )
+
+    case_summaries: list[dict[str, object]] = []
+    candidate_summaries: list[dict[str, object]] = []
+    for threads in GPU_HOST_THREAD_QUALIFICATION_THREADS:
+        candidate_failures: list[str] = []
+        p50_speedups: list[float] = []
+        for profiler_enabled in GPU_HOST_THREAD_QUALIFICATION_PROFILER_STATES:
+            for ui_surface in GPU_HOST_THREAD_QUALIFICATION_UI_SURFACES:
+                distributions: dict[str, dict[str, dict[str, float | int]]] = {}
+                for label, selected_threads in (
+                    ("baseline", 1),
+                    ("candidate", threads),
+                ):
+                    selected_rows = [
+                        row
+                        for repeat_index in range(GPU_HOST_THREAD_QUALIFICATION_REPEATS)
+                        for row in rows_by_key.get(
+                            (
+                                selected_threads,
+                                profiler_enabled,
+                                ui_surface,
+                                repeat_index,
+                            ),
+                            (),
+                        )
+                    ]
+                    metric_distributions: dict[str, dict[str, float | int]] = {}
+                    for metric in (
+                        *GPU_HOST_THREAD_QUALIFICATION_METRICS,
+                        *GPU_HOST_THREAD_QUALIFICATION_CPU_METRICS,
+                    ):
+                        values = [as_float(row.get(metric)) for row in selected_rows]
+                        finite = [
+                            value
+                            for value in values
+                            if value is not None and math.isfinite(value)
+                        ]
+                        if len(finite) == GPU_HOST_THREAD_QUALIFICATION_REPEATS:
+                            metric_distributions[metric] = summarize_distribution(finite)
+                    distributions[label] = metric_distributions
+                baseline_wall = distributions["baseline"].get("wall_time_ms")
+                candidate_wall = distributions["candidate"].get("wall_time_ms")
+                p50_improvement_percent: float | None = None
+                p95_regression_percent: float | None = None
+                if baseline_wall is None or candidate_wall is None:
+                    candidate_failures.append(
+                        f"profiler={profiler_enabled},surface={ui_surface}: incomplete timings"
+                    )
+                else:
+                    baseline_p50 = float(baseline_wall["p50"])
+                    baseline_p95 = float(baseline_wall["p95"])
+                    candidate_p50 = float(candidate_wall["p50"])
+                    candidate_p95 = float(candidate_wall["p95"])
+                    p50_improvement_percent = (
+                        100.0 * (baseline_p50 - candidate_p50) / baseline_p50
+                    )
+                    p95_regression_percent = (
+                        100.0 * (candidate_p95 - baseline_p95) / baseline_p95
+                    )
+                    if threads != 1:
+                        if p50_improvement_percent < 5.0 - 1e-12:
+                            candidate_failures.append(
+                                f"profiler={profiler_enabled},surface={ui_surface}: "
+                                f"p50 improvement {p50_improvement_percent:.3f}% is below 5%"
+                            )
+                        if p95_regression_percent > 5.0 + 1e-12:
+                            candidate_failures.append(
+                                f"profiler={profiler_enabled},surface={ui_surface}: "
+                                f"p95 regression {p95_regression_percent:.3f}% exceeds 5%"
+                            )
+                        p50_speedups.append(baseline_p50 / candidate_p50)
+                raw_cpu_regressions: dict[str, dict[str, float]] = {}
+                if threads != 1:
+                    for metric in GPU_HOST_THREAD_QUALIFICATION_CPU_METRICS:
+                        baseline_cpu = distributions["baseline"].get(metric)
+                        candidate_cpu = distributions["candidate"].get(metric)
+                        if baseline_cpu is None or candidate_cpu is None:
+                            candidate_failures.append(
+                                f"profiler={profiler_enabled},surface={ui_surface}: "
+                                f"incomplete {metric} distribution"
+                            )
+                            continue
+                        regressions: dict[str, float] = {}
+                        for percentile in ("p50", "p95"):
+                            baseline_value = float(baseline_cpu[percentile])
+                            candidate_value = float(candidate_cpu[percentile])
+                            increase = candidate_value - baseline_value
+                            regressions[percentile] = increase
+                            if increase > 1e-12:
+                                candidate_failures.append(
+                                    f"profiler={profiler_enabled},surface={ui_surface}: "
+                                    f"{metric} {percentile} increased by {increase:.6f}; "
+                                    "zero increase is allowed"
+                                )
+                        raw_cpu_regressions[metric] = regressions
+                oversubscribed = any(
+                    (as_float(row.get("host_cpu_average_core_count")) or 0.0)
+                    > (as_int(row.get("host_cpu_capacity")) or 0) + 1e-12
+                    for repeat_index in range(GPU_HOST_THREAD_QUALIFICATION_REPEATS)
+                    for row in rows_by_key.get(
+                        (threads, profiler_enabled, ui_surface, repeat_index), ()
+                    )
+                )
+                case_summaries.append(
+                    {
+                        "threads": threads,
+                        "step_profiler_enabled": profiler_enabled,
+                        "ui_surface": ui_surface,
+                        "distributions": distributions,
+                        "p50_improvement_percent": p50_improvement_percent,
+                        "p95_regression_percent": p95_regression_percent,
+                        "host_cpu_oversubscribed": oversubscribed,
+                        "raw_host_cpu_regressions": raw_cpu_regressions,
+                    }
+                )
+        qualifies = threads != 1 and not failures and not candidate_failures
+        candidate_summaries.append(
+            {
+                "threads": threads,
+                "qualifies": qualifies,
+                "geometric_mean_p50_speedup": (
+                    math.prod(p50_speedups) ** (1.0 / len(p50_speedups))
+                    if p50_speedups
+                    else 1.0
+                ),
+                "failures": candidate_failures,
+            }
+        )
+    qualifying = [candidate for candidate in candidate_summaries if candidate["qualifies"]]
+    resolved_default = (
+        int(
+            max(
+                qualifying,
+                key=lambda candidate: float(candidate["geometric_mean_p50_speedup"]),
+            )["threads"]
+        )
+        if qualifying
+        else 1
+    )
+    return {
+        "schema": "fullmag.fem_gpu.host_thread_policy_qualification.v2",
+        "status": "invalid" if failures else "pass",
+        "decision": (
+            "qualification-invalid-retain-deliberate-default-one"
+            if failures
+            else "promote-qualified-default"
+            if resolved_default != 1
+            else "retain-deliberate-default-one"
+        ),
+        "resolved_default_threads": resolved_default,
+        "promotion_thresholds": {
+            "minimum_end_to_end_p50_improvement_percent": 5.0,
+            "maximum_end_to_end_p95_regression_percent": 5.0,
+            "maximum_raw_host_cpu_p50_increase": 0.0,
+            "maximum_raw_host_cpu_p95_increase": 0.0,
+        },
+        "expected_measured_row_count": len(expected_keys),
+        "observed_measured_row_count": len(rows),
+        "failures": failures,
+        "candidates": candidate_summaries,
+        "cases": case_summaries,
+    }
+
+
+def write_gpu_host_thread_policy_qualification(
+    input_paths: Sequence[Path], output_path: Path
+) -> dict[str, object]:
+    rows = [row for path in input_paths for row in load_csv_results(path)]
+    summary = gpu_host_thread_policy_qualification_summary(rows)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    print(f"FEM_GPU_HOST_THREAD_POLICY_QUALIFICATION={json.dumps(summary, sort_keys=True)}")
+    return summary
+
+
+def task11_final_magnetization_values(
+    row: Mapping[str, object],
+) -> list[tuple[float, float, float]] | None:
+    payload = row.get("final_magnetization_values_json")
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError:
+            return None
+    if (
+        not isinstance(payload, Sequence)
+        or isinstance(payload, (str, bytes))
+        or not payload
+    ):
+        return None
+    values: list[tuple[float, float, float]] = []
+    for vector in payload:
+        if (
+            not isinstance(vector, Sequence)
+            or isinstance(vector, (str, bytes))
+            or len(vector) != 3
+        ):
+            return None
+        components = tuple(as_float(component) for component in vector)
+        if any(component is None or not math.isfinite(component) for component in components):
+            return None
+        values.append((float(components[0]), float(components[1]), float(components[2])))
+    return values
+
+
+def task11_final_magnetization_content_sha256(
+    *,
+    observable: str,
+    unit: str,
+    step: int,
+    values: Sequence[tuple[float, float, float]],
+) -> str:
+    if observable != "m" or unit != "1" or type(step) is not int or step < 0:
+        raise ValueError("invalid Task 11 final magnetization identity")
+    digest = hashlib.sha256()
+    digest.update(b"fullmag.task11.final_magnetization.v1\0")
+    for text in (observable, unit):
+        encoded = text.encode("utf-8")
+        digest.update(struct.pack(">I", len(encoded)))
+        digest.update(encoded)
+    digest.update(struct.pack(">Q", step))
+    digest.update(struct.pack(">Q", len(values)))
+    for vector in values:
+        if len(vector) != 3 or any(
+            not math.isfinite(component) for component in vector
+        ):
+            raise ValueError("invalid Task 11 final magnetization vector")
+        digest.update(struct.pack(">ddd", *vector))
+    return digest.hexdigest()
+
+
+def task11_qualification_identity_failures(
+    matrix_rows: Sequence[Mapping[str, object]],
+    parity_rows: Sequence[Mapping[str, object]],
+    qualification_identity: Mapping[str, object] | None,
+) -> list[str]:
+    if qualification_identity is None:
+        return ["immutable Task 11 qualification identity is missing"]
+    if qualification_identity.get("schema") != TASK11_QUALIFICATION_IDENTITY_SCHEMA:
+        return ["immutable Task 11 qualification identity schema is invalid"]
+    runtime_identity = qualification_identity.get("runtime_identity")
+    gpu_identity = qualification_identity.get("gpu_identity")
+    workload = qualification_identity.get("workload")
+    raw_fixtures = qualification_identity.get("fixtures")
+    if (
+        not isinstance(runtime_identity, Mapping)
+        or not isinstance(gpu_identity, Mapping)
+        or not isinstance(workload, Mapping)
+        or not isinstance(raw_fixtures, Sequence)
+        or isinstance(raw_fixtures, (str, bytes))
+    ):
+        return ["immutable Task 11 qualification identity payload is incomplete"]
+    fixtures = {
+        str(fixture.get("resolution")): fixture
+        for fixture in raw_fixtures
+        if isinstance(fixture, Mapping)
+    }
+    if set(fixtures) != set(RELAXATION_PRECONDITIONER_QUALIFICATION_MESHES):
+        return ["immutable Task 11 qualification identity fixtures are incomplete"]
+
+    failures: list[str] = []
+    for collection_name, rows in (("matrix", matrix_rows), ("parity", parity_rows)):
+        for row_index, row in enumerate(rows):
+            label = f"{collection_name} row {row_index}"
+            mesh_size = str(row.get("mesh_size") or "")
+            fixture = fixtures.get(mesh_size)
+            if fixture is None:
+                failures.append(f"{label}: mesh_size has no pinned fixture")
+                continue
+            for field in (
+                "runtime_manifest_sha256",
+                "source_manifest_sha256",
+                "libfullmag_fem_sha256",
+            ):
+                expected = str(runtime_identity.get(field) or "")
+                if not expected or row.get(field) != expected:
+                    failures.append(
+                        f"{label}: {field} differs from the pinned runtime identity"
+                    )
+            for field in (
+                "solver_mesh_sha256",
+                "solver_mesh_signature",
+                "executed_problem_ir_sha256",
+                "node_count",
+                "element_count",
+            ):
+                expected = fixture.get(field)
+                actual = (
+                    as_int(row.get(field))
+                    if field in {"node_count", "element_count"}
+                    else row.get(field)
+                )
+                if actual != expected:
+                    failures.append(
+                        f"{label}: {field} differs from the pinned {mesh_size} fixture"
+                    )
+            for field, expected_key in (
+                ("scenario", "scenario"),
+                ("reported_scenario", "scenario"),
+                ("integrator", "integrator"),
+                ("reported_integrator", "integrator"),
+                ("timestep_policy", "timestep_policy"),
+                ("reported_timestep_policy", "timestep_policy"),
+                ("reported_relaxation_algorithm", "relaxation_algorithm"),
+                ("reported_precision", "precision"),
+            ):
+                if row.get(field) != workload.get(expected_key):
+                    failures.append(
+                        f"{label}: {field} differs from the pinned workload"
+                    )
+            dt_s = as_float(row.get("dt_s"))
+            expected_dt_s = as_float(workload.get("dt_s"))
+            if (
+                dt_s is None
+                or expected_dt_s is None
+                or not math.isclose(dt_s, expected_dt_s, rel_tol=0.0, abs_tol=0.0)
+            ):
+                failures.append(f"{label}: dt_s differs from the pinned workload")
+            if row.get("backend") == "fem_gpu":
+                for field in ("device_uuid", "device_name", "compute_capability"):
+                    expected = str(gpu_identity.get(field) or "")
+                    if not expected or row.get(field) != expected:
+                        failures.append(
+                            f"{label}: {field} differs from the pinned GPU identity"
+                        )
+    return failures
+
+
+def task11_preconditioner_cpu_gpu_parity_summary(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    expected_runtime_identities: Mapping[str, str],
+    expected_mesh_signatures: Mapping[str, str],
+    expected_fixtures: Mapping[str, Mapping[str, object]],
+) -> dict[str, object]:
+    expected_keys = {
+        (mesh_size, backend)
+        for mesh_size in RELAXATION_PRECONDITIONER_QUALIFICATION_MESHES
+        for backend in ("fem_cpu", "fem_gpu")
+    }
+    rows_by_key: dict[tuple[str, str], list[Mapping[str, object]]] = {}
+    failures: list[str] = []
+    for row in rows:
+        mesh_size = str(row.get("mesh_size") or "")
+        backend = str(row.get("backend") or "")
+        key = (mesh_size, backend)
+        if key not in expected_keys:
+            failures.append(f"unexpected parity row identity {key!r}")
+            continue
+        rows_by_key.setdefault(key, []).append(row)
+    for key in sorted(expected_keys):
+        count = len(rows_by_key.get(key, []))
+        if count != 1:
+            failures.append(f"parity key {key!r} has {count} rows; expected 1")
+
+    exact_fields: tuple[tuple[str, object], ...] = (
+        ("scenario", "box500_airbox_exchange_demag"),
+        ("steps", 64),
+        ("reported_relaxation_algorithm", "nonlinear_cg"),
+        ("reported_precision", "double"),
+        ("requested_relaxation_preconditioner_strategy", "none"),
+        ("requested_demag_solver", "CG"),
+        ("requested_demag_preconditioner", "AMG"),
+        ("demag_linear_solver", "CG"),
+        ("demag_preconditioner", "AMG"),
+    )
+    for key, key_rows in sorted(rows_by_key.items()):
+        for row in key_rows:
+            for field, expected in exact_fields:
+                actual = as_int(row.get(field)) if field == "steps" else row.get(field)
+                if actual != expected:
+                    failures.append(
+                        f"parity key {key!r}: {field} must be {expected!r}, got {row.get(field)!r}"
+                    )
+            expected_execution = "cpu" if key[1] == "fem_cpu" else "gpu"
+            expected_engine = "fem_cpu_native" if key[1] == "fem_cpu" else "fem_native_gpu"
+            if row.get("requested_fem_execution") != expected_execution:
+                failures.append(
+                    f"parity key {key!r}: requested_fem_execution must be {expected_execution}"
+                )
+            if row.get("execution_engine") != expected_engine:
+                failures.append(
+                    f"parity key {key!r}: execution_engine must be {expected_engine}"
+                )
+            if row.get("status") != "ok":
+                failures.append(f"parity key {key!r}: status is not ok")
+            torque_target = as_float(row.get("requested_relax_torque_tolerance_apm"))
+            if torque_target is None or not math.isclose(
+                torque_target,
+                8000.0,
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            ):
+                failures.append(
+                    f"parity key {key!r}: requested_relax_torque_tolerance_apm "
+                    "must be 8000 A/m"
+                )
+            for field in (
+                "requested_demag_relative_tolerance",
+                "demag_relative_tolerance",
+            ):
+                value = as_float(row.get(field))
+                if value is None or not math.isclose(
+                    value,
+                    1e-12,
+                    rel_tol=1e-12,
+                    abs_tol=0.0,
+                ):
+                    failures.append(
+                        f"parity key {key!r}: {field} must be 1e-12"
+                    )
+            for field in (
+                "requested_demag_amg_relax_type",
+                "demag_amg_relax_type",
+            ):
+                if as_int(row.get(field)) != 6:
+                    failures.append(f"parity key {key!r}: {field} must be 6")
+            residual = as_float(row.get("demag_final_residual_norm"))
+            if (
+                residual is None
+                or not math.isfinite(residual)
+                or residual < 0.0
+                or residual > 1e-12
+            ):
+                failures.append(
+                    f"parity key {key!r}: demag_final_residual_norm exceeds 1e-12"
+                )
+            actual_iterations = as_int(row.get("demag_actual_iterations"))
+            requested_max_iterations = as_int(
+                row.get("requested_demag_max_iterations")
+            )
+            if (
+                actual_iterations is None
+                or actual_iterations < 0
+                or requested_max_iterations is None
+                or actual_iterations > requested_max_iterations
+            ):
+                failures.append(
+                    f"parity key {key!r}: demag iteration evidence is invalid"
+                )
+            if key[1] == "fem_gpu":
+                if row.get("relaxation_preconditioner_strategy") != "none":
+                    failures.append(
+                        f"parity key {key!r}: relaxation_preconditioner_strategy "
+                        "must resolve to none"
+                    )
+                for field, expected in (
+                    ("fem_assembly_mode", "legacy_sparse"),
+                    ("fem_execution_mode", "all_in_gpu_legacy_sparse"),
+                    ("fem_data_residency", "device_source_of_truth"),
+                    ("hypre_execution_policy", "device"),
+                    ("demag_residency", "device"),
+                    ("fem_demag_operator_mode", "device_hypre_poisson"),
+                    ("fem_gpu_qualification_status", "production_executable"),
+                ):
+                    if row.get(field) != expected:
+                        failures.append(
+                            f"parity key {key!r}: {field} must be {expected}"
+                        )
+                for field in (
+                    "uses_cuda_kernels",
+                    "uses_gpu_poisson",
+                    "fem_gpu_state_allocated",
+                    "phase2_compute_assertion_enabled",
+                    "phase2_compute_hot_loop_sync_clean",
+                ):
+                    if not as_bool(row.get(field)):
+                        failures.append(f"parity key {key!r}: {field} must be true")
+                for field in (
+                    "hot_loop_compute_host_sync_count",
+                    "hot_loop_exchange_host_sync_count",
+                    "hot_loop_compute_h2d_bytes",
+                    "hot_loop_compute_d2h_bytes",
+                    "hot_loop_exchange_h2d_bytes",
+                    "hot_loop_exchange_d2h_bytes",
+                ):
+                    if as_int(row.get(field)) != 0:
+                        failures.append(f"parity key {key!r}: {field} must be zero")
+                executed_steps = as_int(row.get("executed_steps"))
+                total_rhs_evals = as_int(row.get("total_rhs_evals"))
+                control_syncs = as_int(
+                    row.get("hot_loop_control_scalar_host_sync_count")
+                )
+                if (
+                    executed_steps is None
+                    or total_rhs_evals is None
+                    or control_syncs is None
+                ):
+                    failures.append(
+                        f"parity key {key!r}: GPU control-readback evidence is missing"
+                    )
+                else:
+                    allowed = expected_control_sync_budget(
+                        "nonlinear_cg",
+                        executed_steps,
+                        total_rhs_evals,
+                        DEFAULT_GPU_CONTROL_READBACK_BASE,
+                    )
+                    if control_syncs > allowed:
+                        failures.append(
+                            f"parity key {key!r}: control-readback budget exceeded"
+                        )
+
+    for field in (
+        "runtime_manifest_sha256",
+        "source_manifest_sha256",
+        "libfullmag_fem_sha256",
+    ):
+        identities = {str(row.get(field) or "") for row in rows}
+        expected = expected_runtime_identities.get(field, "")
+        if "" in identities or len(identities) != 1 or identities != {expected}:
+            failures.append(
+                f"parity runtime identity {field} must be common and equal the "
+                f"75-row matrix identity {expected!r}; got {sorted(identities)!r}"
+            )
+
+    pair_summaries: list[dict[str, object]] = []
+    for mesh_size in RELAXATION_PRECONDITIONER_QUALIFICATION_MESHES:
+        cpu_rows = rows_by_key.get((mesh_size, "fem_cpu"), [])
+        gpu_rows = rows_by_key.get((mesh_size, "fem_gpu"), [])
+        if len(cpu_rows) != 1 or len(gpu_rows) != 1:
+            continue
+        cpu_row = cpu_rows[0]
+        gpu_row = gpu_rows[0]
+        cpu_signature = str(cpu_row.get("solver_mesh_signature") or "")
+        gpu_signature = str(gpu_row.get("solver_mesh_signature") or "")
+        expected_signature = expected_mesh_signatures.get(mesh_size, "")
+        if (
+            not expected_signature
+            or cpu_signature != expected_signature
+            or gpu_signature != expected_signature
+        ):
+            failures.append(
+                f"mesh={mesh_size}: parity solver mesh identity must equal matrix "
+                f"identity {expected_signature!r}; got cpu={cpu_signature!r}, gpu={gpu_signature!r}"
+            )
+
+        cpu_energy = as_float(cpu_row.get("final_e_total_j"))
+        gpu_energy = as_float(gpu_row.get("final_e_total_j"))
+        energy_abs_diff = (
+            abs(cpu_energy - gpu_energy)
+            if cpu_energy is not None and gpu_energy is not None
+            else None
+        )
+        if (
+            cpu_energy is None
+            or gpu_energy is None
+            or not math.isfinite(cpu_energy)
+            or not math.isfinite(gpu_energy)
+            or not numeric_values_close(
+                cpu_energy,
+                gpu_energy,
+                rtol=DEFAULT_CPU_GPU_ENERGY_RTOL,
+                atol=DEFAULT_CPU_GPU_ENERGY_ATOL_J,
+            )
+        ):
+            failures.append(
+                f"mesh={mesh_size}: final energy parity differs: "
+                f"cpu={cpu_row.get('final_e_total_j')!r}, gpu={gpu_row.get('final_e_total_j')!r}"
+            )
+
+        cpu_steps = as_int(cpu_row.get("executed_steps"))
+        gpu_steps = as_int(gpu_row.get("executed_steps"))
+        if (
+            not as_bool(cpu_row.get("converged"))
+            or not as_bool(gpu_row.get("converged"))
+            or cpu_row.get("stop_reason") != "torque"
+            or gpu_row.get("stop_reason") != "torque"
+            or cpu_steps is None
+            or gpu_steps is None
+            or cpu_steps <= 0
+            or cpu_steps != gpu_steps
+        ):
+            failures.append(
+                f"mesh={mesh_size}: CPU/GPU stop-state parity failed: "
+                f"cpu=({cpu_row.get('converged')!r},{cpu_row.get('stop_reason')!r},{cpu_steps!r}), "
+                f"gpu=({gpu_row.get('converged')!r},{gpu_row.get('stop_reason')!r},{gpu_steps!r})"
+            )
+
+        expected_node_count = as_int(
+            expected_fixtures.get(mesh_size, {}).get("node_count")
+        )
+        for backend, row, executed_steps in (
+            ("cpu", cpu_row, cpu_steps),
+            ("gpu", gpu_row, gpu_steps),
+        ):
+            final_torque_apm = as_float(row.get("final_torque_apm"))
+            if (
+                final_torque_apm is None
+                or not math.isfinite(final_torque_apm)
+                or final_torque_apm < 0.0
+                or final_torque_apm > 8000.0
+            ):
+                failures.append(
+                    f"mesh={mesh_size}: {backend} final_torque_apm does not "
+                    "satisfy the 8000 A/m stop condition"
+                )
+            if row.get("final_magnetization_observable") != "m":
+                failures.append(
+                    f"mesh={mesh_size}: {backend} final magnetization observable is not m"
+                )
+            if row.get("final_magnetization_unit") != "1":
+                failures.append(
+                    f"mesh={mesh_size}: {backend} final magnetization unit is not dimensionless"
+                )
+            final_step = as_int(row.get("final_magnetization_step"))
+            if final_step is None or executed_steps is None or final_step != executed_steps:
+                failures.append(
+                    f"mesh={mesh_size}: {backend} final magnetization step does not "
+                    "match executed_steps"
+                )
+            final_sha256 = row.get("final_magnetization_sha256")
+            final_sha256_valid = (
+                isinstance(final_sha256, str)
+                and len(final_sha256) == 64
+                and not any(
+                    character not in "0123456789abcdef"
+                    for character in final_sha256
+                )
+            )
+            if not final_sha256_valid:
+                failures.append(
+                    f"mesh={mesh_size}: {backend} final magnetization SHA-256 is invalid"
+                )
+            final_values = task11_final_magnetization_values(row)
+            if (
+                final_sha256_valid
+                and final_values is not None
+                and row.get("final_magnetization_observable") == "m"
+                and row.get("final_magnetization_unit") == "1"
+                and final_step is not None
+                and final_sha256
+                != task11_final_magnetization_content_sha256(
+                    observable="m",
+                    unit="1",
+                    step=final_step,
+                    values=final_values,
+                )
+            ):
+                failures.append(
+                    f"mesh={mesh_size}: {backend} final magnetization content "
+                    "SHA-256 mismatch"
+                )
+            row_node_count = as_int(row.get("node_count"))
+            final_node_count = as_int(row.get("final_magnetization_node_count"))
+            if (
+                expected_node_count is None
+                or row_node_count != expected_node_count
+                or final_node_count != expected_node_count
+            ):
+                failures.append(
+                    f"mesh={mesh_size}: {backend} final magnetization node count "
+                    "does not match the pinned solver mesh"
+                )
+
+        cpu_values = task11_final_magnetization_values(cpu_row)
+        gpu_values = task11_final_magnetization_values(gpu_row)
+        max_component_difference: float | None = None
+        rms_component_difference: float | None = None
+        if (
+            cpu_values is None
+            or gpu_values is None
+            or len(cpu_values) != len(gpu_values)
+            or expected_node_count is None
+            or len(cpu_values or ()) != expected_node_count
+        ):
+            failures.append(
+                f"mesh={mesh_size}: final magnetization parity evidence is missing or shape-mismatched"
+            )
+        else:
+            component_differences = [
+                abs(cpu_component - gpu_component)
+                for cpu_vector, gpu_vector in zip(cpu_values, gpu_values)
+                for cpu_component, gpu_component in zip(cpu_vector, gpu_vector)
+            ]
+            max_component_difference = max(component_differences, default=0.0)
+            rms_component_difference = math.sqrt(
+                sum(value * value for value in component_differences)
+                / max(1, len(component_differences))
+            )
+            if max_component_difference > TASK11_CPU_GPU_MAGNETIZATION_ATOL:
+                failures.append(
+                    f"mesh={mesh_size}: magnetization max-component difference "
+                    f"{max_component_difference:.6g} exceeds "
+                    f"{TASK11_CPU_GPU_MAGNETIZATION_ATOL:.6g}"
+                )
+
+        for backend, row in (("cpu", cpu_row), ("gpu", gpu_row)):
+            norm_defect = as_float(row.get("norm_defect"))
+            if (
+                norm_defect is None
+                or not math.isfinite(norm_defect)
+                or norm_defect < 0.0
+                or norm_defect > MAX_MAGNETIZATION_NORM_DEFECT
+            ):
+                failures.append(
+                    f"mesh={mesh_size}: {backend} norm_defect exceeds "
+                    f"{MAX_MAGNETIZATION_NORM_DEFECT:.1e}"
+                )
+        pair_summaries.append(
+            {
+                "mesh_size": mesh_size,
+                "solver_mesh_signature": expected_signature,
+                "cpu_executed_steps": cpu_steps,
+                "gpu_executed_steps": gpu_steps,
+                "cpu_final_e_total_j": cpu_energy,
+                "gpu_final_e_total_j": gpu_energy,
+                "energy_abs_diff_j": energy_abs_diff,
+                "magnetization_max_component_abs_diff": max_component_difference,
+                "magnetization_rms_component_diff": rms_component_difference,
+            }
+        )
+    return {
+        "schema": "fullmag.fem_gpu.relaxation_preconditioner_cpu_gpu_parity.v1",
+        "status": "pass" if not failures else "invalid",
+        "row_count": len(rows),
+        "expected_row_count": len(expected_keys),
+        "failures": failures,
+        "pairs": pair_summaries,
+    }
+
+
+def relaxation_preconditioner_qualification_summary(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    cpu_gpu_parity_rows: Sequence[Mapping[str, object]] | None = None,
+    qualification_identity: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    expected_keys = {
+        (strategy, mesh_size, repeat_index)
+        for strategy in RELAXATION_PRECONDITIONER_STRATEGIES
+        for mesh_size in RELAXATION_PRECONDITIONER_QUALIFICATION_MESHES
+        for repeat_index in range(RELAXATION_PRECONDITIONER_REQUIRED_REPEATS)
+    }
+    rows_by_key: dict[tuple[str, str, int], list[Mapping[str, object]]] = {}
+    structural_failures: list[str] = []
+    matrix_failures: list[str] = []
+    for row in rows:
+        strategy = row.get("requested_relaxation_preconditioner_strategy")
+        mesh_size = row.get("mesh_size")
+        repeat_index = as_int(row.get("repeat_index"))
+        if (
+            strategy not in RELAXATION_PRECONDITIONER_STRATEGIES
+            or mesh_size not in RELAXATION_PRECONDITIONER_QUALIFICATION_MESHES
+            or repeat_index is None
+        ):
+            structural_failures.append(
+                "row has invalid strategy/mesh_size/repeat_index identity: "
+                f"{strategy!r}/{mesh_size!r}/{repeat_index!r}"
+            )
+            continue
+        rows_by_key.setdefault((str(strategy), str(mesh_size), repeat_index), []).append(
+            row
+        )
+    for key in sorted(expected_keys):
+        count = len(rows_by_key.get(key, []))
+        if count != 1:
+            structural_failures.append(f"matrix key {key!r} has {count} rows; expected 1")
+    extra_keys = sorted(set(rows_by_key) - expected_keys)
+    for key in extra_keys:
+        structural_failures.append(f"unexpected matrix key {key!r}")
+    matrix_failures.extend(structural_failures)
+
+    identity_failures = task11_qualification_identity_failures(
+        rows,
+        cpu_gpu_parity_rows or (),
+        qualification_identity,
+    )
+    matrix_failures.extend(identity_failures)
+
+    for key, key_rows in sorted(rows_by_key.items()):
+        for row in key_rows:
+            matrix_failures.extend(
+                f"matrix key {key!r}: {failure}"
+                for failure in relaxation_preconditioner_workload_failures(row)
+            )
+
+    for field in (
+        "runtime_manifest_sha256",
+        "source_manifest_sha256",
+        "libfullmag_fem_sha256",
+    ):
+        identities = {str(row.get(field) or "") for row in rows}
+        if "" in identities or len(identities) != 1:
+            matrix_failures.append(
+                f"runtime identity field {field} must be nonempty and common to all rows; "
+                f"got {sorted(identities)!r}"
+            )
+    mesh_signatures: dict[str, set[str]] = {}
+    for row in rows:
+        mesh_size = str(row.get("mesh_size") or "")
+        signature = str(row.get("solver_mesh_signature") or "")
+        mesh_signatures.setdefault(mesh_size, set()).add(signature)
+    for mesh_size in RELAXATION_PRECONDITIONER_QUALIFICATION_MESHES:
+        signatures = mesh_signatures.get(mesh_size, set())
+        if "" in signatures or len(signatures) != 1:
+            matrix_failures.append(
+                f"solver mesh identity for {mesh_size} must be nonempty and common "
+                f"to all strategies/repeats; got {sorted(signatures)!r}"
+            )
+
+    runtime_identities = {
+        field: next(iter(sorted({str(row.get(field) or "") for row in rows})), "")
+        for field in (
+            "runtime_manifest_sha256",
+            "source_manifest_sha256",
+            "libfullmag_fem_sha256",
+        )
+    }
+    expected_mesh_signatures = {
+        mesh_size: next(iter(sorted(mesh_signatures.get(mesh_size, set()))), "")
+        for mesh_size in RELAXATION_PRECONDITIONER_QUALIFICATION_MESHES
+    }
+    expected_fixtures = {
+        str(fixture.get("resolution")): fixture
+        for fixture in (
+            qualification_identity.get("fixtures", ())
+            if isinstance(qualification_identity, Mapping)
+            else ()
+        )
+        if isinstance(fixture, Mapping)
+    }
+    if cpu_gpu_parity_rows is None:
+        cpu_gpu_parity_summary: dict[str, object] = {
+            "schema": "fullmag.fem_gpu.relaxation_preconditioner_cpu_gpu_parity.v1",
+            "status": "missing",
+            "row_count": 0,
+            "expected_row_count": 6,
+            "failures": ["CPU/GPU parity evidence is missing"],
+            "pairs": [],
+        }
+    else:
+        cpu_gpu_parity_summary = task11_preconditioner_cpu_gpu_parity_summary(
+            cpu_gpu_parity_rows,
+            expected_runtime_identities=runtime_identities,
+            expected_mesh_signatures=expected_mesh_signatures,
+            expected_fixtures=expected_fixtures,
+        )
+    matrix_failures.extend(
+        f"CPU/GPU parity: {failure}"
+        for failure in cpu_gpu_parity_summary["failures"]
+    )
+
+    baseline_row_failures: list[str] = []
+    for mesh_size in RELAXATION_PRECONDITIONER_QUALIFICATION_MESHES:
+        for repeat_index in range(RELAXATION_PRECONDITIONER_REQUIRED_REPEATS):
+            for row in rows_by_key.get(("none", mesh_size, repeat_index), []):
+                baseline_row_failures.extend(
+                    f"mesh={mesh_size},repeat={repeat_index}: {failure}"
+                    for failure in (
+                        relaxation_preconditioner_workload_failures(row)
+                        + relaxation_preconditioner_row_failures(
+                            row,
+                            expected_strategy="none",
+                        )
+                    )
+                )
+    baseline_structurally_complete = all(
+        len(rows_by_key.get(("none", mesh_size, repeat_index), [])) == 1
+        for mesh_size in RELAXATION_PRECONDITIONER_QUALIFICATION_MESHES
+        for repeat_index in range(RELAXATION_PRECONDITIONER_REQUIRED_REPEATS)
+    )
+    baseline_eligible = baseline_structurally_complete and not baseline_row_failures
+    if not baseline_eligible:
+        matrix_failures.append(
+            "none baseline failed physical row gates and is ineligible as a timing reference"
+        )
+
+    baseline_distributions: dict[str, dict[str, float | int]] = {}
+    for mesh_size in (
+        RELAXATION_PRECONDITIONER_QUALIFICATION_MESHES
+        if baseline_eligible
+        else ()
+    ):
+        values = [
+            as_float(row.get("wall_time_ms"))
+            for repeat_index in range(RELAXATION_PRECONDITIONER_REQUIRED_REPEATS)
+            for row in rows_by_key.get(("none", mesh_size, repeat_index), [])
+        ]
+        finite_values = [
+            value for value in values if value is not None and math.isfinite(value)
+        ]
+        if len(finite_values) == RELAXATION_PRECONDITIONER_REQUIRED_REPEATS:
+            baseline_distributions[mesh_size] = summarize_distribution(finite_values)
+
+    strategy_summaries: list[dict[str, object]] = []
+    for strategy in RELAXATION_PRECONDITIONER_STRATEGIES:
+        failures: list[str] = []
+        rows_for_strategy: list[Mapping[str, object]] = []
+        size_summaries: list[dict[str, object]] = []
+        improved_sizes = 0
+        improvement_factors: list[float] = []
+        for mesh_size in RELAXATION_PRECONDITIONER_QUALIFICATION_MESHES:
+            size_rows = [
+                row
+                for repeat_index in range(RELAXATION_PRECONDITIONER_REQUIRED_REPEATS)
+                for row in rows_by_key.get((strategy, mesh_size, repeat_index), [])
+            ]
+            rows_for_strategy.extend(size_rows)
+            for repeat_index, row in enumerate(size_rows):
+                failures.extend(
+                    f"mesh={mesh_size},repeat={repeat_index}: {failure}"
+                    for failure in relaxation_preconditioner_row_failures(
+                        row,
+                        expected_strategy=strategy,
+                    )
+                )
+            values = [as_float(row.get("wall_time_ms")) for row in size_rows]
+            finite_values = [
+                value for value in values if value is not None and math.isfinite(value)
+            ]
+            if len(finite_values) != RELAXATION_PRECONDITIONER_REQUIRED_REPEATS:
+                failures.append(
+                    f"mesh={mesh_size}: expected {RELAXATION_PRECONDITIONER_REQUIRED_REPEATS} finite timing samples"
+                )
+                continue
+            distribution = summarize_distribution(finite_values)
+            baseline = baseline_distributions.get(mesh_size)
+            if baseline is None:
+                failures.append(f"mesh={mesh_size}: missing complete none baseline")
+                continue
+            p50_improvement_percent = 100.0 * (
+                float(baseline["p50"]) - float(distribution["p50"])
+            ) / float(baseline["p50"])
+            p95_improvement_percent = 100.0 * (
+                float(baseline["p95"]) - float(distribution["p95"])
+            ) / float(baseline["p95"])
+            if strategy != "none":
+                if p50_improvement_percent >= 10.0 - 1e-12:
+                    improved_sizes += 1
+                if p50_improvement_percent < -5.0 - 1e-12:
+                    failures.append(
+                        f"mesh={mesh_size}: p50 regression {-p50_improvement_percent:.3f}% exceeds 5%"
+                    )
+                if p95_improvement_percent < -5.0 - 1e-12:
+                    failures.append(
+                        f"mesh={mesh_size}: p95 regression {-p95_improvement_percent:.3f}% exceeds 5%"
+                    )
+                improvement_factors.append(
+                    float(baseline["p50"]) / float(distribution["p50"])
+                )
+            size_summaries.append(
+                {
+                    "mesh_size": mesh_size,
+                    "baseline": baseline,
+                    "candidate": distribution,
+                    "p50_improvement_percent": p50_improvement_percent,
+                    "p95_improvement_percent": p95_improvement_percent,
+                }
+            )
+        if strategy != "none" and improved_sizes < 2:
+            failures.append(
+                f"p50 improved by at least 10% on {improved_sizes}/3 sizes; required 2/3"
+            )
+        for mesh_size in RELAXATION_PRECONDITIONER_QUALIFICATION_MESHES:
+            baseline_rows = [
+                row
+                for repeat_index in range(RELAXATION_PRECONDITIONER_REQUIRED_REPEATS)
+                for row in rows_by_key.get(("none", mesh_size, repeat_index), [])
+            ]
+            candidate_rows = [
+                row
+                for repeat_index in range(RELAXATION_PRECONDITIONER_REQUIRED_REPEATS)
+                for row in rows_by_key.get((strategy, mesh_size, repeat_index), [])
+            ]
+            for field, rtol, atol in (
+                ("final_e_total_j", DEFAULT_CPU_GPU_ENERGY_RTOL, DEFAULT_CPU_GPU_ENERGY_ATOL_J),
+                ("final_torque_apm", DEFAULT_CPU_GPU_TORQUE_RTOL, DEFAULT_CPU_GPU_TORQUE_ATOL_APM),
+            ):
+                baseline_values = [as_float(row.get(field)) for row in baseline_rows]
+                candidate_values = [as_float(row.get(field)) for row in candidate_rows]
+                if any(value is None for value in baseline_values + candidate_values):
+                    failures.append(f"mesh={mesh_size}: missing {field} parity evidence")
+                    continue
+                baseline_median = statistics.median(
+                    value for value in baseline_values if value is not None
+                )
+                candidate_median = statistics.median(
+                    value for value in candidate_values if value is not None
+                )
+                if not math.isclose(
+                    baseline_median,
+                    candidate_median,
+                    rel_tol=rtol,
+                    abs_tol=atol,
+                ):
+                    failures.append(
+                        f"mesh={mesh_size}: {field} parity differs: "
+                        f"none={baseline_median:.16g}, {strategy}={candidate_median:.16g}"
+                    )
+        geometric_mean_speedup = (
+            math.prod(improvement_factors) ** (1.0 / len(improvement_factors))
+            if improvement_factors
+            else 1.0
+        )
+        strategy_summaries.append(
+            {
+                "strategy": strategy,
+                "qualifies": (
+                    strategy != "none"
+                    and baseline_eligible
+                    and not matrix_failures
+                    and not failures
+                    and improved_sizes >= 2
+                ),
+                "p50_improved_size_count": improved_sizes,
+                "geometric_mean_p50_speedup": geometric_mean_speedup,
+                "sizes": size_summaries,
+                "failures": failures,
+            }
+        )
+    qualifying = [item for item in strategy_summaries if item["qualifies"]]
+    promoted = (
+        max(qualifying, key=lambda item: float(item["geometric_mean_p50_speedup"]))[
+            "strategy"
+        ]
+        if qualifying
+        else None
+    )
+    return {
+        "schema": "fullmag.fem_gpu.relaxation_preconditioner_qualification.v3",
+        "status": (
+            "invalid"
+            if matrix_failures
+            else "pass"
+            if promoted is not None
+            else "no_go"
+        ),
+        "row_count": len(rows),
+        "expected_row_count": len(expected_keys),
+        "matrix_complete": not structural_failures,
+        "matrix_failures": matrix_failures,
+        "qualification_identity": (
+            dict(qualification_identity)
+            if isinstance(qualification_identity, Mapping)
+            else None
+        ),
+        "baseline_eligible": baseline_eligible,
+        "baseline_failures": baseline_row_failures,
+        "cpu_gpu_parity": cpu_gpu_parity_summary,
+        "promoted_strategy": promoted,
+        "strategies": strategy_summaries,
+    }
+
+
+def write_relaxation_preconditioner_qualification(
+    input_path: Path,
+    output_path: Path,
+    *,
+    cpu_gpu_parity_input_path: Path | None = None,
+    qualification_identity: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    summary = relaxation_preconditioner_qualification_summary(
+        load_csv_results(input_path),
+        cpu_gpu_parity_rows=(
+            load_csv_results(cpu_gpu_parity_input_path)
+            if cpu_gpu_parity_input_path is not None
+            else None
+        ),
+        qualification_identity=qualification_identity,
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    print(
+        "FEM_RELAXATION_PRECONDITIONER_QUALIFICATION="
+        + json.dumps(summary, sort_keys=True)
+    )
+    return summary
+
+
+def amg_policy_physics_pair_failures(
+    baseline: Mapping[str, object],
+    candidate: Mapping[str, object],
+    *,
+    case_label: str,
+    repeat_index: int,
+) -> list[str]:
+    """Compare one effective type-18/type-6 repeat under canonical physics gates."""
+    failures: list[str] = []
+    pair_label = f"case={case_label},repeat_index={repeat_index}"
+
+    baseline_problem_ir = baseline.get("executed_problem_ir_sha256")
+    candidate_problem_ir = candidate.get("executed_problem_ir_sha256")
+    if baseline_problem_ir != candidate_problem_ir:
+        failures.append(
+            f"{pair_label} executed_problem_ir_sha256 mismatch: "
+            f"relax_type=18 {baseline_problem_ir!r}, "
+            f"relax_type=6 {candidate_problem_ir!r}"
+        )
+
+    baseline_stop = baseline.get("stop_reason")
+    candidate_stop = candidate.get("stop_reason")
+    if (
+        not isinstance(baseline_stop, str)
+        or not baseline_stop
+        or not isinstance(candidate_stop, str)
+        or not candidate_stop
+    ):
+        failures.append(
+            f"{pair_label} is missing stop_reason: "
+            f"relax_type=18 {baseline_stop!r}, relax_type=6 {candidate_stop!r}"
+        )
+    elif baseline_stop != candidate_stop:
+        failures.append(
+            f"{pair_label} stop_reason mismatch: "
+            f"relax_type=18 {baseline_stop!r}, relax_type=6 {candidate_stop!r}"
+        )
+    elif baseline_stop not in {"torque", "max_steps"}:
+        failures.append(
+            f"{pair_label} has unsupported qualification stop_reason "
+            f"{baseline_stop!r}"
+        )
+
+    baseline_steps = as_int(baseline.get("executed_steps"))
+    candidate_steps = as_int(candidate.get("executed_steps"))
+    if baseline_steps is None or candidate_steps is None:
+        failures.append(
+            f"{pair_label} is missing executed_steps: "
+            f"relax_type=18 {baseline.get('executed_steps')!r}, "
+            f"relax_type=6 {candidate.get('executed_steps')!r}"
+        )
+    elif baseline_steps != candidate_steps:
+        failures.append(
+            f"{pair_label} executed_steps mismatch: "
+            f"relax_type=18 {baseline_steps}, relax_type=6 {candidate_steps}"
+        )
+
+    baseline_max_steps = as_int(baseline.get("steps"))
+    candidate_max_steps = as_int(candidate.get("steps"))
+    if baseline_max_steps is None or candidate_max_steps is None:
+        failures.append(
+            f"{pair_label} is missing configured steps: "
+            f"relax_type=18 {baseline.get('steps')!r}, "
+            f"relax_type=6 {candidate.get('steps')!r}"
+        )
+    elif baseline_max_steps != candidate_max_steps:
+        failures.append(
+            f"{pair_label} configured steps mismatch: "
+            f"relax_type=18 {baseline_max_steps}, relax_type=6 {candidate_max_steps}"
+        )
+
+    baseline_torque_target = as_float(
+        baseline.get("requested_relax_torque_tolerance_apm")
+    )
+    candidate_torque_target = as_float(
+        candidate.get("requested_relax_torque_tolerance_apm")
+    )
+    if (
+        baseline_torque_target is None
+        or candidate_torque_target is None
+        or not math.isfinite(baseline_torque_target)
+        or not math.isfinite(candidate_torque_target)
+        or baseline_torque_target < 0.0
+        or candidate_torque_target < 0.0
+    ):
+        failures.append(f"{pair_label} has invalid requested torque target")
+    elif baseline_torque_target != candidate_torque_target:
+        failures.append(
+            f"{pair_label} requested torque target mismatch: "
+            f"relax_type=18 {baseline_torque_target:.16g}, "
+            f"relax_type=6 {candidate_torque_target:.16g}"
+        )
+
+    for relax_type, row in ((18, baseline), (6, candidate)):
+        executed_steps = as_int(row.get("executed_steps"))
+        max_steps = as_int(row.get("steps"))
+        stop_reason = row.get("stop_reason")
+        if (
+            executed_steps is None
+            or max_steps is None
+            or executed_steps < 1
+            or executed_steps > max_steps
+            or (stop_reason == "max_steps" and executed_steps != max_steps)
+        ):
+            failures.append(
+                f"{pair_label},relax_type={relax_type} has invalid completion "
+                f"semantics: stop_reason={stop_reason!r}, "
+                f"executed_steps={executed_steps!r}, steps={max_steps!r}"
+            )
+        if stop_reason == "torque":
+            final_torque = as_float(row.get("final_torque_apm"))
+            torque_target = as_float(row.get("requested_relax_torque_tolerance_apm"))
+            if (
+                final_torque is None
+                or torque_target is None
+                or not math.isfinite(final_torque)
+                or not math.isfinite(torque_target)
+                or torque_target < 0.0
+                or final_torque > torque_target
+            ):
+                failures.append(
+                    f"{pair_label},relax_type={relax_type} torque stop does not "
+                    "satisfy requested_relax_torque_tolerance_apm"
+                )
+
+        norm_defect = as_float(row.get("norm_defect"))
+        if (
+            norm_defect is None
+            or not math.isfinite(norm_defect)
+            or norm_defect < 0.0
+            or norm_defect > MAX_MAGNETIZATION_NORM_DEFECT
+        ):
+            failures.append(
+                f"{pair_label},relax_type={relax_type} norm_defect exceeds "
+                f"{MAX_MAGNETIZATION_NORM_DEFECT:.1e}: {row.get('norm_defect')!r}"
+            )
+
+    scenario = str(baseline.get("scenario") or "")
+    for field in scenario_energy_fields(scenario):
+        compare_cpu_gpu_numeric_field(
+            baseline,
+            candidate,
+            field,
+            rtol=DEFAULT_CPU_GPU_ENERGY_RTOL,
+            atol=cpu_gpu_energy_atol_for_scenario(
+                scenario,
+                DEFAULT_CPU_GPU_ENERGY_ATOL_J,
+            ),
+            failures=failures,
+            case=(case_label, f"repeat_index={repeat_index}", "relax_type=18/6"),
+        )
+    compare_cpu_gpu_numeric_field(
+        baseline,
+        candidate,
+        "final_torque_apm",
+        rtol=DEFAULT_CPU_GPU_TORQUE_RTOL,
+        atol=DEFAULT_CPU_GPU_TORQUE_ATOL_APM,
+        failures=failures,
+        case=(case_label, f"repeat_index={repeat_index}", "relax_type=18/6"),
+    )
+    compare_cpu_gpu_numeric_field(
+        baseline,
+        candidate,
+        "final_torque_t",
+        rtol=DEFAULT_CPU_GPU_TORQUE_RTOL,
+        atol=DEFAULT_CPU_GPU_TORQUE_ATOL_T,
+        failures=failures,
+        case=(case_label, f"repeat_index={repeat_index}", "relax_type=18/6"),
+    )
+    return failures
+
+
+def amg_relax_policy_qualification_summary(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    cpu_gpu_parity_gate_passed: bool,
+    pcg_symmetry_contract_passed: bool,
+    expected_problem_ir_by_solver_mesh_signature: Mapping[str, str],
+    expected_repeats: int = 5,
+    expected_case_count: int | None = None,
+) -> dict[str, object]:
+    """Evaluate AMG relax type 6 against the retained type 18 baseline."""
+    case_fields = (
+        "backend",
+        "solver_mesh_signature",
+        "scenario",
+        "relaxation_algorithm",
+        "step_profiler_enabled",
+    )
+    grouped: dict[
+        tuple[object, ...], dict[int, list[Mapping[str, object]]]
+    ] = {}
+    executed_problem_ir_by_matrix_identity: dict[
+        tuple[str, str], set[str]
+    ] = {}
+    failures: list[str] = []
+    exact_matrix_identity_ok = True
+    expected_policy = {
+        "demag_linear_solver": "CG",
+        "demag_preconditioner": "AMG",
+        "demag_amg_coarsening": 8,
+        "demag_amg_interpolation": 6,
+        "demag_amg_aggressive_coarsening": 1,
+        "demag_amg_strength_threshold": None,
+        "demag_amg_max_levels": None,
+        "demag_relative_tolerance": 1.0e-12,
+    }
+    for row in rows:
+        relax_type = as_int(row.get("demag_amg_relax_type"))
+        if relax_type not in (18, 6):
+            continue
+        signature = str(row.get("solver_mesh_signature") or "")
+        expected_fixture_problem_ir = expected_problem_ir_by_solver_mesh_signature.get(signature)
+        if expected_fixture_problem_ir is None:
+            failures.append(
+                f"solver_mesh_signature={signature!r} is not in the qualification fixture suite"
+            )
+            exact_matrix_identity_ok = False
+        elif (
+            row.get("qualification_fixture_problem_ir_sha256")
+            != expected_fixture_problem_ir
+        ):
+            failures.append(
+                f"solver_mesh_signature={signature},relax_type={relax_type} "
+                "qualification_fixture_problem_ir_sha256 differs from the fixture suite"
+            )
+            exact_matrix_identity_ok = False
+        executed_problem_ir = row.get("executed_problem_ir_sha256")
+        if (
+            not isinstance(executed_problem_ir, str)
+            or len(executed_problem_ir) != 64
+            or any(character not in "0123456789abcdef" for character in executed_problem_ir)
+        ):
+            failures.append(
+                f"solver_mesh_signature={signature},relax_type={relax_type} "
+                "has invalid executed_problem_ir_sha256"
+            )
+            exact_matrix_identity_ok = False
+        else:
+            matrix_identity = (
+                signature,
+                str(row.get("relaxation_algorithm") or ""),
+            )
+            executed_problem_ir_by_matrix_identity.setdefault(
+                matrix_identity,
+                set(),
+            ).add(executed_problem_ir)
+        for field, expected in expected_policy.items():
+            actual = row.get(field)
+            if expected is None and actual == "":
+                actual = None
+            elif field == "demag_relative_tolerance":
+                actual = as_float(actual)
+            elif field.startswith("demag_amg_") and expected is not None:
+                actual = as_int(actual)
+            if actual != expected:
+                failures.append(
+                    f"solver_mesh_signature={signature},relax_type={relax_type} "
+                    f"{field}={actual!r}; expected {expected!r}"
+                )
+                exact_matrix_identity_ok = False
+        key = tuple(
+            as_bool(row.get(field))
+            if field == "step_profiler_enabled"
+            else row.get(field)
+            for field in case_fields
+        )
+        grouped.setdefault(key, {}).setdefault(relax_type, []).append(row)
+
+    for matrix_identity, executed_problem_ir_hashes in sorted(
+        executed_problem_ir_by_matrix_identity.items()
+    ):
+        if len(executed_problem_ir_hashes) != 1:
+            signature, relaxation_algorithm = matrix_identity
+            failures.append(
+                "executed_problem_ir_sha256 differs across matrix cases for "
+                f"solver_mesh_signature={signature},"
+                f"relaxation_algorithm={relaxation_algorithm}: "
+                f"{sorted(executed_problem_ir_hashes)!r}"
+            )
+            exact_matrix_identity_ok = False
+
+    if not grouped:
+        failures.append("qualification contains no effective AMG relax type 18/6 rows")
+    if expected_case_count is not None and len(grouped) != expected_case_count:
+        failures.append(
+            f"qualification has {len(grouped)} cases; expected {expected_case_count}"
+        )
+
+    case_summaries: list[dict[str, object]] = []
+    end_to_end_p50_ratios: list[float] = []
+    p50_apply_ok = True
+    p50_end_to_end_ok = True
+    p95_end_to_end_ok = True
+    convergence_ok = True
+    trajectory_ok = True
+    physics_equivalence_ok = True
+    for key, policy_rows in sorted(grouped.items(), key=lambda item: repr(item[0])):
+        case = dict(zip(case_fields, key))
+        case_label = ",".join(f"{field}={value}" for field, value in case.items())
+        distributions: dict[int, dict[str, dict[str, float | int]]] = {}
+        rows_by_policy_and_repeat: dict[
+            int, dict[int, list[Mapping[str, object]]]
+        ] = {}
+        for relax_type in (18, 6):
+            selected = policy_rows.get(relax_type, [])
+            if len(selected) != expected_repeats:
+                failures.append(
+                    f"case={case_label},relax_type={relax_type} has {len(selected)} "
+                    f"measured repeats; expected {expected_repeats}"
+                )
+                convergence_ok = False
+                continue
+            indexed_rows: dict[int, list[Mapping[str, object]]] = {}
+            for row in selected:
+                repeat_index = as_int(row.get("repeat_index"))
+                if repeat_index is None or not 0 <= repeat_index < expected_repeats:
+                    failures.append(
+                        f"case={case_label},relax_type={relax_type} has invalid "
+                        f"repeat_index={row.get('repeat_index')!r}"
+                    )
+                    physics_equivalence_ok = False
+                    continue
+                indexed_rows.setdefault(repeat_index, []).append(row)
+            rows_by_policy_and_repeat[relax_type] = indexed_rows
+            for repeat_index in range(expected_repeats):
+                repeat_rows = indexed_rows.get(repeat_index, [])
+                if len(repeat_rows) != 1:
+                    failures.append(
+                        f"case={case_label},relax_type={relax_type},"
+                        f"repeat_index={repeat_index} has {len(repeat_rows)} rows; expected 1"
+                    )
+                    physics_equivalence_ok = False
+            apply_values: list[float] = []
+            wall_values: list[float] = []
+            for row in selected:
+                if row.get("status") != "ok":
+                    failures.append(
+                        f"case={case_label},relax_type={relax_type} has non-ok row"
+                    )
+                    convergence_ok = False
+                residual = as_float(row.get("demag_final_residual_norm"))
+                tolerance = as_float(
+                    first_present(
+                        row.get("demag_relative_tolerance"),
+                        row.get("requested_demag_relative_tolerance"),
+                    )
+                )
+                if (
+                    residual is None
+                    or tolerance is None
+                    or not math.isfinite(residual)
+                    or not math.isfinite(tolerance)
+                    or tolerance < 0.0
+                    or residual > tolerance
+                ):
+                    failures.append(
+                        f"case={case_label},relax_type={relax_type} does not satisfy "
+                        "the recorded demag residual tolerance"
+                    )
+                    convergence_ok = False
+                trajectory_valid, trajectory_failure = accepted_energy_trajectory_gate(
+                    row
+                )
+                if not trajectory_valid:
+                    failures.append(
+                        f"case={case_label},relax_type={relax_type} "
+                        f"{trajectory_failure}"
+                    )
+                    trajectory_ok = False
+                apply_ms = as_float(row.get("demag_solver_apply_wall_time_ms"))
+                wall_ms = as_float(row.get("wall_time_ms"))
+                if (
+                    apply_ms is None
+                    or wall_ms is None
+                    or not math.isfinite(apply_ms)
+                    or not math.isfinite(wall_ms)
+                    or apply_ms <= 0.0
+                    or wall_ms <= 0.0
+                ):
+                    failures.append(
+                        f"case={case_label},relax_type={relax_type} has invalid timing"
+                    )
+                    convergence_ok = False
+                    continue
+                apply_values.append(apply_ms)
+                wall_values.append(wall_ms)
+            if len(apply_values) == expected_repeats:
+                distributions[relax_type] = {
+                    "demag_solver_apply_wall_time_ms": summarize_distribution(
+                        apply_values
+                    ),
+                    "wall_time_ms": summarize_distribution(wall_values),
+                }
+
+        paired_repeat_count = 0
+        case_physics_equivalence_ok = True
+        for repeat_index in range(expected_repeats):
+            baseline_rows = rows_by_policy_and_repeat.get(18, {}).get(
+                repeat_index, []
+            )
+            candidate_rows = rows_by_policy_and_repeat.get(6, {}).get(
+                repeat_index, []
+            )
+            if len(baseline_rows) != 1 or len(candidate_rows) != 1:
+                case_physics_equivalence_ok = False
+                continue
+            pair_failures = amg_policy_physics_pair_failures(
+                baseline_rows[0],
+                candidate_rows[0],
+                case_label=case_label,
+                repeat_index=repeat_index,
+            )
+            if pair_failures:
+                failures.extend(pair_failures)
+                case_physics_equivalence_ok = False
+            else:
+                paired_repeat_count += 1
+        physics_equivalence_ok = (
+            physics_equivalence_ok and case_physics_equivalence_ok
+        )
+
+        case_summary: dict[str, object] = {
+            **case,
+            "policies": distributions,
+            "paired_repeat_count": paired_repeat_count,
+            "physics_equivalence_gate_passed": case_physics_equivalence_ok,
+        }
+        if 18 in distributions and 6 in distributions:
+            base_apply = float(
+                distributions[18]["demag_solver_apply_wall_time_ms"]["p50"]
+            )
+            candidate_apply = float(
+                distributions[6]["demag_solver_apply_wall_time_ms"]["p50"]
+            )
+            base_wall_p50 = float(distributions[18]["wall_time_ms"]["p50"])
+            candidate_wall_p50 = float(distributions[6]["wall_time_ms"]["p50"])
+            base_wall_p95 = float(distributions[18]["wall_time_ms"]["p95"])
+            candidate_wall_p95 = float(distributions[6]["wall_time_ms"]["p95"])
+            apply_ratio = candidate_apply / base_apply
+            wall_p50_ratio = candidate_wall_p50 / base_wall_p50
+            wall_p95_ratio = candidate_wall_p95 / base_wall_p95
+            case_summary.update(
+                {
+                    "p50_apply_ratio_6_over_18": apply_ratio,
+                    "p50_end_to_end_ratio_6_over_18": wall_p50_ratio,
+                    "p95_end_to_end_ratio_6_over_18": wall_p95_ratio,
+                }
+            )
+            end_to_end_p50_ratios.append(wall_p50_ratio)
+            p50_apply_ok = p50_apply_ok and apply_ratio <= 1.05
+            p50_end_to_end_ok = p50_end_to_end_ok and wall_p50_ratio <= 1.05
+            p95_end_to_end_ok = p95_end_to_end_ok and wall_p95_ratio <= 1.05
+        case_summaries.append(case_summary)
+
+    geometric_mean_ratio = (
+        math.exp(
+            sum(math.log(ratio) for ratio in end_to_end_p50_ratios)
+            / len(end_to_end_p50_ratios)
+        )
+        if end_to_end_p50_ratios
+        else None
+    )
+    geomean_improvement_ok = (
+        geometric_mean_ratio is not None and geometric_mean_ratio <= 0.95
+    )
+    if not cpu_gpu_parity_gate_passed:
+        failures.append("CPU/GPU parity gate did not pass")
+    if not pcg_symmetry_contract_passed:
+        failures.append("PCG symmetry contract did not pass")
+    if not p50_apply_ok:
+        failures.append("AMG apply p50 regressed by more than 5%")
+    if not p50_end_to_end_ok:
+        failures.append("end-to-end p50 regressed by more than 5%")
+    if not p95_end_to_end_ok:
+        failures.append("end-to-end p95 regressed by more than 5%")
+    if not geomean_improvement_ok:
+        failures.append("end-to-end p50 geometric-mean improvement is below 5%")
+
+    complete_distributions = len(end_to_end_p50_ratios) == len(grouped) and bool(grouped)
+    promotion_eligible = all(
+        (
+            not failures,
+            complete_distributions,
+            convergence_ok,
+            trajectory_ok,
+            physics_equivalence_ok,
+            exact_matrix_identity_ok,
+            cpu_gpu_parity_gate_passed,
+            pcg_symmetry_contract_passed,
+            p50_apply_ok,
+            p50_end_to_end_ok,
+            p95_end_to_end_ok,
+            geomean_improvement_ok,
+        )
+    )
+    return {
+        "schema": "fullmag.fem.demag_amg_relax_qualification.v1",
+        "baseline_relax_type": 18,
+        "candidate_relax_type": 6,
+        "case_count": len(grouped),
+        "expected_repeats": expected_repeats,
+        "complete_distributions": complete_distributions,
+        "convergence_gate_passed": convergence_ok,
+        "trajectory_gate_passed": trajectory_ok,
+        "physics_equivalence_gate_passed": physics_equivalence_ok,
+        "exact_matrix_identity_gate_passed": exact_matrix_identity_ok,
+        "cpu_gpu_parity_gate_passed": cpu_gpu_parity_gate_passed,
+        "pcg_symmetry_contract_passed": pcg_symmetry_contract_passed,
+        "p50_apply_no_regression": p50_apply_ok,
+        "p50_end_to_end_no_regression": p50_end_to_end_ok,
+        "p95_end_to_end_no_regression": p95_end_to_end_ok,
+        "geometric_mean_end_to_end_improvement_percent": (
+            None
+            if geometric_mean_ratio is None
+            else (1.0 - geometric_mean_ratio) * 100.0
+        ),
+        "geometric_mean_improvement_gate_passed": geomean_improvement_ok,
+        "promotion_eligible": promotion_eligible,
+        "failures": failures,
+        "cases": case_summaries,
+    }
+
+
+def write_amg_relax_policy_qualification(
+    input_paths: Sequence[Path],
+    output_path: Path,
+    *,
+    cpu_gpu_parity_gate_passed: bool,
+    pcg_symmetry_contract_passed: bool,
+    fixture_suite_path: Path,
+    expected_case_count: int = 24,
+) -> dict[str, object]:
+    rows = [
+        row
+        for input_path in input_paths
+        for row in load_csv_results(input_path)
+    ]
+    fixtures = load_amg_qualification_fixture_suite(fixture_suite_path)
+    summary = amg_relax_policy_qualification_summary(
+        rows,
+        cpu_gpu_parity_gate_passed=cpu_gpu_parity_gate_passed,
+        pcg_symmetry_contract_passed=pcg_symmetry_contract_passed,
+        expected_problem_ir_by_solver_mesh_signature={
+            str(fixture["solver_mesh_signature"]): str(fixture["problem_ir_sha256"])
+            for fixture in fixtures
+        },
+        expected_case_count=expected_case_count,
+    )
+    summary["input_paths"] = [str(path) for path in input_paths]
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    print(f"AMG_RELAX_QUALIFICATION={json.dumps(summary, sort_keys=True)}", flush=True)
+    return summary
 
 
 def load_fixture_manifest(
@@ -360,6 +2571,65 @@ def load_fixture_manifest(
         demag_policy=dict(payload["demag_policy"]),
         stop_condition=dict(payload["stop_condition"]),
     )
+
+
+def load_amg_qualification_fixture_suite(path: Path) -> list[dict[str, object]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("schema") != PERFORMANCE_FIXTURE_SUITE_SCHEMA:
+        raise ValueError("unsupported FEM AMG qualification fixture suite schema")
+    fixtures = payload.get("fixtures")
+    if not isinstance(fixtures, list) or len(fixtures) != 3:
+        raise ValueError("FEM AMG qualification fixture suite requires three fixtures")
+    if [fixture.get("resolution") for fixture in fixtures] != [
+        "coarse",
+        "medium",
+        "fine",
+    ]:
+        raise ValueError("FEM AMG qualification fixture suite resolutions must be exact")
+    resolved: list[dict[str, object]] = []
+    for fixture in fixtures:
+        runtime_signature = fixture.get("solver_mesh_signature")
+        if (
+            not isinstance(runtime_signature, str)
+            or len(runtime_signature) != 64
+            or any(character not in "0123456789abcdef" for character in runtime_signature)
+        ):
+            raise ValueError(
+                "FEM AMG qualification runtime solver mesh signature must contain "
+                "64 lowercase hexadecimal characters"
+            )
+        mesh_path = path.parent / str(fixture.get("solver_mesh_path"))
+        mesh_bytes = mesh_path.read_bytes()
+        if hashlib.sha256(mesh_bytes).hexdigest() != fixture.get("solver_mesh_sha256"):
+            raise ValueError(
+                f"FEM AMG qualification mesh sha256 mismatch: {mesh_path}"
+            )
+        mesh = json.loads(mesh_bytes)
+        if len(mesh.get("nodes", [])) != fixture.get("node_count") or len(
+            mesh.get("elements", [])
+        ) != fixture.get("element_count"):
+            raise ValueError(
+                f"FEM AMG qualification mesh size mismatch: {mesh_path}"
+            )
+        resolved.append({**fixture, "solver_mesh_path": str(mesh_path)})
+    return resolved
+
+
+def print_amg_qualification_fixture_suite(path: Path) -> None:
+    for fixture in load_amg_qualification_fixture_suite(path):
+        print(
+            "\t".join(
+                str(fixture[field])
+                for field in (
+                    "resolution",
+                    "solver_mesh_path",
+                    "domain_hmax_m",
+                    "airbox_hmax_m",
+                    "solver_mesh_signature",
+                    "problem_ir_sha256",
+                )
+            )
+        )
 
 
 def verify_fixture_row(
@@ -1164,7 +3434,7 @@ def observe_current_gpu_identity(
         raise ValueError("GPU identity index must be a non-negative integer")
     command = [
         "nvidia-smi",
-        "--query-gpu=name,compute_cap",
+        "--query-gpu=uuid,name,compute_cap",
         "--format=csv,noheader",
     ]
     try:
@@ -1191,11 +3461,11 @@ def observe_current_gpu_identity(
             f"gpu_index={gpu_index} observed_device_count={len(lines)}"
         )
     fields = [field.strip() for field in lines[gpu_index].split(",")]
-    if len(fields) != 2 or not fields[0]:
+    if len(fields) != 3 or not fields[0] or not fields[1]:
         raise ValueError(
             f"current GPU identity is malformed for gpu_index={gpu_index}"
         )
-    compute_capability_parts = fields[1].split(".")
+    compute_capability_parts = fields[2].split(".")
     if (
         len(compute_capability_parts) != 2
         or not all(part.isdigit() for part in compute_capability_parts)
@@ -1204,8 +3474,9 @@ def observe_current_gpu_identity(
             f"current GPU identity has malformed compute capability for gpu_index={gpu_index}"
         )
     return {
-        "device_name": fields[0],
-        "compute_capability": fields[1],
+        "device_uuid": fields[0],
+        "device_name": fields[1],
+        "compute_capability": fields[2],
         "gpu_index": gpu_index,
     }
 
@@ -1214,6 +3485,7 @@ def attach_observed_gpu_identity(
     row: dict[str, object],
     observed_gpu_identity: Mapping[str, object],
 ) -> None:
+    row["device_uuid"] = observed_gpu_identity["device_uuid"]
     row["device_name"] = observed_gpu_identity["device_name"]
     row["compute_capability"] = observed_gpu_identity["compute_capability"]
     row["observed_gpu_index"] = observed_gpu_identity["gpu_index"]
@@ -1529,6 +3801,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Fixed timestep in seconds",
     )
     parser.add_argument(
+        "--airbox-extent-scale",
+        type=positive_float_arg,
+        default=None,
+        help=(
+            "Benchmark-only multiplier for the box500 shared-domain airbox size; "
+            "recorded in every row and canonical ProblemIR"
+        ),
+    )
+    parser.add_argument(
         "--repeat",
         type=int,
         default=1,
@@ -1592,6 +3873,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=str,
         default="llg_overdamped",
         help="Comma-separated relaxation algorithms for relaxation scenarios: llg_overdamped, projected_gradient_bb, nonlinear_cg",
+    )
+    parser.add_argument(
+        "--relaxation-preconditioner-strategies",
+        type=str,
+        default="none",
+        help=(
+            "Comma-separated resolved FEM GPU nonlinear-CG preconditioner strategies: "
+            + ", ".join(RELAXATION_PRECONDITIONER_STRATEGIES)
+        ),
     )
     parser.add_argument(
         "--timestep-policies",
@@ -1795,6 +4085,109 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Optional JSON output path for paired FEM CPU/GPU consistency and timing summary",
     )
     parser.add_argument(
+        "--amg-relax-qualification-inputs",
+        type=str,
+        default=None,
+        help="Comma-separated benchmark CSVs to evaluate for AMG relax 6 promotion",
+    )
+    parser.add_argument(
+        "--gpu-host-thread-qualification-inputs",
+        type=str,
+        default=None,
+        help="Comma-separated benchmark CSVs containing the exact Task 12 host-thread matrix",
+    )
+    parser.add_argument(
+        "--gpu-host-thread-qualification-run",
+        action="store_true",
+        help="Pin current GPU identity into every Task 12 host-thread benchmark row",
+    )
+    parser.add_argument(
+        "--gpu-host-thread-qualification-output",
+        type=Path,
+        default=None,
+        help="Output JSON for --gpu-host-thread-qualification-inputs",
+    )
+    parser.add_argument(
+        "--relaxation-preconditioner-qualification-input",
+        type=Path,
+        default=None,
+        help="Benchmark CSV containing the exact Task 11 five-strategy qualification matrix",
+    )
+    parser.add_argument(
+        "--relaxation-preconditioner-qualification-output",
+        type=Path,
+        default=None,
+        help="Output JSON for --relaxation-preconditioner-qualification-input",
+    )
+    parser.add_argument(
+        "--relaxation-preconditioner-cpu-gpu-parity-input",
+        type=Path,
+        default=None,
+        help=(
+            "Separate six-row CPU/GPU none-baseline CSV with final magnetization, "
+            "energy, stop-state, runtime, and mesh identity evidence"
+        ),
+    )
+    parser.add_argument(
+        "--capture-final-magnetization",
+        action="store_true",
+        help=(
+            "Capture m_final.json values in each benchmark row for explicit "
+            "CPU/GPU field parity qualification"
+        ),
+    )
+    parser.add_argument(
+        "--task11-relaxation-preconditioner-cpu-gpu-parity-sweep",
+        action="store_true",
+        help=(
+            "Enforce the exact three-resolution Task 11 CPU/GPU none-baseline "
+            "parity workload and mesh-generation policy"
+        ),
+    )
+    parser.add_argument(
+        "--task11-qualification-fixture-suite",
+        type=Path,
+        default=None,
+        help=(
+            "Immutable three-resolution mesh suite used to pin Task 11 mesh and "
+            "ProblemIR identity"
+        ),
+    )
+    parser.add_argument(
+        "--task11-qualification-environment",
+        type=Path,
+        default=None,
+        help="Accepted environment used to pin the Task 11 GPU UUID/name/compute capability",
+    )
+    parser.add_argument(
+        "--list-amg-qualification-fixture-suite",
+        type=Path,
+        default=None,
+        help="Validate an AMG qualification fixture suite, print TSV rows, and exit",
+    )
+    parser.add_argument(
+        "--amg-relax-qualification-output",
+        type=Path,
+        default=None,
+        help="Output JSON for --amg-relax-qualification-inputs",
+    )
+    parser.add_argument(
+        "--amg-relax-qualification-fixture-suite",
+        type=Path,
+        default=None,
+        help="Fixture suite that defines exact mesh and ProblemIR identity for AMG qualification",
+    )
+    parser.add_argument(
+        "--amg-relax-cpu-gpu-parity-passed",
+        action="store_true",
+        help="Record that every input sweep passed its CPU/GPU parity gate",
+    )
+    parser.add_argument(
+        "--amg-relax-pcg-symmetry-passed",
+        action="store_true",
+        help="Record that the managed PCG symmetry contract passed",
+    )
+    parser.add_argument(
         "--task8-qualification-identity",
         type=Path,
         default=None,
@@ -1989,9 +4382,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Fail if repeated rows for the same logical case produce different solver mesh signatures",
     )
     parser.add_argument(
+        "--expected-solver-mesh-signature",
+        type=str,
+        default=None,
+        help="Fail if any completed row differs from this fixture solver mesh signature",
+    )
+    parser.add_argument(
+        "--qualification-fixture-problem-ir-sha256",
+        type=str,
+        default=None,
+        help="Record the immutable fixture ProblemIR SHA-256 beside each qualification row",
+    )
+    parser.add_argument(
         "--gpu-warmup",
         action="store_true",
-        help="Run one unrecorded FEM GPU case before measured rows to remove CUDA/Hypre cold-start from policy timing",
+        help="Run one unrecorded FEM GPU case per requested thread count before measured rows",
+    )
+    parser.add_argument(
+        "--ui-surface",
+        choices=GPU_HOST_THREAD_QUALIFICATION_UI_SURFACES,
+        default="headless",
+        help="Run through the headless CLI or the embedded interactive control-room surface",
     )
     parser.add_argument(
         "--reuse-generated-domain-mesh",
@@ -2191,6 +4602,7 @@ def box500_airbox_interaction_manifest(
     max_step_delta: int,
     relax_torque_tolerance_apm: float | None = None,
     relax_torque_tolerance_t: float | None = None,
+    airbox_extent_scale: float | None = None,
 ) -> dict[str, object]:
     contract = interaction_contract_for_scenario(scenario)
     if contract is None:
@@ -2209,12 +4621,20 @@ def box500_airbox_interaction_manifest(
         relaxation["torque_tolerance_apm"] = relax_torque_tolerance_apm
     if relax_torque_tolerance_t is not None:
         relaxation["torque_tolerance_t"] = relax_torque_tolerance_t
-    return {
+    if airbox_extent_scale is not None and (
+        not math.isfinite(airbox_extent_scale) or airbox_extent_scale <= 0.0
+    ):
+        raise ValueError("airbox_extent_scale must be finite and positive")
+    resolved_airbox_extent_scale = airbox_extent_scale or 1.0
+    manifest: dict[str, object] = {
         "case_id": scenario,
         "relaxation_algorithm": relaxation_algorithm,
         "required_backends": required_backends_for_relaxation_algorithm(relaxation_algorithm),
         "magnet_size_m": BOX500_AIRBOX_BODY_SIZE_M,
-        "airbox_size_m": BOX500_AIRBOX_SIZE_M,
+        "airbox_size_m": [
+            component * resolved_airbox_extent_scale
+            for component in BOX500_AIRBOX_SIZE_M
+        ],
         "initial_magnetization": initial_magnetization,
         "interactions": interactions,
         "demag_enabled": "demag" in interactions,
@@ -2229,6 +4649,9 @@ def box500_airbox_interaction_manifest(
             "max_step_delta": max_step_delta,
         },
     }
+    if airbox_extent_scale is not None:
+        manifest["qualification_airbox_extent_scale"] = airbox_extent_scale
+    return manifest
 
 
 def box500_airbox_exchange_manifest(
@@ -2244,6 +4667,7 @@ def box500_airbox_exchange_manifest(
     max_step_delta: int,
     relax_torque_tolerance_apm: float | None = None,
     relax_torque_tolerance_t: float | None = None,
+    airbox_extent_scale: float | None = None,
 ) -> dict[str, object]:
     return box500_airbox_interaction_manifest(
         BOX500_AIRBOX_SCENARIO,
@@ -2258,6 +4682,7 @@ def box500_airbox_exchange_manifest(
         max_step_delta=max_step_delta,
         relax_torque_tolerance_apm=relax_torque_tolerance_apm,
         relax_torque_tolerance_t=relax_torque_tolerance_t,
+        airbox_extent_scale=airbox_extent_scale,
     )
 
 
@@ -2275,6 +4700,7 @@ def cpu_gpu_case_manifests(
     relaxation_algorithms: list[str] | None = None,
     relax_torque_tolerance_apm: float | None = None,
     relax_torque_tolerance_t: float | None = None,
+    airbox_extent_scale: float | None = None,
 ) -> list[dict[str, object]]:
     manifests: list[dict[str, object]] = []
     explicit_relaxation_algorithms = relaxation_algorithms is not None
@@ -2299,6 +4725,7 @@ def cpu_gpu_case_manifests(
                 max_step_delta=max_step_delta,
                 relax_torque_tolerance_apm=relax_torque_tolerance_apm,
                 relax_torque_tolerance_t=relax_torque_tolerance_t,
+                airbox_extent_scale=airbox_extent_scale,
             )
             if not explicit_relaxation_algorithms:
                 manifest["relaxation_algorithm"] = None
@@ -2310,7 +4737,12 @@ def cpu_gpu_case_manifests(
 def benchmark_mesh_env(args: argparse.Namespace) -> dict[str, str]:
     env = {
         key: value
-        for key in ("FULLMAG_BENCH_DOMAIN_HMAX", "FULLMAG_BENCH_AIRBOX_HMAX")
+        for key in (
+            "FULLMAG_BENCH_DOMAIN_HMAX",
+            "FULLMAG_BENCH_AIRBOX_HMAX",
+            "FULLMAG_BENCH_DOMAIN_MESH",
+            "FULLMAG_BENCH_AIRBOX_EXTENT_SCALE",
+        )
         if (value := os.environ.get(key))
     }
     if args.gmsh_threads is not None:
@@ -2635,6 +5067,26 @@ def resolve_relaxation_algorithms(algorithms_arg: str) -> list[str]:
     return list(dict.fromkeys(algorithms))
 
 
+def resolve_relaxation_preconditioner_strategies(strategies_arg: str) -> list[str]:
+    strategies = [
+        part.strip().lower()
+        for part in strategies_arg.split(",")
+        if part.strip()
+    ]
+    if not strategies:
+        raise ValueError("at least one relaxation preconditioner strategy is required")
+    unsupported = sorted(
+        set(strategies) - set(RELAXATION_PRECONDITIONER_STRATEGIES)
+    )
+    if unsupported:
+        raise ValueError(
+            "unsupported FEM GPU relaxation preconditioner strategy(s): "
+            f"{', '.join(unsupported)}; supported: "
+            f"{', '.join(RELAXATION_PRECONDITIONER_STRATEGIES)}"
+        )
+    return list(dict.fromkeys(strategies))
+
+
 def resolve_timestep_policies(policies_arg: str) -> list[str]:
     policies = [part.strip().lower() for part in policies_arg.split(",") if part.strip()]
     if not policies:
@@ -2671,11 +5123,20 @@ def resolve_backends(backends_arg: str) -> list[str]:
     return resolved
 
 
+def qualification_mesh_size(mesh_path: Path) -> str | None:
+    resolved = mesh_path.resolve()
+    for size in RELAXATION_PRECONDITIONER_QUALIFICATION_MESHES:
+        if PRESET_MESHES[size].resolve() == resolved:
+            return size
+    return None
+
+
 def load_mesh_stats(mesh_path: Path) -> dict[str, object]:
     payload = json.loads(mesh_path.read_text(encoding="utf-8"))
     return {
         "mesh_name": payload.get("mesh_name", mesh_path.stem),
         "mesh_path": str(mesh_path),
+        "mesh_size": qualification_mesh_size(mesh_path),
         "node_count": len(payload.get("nodes", [])),
         "element_count": len(payload.get("elements", [])),
         "boundary_face_count": len(payload.get("boundary_faces", [])),
@@ -3285,15 +5746,18 @@ def load_authoritative_benchmark_payload(run_dir: str | Path) -> dict[str, objec
         with step_files[-1].open(newline="", encoding="utf-8") as handle:
             step_rows = list(csv.DictReader(handle))
         if step_rows:
+            payload["accepted_steps"] = len(step_rows)
             payload["rhs_evals"] = as_int(step_rows[-1].get("rhs_evals"))
             for source, target in (
                 ("rhs_evals", "total_rhs_evals"),
-                ("demag_solves", "demag_solves"),
+                ("demag_solves", "cumulative_demag_solves"),
                 ("rejected_attempts", "rejected_attempts"),
             ):
                 values = [as_int(row.get(source)) for row in step_rows]
                 if all(value is not None for value in values):
                     payload[target] = sum(value for value in values if value is not None)
+            if "cumulative_demag_solves" in payload:
+                payload["demag_solves"] = payload["cumulative_demag_solves"]
             accepted_row = step_rows[-1]
             proof_available_raw = accepted_row.get(
                 "accepted_energy_proof_available"
@@ -3389,6 +5853,97 @@ def load_authoritative_benchmark_payload(run_dir: str | Path) -> dict[str, objec
     return payload
 
 
+def load_final_magnetization_evidence(run_dir: str | Path) -> dict[str, object]:
+    path = Path(run_dir) / "m_final.json"
+    try:
+        raw = path.read_bytes()
+        payload = json.loads(raw)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, Mapping):
+        return {}
+    step = payload.get("step")
+    if (
+        payload.get("observable") != "m"
+        or payload.get("unit") != "1"
+        or type(step) is not int
+        or step < 0
+    ):
+        return {}
+    values = task11_final_magnetization_values(
+        {"final_magnetization_values_json": payload.get("values")}
+    )
+    if values is None:
+        return {}
+    return {
+        "final_magnetization_observable": "m",
+        "final_magnetization_unit": "1",
+        "final_magnetization_step": step,
+        "final_magnetization_node_count": len(values),
+        "final_magnetization_sha256": task11_final_magnetization_content_sha256(
+            observable="m",
+            unit="1",
+            step=step,
+            values=values,
+        ),
+        "final_magnetization_artifact_sha256": hashlib.sha256(raw).hexdigest(),
+        "final_magnetization_values_json": json.dumps(
+            values,
+            separators=(",", ":"),
+        ),
+    }
+
+
+def task11_cumulative_relaxation_evidence(
+    payload: Mapping[str, object],
+) -> dict[str, object]:
+    preconditioner_ms = as_float(
+        payload.get("cumulative_preconditioner_wall_time_ms")
+    )
+    if preconditioner_ms is None:
+        preconditioner_ms = ns_to_ms(
+            payload.get("cumulative_preconditioner_wall_time_ns")
+        )
+    hypre_ms = as_float(payload.get("cumulative_hypre_wall_time_ms"))
+    if hypre_ms is None:
+        hypre_ms = ns_to_ms(payload.get("cumulative_hypre_wall_time_ns"))
+    return {
+        "accepted_steps": as_int(payload.get("accepted_steps")),
+        "cumulative_armijo_trials": as_int(
+            payload.get("cumulative_armijo_trials")
+        ),
+        "cumulative_demag_solves": as_int(
+            payload.get("cumulative_demag_solves")
+        ),
+        "cumulative_preconditioner_wall_time_ms": preconditioner_ms,
+        "cumulative_hypre_wall_time_ms": hypre_ms,
+        "relaxation_preconditioner_apply_count": as_int(
+            payload.get("relaxation_preconditioner_apply_count")
+        ),
+    }
+
+
+def task12_exact_runtime_evidence(
+    payload: Mapping[str, object],
+) -> dict[str, object]:
+    evidence: dict[str, object] = {}
+    for field in (
+        "cumulative_step_interval_wall_time",
+        "cumulative_native_solver_wall_time",
+        "cumulative_publisher_replace_wall_time",
+        "cumulative_publish_lag_wall_time",
+        "cumulative_artifact_enqueue_block_wall_time",
+    ):
+        value_ms = as_float(payload.get(f"{field}_ms"))
+        if value_ms is None:
+            value_ms = ns_to_ms(payload.get(f"{field}_ns"))
+        evidence[f"{field}_ms"] = value_ms
+    evidence["artifact_queue_depth_max"] = as_int(
+        payload.get("artifact_queue_depth_max")
+    )
+    return evidence
+
+
 def load_final_scalar_row_from_payload(payload: Mapping[str, object] | None) -> dict[str, object]:
     if payload is None:
         return {}
@@ -3476,6 +6031,9 @@ def generated_domain_mesh_env(
     extra_env: dict[str, str],
     timeout_s: float | None,
 ) -> dict[str, str]:
+    explicit_domain_mesh = extra_env.get("FULLMAG_BENCH_DOMAIN_MESH")
+    if explicit_domain_mesh:
+        return {"FULLMAG_BENCH_DOMAIN_MESH": explicit_domain_mesh}
     if cache_dir is None or not benchmark_scenario_requires_shared_domain(scenario):
         return {}
     key = (
@@ -3483,6 +6041,7 @@ def generated_domain_mesh_env(
         scenario,
         extra_env.get("FULLMAG_BENCH_DOMAIN_HMAX", ""),
         extra_env.get("FULLMAG_BENCH_AIRBOX_HMAX", ""),
+        extra_env.get("FULLMAG_BENCH_AIRBOX_EXTENT_SCALE", ""),
     )
     cached = cache.get(key)
     if cached is None:
@@ -3550,6 +6109,20 @@ def canonical_problem_ir(
             timestep_policy=timestep_policy,
         )
         problem_ir = problem.to_ir(include_geometry_assets=True)
+        geometry_assets = problem_ir.get("geometry_assets")
+        if not isinstance(geometry_assets, dict):
+            raise ValueError("canonical ProblemIR is missing geometry_assets")
+        domain_asset = geometry_assets.get("fem_domain_mesh_asset")
+        if not isinstance(domain_asset, dict):
+            raise ValueError("canonical ProblemIR is missing fem_domain_mesh_asset")
+        resolved_domain_mesh_path = (
+            domain_mesh_path
+            if domain_mesh_path.is_absolute()
+            else REPO_ROOT / domain_mesh_path
+        )
+        domain_asset["mesh"] = json.loads(
+            resolved_domain_mesh_path.read_text(encoding="utf-8")
+        )
     finally:
         os.environ.clear()
         os.environ.update(previous_environment)
@@ -3593,6 +6166,105 @@ def canonical_problem_ir_sha256(**kwargs: object) -> str:
     ).hexdigest()
 
 
+def load_task11_qualification_identity(
+    *,
+    fixture_suite_path: Path,
+    environment_path: Path,
+    runtime_root: Path = MANAGED_FEM_RUNTIME_ROOT,
+) -> dict[str, object]:
+    fixture_suite_sha256 = hashlib.sha256(fixture_suite_path.read_bytes()).hexdigest()
+    if fixture_suite_sha256 != TASK11_QUALIFICATION_FIXTURE_SUITE_SHA256:
+        raise ValueError(
+            "Task 11 fixture suite SHA-256 differs from the immutable qualification identity"
+        )
+    environment_sha256 = hashlib.sha256(environment_path.read_bytes()).hexdigest()
+    if environment_sha256 != TASK11_QUALIFICATION_ENVIRONMENT_SHA256:
+        raise ValueError(
+            "Task 11 environment SHA-256 differs from the immutable qualification identity"
+        )
+    fixtures = load_amg_qualification_fixture_suite(fixture_suite_path)
+    environment = json.loads(environment_path.read_text(encoding="utf-8"))
+    expected_gpu = environment.get("gpu")
+    if not isinstance(expected_gpu, Mapping):
+        raise ValueError("Task 11 environment is missing GPU identity")
+    gpu_identity = {
+        "device_uuid": str(expected_gpu.get("uuid") or ""),
+        "device_name": str(expected_gpu.get("name") or ""),
+        "compute_capability": str(expected_gpu.get("compute_capability") or ""),
+    }
+    if any(not value for value in gpu_identity.values()):
+        raise ValueError("Task 11 environment has incomplete GPU identity")
+
+    fixture_identities: list[dict[str, object]] = []
+    for fixture in fixtures:
+        resolution = str(fixture["resolution"])
+        extra_env = {
+            "FULLMAG_BENCH_DOMAIN_HMAX": repr(float(fixture["domain_hmax_m"])),
+            "FULLMAG_BENCH_AIRBOX_HMAX": repr(float(fixture["airbox_hmax_m"])),
+            "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE": "8000.0",
+            "FULLMAG_BENCH_DEMAG_SOLVER": "CG",
+            "FULLMAG_BENCH_DEMAG_PRECONDITIONER": "AMG",
+            "FULLMAG_BENCH_DEMAG_RTOL": "1e-12",
+            "FULLMAG_BENCH_DEMAG_MAX_ITERATIONS": "500",
+            "FULLMAG_BENCH_DEMAG_PRINT_LEVEL": "0",
+            "FULLMAG_FEM_DEMAG_AMG_RELAX_TYPE": "6",
+            "FULLMAG_FEM_DEMAG_AMG_COARSENING": str(
+                DEFAULT_DEMAG_AMG_COARSENING
+            ),
+            "FULLMAG_FEM_DEMAG_AMG_INTERPOLATION": str(
+                DEFAULT_DEMAG_AMG_INTERPOLATION
+            ),
+            "FULLMAG_FEM_DEMAG_AMG_AGGRESSIVE_COARSENING": str(
+                DEFAULT_DEMAG_AMG_AGGRESSIVE_COARSENING
+            ),
+        }
+        problem_ir = canonical_problem_ir(
+            mesh_path=PRESET_MESHES[resolution],
+            domain_mesh_path=Path(str(fixture["solver_mesh_path"])),
+            scenario="box500_airbox_exchange_demag",
+            integrator="heun",
+            relaxation_algorithm="nonlinear_cg",
+            steps=64,
+            dt=1e-13,
+            timestep_policy="fixed",
+            extra_env=extra_env,
+        )
+        fixture_identities.append(
+            {
+                "resolution": resolution,
+                "solver_mesh_sha256": fixture["solver_mesh_sha256"],
+                "solver_mesh_signature": fixture["solver_mesh_signature"],
+                "executed_problem_ir_sha256": hashlib.sha256(
+                    canonical_problem_ir_bytes(problem_ir)
+                ).hexdigest(),
+                "node_count": fixture["node_count"],
+                "element_count": fixture["element_count"],
+            }
+        )
+    return {
+        "schema": TASK11_QUALIFICATION_IDENTITY_SCHEMA,
+        "fixture_suite_sha256": fixture_suite_sha256,
+        "environment_sha256": environment_sha256,
+        "runtime_identity": runtime_bundle_identity(runtime_root),
+        "gpu_identity": gpu_identity,
+        "workload": {
+            "scenario": "box500_airbox_exchange_demag",
+            "integrator": "heun",
+            "timestep_policy": "fixed",
+            "dt_s": 1e-13,
+            "steps": 64,
+            "relaxation_algorithm": "nonlinear_cg",
+            "precision": "double",
+            "torque_tolerance_apm": 8000.0,
+            "demag_solver": "CG",
+            "demag_preconditioner": "AMG",
+            "demag_relative_tolerance": 1e-12,
+            "demag_amg_relax_type": 6,
+        },
+        "fixtures": fixture_identities,
+    }
+
+
 def problem_ir_execution_command(
     *,
     binary: Path,
@@ -3611,17 +6283,32 @@ def problem_ir_execution_command(
     ]
 
 
-def script_execution_command(binary: Path, run_dir: Path) -> list[str]:
-    return [
+def script_execution_command(
+    binary: Path, run_dir: Path, ui_surface: str = "headless"
+) -> list[str]:
+    command = [
         str(binary),
         str(BENCH_SCRIPT),
-        "--headless",
         "--json",
         "--output-dir",
         str(run_dir),
         "--workspace-root",
         str(run_dir / "workspace-history"),
     ]
+    if ui_surface == "headless":
+        command.insert(2, "--headless")
+    elif ui_surface != "interactive":
+        raise ValueError(f"unsupported benchmark UI surface: {ui_surface}")
+    return command
+
+
+def read_executed_problem_ir_identity(path: Path) -> str:
+    if not path.is_file():
+        raise ValueError(f"missing executed ProblemIR identity sidecar: {path}")
+    contents = path.read_text(encoding="ascii")
+    if re.fullmatch(r"[0-9a-f]{64}\n", contents) is None:
+        raise ValueError(f"malformed executed ProblemIR identity sidecar: {path}")
+    return contents[:-1]
 
 
 def parse_script_run_summary(output: str) -> Mapping[str, object] | None:
@@ -3714,6 +6401,7 @@ def write_performance_fixture_files(
             timestep_policy="fixed",
             thread_spec=ThreadCountSpec(label="auto", env_value="auto"),
             timeout_s=args.case_timeout_s,
+            ui_surface=args.ui_surface,
             extra_env={
                 "FULLMAG_FEM_EXECUTION": "cpu",
                 "FULLMAG_BENCH_DOMAIN_MESH": str(mesh_path),
@@ -3811,6 +6499,9 @@ def run_backend(
     problem_ir: Mapping[str, object] | None = None,
     qualification_case_manifest: Mapping[str, object] | None = None,
     observed_gpu_identity: Mapping[str, object] | None = None,
+    capture_final_magnetization: bool = False,
+    require_reported_execution_identity: bool = False,
+    ui_surface: str = "headless",
 ) -> dict[str, object]:
     row = {
         "backend": backend_label,
@@ -3823,6 +6514,7 @@ def run_backend(
         "dt_s": dt,
         "requested_cpu_thread_spec": thread_spec.label,
         "case_timeout_s": timeout_s,
+        "ui_surface": ui_surface,
         **runtime_bundle_identity(MANAGED_FEM_RUNTIME_ROOT),
         **load_mesh_stats(mesh_path),
     }
@@ -3843,6 +6535,9 @@ def run_backend(
         )
     env = os.environ.copy()
     env.update(extra_env)
+    row["step_profiler_enabled"] = env_flag_enabled(
+        env_text(env, "FULLMAG_FEM_STEP_PROFILE")
+    )
     if backend_label != "fem_gpu":
         env.pop("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC", None)
         env.pop("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_HOST_SYNC", None)
@@ -3913,6 +6608,21 @@ def run_backend(
             "benchmark_only_torque_target_apm"
         ]
     row["requested_relaxation_algorithm"] = relaxation_algorithm
+    row["requested_relaxation_preconditioner_strategy"] = env_text(
+        env,
+        "FULLMAG_FEM_GPU_RELAXATION_PRECONDITIONER_STRATEGY",
+    ) or "none"
+    airbox_extent_scale = env_text(env, "FULLMAG_BENCH_AIRBOX_EXTENT_SCALE")
+    if airbox_extent_scale is not None:
+        scale = float(airbox_extent_scale)
+        row.update(
+            {
+                "qualification_airbox_extent_scale": scale,
+                "qualification_airbox_size_x_m": BOX500_AIRBOX_SIZE_M[0] * scale,
+                "qualification_airbox_size_y_m": BOX500_AIRBOX_SIZE_M[1] * scale,
+                "qualification_airbox_size_z_m": BOX500_AIRBOX_SIZE_M[2] * scale,
+            }
+        )
     if (
         backend_label == "fem_gpu"
         and requires_phase2_compute_hot_loop_gate(scenario)
@@ -3961,24 +6671,59 @@ def run_backend(
     env["FULLMAG_BENCH_TIMESTEP_POLICY"] = timestep_policy
     env["FULLMAG_BENCH_STEPS"] = str(steps)
     env["FULLMAG_BENCH_DT"] = repr(dt)
+    solver_mesh_path = env.get("FULLMAG_BENCH_DOMAIN_MESH")
+    if solver_mesh_path:
+        try:
+            row["solver_mesh_sha256"] = hashlib.sha256(
+                Path(solver_mesh_path).read_bytes()
+            ).hexdigest()
+        except OSError:
+            pass
 
     with tempfile.TemporaryDirectory(prefix=f"fullmag_{backend_label.lower()}_bench_") as run_dir:
-        env["FULLMAG_RUN_DIR"] = run_dir
-        command = script_execution_command(binary, Path(run_dir))
+        case_dir = Path(run_dir)
+        execution_dir = (
+            case_dir / "simulation-output" if problem_ir is None else case_dir
+        )
+        execution_dir.mkdir(parents=True, exist_ok=True)
+        env["FULLMAG_RUN_DIR"] = str(execution_dir)
+        command = script_execution_command(binary, execution_dir, ui_surface)
+        executed_problem_ir_identity_path: Path | None = None
+        if problem_ir is None:
+            executed_problem_ir_identity_path = (
+                case_dir / "executed-problem-ir.sha256"
+            )
+            env["FULLMAG_BENCH_EXECUTED_PROBLEM_IR_SHA256_FILE"] = str(
+                executed_problem_ir_identity_path
+            )
+        else:
+            env.pop("FULLMAG_BENCH_EXECUTED_PROBLEM_IR_SHA256_FILE", None)
         if problem_ir is not None:
-            problem_ir_path = Path(run_dir) / "canonical.problem-ir.json"
+            if ui_surface != "headless":
+                raise ValueError(
+                    "interactive benchmark surface requires script execution, not run-json"
+                )
+            problem_ir_path = case_dir / "canonical.problem-ir.json"
             problem_ir_payload = canonical_problem_ir_bytes(problem_ir)
             problem_ir_path.write_bytes(problem_ir_payload)
             row["executed_problem_ir_sha256"] = hashlib.sha256(
                 problem_ir_payload
             ).hexdigest()
+            canonical_ir_dir = env.get("FULLMAG_BENCH_CANONICAL_IR_DIR")
+            if canonical_ir_dir:
+                retained_ir_dir = Path(canonical_ir_dir)
+                retained_ir_dir.mkdir(parents=True, exist_ok=True)
+                retained_ir_dir.joinpath(
+                    f"{backend_label}-{row['executed_problem_ir_sha256']}.json"
+                ).write_bytes(problem_ir_payload)
             command = problem_ir_execution_command(
                 binary=binary,
                 problem_ir_path=problem_ir_path,
-                run_dir=Path(run_dir),
+                run_dir=execution_dir,
                 until_seconds=max(dt, steps * dt),
             )
         started = time.perf_counter_ns()
+        child_cpu_started = resource.getrusage(resource.RUSAGE_CHILDREN)
         run_kwargs = {
             "cwd": REPO_ROOT,
             "env": env,
@@ -3994,7 +6739,7 @@ def run_backend(
             wall_time_ms = (time.perf_counter_ns() - started) / 1_000_000.0
             stdout = exc.stdout or ""
             stderr = exc.stderr or ""
-            row.update(execution_plan_mesh_stats(load_run_metadata(run_dir)))
+            row.update(execution_plan_mesh_stats(load_run_metadata(execution_dir)))
             row.update(
                 {
                     "status": "timeout",
@@ -4007,10 +6752,32 @@ def run_backend(
             )
             return row
         wall_time_ms = (time.perf_counter_ns() - started) / 1_000_000.0
-        metadata = load_run_metadata(run_dir)
-        final_scalar_row = load_final_scalar_row(run_dir)
-        artifact_payload = load_authoritative_benchmark_payload(run_dir)
-        energy_monotonicity_evidence = load_energy_monotonicity_evidence(run_dir)
+        child_cpu_finished = resource.getrusage(resource.RUSAGE_CHILDREN)
+        host_cpu_time_ms = 1000.0 * (
+            child_cpu_finished.ru_utime
+            + child_cpu_finished.ru_stime
+            - child_cpu_started.ru_utime
+            - child_cpu_started.ru_stime
+        )
+        metadata = load_run_metadata(execution_dir)
+        final_scalar_row = load_final_scalar_row(execution_dir)
+        artifact_payload = load_authoritative_benchmark_payload(execution_dir)
+        energy_monotonicity_evidence = load_energy_monotonicity_evidence(execution_dir)
+        final_magnetization_evidence = (
+            load_final_magnetization_evidence(execution_dir)
+            if capture_final_magnetization
+            else {}
+        )
+        if completed.returncode == 0 and executed_problem_ir_identity_path is not None:
+            try:
+                row["executed_problem_ir_sha256"] = (
+                    read_executed_problem_ir_identity(
+                        executed_problem_ir_identity_path
+                    )
+                )
+            except ValueError:
+                if ui_surface == "interactive":
+                    raise
 
     combined_output = "\n".join(
         part for part in [completed.stdout, completed.stderr] if part.strip()
@@ -4055,17 +6822,29 @@ def run_backend(
     )
     if not isinstance(qualification, Mapping):
         qualification = {}
+    device_policy = qualification.get("device_policy", {})
+    if not isinstance(device_policy, Mapping):
+        device_policy = {}
     demag_timings = demag_runtime.get("timings_ns", {})
     if not isinstance(demag_timings, Mapping):
         demag_timings = {}
+    artifact_pipeline = metadata.get("artifact_pipeline", {}) if metadata else {}
+    if not isinstance(artifact_pipeline, Mapping):
+        artifact_pipeline = {}
     row.update(execution_plan_mesh_stats(metadata))
     row.update(energy_monotonicity_evidence)
+    row.update(final_magnetization_evidence)
 
     row.update(
         {
             "status": "ok" if completed.returncode == 0 and payload is not None else "failed",
             "returncode": completed.returncode,
             "wall_time_ms": round(wall_time_ms, 3),
+            "host_cpu_time_ms": round(host_cpu_time_ms, 3),
+            "host_cpu_average_core_count": (
+                host_cpu_time_ms / wall_time_ms if wall_time_ms > 0.0 else 0.0
+            ),
+            "host_cpu_capacity": os.cpu_count() or 1,
             "stdout_lines": len(completed.stdout.splitlines()),
             "stderr_lines": len(completed.stderr.splitlines()),
         }
@@ -4073,17 +6852,33 @@ def run_backend(
     if payload is not None:
         row.update(
             {
+                **task11_cumulative_relaxation_evidence(payload),
+                **task12_exact_runtime_evidence(payload),
+                "executed_problem_ir_sha256": first_present(
+                    row.get("executed_problem_ir_sha256"),
+                    payload.get("executed_problem_ir_sha256"),
+                ),
                 "executed_steps": first_present(
                     payload.get("executed_steps"), payload.get("total_steps")
                 ),
-                "reported_scenario": first_present(payload.get("scenario"), scenario),
-                "reported_integrator": first_present(payload.get("integrator"), integrator),
+                "reported_scenario": (
+                    payload.get("scenario")
+                    if require_reported_execution_identity
+                    else first_present(payload.get("scenario"), scenario)
+                ),
+                "reported_integrator": (
+                    payload.get("integrator")
+                    if require_reported_execution_identity
+                    else first_present(payload.get("integrator"), integrator)
+                ),
                 "reported_relaxation_algorithm": first_present(
                     payload.get("relaxation_algorithm"),
-                    relaxation_algorithm,
+                    None if require_reported_execution_identity else relaxation_algorithm,
                 ),
-                "reported_timestep_policy": first_present(
-                    payload.get("timestep_policy"), timestep_policy
+                "reported_timestep_policy": (
+                    payload.get("timestep_policy")
+                    if require_reported_execution_identity
+                    else first_present(payload.get("timestep_policy"), timestep_policy)
                 ),
                 "reported_precision": payload.get("precision"),
                 "final_time_s": first_present(
@@ -4130,6 +6925,7 @@ def run_backend(
                     final_scalar_row.get("max_torque_T"),
                 ),
                 "norm_defect": qualification.get("norm_defect"),
+                "converged": qualification.get("converged"),
                 "step_wall_time_ms": ns_to_ms(payload.get("wall_time_ns")),
                 "exchange_wall_time_ms": ns_to_ms(payload.get("exchange_wall_time_ns")),
                 "demag_wall_time_ms": ns_to_ms(payload.get("demag_wall_time_ns")),
@@ -4157,6 +6953,7 @@ def run_backend(
                         demag_timings.get("solver_apply"),
                     )
                 ),
+                "demag_solver_apply_wall_time_scope": "last_step",
                 "demag_solver_setup_reused": first_present(
                     payload.get("demag_solver_setup_reused"),
                     demag_runtime.get("solver_setup_reused"),
@@ -4178,6 +6975,39 @@ def run_backend(
                     payload.get("extra_energy_wall_time_ns")
                 ),
                 "snapshot_wall_time_ms": ns_to_ms(payload.get("snapshot_wall_time_ns")),
+                "relaxation_preconditioner_strategy": first_present(
+                    provenance.get("relaxation_preconditioner_strategy"),
+                    device_policy.get("relaxation_preconditioner_strategy"),
+                    payload.get("relaxation_preconditioner_strategy"),
+                ),
+                "relaxation_preconditioner_iterations": first_present(
+                    provenance.get("relaxation_preconditioner_iterations"),
+                    device_policy.get("relaxation_preconditioner_iterations"),
+                    payload.get("relaxation_preconditioner_iterations"),
+                ),
+                "relaxation_preconditioner_lambda_m_per_a": first_present(
+                    provenance.get("relaxation_preconditioner_lambda_m_per_a"),
+                    device_policy.get("relaxation_preconditioner_lambda_m_per_a"),
+                    payload.get("relaxation_preconditioner_lambda_m_per_a"),
+                ),
+                "relaxation_preconditioner_wall_time_ms": ns_to_ms(
+                    first_present(
+                        provenance.get("relaxation_preconditioner_wall_time_ns"),
+                        device_policy.get("relaxation_preconditioner_wall_time_ns"),
+                        payload.get("relaxation_preconditioner_wall_time_ns"),
+                    )
+                ),
+                "relaxation_preconditioner_wall_time_scope": "last_step",
+                "relaxation_preconditioner_cache_hits": first_present(
+                    provenance.get("relaxation_preconditioner_cache_hits"),
+                    device_policy.get("relaxation_preconditioner_cache_hits"),
+                    payload.get("relaxation_preconditioner_cache_hits"),
+                ),
+                "relaxation_preconditioner_cache_misses": first_present(
+                    provenance.get("relaxation_preconditioner_cache_misses"),
+                    device_policy.get("relaxation_preconditioner_cache_misses"),
+                    payload.get("relaxation_preconditioner_cache_misses"),
+                ),
                 "rhs_evals": payload.get("rhs_evals"),
                 "total_rhs_evals": payload.get("total_rhs_evals"),
                 "demag_solves": payload.get("demag_solves"),
@@ -4271,6 +7101,9 @@ def run_backend(
                 "mfem_device": provenance.get("mfem_device"),
                 "requested_fem_omp_threads": provenance.get("requested_fem_omp_threads"),
                 "effective_fem_omp_threads": provenance.get("effective_fem_omp_threads"),
+                "artifact_writer_job_wall_time_ms": ns_to_ms(
+                    artifact_pipeline.get("artifact_writer_job_wall_time_ns")
+                ),
                 "demag_linear_solver": demag_runtime.get("linear_solver"),
                 "demag_model": demag_runtime.get("model"),
                 "demag_boundary_variant": demag_runtime.get("boundary_variant"),
@@ -4334,6 +7167,13 @@ def run_backend(
                 "e_ani": first_present(payload.get("e_ani"), payload.get("final_e_ani_j")),
                 "e_dmi": first_present(payload.get("e_dmi"), payload.get("final_e_dmi_j")),
             }
+        )
+        effective_threads = as_int(row.get("effective_fem_omp_threads")) or 1
+        average_cores = as_float(row.get("host_cpu_average_core_count")) or 0.0
+        host_capacity = as_int(row.get("host_cpu_capacity")) or 1
+        row["host_cpu_oversubscribed"] = (
+            effective_threads > host_capacity
+            or average_cores > host_capacity + 1e-12
         )
     else:
         row["error"] = "missing BENCHMARK_RESULT payload"
@@ -4607,6 +7447,7 @@ def repeated_case_key(row: Mapping[str, object]) -> tuple[object, ...]:
         row.get("scenario"),
         row.get("integrator"),
         row.get("relaxation_algorithm"),
+        row.get("requested_relaxation_preconditioner_strategy"),
         row.get("timestep_policy"),
         row.get("dt_s"),
         row.get("steps"),
@@ -4656,6 +7497,9 @@ def performance_regression_case_key(row: Mapping[str, object]) -> tuple[str, ...
     signature = row.get("solver_mesh_signature")
     if not signature:
         return None
+    requested_relaxation_preconditioner_strategy = (
+        row.get("requested_relaxation_preconditioner_strategy") or "none"
+    )
     return tuple(
         performance_regression_key_value(value)
         for value in (
@@ -4665,6 +7509,7 @@ def performance_regression_case_key(row: Mapping[str, object]) -> tuple[str, ...
             row.get("scenario"),
             row.get("integrator"),
             row.get("relaxation_algorithm"),
+            requested_relaxation_preconditioner_strategy,
             row.get("timestep_policy"),
             row.get("requested_cpu_thread_spec"),
             row.get("requested_demag_solver"),
@@ -4851,6 +7696,64 @@ def performance_regression_failures(
     return failures
 
 
+CPU_GPU_REQUESTED_DEMAG_POLICY_FIELDS = (
+    "requested_demag_solver",
+    "requested_demag_preconditioner",
+    "requested_demag_relative_tolerance",
+    "requested_demag_absolute_tolerance",
+    "requested_demag_max_iterations",
+    "requested_demag_print_level",
+    "requested_demag_amg_relax_type",
+    "requested_demag_amg_coarsening",
+    "requested_demag_amg_interpolation",
+    "requested_demag_amg_aggressive_coarsening",
+    "requested_demag_amg_strength_threshold",
+    "requested_demag_amg_max_levels",
+)
+
+CPU_GPU_EFFECTIVE_DEMAG_POLICY_FIELDS = (
+    "demag_linear_solver",
+    "demag_preconditioner",
+    "demag_relative_tolerance",
+    "demag_absolute_tolerance",
+    "demag_max_iterations",
+    "demag_print_level",
+    "demag_amg_relax_type",
+    "demag_amg_coarsening",
+    "demag_amg_interpolation",
+    "demag_amg_aggressive_coarsening",
+    "demag_amg_strength_threshold",
+    "demag_amg_max_levels",
+)
+
+
+def cpu_gpu_demag_policy_pairing_key(
+    row: Mapping[str, object],
+) -> tuple[object, ...]:
+    present_requested_fields = tuple(
+        field for field in CPU_GPU_REQUESTED_DEMAG_POLICY_FIELDS if field in row
+    )
+    if present_requested_fields and len(present_requested_fields) != len(
+        CPU_GPU_REQUESTED_DEMAG_POLICY_FIELDS
+    ):
+        missing_fields = tuple(
+            field
+            for field in CPU_GPU_REQUESTED_DEMAG_POLICY_FIELDS
+            if field not in row
+        )
+        raise ValueError(
+            "partially populated requested demag policy cannot be paired: "
+            f"present={present_requested_fields} missing={missing_fields}"
+        )
+    requested = tuple(row.get(field) for field in CPU_GPU_REQUESTED_DEMAG_POLICY_FIELDS)
+    if any(value not in {None, ""} for value in requested):
+        return ("requested", *requested)
+    return (
+        "effective",
+        *(row.get(field) for field in CPU_GPU_EFFECTIVE_DEMAG_POLICY_FIELDS),
+    )
+
+
 def cpu_gpu_consistency_case_key(row: Mapping[str, object]) -> tuple[object, ...]:
     signature = row.get("solver_mesh_signature")
     if not signature:
@@ -4864,6 +7767,7 @@ def cpu_gpu_consistency_case_key(row: Mapping[str, object]) -> tuple[object, ...
         row.get("dt_s"),
         row.get("steps"),
         row.get("reported_precision"),
+        cpu_gpu_demag_policy_pairing_key(row),
     )
 
 
@@ -5220,7 +8124,7 @@ def cpu_gpu_consistency_pair_summary(
     cpu_steps = as_int(cpu_row.get("executed_steps"))
     gpu_steps = as_int(gpu_row.get("executed_steps"))
     summary: dict[str, object] = {
-        "case_key": list(case),
+        "case_key": [*case[:8], list(case[8])],
         "solver_mesh_signature": case[0],
         "scenario": case[1],
         "integrator": case[2],
@@ -5229,6 +8133,15 @@ def cpu_gpu_consistency_pair_summary(
         "dt_s": case[5],
         "steps": case[6],
         "precision": case[7],
+        "demag_policy_pairing_key": list(case[8]),
+        "requested_demag_solver": cpu_row.get("requested_demag_solver"),
+        "requested_demag_preconditioner": cpu_row.get(
+            "requested_demag_preconditioner"
+        ),
+        "cpu_demag_linear_solver": cpu_row.get("demag_linear_solver"),
+        "gpu_demag_linear_solver": gpu_row.get("demag_linear_solver"),
+        "cpu_demag_preconditioner": cpu_row.get("demag_preconditioner"),
+        "gpu_demag_preconditioner": gpu_row.get("demag_preconditioner"),
         "cpu_execution_engine": cpu_row.get("execution_engine"),
         "gpu_execution_engine": gpu_row.get("execution_engine"),
         "cpu_executed_steps": cpu_steps,
@@ -5833,34 +8746,34 @@ def single_backend_case_key(row: Mapping[str, object]) -> tuple[object, ...]:
         row.get("integrator"),
         row.get("timestep_policy"),
         row.get("requested_cpu_thread_spec"),
-        first_present(row.get("requested_demag_solver"), row.get("demag_linear_solver")),
+        first_present(row.get("demag_linear_solver"), row.get("requested_demag_solver")),
         first_present(
-            row.get("requested_demag_preconditioner"),
             row.get("demag_preconditioner"),
+            row.get("requested_demag_preconditioner"),
         ),
         first_present(
-            row.get("requested_demag_amg_relax_type"),
             row.get("demag_amg_relax_type"),
+            row.get("requested_demag_amg_relax_type"),
         ),
         first_present(
-            row.get("requested_demag_amg_coarsening"),
             row.get("demag_amg_coarsening"),
+            row.get("requested_demag_amg_coarsening"),
         ),
         first_present(
-            row.get("requested_demag_amg_interpolation"),
             row.get("demag_amg_interpolation"),
+            row.get("requested_demag_amg_interpolation"),
         ),
         first_present(
-            row.get("requested_demag_amg_aggressive_coarsening"),
             row.get("demag_amg_aggressive_coarsening"),
+            row.get("requested_demag_amg_aggressive_coarsening"),
         ),
         first_present(
-            row.get("requested_demag_amg_strength_threshold"),
             row.get("demag_amg_strength_threshold"),
+            row.get("requested_demag_amg_strength_threshold"),
         ),
         first_present(
-            row.get("requested_demag_amg_max_levels"),
             row.get("demag_amg_max_levels"),
+            row.get("requested_demag_amg_max_levels"),
         ),
     )
 
@@ -5869,22 +8782,25 @@ def single_backend_case_label(row: Mapping[str, object]) -> str:
     scenario = str(row.get("scenario") or "-")
     relaxation_algorithm = row_relaxation_algorithm(row)
     parts = [summary_case_key(scenario, relaxation_algorithm), str(row.get("backend") or "-")]
-    solver = first_present(row.get("requested_demag_solver"), row.get("demag_linear_solver"))
+    solver = first_present(row.get("demag_linear_solver"), row.get("requested_demag_solver"))
     preconditioner = first_present(
-        row.get("requested_demag_preconditioner"),
         row.get("demag_preconditioner"),
+        row.get("requested_demag_preconditioner"),
     )
     if solver or preconditioner:
         parts.append(f"{solver or '-'}/{preconditioner or '-'}")
     if preconditioner in {"AMG", "OMIT"}:
+        def label_value(value: object) -> str:
+            return "-" if value is None or value == "" else str(value)
+
         parts.append(
             "amg="
-            f"{first_present(row.get('requested_demag_amg_relax_type'), row.get('demag_amg_relax_type')) or '-'}/"
-            f"{first_present(row.get('requested_demag_amg_coarsening'), row.get('demag_amg_coarsening')) or '-'}/"
-            f"{first_present(row.get('requested_demag_amg_interpolation'), row.get('demag_amg_interpolation')) or '-'}/"
-            f"{first_present(row.get('requested_demag_amg_aggressive_coarsening'), row.get('demag_amg_aggressive_coarsening')) or '-'}/"
-            f"{first_present(row.get('requested_demag_amg_strength_threshold'), row.get('demag_amg_strength_threshold')) or '-'}/"
-            f"{first_present(row.get('requested_demag_amg_max_levels'), row.get('demag_amg_max_levels')) or '-'}"
+            f"{label_value(first_present(row.get('demag_amg_relax_type'), row.get('requested_demag_amg_relax_type')))}/"
+            f"{label_value(first_present(row.get('demag_amg_coarsening'), row.get('requested_demag_amg_coarsening')))}/"
+            f"{label_value(first_present(row.get('demag_amg_interpolation'), row.get('requested_demag_amg_interpolation')))}/"
+            f"{label_value(first_present(row.get('demag_amg_aggressive_coarsening'), row.get('requested_demag_amg_aggressive_coarsening')))}/"
+            f"{label_value(first_present(row.get('demag_amg_strength_threshold'), row.get('requested_demag_amg_strength_threshold')))}/"
+            f"{label_value(first_present(row.get('demag_amg_max_levels'), row.get('requested_demag_amg_max_levels')))}"
         )
     return " ".join(parts)
 
@@ -7051,35 +9967,14 @@ def demag_policy_selection_case_key(row: Mapping[str, object]) -> tuple[object, 
 
 def demag_policy_identity(row: Mapping[str, object]) -> tuple[object, ...]:
     return (
-        first_present(row.get("requested_demag_solver"), row.get("demag_linear_solver")),
-        first_present(
-            row.get("requested_demag_preconditioner"),
-            row.get("demag_preconditioner"),
-        ),
-        first_present(
-            row.get("requested_demag_amg_relax_type"),
-            row.get("demag_amg_relax_type"),
-        ),
-        first_present(
-            row.get("requested_demag_amg_coarsening"),
-            row.get("demag_amg_coarsening"),
-        ),
-        first_present(
-            row.get("requested_demag_amg_interpolation"),
-            row.get("demag_amg_interpolation"),
-        ),
-        first_present(
-            row.get("requested_demag_amg_aggressive_coarsening"),
-            row.get("demag_amg_aggressive_coarsening"),
-        ),
-        first_present(
-            row.get("requested_demag_amg_strength_threshold"),
-            row.get("demag_amg_strength_threshold"),
-        ),
-        first_present(
-            row.get("requested_demag_amg_max_levels"),
-            row.get("demag_amg_max_levels"),
-        ),
+        row.get("demag_linear_solver"),
+        row.get("demag_preconditioner"),
+        row.get("demag_amg_relax_type"),
+        row.get("demag_amg_coarsening"),
+        row.get("demag_amg_interpolation"),
+        row.get("demag_amg_aggressive_coarsening"),
+        row.get("demag_amg_strength_threshold"),
+        row.get("demag_amg_max_levels"),
     )
 
 
@@ -7322,6 +10217,90 @@ def main() -> None:
     apply_fem_cpu_no_pbc_adaptive_ready_preset(args)
     apply_box500_airbox_exchange_only_preset(args)
     apply_box500_airbox_interaction_consistency_preset(args)
+    if args.list_amg_qualification_fixture_suite is not None:
+        print_amg_qualification_fixture_suite(
+            args.list_amg_qualification_fixture_suite
+        )
+        return
+    if args.gpu_host_thread_qualification_inputs is not None:
+        if args.gpu_host_thread_qualification_output is None:
+            raise SystemExit(
+                "--gpu-host-thread-qualification-inputs needs "
+                "--gpu-host-thread-qualification-output"
+            )
+        input_paths = [
+            Path(value.strip())
+            for value in args.gpu_host_thread_qualification_inputs.split(",")
+            if value.strip()
+        ]
+        if not input_paths:
+            raise SystemExit("--gpu-host-thread-qualification-inputs cannot be empty")
+        summary = write_gpu_host_thread_policy_qualification(
+            input_paths, args.gpu_host_thread_qualification_output
+        )
+        if summary["status"] != "pass":
+            raise SystemExit(21)
+        return
+    if args.amg_relax_qualification_inputs is not None:
+        if args.amg_relax_qualification_output is None:
+            raise SystemExit(
+                "--amg-relax-qualification-inputs needs "
+                "--amg-relax-qualification-output"
+            )
+        if args.amg_relax_qualification_fixture_suite is None:
+            raise SystemExit(
+                "--amg-relax-qualification-inputs needs "
+                "--amg-relax-qualification-fixture-suite"
+            )
+        input_paths = [
+            Path(value.strip())
+            for value in args.amg_relax_qualification_inputs.split(",")
+            if value.strip()
+        ]
+        if not input_paths:
+            raise SystemExit("--amg-relax-qualification-inputs cannot be empty")
+        write_amg_relax_policy_qualification(
+            input_paths,
+            args.amg_relax_qualification_output,
+            cpu_gpu_parity_gate_passed=args.amg_relax_cpu_gpu_parity_passed,
+            pcg_symmetry_contract_passed=args.amg_relax_pcg_symmetry_passed,
+            fixture_suite_path=args.amg_relax_qualification_fixture_suite,
+        )
+        return
+    if args.relaxation_preconditioner_qualification_input is not None:
+        if args.relaxation_preconditioner_qualification_output is None:
+            raise SystemExit(
+                "--relaxation-preconditioner-qualification-input needs "
+                "--relaxation-preconditioner-qualification-output"
+            )
+        if (
+            args.task11_qualification_fixture_suite is None
+        ) != (args.task11_qualification_environment is None):
+            raise SystemExit(
+                "Task 11 qualification identity requires both "
+                "--task11-qualification-fixture-suite and "
+                "--task11-qualification-environment"
+            )
+        qualification_identity = None
+        if args.task11_qualification_fixture_suite is not None:
+            try:
+                qualification_identity = load_task11_qualification_identity(
+                    fixture_suite_path=args.task11_qualification_fixture_suite,
+                    environment_path=args.task11_qualification_environment,
+                )
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                raise SystemExit(f"invalid Task 11 qualification identity: {exc}") from exc
+        summary = write_relaxation_preconditioner_qualification(
+            args.relaxation_preconditioner_qualification_input,
+            args.relaxation_preconditioner_qualification_output,
+            cpu_gpu_parity_input_path=(
+                args.relaxation_preconditioner_cpu_gpu_parity_input
+            ),
+            qualification_identity=qualification_identity,
+        )
+        if summary["status"] != "pass":
+            raise SystemExit(20)
+        return
     if args.write_task8_qualification_identity is not None:
         write_task8_qualification_identity(
             args,
@@ -7379,16 +10358,92 @@ def main() -> None:
         raise SystemExit("--require-fixture-identity needs --fixture-manifest")
     if args.require_fixture_identity and args.fixture_environment is None:
         raise SystemExit("--require-fixture-identity needs --fixture-environment")
+    if args.qualification_fixture_problem_ir_sha256 is not None and (
+        len(args.qualification_fixture_problem_ir_sha256) != 64
+        or any(
+            character not in "0123456789abcdef"
+            for character in args.qualification_fixture_problem_ir_sha256
+        )
+    ):
+        raise SystemExit(
+            "--qualification-fixture-problem-ir-sha256 must contain 64 lowercase hexadecimal characters"
+        )
     repeat_count = max(1, args.repeat)
 
     meshes = resolve_meshes(args.meshes, args.sizes)
     scenarios = resolve_scenarios(args.scenarios)
     integrators = resolve_integrators(args.integrators or ",".join(DEFAULT_INTEGRATORS))
     relaxation_algorithms = resolve_relaxation_algorithms(args.relax_algorithms)
+    relaxation_preconditioner_strategies = (
+        resolve_relaxation_preconditioner_strategies(
+            args.relaxation_preconditioner_strategies
+        )
+    )
     timestep_policies = resolve_timestep_policies(args.timestep_policies)
     backends = resolve_backends(args.backends)
+    if relaxation_preconditioner_strategies != ["none"] and (
+        relaxation_algorithms != ["nonlinear_cg"] or backends != ["fem_gpu"]
+    ):
+        raise SystemExit(
+            "non-none --relaxation-preconditioner-strategies requires exactly "
+            "--relax-algorithms nonlinear_cg --backends gpu"
+        )
+    task11_qualification_sweep = tuple(relaxation_preconditioner_strategies) == (
+        RELAXATION_PRECONDITIONER_STRATEGIES
+    )
+    task11_parity_sweep = (
+        args.task11_relaxation_preconditioner_cpu_gpu_parity_sweep
+    )
+    task11_resolution_sweep = task11_qualification_sweep or task11_parity_sweep
+    task11_qualification_identity: dict[str, object] | None = None
+    if task11_resolution_sweep:
+        if (
+            args.task11_qualification_fixture_suite is None
+            or args.task11_qualification_environment is None
+        ):
+            raise SystemExit(
+                "the exact Task 11 sweep requires "
+                "--task11-qualification-fixture-suite and "
+                "--task11-qualification-environment"
+            )
+        try:
+            task11_qualification_identity = load_task11_qualification_identity(
+                fixture_suite_path=args.task11_qualification_fixture_suite,
+                environment_path=args.task11_qualification_environment,
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise SystemExit(f"invalid Task 11 qualification identity: {exc}") from exc
+        expected_meshes = [
+            PRESET_MESHES[size]
+            for size in RELAXATION_PRECONDITIONER_QUALIFICATION_MESHES
+        ]
+        if [path.resolve() for path in meshes] != [path.resolve() for path in expected_meshes]:
+            raise SystemExit(
+                "the exact Task 11 sweep requires --meshes coarse,medium,fine in that order"
+            )
+    if task11_parity_sweep and (
+        scenarios != ["box500_airbox_exchange_demag"]
+        or relaxation_algorithms != ["nonlinear_cg"]
+        or relaxation_preconditioner_strategies != ["none"]
+        or backends != ["fem_cpu", "fem_gpu"]
+        or repeat_count != 1
+        or args.steps != 64
+        or not args.capture_final_magnetization
+    ):
+        raise SystemExit(
+            "the exact Task 11 CPU/GPU parity sweep requires the exchange+demag "
+            "NCG none baseline, cpu,gpu, 64 steps, repeat 1, and final "
+            "magnetization capture"
+        )
+    if task11_qualification_sweep:
+        if repeat_count != RELAXATION_PRECONDITIONER_REQUIRED_REPEATS:
+            raise SystemExit("the exact Task 11 sweep requires --repeat 5")
     observed_gpu_identity: dict[str, object] | None = None
-    if args.task8_qualification_identity is not None:
+    if (
+        args.task8_qualification_identity is not None
+        or task11_resolution_sweep
+        or args.gpu_host_thread_qualification_run
+    ):
         raw_gpu_index = os.environ.get("FULLMAG_FEM_GPU_INDEX", "0")
         try:
             gpu_index = int(raw_gpu_index)
@@ -7402,6 +10457,19 @@ def main() -> None:
             observed_gpu_identity = observe_current_gpu_identity(gpu_index=gpu_index)
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
+        if task11_qualification_identity is not None:
+            expected_gpu_identity = task11_qualification_identity["gpu_identity"]
+            assert isinstance(expected_gpu_identity, Mapping)
+            gpu_failures = [
+                field
+                for field in ("device_uuid", "device_name", "compute_capability")
+                if observed_gpu_identity.get(field) != expected_gpu_identity.get(field)
+            ]
+            if gpu_failures:
+                raise SystemExit(
+                    "current GPU differs from the pinned Task 11 environment: "
+                    + ", ".join(gpu_failures)
+                )
     if args.require_cpu_gpu_consistency and "fem_gpu" in backends:
         gpu_failure = runtime_gpu_availability_failure(FULLMAG_GPU)
         if gpu_failure is not None:
@@ -7468,8 +10536,25 @@ def main() -> None:
         max_step_delta=args.cpu_gpu_max_step_delta,
         relax_torque_tolerance_apm=relax_torque_tolerance_apm,
         relax_torque_tolerance_t=args.relax_torque_tolerance_t,
+        airbox_extent_scale=args.airbox_extent_scale,
     )
     mesh_env = benchmark_mesh_env(args)
+    if args.airbox_extent_scale is not None:
+        mesh_env["FULLMAG_BENCH_AIRBOX_EXTENT_SCALE"] = repr(
+            args.airbox_extent_scale
+        )
+
+    def task11_mesh_env(mesh_path: Path) -> dict[str, str]:
+        resolved = dict(mesh_env)
+        if not task11_resolution_sweep:
+            return resolved
+        mesh_size = qualification_mesh_size(mesh_path)
+        for resolution, domain_hmax, airbox_hmax in PERFORMANCE_FIXTURE_RESOLUTIONS:
+            if resolution == mesh_size:
+                resolved["FULLMAG_BENCH_DOMAIN_HMAX"] = repr(domain_hmax)
+                resolved["FULLMAG_BENCH_AIRBOX_HMAX"] = repr(airbox_hmax)
+                return resolved
+        raise ValueError(f"missing Task 11 mesh resolution for {mesh_path}")
     results: list[dict[str, object]] = []
     persistent_domain_mesh_cache_dir = args.generated_domain_mesh_cache_dir
     if args.reuse_generated_domain_mesh and persistent_domain_mesh_cache_dir is not None:
@@ -7487,10 +10572,11 @@ def main() -> None:
     domain_mesh_cache: dict[tuple[str, ...], Path] = {}
 
     print(
-        f"FEM benchmark sweep: backends={','.join(backends)} meshes={len(meshes)} scenarios={len(scenarios)} integrators={len(integrators)} relaxation_algorithms={','.join(relaxation_algorithms)} timestep_policies={','.join(timestep_policies)} demag_solvers={','.join(demag_solvers)} demag_preconditioners={','.join(demag_preconditioners)} demag_rtols={','.join(repr(value) for value in demag_rtols)} demag_amg_profiles={len(demag_amg_profiles)} repeat={repeat_count} steps={args.steps} dt={args.dt:.3e} s"
+        f"FEM benchmark sweep: backends={','.join(backends)} meshes={len(meshes)} scenarios={len(scenarios)} integrators={len(integrators)} relaxation_algorithms={','.join(relaxation_algorithms)} relaxation_preconditioners={','.join(relaxation_preconditioner_strategies)} timestep_policies={','.join(timestep_policies)} demag_solvers={','.join(demag_solvers)} demag_preconditioners={','.join(demag_preconditioners)} demag_rtols={','.join(repr(value) for value in demag_rtols)} demag_amg_profiles={len(demag_amg_profiles)} repeat={repeat_count} steps={args.steps} dt={args.dt:.3e} s"
     )
     if args.gpu_warmup and "fem_gpu" in backends:
         warmup_mesh = meshes[0]
+        warmup_mesh_env = task11_mesh_env(warmup_mesh)
         warmup_scenario = scenarios[0]
         warmup_relaxation_algorithms = (
             relaxation_algorithms_for_scenario(warmup_scenario, relaxation_algorithms)
@@ -7519,63 +10605,69 @@ def main() -> None:
                 warmup_preconditioner,
                 demag_amg_profiles,
             )[0]
-            warmup_domain_mesh_env = generated_domain_mesh_env(
-                cache=domain_mesh_cache,
-                cache_dir=domain_mesh_cache_dir,
-                mesh_path=warmup_mesh,
-                scenario=warmup_scenario,
-                integrator=integrators[0],
-                steps=args.steps,
-                dt=args.dt,
-                timestep_policy=timestep_policies[0],
-                thread_spec=thread_specs[0],
-                extra_env={
-                    **mesh_env,
-                    **relax_env,
-                },
-                timeout_s=args.case_timeout_s,
-            )
-            if fixture is not None:
-                warmup_domain_mesh_env = {
-                    "FULLMAG_BENCH_DOMAIN_MESH": str(runtime_fixture_mesh_path(fixture))
-                }
-            print(
-                f"  gpu_warmup scenario={warmup_scenario} relaxation_algorithm={warmup_relaxation_algorithm or 'none'} demag_policy={warmup_solver}/{warmup_preconditioner} demag_rtol={warmup_rtol!r} demag_amg_profile={warmup_amg_profile}",
-                flush=True,
-            )
-            warmup_row = run_backend(
-                backend_label="fem_gpu",
-                binary=FULLMAG_GPU,
-                mesh_path=warmup_mesh,
-                scenario=warmup_scenario,
-                integrator=integrators[0],
-                relaxation_algorithm=warmup_relaxation_algorithm,
-                steps=args.steps,
-                dt=args.dt,
-                timestep_policy=timestep_policies[0],
-                thread_spec=thread_specs[0],
-                timeout_s=args.case_timeout_s,
-                extra_env={
-                    **mesh_env,
-                    **relax_env,
-                    **warmup_domain_mesh_env,
-                    **demag_policy_env(
-                        warmup_solver,
-                        warmup_preconditioner,
-                        warmup_rtol,
-                        warmup_amg_profile,
-                        args,
-                    ),
-                },
-            )
-            if warmup_row.get("status") != "ok":
-                print(
-                    f"FEM_GPU_WARMUP_ERROR={warmup_row.get('status')}: {warmup_row.get('error')}",
-                    file=sys.stderr,
+            for warmup_thread_spec in thread_specs:
+                warmup_domain_mesh_env = generated_domain_mesh_env(
+                    cache=domain_mesh_cache,
+                    cache_dir=domain_mesh_cache_dir,
+                    mesh_path=warmup_mesh,
+                    scenario=warmup_scenario,
+                    integrator=integrators[0],
+                    steps=args.steps,
+                    dt=args.dt,
+                    timestep_policy=timestep_policies[0],
+                    thread_spec=warmup_thread_spec,
+                    extra_env={
+                        **warmup_mesh_env,
+                        **relax_env,
+                    },
+                    timeout_s=args.case_timeout_s,
                 )
-                raise SystemExit(2)
+                if fixture is not None:
+                    warmup_domain_mesh_env = {
+                        "FULLMAG_BENCH_DOMAIN_MESH": str(
+                            runtime_fixture_mesh_path(fixture)
+                        )
+                    }
+                print(
+                    f"  gpu_warmup scenario={warmup_scenario} relaxation_algorithm={warmup_relaxation_algorithm or 'none'} thread_count={warmup_thread_spec.label}:{warmup_thread_spec.env_value} demag_policy={warmup_solver}/{warmup_preconditioner} demag_rtol={warmup_rtol!r} demag_amg_profile={warmup_amg_profile}",
+                    flush=True,
+                )
+                warmup_row = run_backend(
+                    backend_label="fem_gpu",
+                    binary=FULLMAG_GPU,
+                    mesh_path=warmup_mesh,
+                    scenario=warmup_scenario,
+                    integrator=integrators[0],
+                    relaxation_algorithm=warmup_relaxation_algorithm,
+                    steps=args.steps,
+                    dt=args.dt,
+                    timestep_policy=timestep_policies[0],
+                    thread_spec=warmup_thread_spec,
+                    timeout_s=args.case_timeout_s,
+                    ui_surface=args.ui_surface,
+                    extra_env={
+                        **warmup_mesh_env,
+                        **relax_env,
+                        "FULLMAG_FEM_GPU_RELAXATION_PRECONDITIONER_STRATEGY": relaxation_preconditioner_strategies[0],
+                        **warmup_domain_mesh_env,
+                        **demag_policy_env(
+                            warmup_solver,
+                            warmup_preconditioner,
+                            warmup_rtol,
+                            warmup_amg_profile,
+                            args,
+                        ),
+                    },
+                )
+                if warmup_row.get("status") != "ok":
+                    print(
+                        f"FEM_GPU_WARMUP_ERROR={warmup_row.get('status')}: {warmup_row.get('error')}",
+                        file=sys.stderr,
+                    )
+                    raise SystemExit(2)
     for mesh_path in meshes:
         mesh_stats = load_mesh_stats(mesh_path)
+        case_mesh_env = task11_mesh_env(mesh_path)
         print(f"  {input_mesh_summary(mesh_stats)}")
         for scenario in scenarios:
             scenario_relaxation_algorithms: list[str | None] = (
@@ -7598,7 +10690,7 @@ def main() -> None:
                                 timestep_policy=timestep_policy,
                                 thread_spec=thread_spec,
                                 extra_env={
-                                    **mesh_env,
+                                    **case_mesh_env,
                                     **relax_env,
                                 },
                                 timeout_s=args.case_timeout_s,
@@ -7637,6 +10729,10 @@ def main() -> None:
                                         if (
                                             fixture is not None
                                             or args.task8_qualification_identity is not None
+                                            or task11_resolution_sweep
+                                            or args.airbox_extent_scale is not None
+                                            or args.qualification_fixture_problem_ir_sha256
+                                            is not None
                                         ):
                                             executed_problem_ir = canonical_problem_ir(
                                                 mesh_path=mesh_path,
@@ -7656,11 +10752,44 @@ def main() -> None:
                                                 dt=args.dt,
                                                 timestep_policy=timestep_policy,
                                                 extra_env={
-                                                    **mesh_env,
+                                                    **case_mesh_env,
                                                     **relax_env,
                                                     **demag_env,
                                                 },
                                             )
+                                        if (
+                                            task11_qualification_identity is not None
+                                            and executed_problem_ir is not None
+                                        ):
+                                            mesh_size = qualification_mesh_size(mesh_path)
+                                            expected_fixture = next(
+                                                fixture_identity
+                                                for fixture_identity in task11_qualification_identity[
+                                                    "fixtures"
+                                                ]
+                                                if fixture_identity["resolution"] == mesh_size
+                                            )
+                                            domain_mesh_path = Path(
+                                                domain_mesh_env["FULLMAG_BENCH_DOMAIN_MESH"]
+                                            )
+                                            actual_mesh_sha256 = hashlib.sha256(
+                                                domain_mesh_path.read_bytes()
+                                            ).hexdigest()
+                                            actual_problem_ir_sha256 = hashlib.sha256(
+                                                canonical_problem_ir_bytes(executed_problem_ir)
+                                            ).hexdigest()
+                                            if (
+                                                actual_mesh_sha256
+                                                != expected_fixture["solver_mesh_sha256"]
+                                                or actual_problem_ir_sha256
+                                                != expected_fixture[
+                                                    "executed_problem_ir_sha256"
+                                                ]
+                                            ):
+                                                raise SystemExit(
+                                                    f"Task 11 {mesh_size} mesh or ProblemIR "
+                                                    "differs from the pinned fixture identity"
+                                                )
                                         qualification_case_manifest = None
                                         if args.task8_qualification_identity is not None:
                                             qualification_case_manifest = next(
@@ -7696,70 +10825,106 @@ def main() -> None:
                                                         f"      skip backend={backend} relaxation_algorithm={relaxation_label}: unsupported lane"
                                                     )
                                                     continue
-                                                if backend == "fem_cpu":
-                                                    row = run_backend(
-                                                        backend_label="fem_cpu",
-                                                        binary=FULLMAG_CPU,
-                                                        mesh_path=mesh_path,
-                                                        scenario=scenario,
-                                                        integrator=integrator,
-                                                        relaxation_algorithm=relaxation_algorithm,
-                                                        steps=args.steps,
-                                                        dt=args.dt,
-                                                        timestep_policy=timestep_policy,
-                                                        thread_spec=thread_spec,
-                                                        timeout_s=args.case_timeout_s,
-                                                        problem_ir=executed_problem_ir,
-                                                        qualification_case_manifest=(
-                                                            qualification_case_manifest
-                                                        ),
-                                                        extra_env={
-                                                            "FULLMAG_FEM_EXECUTION": "cpu",
-                                                            **demag_env,
-                                                            **mesh_env,
-                                                            **relax_env,
-                                                            **domain_mesh_env,
-                                                        },
+                                                strategies_for_backend = (
+                                                    relaxation_preconditioner_strategies
+                                                    if backend == "fem_gpu"
+                                                    and relaxation_algorithm == "nonlinear_cg"
+                                                    else ["none"]
+                                                )
+                                                for relaxation_preconditioner_strategy in strategies_for_backend:
+                                                    print(
+                                                        "      "
+                                                        f"backend={backend} repeat={repeat_index} "
+                                                        "relaxation_preconditioner="
+                                                        f"{relaxation_preconditioner_strategy}",
+                                                        flush=True,
                                                     )
-                                                elif backend == "fem_gpu":
-                                                    row = run_backend(
-                                                        backend_label="fem_gpu",
-                                                        binary=FULLMAG_GPU,
-                                                        mesh_path=mesh_path,
-                                                        scenario=scenario,
-                                                        integrator=integrator,
-                                                        relaxation_algorithm=relaxation_algorithm,
-                                                        steps=args.steps,
-                                                        dt=args.dt,
-                                                        timestep_policy=timestep_policy,
-                                                        thread_spec=thread_spec,
-                                                        timeout_s=args.case_timeout_s,
-                                                        problem_ir=executed_problem_ir,
-                                                        qualification_case_manifest=(
-                                                            qualification_case_manifest
-                                                        ),
-                                                        observed_gpu_identity=(
-                                                            observed_gpu_identity
-                                                        ),
-                                                        extra_env={
-                                                            "FULLMAG_FEM_GPU_INDEX": str(
-                                                                observed_gpu_identity[
-                                                                    "gpu_index"
-                                                                ]
-                                                                if observed_gpu_identity
-                                                                is not None
-                                                                else 0
+                                                    if backend == "fem_cpu":
+                                                        row = run_backend(
+                                                            backend_label="fem_cpu",
+                                                            binary=FULLMAG_CPU,
+                                                            mesh_path=mesh_path,
+                                                            scenario=scenario,
+                                                            integrator=integrator,
+                                                            relaxation_algorithm=relaxation_algorithm,
+                                                            steps=args.steps,
+                                                            dt=args.dt,
+                                                            timestep_policy=timestep_policy,
+                                                            thread_spec=thread_spec,
+                                                            timeout_s=args.case_timeout_s,
+                                                            problem_ir=executed_problem_ir,
+                                                            qualification_case_manifest=(
+                                                                qualification_case_manifest
                                                             ),
-                                                            **demag_env,
-                                                            **mesh_env,
-                                                            **relax_env,
-                                                            **domain_mesh_env,
-                                                        },
-                                                    )
-                                                else:
-                                                    continue
-                                                row["repeat_index"] = repeat_index
-                                                results.append(row)
+                                                            capture_final_magnetization=(
+                                                                args.capture_final_magnetization
+                                                            ),
+                                                            require_reported_execution_identity=(
+                                                                task11_resolution_sweep
+                                                            ),
+                                                            ui_surface=args.ui_surface,
+                                                            extra_env={
+                                                                "FULLMAG_FEM_EXECUTION": "cpu",
+                                                                **demag_env,
+                                                                **case_mesh_env,
+                                                                **relax_env,
+                                                                **domain_mesh_env,
+                                                            },
+                                                        )
+                                                    elif backend == "fem_gpu":
+                                                        row = run_backend(
+                                                            backend_label="fem_gpu",
+                                                            binary=FULLMAG_GPU,
+                                                            mesh_path=mesh_path,
+                                                            scenario=scenario,
+                                                            integrator=integrator,
+                                                            relaxation_algorithm=relaxation_algorithm,
+                                                            steps=args.steps,
+                                                            dt=args.dt,
+                                                            timestep_policy=timestep_policy,
+                                                            thread_spec=thread_spec,
+                                                            timeout_s=args.case_timeout_s,
+                                                            problem_ir=executed_problem_ir,
+                                                            qualification_case_manifest=(
+                                                                qualification_case_manifest
+                                                            ),
+                                                            observed_gpu_identity=(
+                                                                observed_gpu_identity
+                                                            ),
+                                                            capture_final_magnetization=(
+                                                                args.capture_final_magnetization
+                                                            ),
+                                                            require_reported_execution_identity=(
+                                                                task11_resolution_sweep
+                                                            ),
+                                                            ui_surface=args.ui_surface,
+                                                            extra_env={
+                                                                "FULLMAG_FEM_GPU_INDEX": str(
+                                                                    observed_gpu_identity[
+                                                                        "gpu_index"
+                                                                    ]
+                                                                    if observed_gpu_identity
+                                                                    is not None
+                                                                    else 0
+                                                                ),
+                                                                "FULLMAG_FEM_GPU_RELAXATION_PRECONDITIONER_STRATEGY": relaxation_preconditioner_strategy,
+                                                                **demag_env,
+                                                                **case_mesh_env,
+                                                                **relax_env,
+                                                                **domain_mesh_env,
+                                                            },
+                                                        )
+                                                    else:
+                                                        continue
+                                                    row["repeat_index"] = repeat_index
+                                                    if (
+                                                        args.qualification_fixture_problem_ir_sha256
+                                                        is not None
+                                                    ):
+                                                        row[
+                                                            "qualification_fixture_problem_ir_sha256"
+                                                        ] = args.qualification_fixture_problem_ir_sha256
+                                                    results.append(row)
 
     write_csv(results, args.output)
     demag_residual_threshold = args.demag_convergence_residual
@@ -7829,6 +10994,19 @@ def main() -> None:
             gate_exit_code = gate_exit_code or 18
     if args.require_stable_solver_mesh:
         failures = unstable_solver_mesh_groups(results)
+        if failures:
+            gate_failures.extend(failures)
+            gate_exit_code = gate_exit_code or 3
+    if args.expected_solver_mesh_signature is not None:
+        failures = [
+            f"case={repeated_case_key(row)} solver_mesh_signature="
+            f"{row.get('solver_mesh_signature')} differs from expected "
+            f"{args.expected_solver_mesh_signature}"
+            for row in results
+            if row.get("status") == "ok"
+            and row.get("solver_mesh_signature")
+            != args.expected_solver_mesh_signature
+        ]
         if failures:
             gate_failures.extend(failures)
             gate_exit_code = gate_exit_code or 3

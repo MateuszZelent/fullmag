@@ -685,6 +685,7 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
         resolved_worker: None,
         resolved_cpu_threads: None,
         resolved_fallback: None,
+        fem_crossover_decision: None,
         artifact_dir: ".".into(),
         started_at_unix_ms: 1_700_000_000_000,
         finished_at_unix_ms: 0,
@@ -1393,6 +1394,7 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
         resolved_worker: None,
         resolved_cpu_threads: None,
         resolved_fallback: None,
+        fem_crossover_decision: None,
         artifact_dir: artifact_dir.display().to_string(),
         started_at_unix_ms: 1_700_000_000_000,
         finished_at_unix_ms: 0,
@@ -1520,6 +1522,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         resolved_worker: None,
         resolved_cpu_threads: None,
         resolved_fallback: None,
+        fem_crossover_decision: None,
         artifact_dir: repo_root.join("artifacts").display().to_string(),
         started_at_unix_ms: 1_700_000_000_000,
         finished_at_unix_ms: 0,
@@ -2040,6 +2043,57 @@ async fn status_returns_200_with_live_session() {
     assert!(json["capabilities"].is_object());
     assert!(json["energies"].is_object());
     assert!(json["metrics"].is_object());
+}
+
+#[tokio::test]
+async fn status_exposes_fem_auto_device_crossover_decision() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.requested_device = "auto".into();
+        snapshot.session.resolved_device = Some("cpu".into());
+        snapshot.session.fem_crossover_decision = Some(fullmag_runner::FemCrossoverDecision {
+            requested: "auto".into(),
+            resolved: "cpu".into(),
+            reason: "calibrated_below_lower_bound".into(),
+            calibration_id: Some("test-calibration".into()),
+            confidence: Some(0.95),
+        });
+        snapshot.run = Some(RunManifest {
+            run_id: "run-crossover".into(),
+            session_id: snapshot.session.session_id.clone(),
+            status: "running".into(),
+            total_steps: 0,
+            final_time: Some(0.0),
+            final_e_ex: None,
+            final_e_demag: None,
+            final_e_ext: None,
+            final_e_ani: None,
+            final_e_dmi: None,
+            final_e_total: None,
+            artifact_dir: "/tmp/fullmag-tests".into(),
+        });
+    }
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["run"]["requested_device"], "auto");
+    assert_eq!(json["run"]["resolved_device"], "cpu");
+    assert_eq!(
+        json["run"]["selection_reason"],
+        "calibrated_below_lower_bound"
+    );
+    assert_eq!(json["run"]["calibration_id"], "test-calibration");
+    assert_eq!(json["run"]["selection_confidence"], 0.95);
 }
 
 #[tokio::test]
@@ -19421,7 +19475,19 @@ async fn solver_profile_returns_404_without_session() {
 
 #[tokio::test]
 async fn solver_profile_returns_200_with_session() {
-    let app = test_router_with_session().await;
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        guard
+            .as_mut()
+            .expect("live session exists")
+            .solver_profile
+            .persistence_failed = true;
+        let profile = &mut guard.as_mut().expect("live session exists").solver_profile;
+        profile.overhead.persist_enqueued_count = 3;
+        profile.overhead.persist_completed_count = 2;
+    }
+    let app = build_v2_router().with_state(state);
     let response = app
         .oneshot(
             Request::builder()
@@ -19439,6 +19505,9 @@ async fn solver_profile_returns_200_with_session() {
     assert_eq!(json["state"], "disabled");
     assert!(json["latest_samples"].is_array());
     assert_eq!(json["aggregates"]["sample_count"], 0);
+    assert_eq!(json["persistence_failed"], true);
+    assert_eq!(json["overhead"]["persist_enqueued_count"], 3);
+    assert_eq!(json["overhead"]["persist_completed_count"], 2);
 }
 
 #[tokio::test]
@@ -24002,6 +24071,76 @@ async fn v2_field_vector_accepts_fem_live_magnetization_on_magnetic_nodes() {
             .and_then(|value| value.to_str().ok()),
         Some("4")
     );
+}
+
+#[tokio::test]
+async fn v2_field_vector_normalizes_unset_fem_grid_without_losing_topology_identity() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_scoped_fem_mesh_payload();
+        while mesh.nodes.len() < 70 {
+            let index = mesh.nodes.len() as f64;
+            mesh.nodes.push([index, index + 0.25, index + 0.5]);
+        }
+        let values = (0..70)
+            .map(|index| [index as f64, index as f64 + 0.1, index as f64 + 0.2])
+            .collect::<Vec<_>>();
+        snapshot.state_version = 52;
+        snapshot.mesh_revision = 19;
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.preview_cache = Default::default();
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": values,
+                "source_step": 52,
+                "source_revision": 19,
+                "materialized_at_unix_ms": 1_700_000_000_456_u64,
+                "layout": { "grid_cells": [0, 0, 0] }
+            }
+        }))
+        .expect("terminal FEM m field should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-fullmag-encoding"], "FMVP;version=3");
+    assert_eq!(
+        response.headers()["x-fullmag-field-indexing"],
+        "full_domain"
+    );
+    assert!(response
+        .headers()
+        .get("x-fullmag-mesh-topology-hash")
+        .is_some());
+    assert!(response
+        .headers()
+        .get("x-fullmag-node-index-count")
+        .is_none());
+
+    let bytes = body_bytes(response).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    assert_eq!(bytes[4], 3);
+    assert_eq!(bytes[6], 3);
+    assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()), 210);
+    assert_eq!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()), 70);
+    assert_eq!(u32::from_le_bytes(bytes[20..24].try_into().unwrap()), 1);
+    assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 1);
+    assert_eq!(u32::from_le_bytes(bytes[104..108].try_into().unwrap()), 0);
+    assert_eq!(u32::from_le_bytes(bytes[108..112].try_into().unwrap()), 0);
+    let values = decode_fmvp_payload_f64(&bytes);
+    assert_eq!(values.len(), 210);
+    assert_eq!(&values[..3], &[0.0, 0.1, 0.2]);
+    assert_eq!(&values[207..], &[69.0, 69.1, 69.2]);
 }
 
 #[tokio::test]

@@ -28,6 +28,15 @@ typedef enum {
     FULLMAG_FEM_INTEGRATOR_RK45_DP54 = 4,
 } fullmag_fem_integrator;
 
+typedef enum {
+    FULLMAG_FEM_HOST_THREAD_POLICY_NONE = 0,
+    FULLMAG_FEM_HOST_THREAD_POLICY_EXTERNAL_AUTO_RESOLVED = 1,
+    FULLMAG_FEM_HOST_THREAD_POLICY_SMALL_MESH = 2,
+    FULLMAG_FEM_HOST_THREAD_POLICY_MEDIUM_MESH = 3,
+    FULLMAG_FEM_HOST_THREAD_POLICY_GPU_DEFAULT_ONE = 4,
+    FULLMAG_FEM_HOST_THREAD_POLICY_AUTO_UNCAPPED = 5,
+} fullmag_fem_host_thread_policy_reason;
+
 typedef struct {
     double atol;
     double rtol;
@@ -507,7 +516,17 @@ typedef struct {
     /* Thread provenance (filled from context each step) */
     int32_t requested_omp_threads;
     int32_t effective_omp_threads;
+    /* fullmag_fem_host_thread_policy_reason; field name retained for ABI stability. */
     int32_t cpu_thread_cap_reason;
+    /* Effective native BoomerAMG policy, including optional override presence. */
+    int32_t demag_amg_relax_type;
+    int32_t demag_amg_coarsening;
+    int32_t demag_amg_interpolation;
+    int32_t demag_amg_aggressive_coarsening;
+    double demag_amg_strength_threshold;
+    int32_t demag_amg_strength_threshold_is_set;
+    int32_t demag_amg_max_levels;
+    int32_t demag_amg_max_levels_is_set;
 } fullmag_fem_step_stats;
 
 #define FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION 1u

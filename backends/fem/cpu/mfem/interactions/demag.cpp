@@ -79,6 +79,7 @@ void initialize_demag_plan_fields(Context &ctx, const fullmag_fem_plan_desc &pla
 {
     ctx.demag.enabled = plan.enable_demag != 0;
     ctx.demag.solver = plan.demag_solver;
+    ctx.demag.amg_policy = resolve_demag_amg_policy_from_environment();
 
 #if FULLMAG_HAS_MFEM_STACK
     ctx.demag.realization = static_cast<int>(plan.demag_realization);

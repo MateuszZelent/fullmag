@@ -15020,7 +15020,29 @@
       },
       "RunSummary": {
         "properties": {
+          "calibration_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requested_device": {
+            "type": "string"
+          },
+          "resolved_device": {
+            "type": "string"
+          },
           "run_id": {
+            "type": "string"
+          },
+          "selection_confidence": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "selection_reason": {
             "type": "string"
           },
           "solver_steps": {
@@ -15056,7 +15078,10 @@
           "stage_count",
           "started_at",
           "solver_steps",
-          "solver_time"
+          "solver_time",
+          "requested_device",
+          "resolved_device",
+          "selection_reason"
         ],
         "type": "object"
       },
@@ -18001,6 +18026,16 @@
             "minimum": 0,
             "type": "integer"
           },
+          "persist_completed_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "persist_enqueued_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "total_persist_wall_time_ns": {
             "format": "int64",
             "minimum": 0,
@@ -18118,6 +18153,9 @@
           },
           "overhead": {
             "$ref": "#/components/schemas/SolverProfileOverheadDiagnosticsResource"
+          },
+          "persistence_failed": {
+            "type": "boolean"
           },
           "preview_3d_disabled": {
             "type": "boolean"
