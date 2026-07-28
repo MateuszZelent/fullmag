@@ -231,6 +231,7 @@ When the user corrects your approach, append a one-line rule here before ending 
 - In a shared dirty worktree, inspect `git diff --cached --name-only` in a separate command before every commit; never chain that inspection and `git commit`, because another process may have staged unrelated files between task steps.
 - Microwave antenna designs with a taper or constriction must use a full 3D conductor/current solve; never promote a translationally invariant 2.5D cross-section as the production model for width variation along current flow.
 - Ordinary `fullmag x.py` launches without `--output-dir` must replace only the auto-derived sibling `x.zarr` bundle and write final and per-stage scientific artifacts there; never auto-delete an explicit output path or hide the only result under `.fullmag` session history.
+- Never delete a worktree `target/` directory while a Docker Compose container bind-mounts that worktree, even when `/workspace/target` is overmounted by a named volume; stop the container and verify its mounts first.
 
 ---
 

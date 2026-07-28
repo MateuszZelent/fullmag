@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Mapping
 
 from inspect_cuda_architectures import inspect_cuda_binary
-from validate_managed_fem_runtime_bundle import loader_trace, read_soname, sha256
+from validate_managed_fem_runtime_bundle import loader_trace, query_mesh_abi, read_soname, sha256
 
 
 def relative_to_runtime(path: Path, runtime_root: Path) -> str:
@@ -167,6 +167,7 @@ def build_manifest(args: argparse.Namespace) -> Mapping[str, object]:
         },
         "native_libraries": native_libraries,
         "loader_trace": loader_contract,
+        "native_abi": dict(query_mesh_abi(fullmag_path, runtime_root)),
         "build": {
             "mfem_version": "4.9",
             "hypre_version": "3.1.0",

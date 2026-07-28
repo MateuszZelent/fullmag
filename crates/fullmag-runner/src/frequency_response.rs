@@ -4351,10 +4351,10 @@ fn build_dmi_payload(
     };
     let node_count = magnetic_node_indices.len();
     let mut lumped_mass = vec![0.0; node_count];
-    let mut elements = Vec::new();
+    let mut dmi_elements = Vec::new();
 
-    let elements = plan.mesh.require_tet4_elements().ok()?;
-    for (element_index, element) in elements.iter().enumerate() {
+    let tet_elements = plan.mesh.require_tet4_elements().ok()?;
+    for (element_index, element) in tet_elements.iter().enumerate() {
         if plan
             .mesh
             .element_markers
@@ -4384,7 +4384,7 @@ fn build_dmi_payload(
             lumped_mass[node_index] += geometry.volume * 0.25;
         }
         if let Some(d) = interfacial_dmi {
-            elements.push(NativeDrivenFrequencyResponseDmiElement {
+            dmi_elements.push(NativeDrivenFrequencyResponseDmiElement {
                 kind: NativeDrivenFrequencyResponseDmiKind::Interfacial,
                 node_indices: compact_element,
                 shape: [0.25, 0.25, 0.25, 0.25],
@@ -4395,7 +4395,7 @@ fn build_dmi_payload(
             });
         }
         if let Some(d) = bulk_dmi {
-            elements.push(NativeDrivenFrequencyResponseDmiElement {
+            dmi_elements.push(NativeDrivenFrequencyResponseDmiElement {
                 kind: NativeDrivenFrequencyResponseDmiKind::Bulk,
                 node_indices: compact_element,
                 shape: [0.25, 0.25, 0.25, 0.25],
@@ -4406,7 +4406,7 @@ fn build_dmi_payload(
             });
         }
     }
-    if elements.is_empty()
+    if dmi_elements.is_empty()
         || lumped_mass
             .iter()
             .any(|mass| !mass.is_finite() || *mass <= 0.0)
@@ -4414,7 +4414,7 @@ fn build_dmi_payload(
         return None;
     }
     Some(DmiPayload {
-        elements,
+        elements: dmi_elements,
         lumped_mass: Some(lumped_mass),
         ms_field,
         uniform_ms: plan.material.saturation_magnetisation,

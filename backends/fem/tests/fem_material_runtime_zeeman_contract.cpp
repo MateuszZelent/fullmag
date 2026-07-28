@@ -69,7 +69,7 @@ fullmag::fem::Context sharp_ms_context() {
         0.0, 0.0, 2.0,
         0.0, 0.0, 3.0,
     };
-    ctx.mesh.elements = {
+    ctx.mesh.cell_nodes = {
         0u, 1u, 2u, 3u,
         0u, 1u, 2u, 4u,
         0u, 1u, 2u, 5u,

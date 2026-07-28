@@ -40,8 +40,15 @@ int main() {
         0.0, 0.0, 1.0,
     };
     const uint32_t elements[] = {0, 1, 2, 3};
+    const uint32_t cell_types[] = {FULLMAG_FEM_CELL_TET4};
+    const uint32_t cell_offsets[] = {0, 4};
+    const uint64_t cell_ordinals[] = {0};
     const uint32_t element_markers[] = {1};
     const uint32_t boundary_faces[] = {0, 1, 2};
+    const uint32_t facet_types[] = {FULLMAG_FEM_FACET_TRI3};
+    const uint32_t facet_roles[] = {FULLMAG_FEM_FACET_ROLE_EXTERIOR};
+    const uint32_t facet_offsets[] = {0, 3};
+    const uint64_t facet_ordinals[] = {0};
     const uint32_t boundary_markers[] = {1};
     std::vector<double> m0 = {
         1.0, 0.0, 0.0,
@@ -51,14 +58,32 @@ int main() {
     };
 
     fullmag_fem_plan_desc plan = {};
+    plan.mesh.abi_version = FULLMAG_FEM_MESH_DESC_ABI_VERSION;
+    plan.mesh.struct_size = sizeof(fullmag_fem_mesh_desc);
     plan.mesh.nodes_xyz = nodes;
-    plan.mesh.n_nodes = 4;
-    plan.mesh.elements = elements;
-    plan.mesh.n_elements = 1;
-    plan.mesh.element_markers = element_markers;
-    plan.mesh.boundary_faces = boundary_faces;
-    plan.mesh.n_boundary_faces = 1;
-    plan.mesh.boundary_markers = boundary_markers;
+    plan.mesh.nodes_xyz_len = 12;
+    plan.mesh.cell_types = cell_types;
+    plan.mesh.cell_types_len = 1;
+    plan.mesh.cell_offsets = cell_offsets;
+    plan.mesh.cell_offsets_len = 2;
+    plan.mesh.cell_nodes = elements;
+    plan.mesh.cell_nodes_len = 4;
+    plan.mesh.cell_global_ordinals = cell_ordinals;
+    plan.mesh.cell_global_ordinals_len = 1;
+    plan.mesh.cell_markers = element_markers;
+    plan.mesh.cell_markers_len = 1;
+    plan.mesh.facet_types = facet_types;
+    plan.mesh.facet_types_len = 1;
+    plan.mesh.facet_roles = facet_roles;
+    plan.mesh.facet_roles_len = 1;
+    plan.mesh.facet_offsets = facet_offsets;
+    plan.mesh.facet_offsets_len = 2;
+    plan.mesh.facet_nodes = boundary_faces;
+    plan.mesh.facet_nodes_len = 3;
+    plan.mesh.facet_global_ordinals = facet_ordinals;
+    plan.mesh.facet_global_ordinals_len = 1;
+    plan.mesh.facet_markers = boundary_markers;
+    plan.mesh.facet_markers_len = 1;
     plan.material.saturation_magnetisation = 800e3;
     plan.material.exchange_stiffness = 13e-12;
     plan.material.damping = 0.1;

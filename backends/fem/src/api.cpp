@@ -1153,9 +1153,88 @@ frequency_domain_mfem_apply_demag_tangent_with_potential_from_c_abi(
         error_message));
 }
 
+constexpr fullmag_fem_mesh_abi_record make_mesh_abi_record() {
+    static_assert(sizeof(fullmag_fem_mesh_abi_layout) == 360u);
+    static_assert(alignof(fullmag_fem_mesh_abi_layout) == 8u);
+    static_assert(offsetof(fullmag_fem_mesh_abi_layout, abi_version) == 0u);
+    static_assert(offsetof(fullmag_fem_mesh_abi_layout, struct_size) == 4u);
+    static_assert(offsetof(fullmag_fem_mesh_abi_layout, mesh_desc_abi_version) == 8u);
+    static_assert(offsetof(fullmag_fem_mesh_abi_layout, mesh_desc_struct_size) == 12u);
+    static_assert(offsetof(fullmag_fem_mesh_abi_layout, field_count) == 16u);
+    static_assert(offsetof(fullmag_fem_mesh_abi_layout, reserved) == 20u);
+    static_assert(offsetof(fullmag_fem_mesh_abi_layout, field_offsets) == 24u);
+    static_assert(offsetof(fullmag_fem_mesh_abi_layout, layout_fingerprint) == 264u);
+    static_assert(sizeof(fullmag_fem_mesh_abi_record) == 416u);
+    static_assert(alignof(fullmag_fem_mesh_abi_record) == 8u);
+    static_assert(offsetof(fullmag_fem_mesh_abi_record, magic) == 0u);
+    static_assert(offsetof(fullmag_fem_mesh_abi_record, record_version) == 40u);
+    static_assert(offsetof(fullmag_fem_mesh_abi_record, record_size) == 44u);
+    static_assert(offsetof(fullmag_fem_mesh_abi_record, endian_tag) == 48u);
+    static_assert(offsetof(fullmag_fem_mesh_abi_record, reserved) == 52u);
+    static_assert(offsetof(fullmag_fem_mesh_abi_record, layout) == 56u);
+    fullmag_fem_mesh_abi_record record{};
+    constexpr char magic[] = FULLMAG_FEM_MESH_ABI_RECORD_MAGIC;
+    constexpr char fingerprint[] = FULLMAG_FEM_MESH_DESC_ABI_LAYOUT_FINGERPRINT;
+    for (size_t i = 0; i < sizeof(magic); ++i) record.magic[i] = magic[i];
+    record.record_version = FULLMAG_FEM_MESH_ABI_RECORD_VERSION;
+    record.record_size = sizeof(record);
+    record.endian_tag = FULLMAG_FEM_MESH_ABI_RECORD_ENDIAN_TAG;
+    record.layout.abi_version = FULLMAG_FEM_MESH_ABI_LAYOUT_VERSION;
+    record.layout.struct_size = sizeof(record.layout);
+    record.layout.mesh_desc_abi_version = FULLMAG_FEM_MESH_DESC_ABI_VERSION;
+    record.layout.mesh_desc_struct_size = sizeof(fullmag_fem_mesh_desc);
+    record.layout.field_count = FULLMAG_FEM_MESH_ABI_FIELD_COUNT;
+    constexpr uint64_t offsets[] = {
+        offsetof(fullmag_fem_mesh_desc, abi_version),
+        offsetof(fullmag_fem_mesh_desc, struct_size),
+        offsetof(fullmag_fem_mesh_desc, nodes_xyz),
+        offsetof(fullmag_fem_mesh_desc, nodes_xyz_len),
+        offsetof(fullmag_fem_mesh_desc, cell_types),
+        offsetof(fullmag_fem_mesh_desc, cell_types_len),
+        offsetof(fullmag_fem_mesh_desc, cell_offsets),
+        offsetof(fullmag_fem_mesh_desc, cell_offsets_len),
+        offsetof(fullmag_fem_mesh_desc, cell_nodes),
+        offsetof(fullmag_fem_mesh_desc, cell_nodes_len),
+        offsetof(fullmag_fem_mesh_desc, cell_global_ordinals),
+        offsetof(fullmag_fem_mesh_desc, cell_global_ordinals_len),
+        offsetof(fullmag_fem_mesh_desc, cell_markers),
+        offsetof(fullmag_fem_mesh_desc, cell_markers_len),
+        offsetof(fullmag_fem_mesh_desc, facet_types),
+        offsetof(fullmag_fem_mesh_desc, facet_types_len),
+        offsetof(fullmag_fem_mesh_desc, facet_roles),
+        offsetof(fullmag_fem_mesh_desc, facet_roles_len),
+        offsetof(fullmag_fem_mesh_desc, facet_offsets),
+        offsetof(fullmag_fem_mesh_desc, facet_offsets_len),
+        offsetof(fullmag_fem_mesh_desc, facet_nodes),
+        offsetof(fullmag_fem_mesh_desc, facet_nodes_len),
+        offsetof(fullmag_fem_mesh_desc, facet_global_ordinals),
+        offsetof(fullmag_fem_mesh_desc, facet_global_ordinals_len),
+        offsetof(fullmag_fem_mesh_desc, facet_markers),
+        offsetof(fullmag_fem_mesh_desc, facet_markers_len),
+        offsetof(fullmag_fem_mesh_desc, periodic_node_pairs),
+        offsetof(fullmag_fem_mesh_desc, periodic_node_pairs_len),
+        offsetof(fullmag_fem_mesh_desc, periodic_boundary_pair_markers),
+        offsetof(fullmag_fem_mesh_desc, periodic_boundary_pair_markers_len),
+    };
+    static_assert(sizeof(offsets) / sizeof(offsets[0]) == FULLMAG_FEM_MESH_ABI_FIELD_COUNT);
+    for (size_t i = 0; i < FULLMAG_FEM_MESH_ABI_FIELD_COUNT; ++i) {
+        record.layout.field_offsets[i] = offsets[i];
+    }
+    for (size_t i = 0; i < sizeof(fingerprint); ++i) {
+        record.layout.layout_fingerprint[i] = fingerprint[i];
+    }
+    return record;
+}
+
 } // namespace
 
 extern "C" {
+
+#if defined(__GNUC__)
+__attribute__((used, section(".fullmag_fem_abi"), aligned(8), visibility("default")))
+#endif
+extern const fullmag_fem_mesh_abi_record fullmag_fem_mesh_abi_record_v1 =
+    make_mesh_abi_record();
 
 int fullmag_fem_is_available(void) {
     const auto info = fullmag::fem::query_availability();
@@ -1462,6 +1541,18 @@ int fullmag_fem_get_frequency_domain_abi_layout(
         sizeof(fullmag_fem_frequency_domain_solve_result);
     out_layout->solve_result_artifact_manifest_path_offset =
         offsetof(fullmag_fem_frequency_domain_solve_result, artifact_manifest_path);
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_get_mesh_abi_layout(fullmag_fem_mesh_abi_layout *out_layout)
+{
+    if (out_layout == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_get_mesh_abi_layout received null out_layout");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    *out_layout = fullmag_fem_mesh_abi_record_v1.layout;
+    fullmag_fem_clear_global_error();
     return FULLMAG_FEM_OK;
 }
 

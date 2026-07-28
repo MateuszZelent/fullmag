@@ -70,7 +70,7 @@ double average_magnetic_node_volume(const Context &ctx)
             ctx.mesh.magnetic_element_mask[static_cast<size_t>(element)] == 0u) {
             continue;
         }
-        total_magnetic_volume += tetrahedron_volume(ctx.mesh.nodes_xyz, ctx.mesh.elements, element);
+        total_magnetic_volume += tetrahedron_volume(ctx.mesh.nodes_xyz, ctx.mesh.cell_nodes, element);
     }
     if (total_magnetic_volume <= 0.0) {
         return 0.0;

@@ -137,7 +137,7 @@ std::vector<MfemBoundaryTriangle> exterior_mfem_boundary_triangles(const Context
     };
 
     for (uint32_t i = 0; i < ctx.mesh.n_elements; ++i) {
-        const uint32_t *tet = ctx.mesh.elements.data() + static_cast<size_t>(i) * 4u;
+        const uint32_t *tet = ctx.mesh.cell_nodes.data() + static_cast<size_t>(i) * 4u;
         add_tet_face({tet[0], tet[2], tet[1]});
         add_tet_face({tet[0], tet[1], tet[3]});
         add_tet_face({tet[0], tet[3], tet[2]});
@@ -146,10 +146,10 @@ std::vector<MfemBoundaryTriangle> exterior_mfem_boundary_triangles(const Context
 
     std::map<std::array<uint32_t, 3>, uint32_t> input_markers;
     for (uint32_t i = 0; i < ctx.mesh.n_boundary_faces; ++i) {
-        const uint32_t *tri = ctx.mesh.boundary_faces.data() + static_cast<size_t>(i) * 3u;
+        const uint32_t *tri = ctx.mesh.facet_nodes.data() + static_cast<size_t>(i) * 3u;
         uint32_t marker = 1u;
-        if (!ctx.mesh.boundary_markers.empty()) {
-            marker = ctx.mesh.boundary_markers[static_cast<size_t>(i)];
+        if (!ctx.mesh.facet_markers.empty()) {
+            marker = ctx.mesh.facet_markers[static_cast<size_t>(i)];
             if (marker == 0u) {
                 marker = 1u;
             }
@@ -304,7 +304,7 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
         }
 
         for (uint32_t i = 0; i < ctx.mesh.n_elements; ++i) {
-            const uint32_t *tet = ctx.mesh.elements.data() + static_cast<size_t>(i) * 4u;
+            const uint32_t *tet = ctx.mesh.cell_nodes.data() + static_cast<size_t>(i) * 4u;
             const int vi[4] = {
                 static_cast<int>(tet[0]),
                 static_cast<int>(tet[1]),
@@ -312,8 +312,8 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
                 static_cast<int>(tet[3]),
             };
             int attr = 1;
-            if (!ctx.mesh.element_markers.empty()) {
-                const uint32_t marker = ctx.mesh.element_markers[static_cast<size_t>(i)];
+            if (!ctx.mesh.cell_markers.empty()) {
+                const uint32_t marker = ctx.mesh.cell_markers[static_cast<size_t>(i)];
                 attr = marker == 0u ? 2 : static_cast<int>(marker);
             }
             mesh->AddTet(vi, attr);

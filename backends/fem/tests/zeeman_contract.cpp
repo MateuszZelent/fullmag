@@ -374,7 +374,7 @@ void global_uniform_regional_drive_projects_and_materializes_exactly() {
     ctx.mesh.n_nodes = 4;
     ctx.mesh.n_elements = 1;
     ctx.mesh.nodes_xyz = {0,0,0, 1,0,0, 0,1,0, 0,0,1};
-    ctx.mesh.elements = {0,1,2,3};
+    ctx.mesh.cell_nodes = {0,1,2,3};
     ctx.mesh.magnetic_element_mask = {1};
     ctx.mesh.node_volumes = {1.0/24.0, 1.0/24.0, 1.0/24.0, 1.0/24.0};
     auto drive_desc = global_uniform_drive_desc();
@@ -397,7 +397,7 @@ void spatial_sinc_regional_drive_uses_tetra_volume_projection() {
     ctx.mesh.n_nodes = 4;
     ctx.mesh.n_elements = 1;
     ctx.mesh.nodes_xyz = {0,0,0, 1,0,0, 0,1,0, 0,0,1};
-    ctx.mesh.elements = {0,1,2,3};
+    ctx.mesh.cell_nodes = {0,1,2,3};
     ctx.mesh.magnetic_element_mask = {1};
     ctx.mesh.node_volumes = {1.0/24.0, 1.0/24.0, 1.0/24.0, 1.0/24.0};
     auto drive_desc = global_uniform_drive_desc();
@@ -421,7 +421,7 @@ void geometry_mask_projection_matches_analytic_clipped_tetra_volume() {
     ctx.mesh.n_nodes = 4;
     ctx.mesh.n_elements = 1;
     ctx.mesh.nodes_xyz = {0,0,0, 1,0,0, 0,1,0, 0,0,1};
-    ctx.mesh.elements = {0,1,2,3};
+    ctx.mesh.cell_nodes = {0,1,2,3};
     ctx.mesh.magnetic_element_mask = {1};
     ctx.mesh.node_volumes = {1.0/24.0, 1.0/24.0, 1.0/24.0, 1.0/24.0};
     fullmag_fem_geometry_mask_node box{};
@@ -472,7 +472,7 @@ void periodic_node_pair_requires_identical_projected_basis_without_averaging() {
     ctx.mesh.n_nodes = 4;
     ctx.mesh.n_elements = 1;
     ctx.mesh.nodes_xyz = {0,0,0, 1,0,0, 0,1,0, 0,0,1};
-    ctx.mesh.elements = {0,1,2,3};
+    ctx.mesh.cell_nodes = {0,1,2,3};
     ctx.mesh.magnetic_element_mask = {1};
     ctx.mesh.node_volumes = {1.0/24.0, 1.0/24.0, 1.0/24.0, 1.0/24.0};
     ctx.mesh.periodic_node_pairs = {0, 1};
@@ -499,7 +499,7 @@ void multiple_regional_drives_superpose_and_cancel() {
     ctx.mesh.n_nodes = 4;
     ctx.mesh.n_elements = 1;
     ctx.mesh.nodes_xyz = {0,0,0, 1,0,0, 0,1,0, 0,0,1};
-    ctx.mesh.elements = {0,1,2,3};
+    ctx.mesh.cell_nodes = {0,1,2,3};
     ctx.mesh.magnetic_element_mask = {1};
     ctx.mesh.node_volumes = {1.0/24.0, 1.0/24.0, 1.0/24.0, 1.0/24.0};
     fullmag_fem_regional_field_drive_desc drives[] = {

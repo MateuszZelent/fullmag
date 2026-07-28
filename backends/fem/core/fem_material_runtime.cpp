@@ -18,10 +18,10 @@ double tetrahedron_volume(const FemMeshRuntimeState &mesh, std::size_t element) 
         return mesh.nodes_xyz[static_cast<std::size_t>(node) * 3u + axis];
     };
     const std::size_t base = element * 4u;
-    const std::uint32_t n0 = mesh.elements[base + 0u];
-    const std::uint32_t n1 = mesh.elements[base + 1u];
-    const std::uint32_t n2 = mesh.elements[base + 2u];
-    const std::uint32_t n3 = mesh.elements[base + 3u];
+    const std::uint32_t n0 = mesh.cell_nodes[base + 0u];
+    const std::uint32_t n1 = mesh.cell_nodes[base + 1u];
+    const std::uint32_t n2 = mesh.cell_nodes[base + 2u];
+    const std::uint32_t n3 = mesh.cell_nodes[base + 3u];
     const double ax = coord(n1, 0u) - coord(n0, 0u);
     const double ay = coord(n1, 1u) - coord(n0, 1u);
     const double az = coord(n1, 2u) - coord(n0, 2u);
@@ -90,7 +90,7 @@ bool initialize_material_runtime(Context &ctx, std::string &error) {
     if (ctx.material_fields.runtime.has_value()) {
         return true;
     }
-    if (ctx.mesh.elements.size() != static_cast<std::size_t>(ctx.mesh.n_elements) * 4u ||
+    if (ctx.mesh.cell_nodes.size() != static_cast<std::size_t>(ctx.mesh.n_elements) * 4u ||
         ctx.mesh.nodes_xyz.size() != static_cast<std::size_t>(ctx.mesh.n_nodes) * 3u ||
         ctx.mesh.magnetic_element_mask.size() != static_cast<std::size_t>(ctx.mesh.n_elements)) {
         error = "FEM material runtime requires imported ordered mesh topology and magnetic-element mask";
@@ -105,8 +105,8 @@ bool initialize_material_runtime(Context &ctx, std::string &error) {
         for (std::size_t element = 0; element < ctx.mesh.n_elements; ++element) {
             const std::size_t base = element * 4u;
             topology.push_back({{
-                ctx.mesh.elements[base + 0u], ctx.mesh.elements[base + 1u],
-                ctx.mesh.elements[base + 2u], ctx.mesh.elements[base + 3u]},
+                ctx.mesh.cell_nodes[base + 0u], ctx.mesh.cell_nodes[base + 1u],
+                ctx.mesh.cell_nodes[base + 2u], ctx.mesh.cell_nodes[base + 3u]},
                 tetrahedron_volume(ctx.mesh, element)});
             if (ctx.mesh.magnetic_element_mask[element] != 0u) {
                 active.push_back(element);

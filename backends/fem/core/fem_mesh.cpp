@@ -11,246 +11,483 @@
 #include "context.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <unordered_set>
 
 namespace fullmag::fem {
 namespace {
 
+constexpr uint8_t kTetFaceOffsets[] = {0, 3, 6, 9, 12};
+constexpr uint8_t kTetFaceNodes[] = {0, 2, 1, 0, 1, 3, 1, 2, 3, 2, 0, 3};
+constexpr uint8_t kTetEdgeOffsets[] = {0, 2, 4, 6, 8, 10, 12};
+constexpr uint8_t kTetEdgeNodes[] = {0, 1, 1, 2, 2, 0, 0, 3, 1, 3, 2, 3};
+constexpr uint8_t kPrismFaceOffsets[] = {0, 3, 6, 10, 14, 18};
+constexpr uint8_t kPrismFaceNodes[] = {0, 2, 1, 3, 4, 5, 0, 1, 4, 3, 1, 2, 5, 4, 2, 0, 3, 5};
+constexpr uint8_t kPrismEdgeOffsets[] = {0, 2, 4, 6, 8, 10, 12, 14, 16, 18};
+constexpr uint8_t kPrismEdgeNodes[] = {0, 1, 1, 2, 2, 0, 3, 4, 4, 5, 5, 3, 0, 3, 1, 4, 2, 5};
+constexpr uint8_t kPyramidFaceOffsets[] = {0, 4, 7, 10, 13, 16};
+constexpr uint8_t kPyramidFaceNodes[] = {0, 3, 2, 1, 0, 1, 4, 1, 2, 4, 2, 3, 4, 3, 0, 4};
+constexpr uint8_t kPyramidEdgeOffsets[] = {0, 2, 4, 6, 8, 10, 12, 14, 16};
+constexpr uint8_t kPyramidEdgeNodes[] = {0, 1, 1, 2, 2, 3, 3, 0, 0, 4, 1, 4, 2, 4, 3, 4};
+constexpr uint8_t kHexFaceOffsets[] = {0, 4, 8, 12, 16, 20, 24};
+constexpr uint8_t kHexFaceNodes[] = {0, 3, 2, 1, 4, 5, 6, 7, 0, 1, 5, 4, 1, 2, 6, 5, 2, 3, 7, 6, 3, 0, 4, 7};
+constexpr uint8_t kHexEdgeOffsets[] = {0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24};
+constexpr uint8_t kHexEdgeNodes[] = {0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7};
+
 template <typename T>
-void copy_optional_span(
-    const T *source,
-    size_t count,
-    std::vector<T> &destination,
-    T fill_value = T{})
-{
-    destination.assign(count, fill_value);
-    if (source != nullptr && count > 0) {
-        std::copy(source, source + count, destination.begin());
+bool validate_span(const T *pointer, uint64_t length, const char *name, std::string &error) {
+    if (length > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+        error = std::string("FEM mesh ") + name + " length exceeds addressable memory";
+        return false;
+    }
+    if (length > 0 && pointer == nullptr) {
+        error = std::string("FEM mesh ") + name + " pointer is null";
+        return false;
+    }
+    return true;
+}
+
+template <typename T>
+void copy_span(std::vector<T> &destination, const T *source, uint64_t length) {
+    if (length == 0u) {
+        destination.clear();
+        return;
+    }
+    destination.assign(source, source + length);
+}
+
+uint32_t cell_arity(uint32_t type) {
+    switch (type) {
+        case FULLMAG_FEM_CELL_TET4: return 4u;
+        case FULLMAG_FEM_CELL_PRISM6: return 6u;
+        case FULLMAG_FEM_CELL_PYRAMID5: return 5u;
+        case FULLMAG_FEM_CELL_HEX8: return 8u;
+        default: return 0u;
     }
 }
 
-template <typename T>
-void copy_present_span(
-    const T *source,
-    size_t count,
-    std::vector<T> &destination)
-{
-    destination.clear();
-    if (source != nullptr && count > 0) {
-        destination.assign(source, source + count);
+uint32_t facet_arity(uint32_t type) {
+    switch (type) {
+        case FULLMAG_FEM_FACET_TRI3: return 3u;
+        case FULLMAG_FEM_FACET_QUAD4: return 4u;
+        default: return 0u;
     }
 }
 
-double tetrahedron_volume_from_nodes(
-    const double *nodes_xyz,
-    const uint32_t *elements,
-    uint32_t element_index)
-{
-    const size_t base = static_cast<size_t>(element_index) * 4u;
-    const auto read_coord = [&](uint32_t node, int axis) -> double {
-        return nodes_xyz[static_cast<size_t>(node) * 3u + static_cast<size_t>(axis)];
-    };
-
-    const uint32_t n0 = elements[base + 0];
-    const uint32_t n1 = elements[base + 1];
-    const uint32_t n2 = elements[base + 2];
-    const uint32_t n3 = elements[base + 3];
-
-    const double ax = read_coord(n1, 0) - read_coord(n0, 0);
-    const double ay = read_coord(n1, 1) - read_coord(n0, 1);
-    const double az = read_coord(n1, 2) - read_coord(n0, 2);
-    const double bx = read_coord(n2, 0) - read_coord(n0, 0);
-    const double by = read_coord(n2, 1) - read_coord(n0, 1);
-    const double bz = read_coord(n2, 2) - read_coord(n0, 2);
-    const double cx = read_coord(n3, 0) - read_coord(n0, 0);
-    const double cy = read_coord(n3, 1) - read_coord(n0, 1);
-    const double cz = read_coord(n3, 2) - read_coord(n0, 2);
-
-    const double determinant =
-        ax * (by * cz - bz * cy) -
-        ay * (bx * cz - bz * cx) +
-        az * (bx * cy - by * cx);
-
-    return std::abs(determinant) / 6.0;
+double determinant3(const std::array<std::array<double, 3>, 3> &m) {
+    return m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) -
+           m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+           m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
 }
 
-double tetrahedron_volume(
-    const std::vector<double> &nodes_xyz,
-    const std::vector<uint32_t> &elements,
-    uint32_t element_index)
-{
-    const size_t base = static_cast<size_t>(element_index) * 4u;
-    const auto read_coord = [&](uint32_t node, int axis) -> double {
-        return nodes_xyz[static_cast<size_t>(node) * 3u + static_cast<size_t>(axis)];
+double mapped_jacobian(
+    const std::vector<std::array<double, 3>> &coordinates,
+    const std::vector<std::array<double, 3>> &derivatives) {
+    std::array<std::array<double, 3>, 3> jacobian{};
+    for (size_t node = 0; node < coordinates.size(); ++node) {
+        for (size_t physical = 0; physical < 3; ++physical) {
+            for (size_t reference = 0; reference < 3; ++reference) {
+                jacobian[physical][reference] += coordinates[node][physical] * derivatives[node][reference];
+            }
+        }
+    }
+    return determinant3(jacobian);
+}
+
+std::array<double, 3> cross3(
+    const std::array<double, 3> &a,
+    const std::array<double, 3> &b) {
+    return {a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]};
+}
+
+double dot3(const std::array<double, 3> &a, const std::array<double, 3> &b) {
+    return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+}
+
+bool valid_facet_geometry(
+    uint32_t type,
+    const std::vector<std::array<double, 3>> &x) {
+    constexpr double kMinimumSquared = 1e-300;
+    if (type == FULLMAG_FEM_FACET_TRI3) {
+        const std::array<double, 3> a{x[1][0]-x[0][0], x[1][1]-x[0][1], x[1][2]-x[0][2]};
+        const std::array<double, 3> b{x[2][0]-x[0][0], x[2][1]-x[0][1], x[2][2]-x[0][2]};
+        const auto normal = cross3(a, b);
+        const double squared = dot3(normal, normal);
+        return std::isfinite(squared) && squared > kMinimumSquared;
+    }
+    if (type == FULLMAG_FEM_FACET_QUAD4) {
+        for (size_t node = 0; node < 4u; ++node) {
+            const size_t next = (node + 1u) % 4u;
+            const std::array<double, 3> edge{
+                x[next][0]-x[node][0],
+                x[next][1]-x[node][1],
+                x[next][2]-x[node][2]};
+            const double squared = dot3(edge, edge);
+            if (!std::isfinite(squared) || squared <= kMinimumSquared) return false;
+        }
+        const std::array<double, 3> diagonal{x[2][0]-x[0][0], x[2][1]-x[0][1], x[2][2]-x[0][2]};
+        const std::array<double, 3> first_edge{x[1][0]-x[0][0], x[1][1]-x[0][1], x[1][2]-x[0][2]};
+        const std::array<double, 3> last_edge{x[3][0]-x[0][0], x[3][1]-x[0][1], x[3][2]-x[0][2]};
+        const auto first_triangle_normal = cross3(first_edge, diagonal);
+        const auto second_triangle_normal = cross3(diagonal, last_edge);
+        const double first_triangle_squared = dot3(first_triangle_normal, first_triangle_normal);
+        const double second_triangle_squared = dot3(second_triangle_normal, second_triangle_normal);
+        if (!std::isfinite(first_triangle_squared) || first_triangle_squared <= kMinimumSquared ||
+            !std::isfinite(second_triangle_squared) || second_triangle_squared <= kMinimumSquared ||
+            !(dot3(first_triangle_normal, second_triangle_normal) > 0.0)) {
+            return false;
+        }
+        const double q = 1.0 / std::sqrt(3.0);
+        std::array<double, 3> reference_normal{};
+        bool have_reference = false;
+        for (double r : {-q, q}) for (double s : {-q, q}) {
+            std::array<double, 3> dr{};
+            std::array<double, 3> ds{};
+            const double dndr[4] = {-(1-s)/4, (1-s)/4, (1+s)/4, -(1+s)/4};
+            const double dnds[4] = {-(1-r)/4, -(1+r)/4, (1+r)/4, (1-r)/4};
+            for (size_t node = 0; node < 4u; ++node) {
+                for (size_t axis = 0; axis < 3u; ++axis) {
+                    dr[axis] += x[node][axis] * dndr[node];
+                    ds[axis] += x[node][axis] * dnds[node];
+                }
+            }
+            const auto normal = cross3(dr, ds);
+            const double squared = dot3(normal, normal);
+            if (!std::isfinite(squared) || squared <= kMinimumSquared) return false;
+            if (!have_reference) {
+                reference_normal = normal;
+                have_reference = true;
+            } else if (!(dot3(reference_normal, normal) > 0.0)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
+bool positive_jacobian_at_order_two(
+    uint32_t type,
+    const std::vector<std::array<double, 3>> &x) {
+    constexpr double kMinimum = 1e-300;
+    const double q = 1.0 / std::sqrt(3.0);
+    auto positive = [&](const std::vector<std::array<double, 3>> &d) {
+        const double determinant = mapped_jacobian(x, d);
+        return std::isfinite(determinant) && determinant > kMinimum;
     };
+    if (type == FULLMAG_FEM_CELL_TET4) {
+        return positive({{-1, -1, -1}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}});
+    }
+    if (type == FULLMAG_FEM_CELL_PRISM6) {
+        const std::array<std::array<double, 3>, 6> points{{
+            {1.0 / 6.0, 1.0 / 6.0, -q}, {2.0 / 3.0, 1.0 / 6.0, -q},
+            {1.0 / 6.0, 2.0 / 3.0, -q}, {1.0 / 6.0, 1.0 / 6.0, q},
+            {2.0 / 3.0, 1.0 / 6.0, q}, {1.0 / 6.0, 2.0 / 3.0, q},
+        }};
+        for (const auto &point : points) {
+            const double r = point[0], s = point[1], t = point[2];
+            if (!positive({
+                    {-(1-t)/2, -(1-t)/2, -(1-r-s)/2}, {(1-t)/2, 0, -r/2}, {0, (1-t)/2, -s/2},
+                    {-(1+t)/2, -(1+t)/2, (1-r-s)/2}, {(1+t)/2, 0, r/2}, {0, (1+t)/2, s/2}})) return false;
+        }
+        return true;
+    }
+    if (type == FULLMAG_FEM_CELL_PYRAMID5) {
+        const double qt = std::sqrt(10.0) / 15.0;
+        for (double t : {1.0 / 3.0 - qt, 1.0 / 3.0 + qt}) {
+            for (double r : {-q, q}) for (double s : {-q, q}) {
+                if (!positive({
+                        {-(1-s)*(1-t)/4, -(1-r)*(1-t)/4, -(1-r)*(1-s)/4},
+                        {(1-s)*(1-t)/4, -(1+r)*(1-t)/4, -(1+r)*(1-s)/4},
+                        {(1+s)*(1-t)/4, (1+r)*(1-t)/4, -(1+r)*(1+s)/4},
+                        {-(1+s)*(1-t)/4, (1-r)*(1-t)/4, -(1-r)*(1+s)/4},
+                        {0, 0, 1}})) return false;
+            }
+        }
+        return true;
+    }
+    if (type == FULLMAG_FEM_CELL_HEX8) {
+        constexpr std::array<std::array<double, 3>, 8> signs{{
+            {-1,-1,-1}, {1,-1,-1}, {1,1,-1}, {-1,1,-1},
+            {-1,-1,1}, {1,-1,1}, {1,1,1}, {-1,1,1}}};
+        for (double r : {-q, q}) for (double s : {-q, q}) for (double t : {-q, q}) {
+            std::vector<std::array<double, 3>> derivatives;
+            derivatives.reserve(8);
+            for (const auto &sign : signs) derivatives.push_back({
+                sign[0]*(1+sign[1]*s)*(1+sign[2]*t)/8,
+                sign[1]*(1+sign[0]*r)*(1+sign[2]*t)/8,
+                sign[2]*(1+sign[0]*r)*(1+sign[1]*s)/8});
+            if (!positive(derivatives)) return false;
+        }
+        return true;
+    }
+    return false;
+}
 
-    const uint32_t n0 = elements[base + 0];
-    const uint32_t n1 = elements[base + 1];
-    const uint32_t n2 = elements[base + 2];
-    const uint32_t n3 = elements[base + 3];
+double simplex_measure(
+    const std::vector<std::array<double, 3>> &x,
+    size_t a, size_t b, size_t c, size_t d) {
+    const std::array<std::array<double, 3>, 3> matrix{{
+        {x[b][0]-x[a][0], x[c][0]-x[a][0], x[d][0]-x[a][0]},
+        {x[b][1]-x[a][1], x[c][1]-x[a][1], x[d][1]-x[a][1]},
+        {x[b][2]-x[a][2], x[c][2]-x[a][2], x[d][2]-x[a][2]},
+    }};
+    return std::abs(determinant3(matrix)) / 6.0;
+}
 
-    const double ax = read_coord(n1, 0) - read_coord(n0, 0);
-    const double ay = read_coord(n1, 1) - read_coord(n0, 1);
-    const double az = read_coord(n1, 2) - read_coord(n0, 2);
-    const double bx = read_coord(n2, 0) - read_coord(n0, 0);
-    const double by = read_coord(n2, 1) - read_coord(n0, 1);
-    const double bz = read_coord(n2, 2) - read_coord(n0, 2);
-    const double cx = read_coord(n3, 0) - read_coord(n0, 0);
-    const double cy = read_coord(n3, 1) - read_coord(n0, 1);
-    const double cz = read_coord(n3, 2) - read_coord(n0, 2);
+double cell_measure(uint32_t type, const std::vector<std::array<double, 3>> &x) {
+    switch (type) {
+        case FULLMAG_FEM_CELL_TET4:
+            return simplex_measure(x, 0, 1, 2, 3);
+        case FULLMAG_FEM_CELL_PRISM6:
+            return simplex_measure(x, 0, 1, 2, 3) + simplex_measure(x, 1, 2, 4, 3) +
+                   simplex_measure(x, 2, 4, 5, 3);
+        case FULLMAG_FEM_CELL_PYRAMID5:
+            return simplex_measure(x, 0, 1, 2, 4) + simplex_measure(x, 0, 2, 3, 4);
+        case FULLMAG_FEM_CELL_HEX8:
+            return simplex_measure(x, 0, 1, 3, 4) + simplex_measure(x, 1, 2, 3, 6) +
+                   simplex_measure(x, 1, 3, 4, 6) + simplex_measure(x, 1, 4, 5, 6) +
+                   simplex_measure(x, 3, 4, 6, 7);
+        default:
+            return 0.0;
+    }
+}
 
-    const double determinant =
-        ax * (by * cz - bz * cy) -
-        ay * (bx * cz - bz * cx) +
-        az * (bx * cy - by * cx);
-
-    return std::abs(determinant) / 6.0;
+bool validate_csr(
+    const uint32_t *types, uint64_t types_len,
+    const uint32_t *offsets, uint64_t offsets_len,
+    const uint32_t *nodes, uint64_t nodes_len,
+    const uint64_t *global_ordinals, uint64_t global_ordinals_len,
+    const uint32_t *markers, uint64_t markers_len,
+    uint32_t node_count, bool facets, const uint32_t *roles, uint64_t roles_len,
+    const double *nodes_xyz, std::string &error) {
+    const char *kind = facets ? "facet" : "cell";
+    if (offsets_len != types_len + 1u) {
+        error = std::string("FEM mesh ") + kind + "_offsets length must equal type count plus one";
+        return false;
+    }
+    if (global_ordinals_len != types_len) {
+        error = std::string("FEM mesh ") + kind + "_global_ordinals length must equal type count";
+        return false;
+    }
+    if (markers_len != types_len) {
+        error = std::string("FEM mesh ") + kind + "_markers length must equal type count";
+        return false;
+    }
+    if (facets && roles_len != types_len) {
+        error = "FEM mesh facet_roles length must equal facet type count";
+        return false;
+    }
+    if (offsets[0] != 0u) {
+        error = std::string("FEM mesh ") + kind + "_offsets must start at zero";
+        return false;
+    }
+    for (uint64_t i = 0; i < types_len; ++i) {
+        if (offsets[i] > offsets[i + 1u]) {
+            error = std::string("FEM mesh ") + kind + "_offsets must be monotonic";
+            return false;
+        }
+    }
+    if (offsets[types_len] != nodes_len) {
+        error = std::string("FEM mesh ") + kind + "_offsets final value must equal node buffer length";
+        return false;
+    }
+    std::unordered_set<uint64_t> seen_ordinals;
+    for (uint64_t item = 0; item < types_len; ++item) {
+        const uint32_t arity = facets ? facet_arity(types[item]) : cell_arity(types[item]);
+        if (arity == 0u) {
+            error = std::string("FEM mesh invalid ") + kind + " type wire value";
+            return false;
+        }
+        if (facets && roles[item] != FULLMAG_FEM_FACET_ROLE_EXTERIOR &&
+            roles[item] != FULLMAG_FEM_FACET_ROLE_MATERIAL_INTERFACE &&
+            roles[item] != FULLMAG_FEM_FACET_ROLE_PERIODIC_SEAM) {
+            error = "FEM mesh invalid facet role wire value";
+            return false;
+        }
+        const uint32_t start = offsets[item], end = offsets[item + 1u];
+        if (end - start != arity) {
+            error = std::string("FEM mesh ") + kind + " arity does not match type";
+            return false;
+        }
+        std::unordered_set<uint32_t> seen_nodes;
+        std::vector<std::array<double, 3>> coordinates;
+        for (uint32_t cursor = start; cursor < end; ++cursor) {
+            const uint32_t node = nodes[cursor];
+            if (node >= node_count) {
+                error = std::string("FEM mesh ") + kind + " connectivity references node outside mesh";
+                return false;
+            }
+            if (!seen_nodes.insert(node).second) {
+                error = std::string("FEM mesh ") + kind + " contains duplicate node indices";
+                return false;
+            }
+            const size_t coordinate = 3u * static_cast<size_t>(node);
+            coordinates.push_back({nodes_xyz[coordinate], nodes_xyz[coordinate+1u], nodes_xyz[coordinate+2u]});
+        }
+        if (!seen_ordinals.insert(global_ordinals[item]).second) {
+            error = std::string("FEM mesh ") + kind + " contains duplicate global ordinal";
+            return false;
+        }
+        if (!facets && !positive_jacobian_at_order_two(types[item], coordinates)) {
+            error = "FEM mesh cell has non-positive Jacobian at order-two validation points";
+            return false;
+        }
+        if (facets && !valid_facet_geometry(types[item], coordinates)) {
+            error = "FEM mesh facet has degenerate or folded surface Jacobian at order-two validation points";
+            return false;
+        }
+    }
+    return true;
 }
 
 bool validate_mesh_topology(
-    const Context &ctx,
     const fullmag_fem_mesh_desc &mesh,
     std::string &error)
 {
-    if (ctx.mesh.n_nodes > 0 && mesh.nodes_xyz == nullptr) {
-        error = "FEM mesh nodes pointer is null";
+    if (mesh.abi_version != FULLMAG_FEM_MESH_DESC_ABI_VERSION) {
+        error = "FEM mesh ABI version is unsupported";
         return false;
     }
-    if (ctx.mesh.n_elements > 0 && mesh.elements == nullptr) {
-        error = "FEM mesh elements pointer is null";
+    if (mesh.struct_size != sizeof(fullmag_fem_mesh_desc)) {
+        error = "FEM mesh struct_size does not match ABI version";
         return false;
     }
-    if (ctx.mesh.n_boundary_faces > 0 && mesh.boundary_faces == nullptr) {
-        error = "FEM mesh boundary_faces pointer is null";
+    if (!validate_span(mesh.nodes_xyz, mesh.nodes_xyz_len, "nodes_xyz", error) ||
+        !validate_span(mesh.cell_types, mesh.cell_types_len, "cell_types", error) ||
+        !validate_span(mesh.cell_offsets, mesh.cell_offsets_len, "cell_offsets", error) ||
+        !validate_span(mesh.cell_nodes, mesh.cell_nodes_len, "cell_nodes", error) ||
+        !validate_span(mesh.cell_global_ordinals, mesh.cell_global_ordinals_len, "cell_global_ordinals", error) ||
+        !validate_span(mesh.cell_markers, mesh.cell_markers_len, "cell_markers", error) ||
+        !validate_span(mesh.facet_types, mesh.facet_types_len, "facet_types", error) ||
+        !validate_span(mesh.facet_roles, mesh.facet_roles_len, "facet_roles", error) ||
+        !validate_span(mesh.facet_offsets, mesh.facet_offsets_len, "facet_offsets", error) ||
+        !validate_span(mesh.facet_nodes, mesh.facet_nodes_len, "facet_nodes", error) ||
+        !validate_span(mesh.facet_global_ordinals, mesh.facet_global_ordinals_len, "facet_global_ordinals", error) ||
+        !validate_span(mesh.facet_markers, mesh.facet_markers_len, "facet_markers", error) ||
+        !validate_span(mesh.periodic_node_pairs, mesh.periodic_node_pairs_len, "periodic_node_pairs", error) ||
+        !validate_span(mesh.periodic_boundary_pair_markers, mesh.periodic_boundary_pair_markers_len, "periodic_boundary_pair_markers", error)) return false;
+    if (mesh.nodes_xyz_len == 0u || mesh.nodes_xyz_len % 3u != 0u) {
+        error = "FEM mesh nodes_xyz length must be a non-zero multiple of 3";
         return false;
     }
-    if (mesh.periodic_boundary_pair_count > 0 &&
-        mesh.periodic_boundary_pair_markers == nullptr) {
-        error = "FEM mesh periodic_boundary_pair_markers pointer is null";
+    const uint64_t node_count_u64 = mesh.nodes_xyz_len / 3u;
+    if (node_count_u64 > std::numeric_limits<uint32_t>::max() ||
+        mesh.cell_types_len == 0u || mesh.cell_types_len > std::numeric_limits<uint32_t>::max() ||
+        mesh.facet_types_len > std::numeric_limits<uint32_t>::max()) {
+        error = "FEM mesh cardinality exceeds native 32-bit runtime limits";
         return false;
     }
-
-    const size_t node_scalar_count = static_cast<size_t>(ctx.mesh.n_nodes) * 3u;
-    for (size_t i = 0; i < node_scalar_count; ++i) {
+    for (uint64_t i = 0; i < mesh.nodes_xyz_len; ++i) {
         if (!std::isfinite(mesh.nodes_xyz[i])) {
             error = "FEM mesh node coordinates must be finite";
             return false;
         }
     }
-
-    constexpr double kMinTetVolume = 1e-300;
-    for (uint32_t element = 0; element < ctx.mesh.n_elements; ++element) {
-        const size_t base = static_cast<size_t>(element) * 4u;
-        const uint32_t n0 = mesh.elements[base + 0u];
-        const uint32_t n1 = mesh.elements[base + 1u];
-        const uint32_t n2 = mesh.elements[base + 2u];
-        const uint32_t n3 = mesh.elements[base + 3u];
-        if (n0 >= ctx.mesh.n_nodes || n1 >= ctx.mesh.n_nodes ||
-            n2 >= ctx.mesh.n_nodes || n3 >= ctx.mesh.n_nodes) {
-            error = "FEM mesh element connectivity references node outside mesh";
-            return false;
-        }
-        if (n0 == n1 || n0 == n2 || n0 == n3 ||
-            n1 == n2 || n1 == n3 || n2 == n3) {
-            error = "FEM mesh degenerate tetrahedron contains duplicate node indices";
-            return false;
-        }
-        const double volume = tetrahedron_volume_from_nodes(mesh.nodes_xyz, mesh.elements, element);
-        if (!(volume > kMinTetVolume) || !std::isfinite(volume)) {
-            error = "FEM mesh degenerate tetrahedron has non-positive volume";
-            return false;
-        }
+    if (mesh.periodic_node_pairs_len % 2u != 0u) {
+        error = "FEM mesh periodic_node_pairs length must be even";
+        return false;
     }
-
-    for (uint32_t face = 0; face < ctx.mesh.n_boundary_faces; ++face) {
-        const size_t base = static_cast<size_t>(face) * 3u;
-        const uint32_t n0 = mesh.boundary_faces[base + 0u];
-        const uint32_t n1 = mesh.boundary_faces[base + 1u];
-        const uint32_t n2 = mesh.boundary_faces[base + 2u];
-        if (n0 >= ctx.mesh.n_nodes || n1 >= ctx.mesh.n_nodes || n2 >= ctx.mesh.n_nodes) {
-            error = "FEM mesh boundary face references node outside mesh";
-            return false;
-        }
-        if (n0 == n1 || n0 == n2 || n1 == n2) {
-            error = "FEM mesh degenerate boundary face contains duplicate node indices";
-            return false;
-        }
+    if (mesh.periodic_boundary_pair_markers_len % 2u != 0u) {
+        error = "FEM mesh periodic_boundary_pair_markers length must be even";
+        return false;
     }
-
-    return true;
+    const uint32_t node_count = static_cast<uint32_t>(node_count_u64);
+    return validate_csr(mesh.cell_types, mesh.cell_types_len, mesh.cell_offsets, mesh.cell_offsets_len,
+               mesh.cell_nodes, mesh.cell_nodes_len, mesh.cell_global_ordinals, mesh.cell_global_ordinals_len,
+               mesh.cell_markers, mesh.cell_markers_len, node_count, false, nullptr, 0u, mesh.nodes_xyz, error) &&
+           validate_csr(mesh.facet_types, mesh.facet_types_len, mesh.facet_offsets, mesh.facet_offsets_len,
+               mesh.facet_nodes, mesh.facet_nodes_len, mesh.facet_global_ordinals, mesh.facet_global_ordinals_len,
+               mesh.facet_markers, mesh.facet_markers_len, node_count, true, mesh.facet_roles,
+               mesh.facet_roles_len, mesh.nodes_xyz, error);
 }
 
 } // namespace
+
+bool element_topology(uint32_t cell_type, ElementTopology &topology) {
+    switch (cell_type) {
+        case FULLMAG_FEM_CELL_TET4:
+            topology = {4u, {kTetFaceOffsets, kTetFaceNodes, 4u, 12u}, {kTetEdgeOffsets, kTetEdgeNodes, 6u, 12u}};
+            return true;
+        case FULLMAG_FEM_CELL_PRISM6:
+            topology = {6u, {kPrismFaceOffsets, kPrismFaceNodes, 5u, 18u}, {kPrismEdgeOffsets, kPrismEdgeNodes, 9u, 18u}};
+            return true;
+        case FULLMAG_FEM_CELL_PYRAMID5:
+            topology = {5u, {kPyramidFaceOffsets, kPyramidFaceNodes, 5u, 16u}, {kPyramidEdgeOffsets, kPyramidEdgeNodes, 8u, 16u}};
+            return true;
+        case FULLMAG_FEM_CELL_HEX8:
+            topology = {8u, {kHexFaceOffsets, kHexFaceNodes, 6u, 24u}, {kHexEdgeOffsets, kHexEdgeNodes, 12u, 24u}};
+            return true;
+        default:
+            topology = {};
+            return false;
+    }
+}
 
 bool initialize_mesh_plan_fields(
     Context &ctx,
     const fullmag_fem_mesh_desc &mesh,
     std::string &error)
 {
-    if (mesh.n_periodic_node_pairs > 0 && mesh.periodic_node_pairs == nullptr) {
-        error = "FEM mesh periodic_node_pairs pointer is null";
+    if (!validate_mesh_topology(mesh, error)) {
         return false;
     }
-    if (!validate_mesh_topology(ctx, mesh, error)) {
-        return false;
-    }
-
-    ctx.mesh.nodes_xyz.assign(
-        mesh.nodes_xyz,
-        mesh.nodes_xyz + static_cast<size_t>(ctx.mesh.n_nodes) * 3u);
-    ctx.mesh.elements.assign(
-        mesh.elements,
-        mesh.elements + static_cast<size_t>(ctx.mesh.n_elements) * 4u);
-    copy_present_span(
-        mesh.element_markers,
-        static_cast<size_t>(ctx.mesh.n_elements),
-        ctx.mesh.element_markers);
-    copy_optional_span(
-        mesh.boundary_faces,
-        static_cast<size_t>(ctx.mesh.n_boundary_faces) * 3u,
-        ctx.mesh.boundary_faces,
-        0u);
-    copy_optional_span(
-        mesh.boundary_markers,
-        static_cast<size_t>(ctx.mesh.n_boundary_faces),
-        ctx.mesh.boundary_markers,
-        0u);
-
-    ctx.mesh.periodic_node_pairs.clear();
-    if (mesh.n_periodic_node_pairs > 0) {
-        const size_t pair_scalar_count =
-            static_cast<size_t>(mesh.n_periodic_node_pairs) * 2u;
-        ctx.mesh.periodic_node_pairs.assign(
-            mesh.periodic_node_pairs,
-            mesh.periodic_node_pairs + pair_scalar_count);
-    }
+    ctx.mesh.n_nodes = static_cast<uint32_t>(mesh.nodes_xyz_len / 3u);
+    ctx.mesh.n_elements = static_cast<uint32_t>(mesh.cell_types_len);
+    ctx.mesh.n_boundary_faces = static_cast<uint32_t>(mesh.facet_types_len);
+    copy_span(ctx.mesh.nodes_xyz, mesh.nodes_xyz, mesh.nodes_xyz_len);
+    copy_span(ctx.mesh.cell_types, mesh.cell_types, mesh.cell_types_len);
+    copy_span(ctx.mesh.cell_offsets, mesh.cell_offsets, mesh.cell_offsets_len);
+    copy_span(ctx.mesh.cell_nodes, mesh.cell_nodes, mesh.cell_nodes_len);
+    copy_span(ctx.mesh.cell_global_ordinals, mesh.cell_global_ordinals, mesh.cell_global_ordinals_len);
+    copy_span(ctx.mesh.cell_markers, mesh.cell_markers, mesh.cell_markers_len);
+    copy_span(ctx.mesh.facet_types, mesh.facet_types, mesh.facet_types_len);
+    copy_span(ctx.mesh.facet_roles, mesh.facet_roles, mesh.facet_roles_len);
+    copy_span(ctx.mesh.facet_offsets, mesh.facet_offsets, mesh.facet_offsets_len);
+    copy_span(ctx.mesh.facet_nodes, mesh.facet_nodes, mesh.facet_nodes_len);
+    copy_span(ctx.mesh.facet_global_ordinals, mesh.facet_global_ordinals, mesh.facet_global_ordinals_len);
+    copy_span(ctx.mesh.facet_markers, mesh.facet_markers, mesh.facet_markers_len);
+    copy_span(ctx.mesh.periodic_node_pairs, mesh.periodic_node_pairs, mesh.periodic_node_pairs_len);
     if (!build_static_periodic_reduction(ctx, error)) {
         return false;
     }
 
     ctx.mesh.periodic_boundary_marker_set.clear();
-    if (mesh.periodic_boundary_pair_markers != nullptr &&
-        mesh.periodic_boundary_pair_count > 0) {
-        for (uint32_t i = 0; i < mesh.periodic_boundary_pair_count; ++i) {
+    if (mesh.periodic_boundary_pair_markers_len > 0) {
+        for (uint64_t i = 0; i < mesh.periodic_boundary_pair_markers_len; ++i) {
             ctx.mesh.periodic_boundary_marker_set.insert(
-                mesh.periodic_boundary_pair_markers[2u * i]);
-            ctx.mesh.periodic_boundary_marker_set.insert(
-                mesh.periodic_boundary_pair_markers[2u * i + 1u]);
+                mesh.periodic_boundary_pair_markers[i]);
         }
     }
 
     return true;
 }
 
+bool validate_tetra_only_physics_topology(const Context &ctx, std::string &error) {
+    if (!std::all_of(ctx.mesh.cell_types.begin(), ctx.mesh.cell_types.end(),
+            [](uint32_t type) { return type == FULLMAG_FEM_CELL_TET4; }) ||
+        !std::all_of(ctx.mesh.facet_types.begin(), ctx.mesh.facet_types.end(),
+            [](uint32_t type) { return type == FULLMAG_FEM_FACET_TRI3; })) {
+        error =
+            "native FEM typed mesh import accepted mixed topology, but current "
+            "MFEM/libCEED/CUDA physics modules are gated to tet4/tri3 until the "
+            "mixed-P1 operator slices are installed";
+        return false;
+    }
+    return true;
+}
+
 void initialize_magnetic_masks(Context &ctx)
 {
     ctx.mesh.magnetic_element_mask.assign(static_cast<size_t>(ctx.mesh.n_elements), 1u);
-    if (!ctx.mesh.element_markers.empty()) {
-        for (size_t i = 0; i < ctx.mesh.element_markers.size(); ++i) {
+    if (!ctx.mesh.cell_markers.empty()) {
+        for (size_t i = 0; i < ctx.mesh.cell_markers.size(); ++i) {
             ctx.mesh.magnetic_element_mask[i] =
-                ctx.mesh.element_markers[i] != 0u ? 1u : 0u;
+                ctx.mesh.cell_markers[i] != 0u ? 1u : 0u;
         }
     }
 
@@ -259,9 +496,10 @@ void initialize_magnetic_masks(Context &ctx)
         if (ctx.mesh.magnetic_element_mask[e] == 0u) {
             continue;
         }
-        const size_t base = static_cast<size_t>(e) * 4u;
-        for (int v = 0; v < 4; ++v) {
-            ctx.mesh.magnetic_node_mask[ctx.mesh.elements[base + static_cast<size_t>(v)]] = 1u;
+        const uint32_t start = ctx.mesh.cell_offsets[static_cast<size_t>(e)];
+        const uint32_t end = ctx.mesh.cell_offsets[static_cast<size_t>(e) + 1u];
+        for (uint32_t cursor = start; cursor < end; ++cursor) {
+            ctx.mesh.magnetic_node_mask[ctx.mesh.cell_nodes[cursor]] = 1u;
         }
     }
 }
@@ -277,7 +515,7 @@ bool validate_magnetic_mesh_has_active_region(const Context &ctx, std::string &e
         ctx.mesh.magnetic_element_mask.end(),
         [](uint8_t value) { return value != 0u; });
     if (!has_magnetic_element) {
-        error = "FEM mesh must contain at least one magnetic tetrahedral element";
+        error = "FEM mesh must contain at least one magnetic cell";
         return false;
     }
     return true;
@@ -457,12 +695,19 @@ void compute_node_volumes(Context &ctx) {
             ctx.mesh.magnetic_element_mask[static_cast<size_t>(elem)] == 0u) {
             continue;
         }
-        const double v_tet = tetrahedron_volume(ctx.mesh.nodes_xyz, ctx.mesh.elements, elem);
-        const double quarter_v = v_tet * 0.25;
-        const size_t base = static_cast<size_t>(elem) * 4u;
-        for (int k = 0; k < 4; ++k) {
-            const uint32_t node = ctx.mesh.elements[base + static_cast<size_t>(k)];
-            ctx.mesh.node_volumes[node] += quarter_v;
+        const uint32_t start = ctx.mesh.cell_offsets[static_cast<size_t>(elem)];
+        const uint32_t end = ctx.mesh.cell_offsets[static_cast<size_t>(elem) + 1u];
+        std::vector<std::array<double, 3>> coordinates;
+        coordinates.reserve(end - start);
+        for (uint32_t cursor = start; cursor < end; ++cursor) {
+            const uint32_t node = ctx.mesh.cell_nodes[cursor];
+            const size_t coordinate = 3u * static_cast<size_t>(node);
+            coordinates.push_back({ctx.mesh.nodes_xyz[coordinate], ctx.mesh.nodes_xyz[coordinate+1u], ctx.mesh.nodes_xyz[coordinate+2u]});
+        }
+        const double nodal_share = cell_measure(ctx.mesh.cell_types[elem], coordinates) /
+            static_cast<double>(end - start);
+        for (uint32_t cursor = start; cursor < end; ++cursor) {
+            ctx.mesh.node_volumes[ctx.mesh.cell_nodes[cursor]] += nodal_share;
         }
     }
 }

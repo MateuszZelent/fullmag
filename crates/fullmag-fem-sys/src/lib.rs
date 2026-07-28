@@ -269,24 +269,135 @@ pub enum fullmag_fem_stage_stop_reason {
 
 pub type fullmag_fem_interrupt_poll_fn = Option<unsafe extern "C" fn(*mut c_void) -> i32>;
 
+pub const FULLMAG_FEM_MESH_DESC_ABI_VERSION: u32 = 2;
+pub const FULLMAG_FEM_MESH_DESC_ABI_LAYOUT_FINGERPRINT: &str =
+    "fullmag:fem-mesh-desc:abi:v2:lp64:size232:typed-csr-global-ordinals";
+pub const FULLMAG_FEM_MESH_ABI_LAYOUT_VERSION: u32 = 1;
+pub const FULLMAG_FEM_MESH_ABI_FIELD_COUNT: usize = 30;
+pub const FULLMAG_FEM_MESH_ABI_FINGERPRINT_CAPACITY: usize = 96;
+pub const FULLMAG_FEM_CELL_TET4: u32 = 1;
+pub const FULLMAG_FEM_CELL_PRISM6: u32 = 2;
+pub const FULLMAG_FEM_CELL_PYRAMID5: u32 = 3;
+pub const FULLMAG_FEM_CELL_HEX8: u32 = 4;
+pub const FULLMAG_FEM_FACET_TRI3: u32 = 1;
+pub const FULLMAG_FEM_FACET_QUAD4: u32 = 2;
+pub const FULLMAG_FEM_FACET_ROLE_EXTERIOR: u32 = 1;
+pub const FULLMAG_FEM_FACET_ROLE_MATERIAL_INTERFACE: u32 = 2;
+pub const FULLMAG_FEM_FACET_ROLE_PERIODIC_SEAM: u32 = 3;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct fullmag_fem_mesh_desc {
+    pub abi_version: u32,
+    pub struct_size: u32,
     pub nodes_xyz: *const f64,
-    pub n_nodes: u32,
-    pub elements: *const u32,
-    pub n_elements: u32,
-    pub element_markers: *const u32,
-    pub boundary_faces: *const u32,
-    pub n_boundary_faces: u32,
-    pub boundary_markers: *const u32,
+    pub nodes_xyz_len: u64,
+    pub cell_types: *const u32,
+    pub cell_types_len: u64,
+    pub cell_offsets: *const u32,
+    pub cell_offsets_len: u64,
+    pub cell_nodes: *const u32,
+    pub cell_nodes_len: u64,
+    pub cell_global_ordinals: *const u64,
+    pub cell_global_ordinals_len: u64,
+    pub cell_markers: *const u32,
+    pub cell_markers_len: u64,
+    pub facet_types: *const u32,
+    pub facet_types_len: u64,
+    pub facet_roles: *const u32,
+    pub facet_roles_len: u64,
+    pub facet_offsets: *const u32,
+    pub facet_offsets_len: u64,
+    pub facet_nodes: *const u32,
+    pub facet_nodes_len: u64,
+    pub facet_global_ordinals: *const u64,
+    pub facet_global_ordinals_len: u64,
+    pub facet_markers: *const u32,
+    pub facet_markers_len: u64,
     pub periodic_node_pairs: *const u32,
-    pub n_periodic_node_pairs: u32,
+    pub periodic_node_pairs_len: u64,
     /// MFEM boundary attribute markers for periodic seam face pairs:
     /// flat `[marker_a, marker_b] × count`.  Null/0 when not applicable.
     pub periodic_boundary_pair_markers: *const u32,
-    pub periodic_boundary_pair_count: u32,
+    pub periodic_boundary_pair_markers_len: u64,
 }
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct fullmag_fem_mesh_abi_layout {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub mesh_desc_abi_version: u32,
+    pub mesh_desc_struct_size: u32,
+    pub field_count: u32,
+    pub reserved: u32,
+    pub field_offsets: [u64; FULLMAG_FEM_MESH_ABI_FIELD_COUNT],
+    pub layout_fingerprint: [c_char; FULLMAG_FEM_MESH_ABI_FINGERPRINT_CAPACITY],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct fullmag_fem_mesh_abi_record {
+    pub magic: [c_char; 40],
+    pub record_version: u32,
+    pub record_size: u32,
+    pub endian_tag: u32,
+    pub reserved: u32,
+    pub layout: fullmag_fem_mesh_abi_layout,
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<fullmag_fem_mesh_desc>() == 232);
+    assert!(std::mem::align_of::<fullmag_fem_mesh_desc>() == 8);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, abi_version) == 0);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, struct_size) == 4);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, nodes_xyz) == 8);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, nodes_xyz_len) == 16);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_types) == 24);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_types_len) == 32);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_offsets) == 40);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_offsets_len) == 48);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_nodes) == 56);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_nodes_len) == 64);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_global_ordinals) == 72);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_global_ordinals_len) == 80);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_markers) == 88);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_markers_len) == 96);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_types) == 104);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_types_len) == 112);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_roles) == 120);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_roles_len) == 128);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_offsets) == 136);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_offsets_len) == 144);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_nodes) == 152);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_nodes_len) == 160);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_global_ordinals) == 168);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_global_ordinals_len) == 176);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_markers) == 184);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_markers_len) == 192);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, periodic_node_pairs) == 200);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, periodic_node_pairs_len) == 208);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, periodic_boundary_pair_markers) == 216);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_desc, periodic_boundary_pair_markers_len) == 224);
+    assert!(std::mem::size_of::<fullmag_fem_mesh_abi_layout>() == 360);
+    assert!(std::mem::align_of::<fullmag_fem_mesh_abi_layout>() == 8);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_abi_layout, abi_version) == 0);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_abi_layout, struct_size) == 4);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_abi_layout, mesh_desc_abi_version) == 8);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_abi_layout, mesh_desc_struct_size) == 12);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_abi_layout, field_count) == 16);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_abi_layout, reserved) == 20);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_abi_layout, field_offsets) == 24);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_abi_layout, layout_fingerprint) == 264);
+    assert!(std::mem::size_of::<fullmag_fem_mesh_abi_record>() == 416);
+    assert!(std::mem::align_of::<fullmag_fem_mesh_abi_record>() == 8);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_abi_record, magic) == 0);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_abi_record, record_version) == 40);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_abi_record, record_size) == 44);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_abi_record, endian_tag) == 48);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_abi_record, reserved) == 52);
+    assert!(std::mem::offset_of!(fullmag_fem_mesh_abi_record, layout) == 56);
+};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -1273,9 +1384,13 @@ pub struct fullmag_fem_snapshot_desc {
 }
 
 extern "C" {
+    pub static fullmag_fem_mesh_abi_record_v1: fullmag_fem_mesh_abi_record;
     pub fn fullmag_fem_is_available() -> i32;
     pub fn fullmag_fem_get_regional_field_drive_abi_layout(
         out_layout: *mut fullmag_fem_regional_field_drive_abi_layout,
+    ) -> i32;
+    pub fn fullmag_fem_get_mesh_abi_layout(
+        out_layout: *mut fullmag_fem_mesh_abi_layout,
     ) -> i32;
     pub fn fullmag_fem_get_availability_info(out_info: *mut fullmag_fem_availability_info) -> i32;
     pub fn fullmag_fem_get_frequency_domain_availability_info(
@@ -1557,6 +1672,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn typed_mesh_v2_abi_layout_and_wire_codes_are_frozen() {
+        assert_eq!(FULLMAG_FEM_MESH_DESC_ABI_VERSION, 2);
+        assert_eq!(FULLMAG_FEM_CELL_TET4, 1);
+        assert_eq!(FULLMAG_FEM_CELL_PRISM6, 2);
+        assert_eq!(FULLMAG_FEM_CELL_PYRAMID5, 3);
+        assert_eq!(FULLMAG_FEM_CELL_HEX8, 4);
+        assert_eq!(FULLMAG_FEM_FACET_TRI3, 1);
+        assert_eq!(FULLMAG_FEM_FACET_QUAD4, 2);
+        assert_eq!(FULLMAG_FEM_FACET_ROLE_EXTERIOR, 1);
+        assert_eq!(FULLMAG_FEM_FACET_ROLE_MATERIAL_INTERFACE, 2);
+        assert_eq!(FULLMAG_FEM_FACET_ROLE_PERIODIC_SEAM, 3);
+
+        assert_eq!(std::mem::size_of::<fullmag_fem_mesh_desc>(), 232);
+        assert_eq!(std::mem::align_of::<fullmag_fem_mesh_desc>(), 8);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, abi_version), 0);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, struct_size), 4);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, nodes_xyz), 8);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, nodes_xyz_len), 16);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_types), 24);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_types_len), 32);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_offsets), 40);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_offsets_len), 48);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_nodes), 56);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_nodes_len), 64);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_global_ordinals), 72);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_global_ordinals_len), 80);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_markers), 88);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_markers_len), 96);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_types), 104);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_types_len), 112);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_roles), 120);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_roles_len), 128);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_offsets), 136);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_offsets_len), 144);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_nodes), 152);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_nodes_len), 160);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_global_ordinals), 168);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_global_ordinals_len), 176);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_markers), 184);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_markers_len), 192);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, periodic_node_pairs), 200);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, periodic_node_pairs_len), 208);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, periodic_boundary_pair_markers), 216);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, periodic_boundary_pair_markers_len), 224);
+    }
+
+    #[test]
     fn adaptive_v2_keeps_legacy_layout_as_a_versioned_base() {
         assert_eq!(
             std::mem::size_of::<fullmag_fem_adaptive_config>(),
@@ -1693,7 +1855,7 @@ mod tests {
         let mesh = std::mem::MaybeUninit::<fullmag_fem_mesh_desc>::zeroed();
         let mesh = unsafe { mesh.assume_init() };
         assert!(mesh.periodic_node_pairs.is_null());
-        assert_eq!(mesh.n_periodic_node_pairs, 0);
+        assert_eq!(mesh.periodic_node_pairs_len, 0);
     }
 
     /// Verify mesh desc carries periodic boundary pair marker fields for native demag PBC.
@@ -1702,7 +1864,7 @@ mod tests {
         let mesh = std::mem::MaybeUninit::<fullmag_fem_mesh_desc>::zeroed();
         let mesh = unsafe { mesh.assume_init() };
         assert!(mesh.periodic_boundary_pair_markers.is_null());
-        assert_eq!(mesh.periodic_boundary_pair_count, 0);
+        assert_eq!(mesh.periodic_boundary_pair_markers_len, 0);
     }
 
     /// Verify transfer-audit ABI fields required by the ALL IN GPU FEM rollout.

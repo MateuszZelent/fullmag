@@ -16,6 +16,20 @@ HELPER = REPO_ROOT / "scripts" / "lib" / "runtime_bundle_copy.sh"
 EXPORT_SCRIPT = REPO_ROOT / "scripts" / "export_fem_gpu_runtime.sh"
 VALIDATOR = REPO_ROOT / "scripts" / "validate_managed_fem_runtime_bundle.py"
 MANIFEST_BUILDER = REPO_ROOT / "scripts" / "build_managed_fem_runtime_manifest.py"
+MESH_FIELD_NAMES = (
+    "abi_version", "struct_size", "nodes_xyz", "nodes_xyz_len", "cell_types",
+    "cell_types_len", "cell_offsets", "cell_offsets_len", "cell_nodes",
+    "cell_nodes_len", "cell_global_ordinals", "cell_global_ordinals_len",
+    "cell_markers", "cell_markers_len", "facet_types", "facet_types_len",
+    "facet_roles", "facet_roles_len", "facet_offsets", "facet_offsets_len",
+    "facet_nodes", "facet_nodes_len", "facet_global_ordinals",
+    "facet_global_ordinals_len", "facet_markers", "facet_markers_len",
+    "periodic_node_pairs", "periodic_node_pairs_len",
+    "periodic_boundary_pair_markers", "periodic_boundary_pair_markers_len",
+)
+MESH_FIELD_OFFSETS = dict(
+    zip(MESH_FIELD_NAMES, [0, 4, *range(8, 232, 8)], strict=True)
+)
 
 
 def load_validator_module():
@@ -66,7 +80,55 @@ def write_fake_schema_v2_bundle(
     native_libraries: dict[str, dict[str, object]] = {}
     for name, (filename, soname, cuda_required, cubins) in library_specs.items():
         target = lib_dir / filename
-        target.write_bytes(f"synthetic {name}\n".encode())
+        if name == "fullmag_fem":
+            source = r'''
+#include <stdint.h>
+#include <stdio.h>
+typedef struct {
+  uint32_t abi_version, struct_size, mesh_desc_abi_version, mesh_desc_struct_size;
+  uint32_t field_count, reserved;
+  uint64_t field_offsets[30];
+  char layout_fingerprint[96];
+} mesh_layout;
+typedef struct {
+  char magic[40];
+  uint32_t record_version, record_size, endian_tag, reserved;
+  mesh_layout layout;
+} mesh_record;
+__attribute__((used, section(".fullmag_fem_abi"), aligned(8), visibility("default")))
+const mesh_record fullmag_fem_mesh_abi_record_v1 = {
+  "FULLMAG_FEM_MESH_ABI_RECORD_V1", 1, sizeof(mesh_record), 0x01020304, 0,
+  {1, sizeof(mesh_layout), 2, 232, 30, 0,
+   {0,4,8,16,24,32,40,48,56,64,72,80,88,96,104,112,120,128,
+    136,144,152,160,168,176,184,192,200,208,216,224},
+   "fullmag:fem-mesh-desc:abi:v2:lp64:size232:typed-csr-global-ordinals"}
+};
+int fullmag_fem_get_mesh_abi_layout(mesh_layout *out) {
+  static const uint64_t offsets[30] = {
+    0,4,8,16,24,32,40,48,56,64,72,80,88,96,104,112,120,128,
+    136,144,152,160,168,176,184,192,200,208,216,224
+  };
+  if (!out) return -1;
+  *out = (mesh_layout){0};
+  out->abi_version = 1; out->struct_size = sizeof(*out);
+  out->mesh_desc_abi_version = 2; out->mesh_desc_struct_size = 232;
+  out->field_count = 30;
+  for (unsigned i = 0; i < 30; ++i) out->field_offsets[i] = offsets[i];
+  snprintf(out->layout_fingerprint, sizeof(out->layout_fingerprint), "%s",
+    "fullmag:fem-mesh-desc:abi:v2:lp64:size232:typed-csr-global-ordinals");
+  return 0;
+}
+'''
+            compiled = subprocess.run(
+                ["cc", "-shared", "-fPIC", "-x", "c", "-", "-o", str(target)],
+                input=source,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            assert compiled.returncode == 0, compiled.stderr
+        else:
+            target.write_bytes(f"synthetic {name}\n".encode())
         manifest_path = target
         if name == "fullmag_fem":
             manifest_path = lib_dir / soname
@@ -102,6 +164,14 @@ def write_fake_schema_v2_bundle(
                 "libHYPRE-3.1.0.so": "lib/libHYPRE-3.1.0.so",
                 "libceed.so": "lib/libceed.so.0.12.0",
             },
+        },
+        "native_abi": {
+            "mesh_desc_abi_version": 2,
+            "mesh_desc_struct_size": 232,
+            "mesh_desc_layout_fingerprint": (
+                "fullmag:fem-mesh-desc:abi:v2:lp64:size232:typed-csr-global-ordinals"
+            ),
+            "mesh_desc_field_offsets": MESH_FIELD_OFFSETS,
         },
         "build": {
             "mfem_version": "4.9",
@@ -422,6 +492,19 @@ def test_managed_runtime_validator_rejects_missing_or_mismatched_api(tmp_path: P
     assert "api hash mismatch" in invalid.stderr
 
 
+def test_managed_runtime_validator_rejects_mismatched_mesh_abi(tmp_path: Path) -> None:
+    runtime, ldd, readelf = write_fake_schema_v2_bundle(tmp_path)
+    manifest_path = runtime / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["native_abi"]["mesh_desc_layout_fingerprint"] = "stale-layout"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    invalid = validate_fake_bundle(runtime, ldd, readelf)
+
+    assert invalid.returncode != 0
+    assert "mesh descriptor ABI mismatch" in invalid.stderr
+
+
 def test_managed_runtime_validator_rejects_unaddressed_variant_by_default(
     tmp_path: Path,
 ) -> None:
@@ -735,6 +818,14 @@ def test_manifest_builder_records_actual_loaded_native_libraries(tmp_path: Path)
     )
     assert manifest["build"]["cuda_toolkit"] == "12.4"
     assert manifest["runtime_diagnostics"]["compute_capability"] == "8.9"
+    assert manifest["native_abi"] == {
+        "mesh_desc_abi_version": 2,
+        "mesh_desc_struct_size": 232,
+        "mesh_desc_layout_fingerprint": (
+            "fullmag:fem-mesh-desc:abi:v2:lp64:size232:typed-csr-global-ordinals"
+        ),
+        "mesh_desc_field_offsets": MESH_FIELD_OFFSETS,
+    }
 
 
 def test_export_script_replaces_existing_runtime_binaries_before_copying() -> None:
