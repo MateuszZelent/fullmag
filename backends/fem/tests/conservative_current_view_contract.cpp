@@ -894,7 +894,8 @@ void independently_certify_periodic_field(
                     std::abs(gradient[2]) <= 1.0e-12,
                 "periodic H1 quadrature gradient disagrees with (-1,0,0)");
             const double sigma = conductivity.Eval(*transformation, point);
-            mfem::DenseMatrix physical_shape_gradient;
+            mfem::DenseMatrix physical_shape_gradient(
+                finite_element->GetDof(), transformation->GetSpaceDim());
             finite_element->CalcPhysDShape(
                 *transformation, physical_shape_gradient);
             for (int local = 0; local < element_dofs.Size(); ++local) {
@@ -2308,8 +2309,12 @@ void non_tetrahedral_mesh_is_rejected()
 {
     ChargeFixture fixture(mfem::Mesh::MakeCartesian3D(
         1, 1, 1, mfem::Element::HEXAHEDRON, 1.0, 1.0, 1.0));
-    auto request = periodic_request(
-        fixture, stable_vertex_ids(fixture.mesh), identity_input());
+    const auto identity = identity_input();
+    ConservativeCurrentBuildRequest request;
+    request.mesh = &fixture.mesh;
+    request.conductivity = &fixture.conductivity;
+    request.identity = identity;
+    request.pins = pins_for(identity);
     require_rejected([&] { (void)ConservativeCurrentView::Build(request); },
         "OE-T0 accepted non-tetrahedral input");
 }
@@ -2320,8 +2325,12 @@ void curved_high_order_mesh_is_rejected_by_affine_v1()
         1, 1, 1, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0);
     mesh.SetCurvature(2);
     ChargeFixture fixture(std::move(mesh));
-    auto request = periodic_request(
-        fixture, stable_vertex_ids(fixture.mesh), identity_input());
+    const auto identity = identity_input();
+    ConservativeCurrentBuildRequest request;
+    request.mesh = &fixture.mesh;
+    request.conductivity = &fixture.conductivity;
+    request.identity = identity;
+    request.pins = pins_for(identity);
     require_rejected([&] { (void)ConservativeCurrentView::Build(request); },
         "fem_conservative_current_rt0_view.v1 accepted curved/high-order "
         "geometry even though its canonical normal and affine RT0 contract "
@@ -2907,16 +2916,48 @@ void coupled_volumetric_external_lead_extension_is_accepted()
     require(device_left.size() == lead_left_join.size() &&
             device_right.size() == lead_right_join.size(),
         "continuous external-lead join triangulations do not match");
+    const auto boundary_centroid = [](const mfem::Mesh &mesh, int boundary) {
+        mfem::Array<int> vertices;
+        mesh.GetBdrElementVertices(boundary, vertices);
+        require(vertices.Size() == 3,
+            "external-lead fixture boundary must be triangular");
+        mfem::Vector centroid(3);
+        centroid = 0.0;
+        for (int i = 0; i < vertices.Size(); ++i) {
+            centroid += coordinate_copy(mesh, vertices[i]);
+        }
+        centroid /= static_cast<double>(vertices.Size());
+        return centroid;
+    };
     const auto append_pairs = [&](const std::vector<int> &device_faces,
                                   const std::vector<int> &lead_faces) {
-        for (std::size_t i = 0; i < device_faces.size(); ++i) {
+        std::vector<bool> lead_face_used(lead_faces.size(), false);
+        for (const int device_face : device_faces) {
+            const auto device_centroid = boundary_centroid(
+                conductor.mesh, device_face);
+            std::size_t matched_lead = lead_faces.size();
+            for (std::size_t i = 0; i < lead_faces.size(); ++i) {
+                if (lead_face_used[i]) continue;
+                auto separation = device_centroid;
+                separation -= boundary_centroid(leads.mesh, lead_faces[i]);
+                if (separation.Norml2() <= 1.0e-13) {
+                    matched_lead = i;
+                    break;
+                }
+            }
+            require(matched_lead != lead_faces.size(),
+                "external-lead fixture left a device face unmatched");
+            lead_face_used[matched_lead] = true;
             ExternalLeadInterfacePair pair;
             pair.transport_face_vertex_ids = sorted_face_key(
-                conductor.mesh, conductor_ids, device_faces[i]);
+                conductor.mesh, conductor_ids, device_face);
             pair.lead_face_vertex_ids = sorted_face_key(
-                leads.mesh, lead_ids, lead_faces[i]);
+                leads.mesh, lead_ids, lead_faces[matched_lead]);
             closure.interface_pairs.push_back(pair);
         }
+        require(std::all_of(lead_face_used.begin(), lead_face_used.end(),
+                    [](bool used) { return used; }),
+            "external-lead fixture left a lead face unmatched");
     };
     append_pairs(device_left, lead_left_join);
     append_pairs(device_right, lead_right_join);
