@@ -12,6 +12,7 @@ import {
   HysteresisStageDraftFields,
 } from "./HysteresisStageDraftFields";
 import { type FrequencyDomainAuthoringView } from "./stages/StageInspectorFrame";
+import { StageAutosaveSection } from "./stages/StageAutosaveSection";
 
 export function StudyStageDraftEditor({
   algorithmsAvailable,
@@ -114,12 +115,19 @@ export function StudyStageDraftEditor({
           OFF for following Run stages. It uses the active table-autosave clock.
         </div>
       ) : draft.kind === "run" ? (
-        <FormField
-          label="Until"
-          unit="s"
-          value={draft.untilSeconds}
-          onChange={(event) => onUpdate({ untilSeconds: event.target.value })}
-        />
+        <>
+          <FormField
+            label="Until"
+            unit="s"
+            value={draft.untilSeconds}
+            onChange={(event) => onUpdate({ untilSeconds: event.target.value })}
+          />
+          <StageAutosaveSection
+            draft={draft.stageAutosave}
+            owner="run"
+            onChange={(stageAutosave) => onUpdate({ stageAutosave })}
+          />
+        </>
       ) : draft.kind === "hysteresis" ? (
         <HysteresisStageDraftFields
           algorithmsAvailable={algorithmsAvailable}
@@ -425,6 +433,11 @@ function RelaxStageDraftFields({
           />
         </>
       ) : null}
+      <StageAutosaveSection
+        draft={draft.stageAutosave}
+        owner="relax"
+        onChange={(stageAutosave) => onUpdate({ stageAutosave })}
+      />
     </>
   );
 }

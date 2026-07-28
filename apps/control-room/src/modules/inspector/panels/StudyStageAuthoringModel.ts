@@ -17,6 +17,13 @@ import {
   DEFAULT_HYSTERESIS_SETTLE_STEP,
   DEFAULT_HYSTERESIS_STORAGE,
 } from "@/shared/domain/study/hysteresisDefaults";
+import {
+  DEFAULT_STAGE_AUTOSAVE_DRAFT,
+  stageAutosaveDraftFromValue,
+  stageAutosaveDraftToValue,
+  validateStageAutosaveDraft,
+  type StageAutosaveDraft,
+} from "./StageAutosaveDraft";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -214,6 +221,7 @@ export interface StudyStageDraft {
   solver: string;
   solverMethod: string;
   stageId: string;
+  stageAutosave: StageAutosaveDraft;
   startField: string;
   stopField: string;
   target: string;
@@ -390,6 +398,7 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   solver: "rk23",
   solverMethod: "auto",
   stageId: "",
+  stageAutosave: DEFAULT_STAGE_AUTOSAVE_DRAFT,
   startField: "0, 0, -0.1",
   stopField: "0, 0, 0.1",
   target: "lowest",
@@ -479,6 +488,7 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   solver: "",
   solverMethod: "auto",
   stageId: "",
+  stageAutosave: DEFAULT_STAGE_AUTOSAVE_DRAFT,
   startField: "0, 0, -0.1",
   stopField: "0, 0, 0.1",
   target: "lowest",
@@ -869,6 +879,7 @@ export function createStudyStageDraft(
     return {
       ...DEFAULT_RUN_STAGE_DRAFT,
       legacyRunFixedTimestep: scalarText(record?.fixed_timestep, ""),
+      stageAutosave: stageAutosaveDraftFromValue(record?.autosave, "run"),
       stageId: stringValue(record?.stage_id ?? record?.id, `stage-${index + 1}`),
       untilSeconds: scalarText(
         record?.until_seconds ??
@@ -1104,6 +1115,7 @@ export function createStudyStageDraft(
       "",
     ),
     kind: "relax",
+    stageAutosave: stageAutosaveDraftFromValue(record?.autosave, "relax"),
     maxError: scalarText(
       toleranceMode === "max_error"
         ? adaptiveTimestep?.atol ?? record?.max_error
@@ -1299,12 +1311,15 @@ export function studyStageDraftToSceneStage(
     };
   }
   if (draft.kind === "run") {
-    return {
+    const stage: JsonObject = {
       entrypoint_kind: "flat_run",
       kind: "run",
       stage_id: requiredText(draft.stageId, "run"),
       until_seconds: requiredNumber(draft.untilSeconds, "until_seconds"),
     };
+    const autosave = stageAutosaveDraftToValue(draft.stageAutosave, "run");
+    if (autosave) stage.autosave = autosave;
+    return stage;
   }
   if (draft.kind === "eigenmodes") {
     const stage = spectralSceneStage(draft, "eigenmodes");
@@ -1548,6 +1563,9 @@ export function studyStageDraftToSceneStage(
     setOptionalNumber(stage, "demag_interval_s", draft.demagInterval);
   }
 
+  const autosave = stageAutosaveDraftToValue(draft.stageAutosave, "relax");
+  if (autosave) stage.autosave = autosave;
+
   return stage;
 }
 
@@ -1660,6 +1678,9 @@ export function validateStudyStageDraft(
           "Legacy Run-local fixed_timestep must be moved to the global Solver definition before this workflow can be saved.",
         severity: "error",
       });
+    }
+    for (const message of validateStageAutosaveDraft(draft.stageAutosave, "run")) {
+      issues.push({ message, severity: "error" });
     }
     return issues;
   }
@@ -1849,6 +1870,9 @@ export function validateStudyStageDraft(
     if (draft.timestepMode !== "auto" && draft.dt.trim()) {
       validatePositiveNumber(issues, draft.dt, "dt", true);
     }
+  }
+  for (const message of validateStageAutosaveDraft(draft.stageAutosave, "relax")) {
+    issues.push({ message, severity: "error" });
   }
   return issues;
 }
@@ -3277,6 +3301,7 @@ function cloneStudyStageDraft(draft: StudyStageDraft): StudyStageDraft {
         : {}),
     },
     fieldDrive: structuredClone(draft.fieldDrive),
+    stageAutosave: structuredClone(draft.stageAutosave),
     fftResponse: {
       ...draft.fftResponse,
       ...(draft.fftResponse.rawRequest
