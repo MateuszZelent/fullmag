@@ -21,15 +21,15 @@
 #include "cpu/mfem/runtime/cpu_threads.hpp"
 #include "cpu/mfem/runtime/mfem_device.hpp"
 #include "cpu/mfem/runtime/mfem_host_access.hpp"
+#include "cpu/mfem/runtime/mfem_mesh_builder.hpp"
 #include "fem_common.hpp"
 #include "gpu/cuda/transfer/snapshot_pool.hpp"
 
 #include <mfem.hpp>
 
-#include <array>
 #include <cstdio>
 #include <cstdlib>
-#include <map>
+#include <memory>
 #include <optional>
 #include <algorithm>
 #include <stdexcept>
@@ -110,67 +110,6 @@ private:
     const FemMaterialRuntimeAdapter &runtime_;
     AdapterCoefficientKind kind_;
 };
-
-struct MfemBoundaryTriangle {
-    std::array<uint32_t, 3> nodes{};
-    uint32_t marker = 1;
-};
-
-std::array<uint32_t, 3> sorted_face_key(std::array<uint32_t, 3> face)
-{
-    std::sort(face.begin(), face.end());
-    return face;
-}
-
-std::vector<MfemBoundaryTriangle> exterior_mfem_boundary_triangles(const Context &ctx)
-{
-    struct FaceRecord {
-        std::array<uint32_t, 3> oriented_nodes{};
-        uint32_t adjacent_elements = 0;
-    };
-
-    std::map<std::array<uint32_t, 3>, FaceRecord> face_records;
-    const auto add_tet_face = [&](std::array<uint32_t, 3> oriented_nodes) {
-        auto &record = face_records[sorted_face_key(oriented_nodes)];
-        record.oriented_nodes = oriented_nodes;
-        record.adjacent_elements += 1u;
-    };
-
-    for (uint32_t i = 0; i < ctx.mesh.n_elements; ++i) {
-        const uint32_t *tet = ctx.mesh.cell_nodes.data() + static_cast<size_t>(i) * 4u;
-        add_tet_face({tet[0], tet[2], tet[1]});
-        add_tet_face({tet[0], tet[1], tet[3]});
-        add_tet_face({tet[0], tet[3], tet[2]});
-        add_tet_face({tet[1], tet[2], tet[3]});
-    }
-
-    std::map<std::array<uint32_t, 3>, uint32_t> input_markers;
-    for (uint32_t i = 0; i < ctx.mesh.n_boundary_faces; ++i) {
-        const uint32_t *tri = ctx.mesh.facet_nodes.data() + static_cast<size_t>(i) * 3u;
-        uint32_t marker = 1u;
-        if (!ctx.mesh.facet_markers.empty()) {
-            marker = ctx.mesh.facet_markers[static_cast<size_t>(i)];
-            if (marker == 0u) {
-                marker = 1u;
-            }
-        }
-        input_markers.emplace(sorted_face_key({tri[0], tri[1], tri[2]}), marker);
-    }
-
-    std::vector<MfemBoundaryTriangle> result;
-    result.reserve(ctx.mesh.n_boundary_faces);
-    for (const auto &[key, record] : face_records) {
-        if (record.adjacent_elements != 1u) {
-            continue;
-        }
-        const auto marker = input_markers.find(key);
-        result.push_back({
-            record.oriented_nodes,
-            marker == input_markers.end() ? 1u : marker->second,
-        });
-    }
-    return result;
-}
 
 #if FULLMAG_HAS_CUDA_RUNTIME
 static const char *resolve_global_device_config(const Context &ctx)
@@ -292,42 +231,11 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
 #endif
 
         debug_checkpoint("context_initialize_mfem:device_ready");
-        const auto mfem_boundary_triangles = exterior_mfem_boundary_triangles(ctx);
-        auto *mesh = new mfem::Mesh(3, static_cast<int>(ctx.mesh.n_nodes), static_cast<int>(ctx.mesh.n_elements),
-                                    static_cast<int>(mfem_boundary_triangles.size()), 3);
-
-        for (uint32_t i = 0; i < ctx.mesh.n_nodes; ++i) {
-            const double *coords = ctx.mesh.nodes_xyz.data() + static_cast<size_t>(i) * 3u;
-            mesh->AddVertex(coords);
+        std::unique_ptr<mfem::Mesh> mesh_owner;
+        if (!build_mfem_mesh(ctx.mesh, mesh_owner, error)) {
+            return false;
         }
-
-        for (uint32_t i = 0; i < ctx.mesh.n_elements; ++i) {
-            const uint32_t *tet = ctx.mesh.cell_nodes.data() + static_cast<size_t>(i) * 4u;
-            const int vi[4] = {
-                static_cast<int>(tet[0]),
-                static_cast<int>(tet[1]),
-                static_cast<int>(tet[2]),
-                static_cast<int>(tet[3]),
-            };
-            int attr = 1;
-            if (!ctx.mesh.cell_markers.empty()) {
-                const uint32_t marker = ctx.mesh.cell_markers[static_cast<size_t>(i)];
-                attr = marker == 0u ? 2 : static_cast<int>(marker);
-            }
-            mesh->AddTet(vi, attr);
-        }
-
-        for (const auto &tri : mfem_boundary_triangles) {
-            const int vi[3] = {
-                static_cast<int>(tri.nodes[0]),
-                static_cast<int>(tri.nodes[1]),
-                static_cast<int>(tri.nodes[2]),
-            };
-            mesh->AddBdrTriangle(vi, static_cast<int>(tri.marker));
-        }
-
-        mesh->FinalizeTopology();
-        mesh->Finalize(false, true);
+        auto *mesh = mesh_owner.get();
         debug_checkpoint("context_initialize_mfem:mesh_ready");
 
         auto *fec = new mfem::H1_FECollection(static_cast<int>(ctx.base_plan.fe_order), mesh->Dimension());
@@ -338,7 +246,7 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
             error = "MFEM H1 P1 space DOF count does not match node count";
             delete fes;
             delete fec;
-            delete mesh;
+            mesh_owner.reset();
             return false;
         }
 
@@ -382,7 +290,7 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
             delete gf_mz;
             delete fes;
             delete fec;
-            delete mesh;
+            mesh_owner.reset();
             return false;
         }
 
@@ -400,7 +308,7 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
             delete gf_mz;
             delete fes;
             delete fec;
-            delete mesh;
+            mesh_owner.reset();
             return false;
         }
         if ((use_dg0_a && runtime->realization().a_location() != MaterialCoefficientLocation::element_dg0) ||
@@ -413,7 +321,7 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
             delete gf_mz;
             delete fes;
             delete fec;
-            delete mesh;
+            mesh_owner.reset();
             return false;
         }
 
@@ -437,11 +345,11 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
             delete gf_mz;
             delete fes;
             delete fec;
-            delete mesh;
+            mesh_owner.reset();
             return false;
         }
         debug_checkpoint("context_initialize_mfem:exchange_operator_ready");
-        ctx.mfem_context.mesh = mesh;
+        ctx.mfem_context.mesh = mesh_owner.release();
         ctx.mfem_context.fec = fec;
         ctx.mfem_context.fes = fes;
         ctx.mfem_context.gf_mx = gf_mx;

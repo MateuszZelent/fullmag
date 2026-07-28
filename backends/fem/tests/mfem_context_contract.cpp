@@ -393,24 +393,61 @@ void mfem_context_uses_elementwise_material_coefficients_when_present() {
         "exchange operator must accept generic MFEM coefficients, not only GridFunctionCoefficient");
 }
 
-void mfem_context_filters_internal_boundary_faces_before_mfem_mesh_creation() {
+void mixed_mesh_builder_owns_topology_translation_without_unlocking_physics() {
     const std::filesystem::path root = fem_source_root();
     const std::string runtime =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "mfem_context.cpp");
+    const std::string builder =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "mfem_mesh_builder.cpp");
+    const std::string builder_header =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "mfem_mesh_builder.hpp");
+    const std::string context_builder = read_text_file(root / "core" / "fem_context_builder.cpp");
 
     check(
-        runtime.find("std::vector<MfemBoundaryTriangle> exterior_mfem_boundary_triangles(") !=
+        runtime.find("build_mfem_mesh(ctx.mesh, mesh_owner, error)") != std::string::npos,
+        "MFEM context must delegate canonical topology translation to the mixed mesh builder");
+    check(
+            runtime.find("AddTet") == std::string::npos &&
+            runtime.find("AddBdrTriangle") == std::string::npos &&
+            runtime.find("exterior_mfem_boundary_triangles") == std::string::npos &&
+            runtime.find("static_cast<size_t>(i) * 4u") == std::string::npos,
+        "MFEM context must not retain tetra-only mesh or boundary reconstruction");
+    check(
+        builder_header.find("does not make a topology solver-executable") !=
+            std::string::npos &&
+            builder.find("does not own physics capability, materials, operators, or device policy") !=
             std::string::npos,
-        "MFEM context must build boundary elements from exterior tetra faces");
+        "mixed mesh builder must document its topology-only ownership boundary");
+    for (const char *native_add_api : {
+             "AddTet", "AddWedge", "AddPyramid", "AddHex", "AddBdrTriangle", "AddBdrQuad"}) {
+        check(
+            builder.find(native_add_api) != std::string::npos,
+            "mixed mesh builder must preserve every canonical cell and facet family natively");
+    }
+    for (const char *split_helper : {
+             "AddHexAsTets", "AddHexAsWedges", "AddHexAsPyramids", "AddBdrQuadAsTriangles"}) {
+        check(
+            builder.find(split_helper) == std::string::npos,
+            "mixed mesh builder must not split canonical element families");
+    }
     check(
-        runtime.find("record.adjacent_elements != 1u") != std::string::npos,
-        "MFEM boundary filtering must skip internal shared-domain interface faces");
+        builder.find("FinalizeTopology(false)") != std::string::npos &&
+            builder.find("Finalize(false, false)") != std::string::npos &&
+            builder.find("FinalizeTetMesh") == std::string::npos,
+        "mixed mesh builder must use general MFEM finalization without orientation repair");
+
+    const size_t topology_gate =
+        context_builder.find("validate_tetra_only_physics_topology(ctx, error)");
+    const size_t material_runtime =
+        context_builder.find("initialize_material_runtime(ctx, error)");
+    const size_t mfem_runtime = context_builder.find("context_initialize_mfem(ctx, error)");
+    const size_t gpu_runtime = context_builder.find("initialize_context_gpu_state(ctx, error)");
     check(
-        runtime.find("static_cast<int>(mfem_boundary_triangles.size())") !=
-                std::string::npos &&
-            runtime.find("for (const auto &tri : mfem_boundary_triangles)") !=
-                std::string::npos,
-        "MFEM mesh creation must use filtered exterior boundary triangles");
+        topology_gate != std::string::npos && material_runtime != std::string::npos &&
+            mfem_runtime != std::string::npos && gpu_runtime != std::string::npos &&
+            topology_gate < material_runtime && topology_gate < mfem_runtime &&
+            topology_gate < gpu_runtime,
+        "public tetra-only physics gate must remain before material, MFEM, and GPU initialization");
 }
 
 } // namespace
@@ -419,7 +456,7 @@ int main() {
     mfem_context_lifecycle_is_owned_by_runtime_module();
     mfem_runtime_pointers_are_typed();
     mfem_context_uses_elementwise_material_coefficients_when_present();
-    mfem_context_filters_internal_boundary_faces_before_mfem_mesh_creation();
+    mixed_mesh_builder_owns_topology_translation_without_unlocking_physics();
     runtime_source_files_document_module_boundaries();
     runtime_headers_document_module_boundaries();
     return 0;

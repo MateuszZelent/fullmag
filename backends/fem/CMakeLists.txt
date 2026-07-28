@@ -149,6 +149,7 @@ set(FEM_SOURCES
     cpu/mfem/runtime/interrupt.cpp
     cpu/mfem/runtime/mfem_context.cpp
     cpu/mfem/runtime/mfem_device.cpp
+    cpu/mfem/runtime/mfem_mesh_builder.cpp
     cpu/mfem/runtime/snapshot.cpp
     cpu/mfem/runtime/stage_completion.cpp
     cpu/mfem/runtime/state_io.cpp
@@ -605,6 +606,21 @@ target_include_directories(fem_exchange_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_exchange_contract COMMAND fem_exchange_contract)
+
+add_executable(fem_mixed_p1_contract tests/fem_mixed_p1_contract.cpp)
+target_link_libraries(fem_mixed_p1_contract PRIVATE fullmag_fem)
+if(FULLMAG_USE_MFEM_STACK)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_mixed_p1_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_mixed_p1_contract PRIVATE mfem)
+    endif()
+endif()
+target_include_directories(fem_mixed_p1_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_mixed_p1_contract COMMAND fem_mixed_p1_contract)
 
 add_executable(fem_effective_field_contract tests/effective_field_contract.cpp)
 target_link_libraries(fem_effective_field_contract PRIVATE fullmag_fem)
