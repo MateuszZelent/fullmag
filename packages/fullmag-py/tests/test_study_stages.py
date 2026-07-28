@@ -55,6 +55,32 @@ study.stages.add_run(stage_id="plain", until=8e-12)
         self.assertEqual(loaded.stages[0].autosave.target, "main")
         self.assertEqual(loaded.stages[1].autosave.target, "main")
         self.assertIsNone(loaded.stages[2].autosave)
+        relax_ir = loaded.stages[0].to_ir(
+            requested_backend=None,
+            execution_mode=None,
+            execution_precision=None,
+            script_source=loaded.script_source,
+            source_root=loaded.source_path.parent,
+            include_geometry_assets=False,
+            study_pipeline=loaded.study_pipeline_document(),
+        )
+        run_ir = loaded.stages[1].to_ir(
+            requested_backend=None,
+            execution_mode=None,
+            execution_precision=None,
+            script_source=loaded.script_source,
+            source_root=loaded.source_path.parent,
+            include_geometry_assets=False,
+            study_pipeline=loaded.study_pipeline_document(),
+        )
+        self.assertEqual(
+            relax_ir["study"]["sampling"]["stage_autosave"],
+            loaded.stages[0].autosave.to_ir(),
+        )
+        self.assertEqual(
+            run_ir["study"]["sampling"]["stage_autosave"],
+            loaded.stages[1].autosave.to_ir(),
+        )
         self.assertNotIn(
             "stage_autosave",
             loaded.pipeline_base_problem().study.to_ir()["sampling"],

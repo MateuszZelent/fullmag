@@ -10,7 +10,7 @@ use crate::artifact_pipeline::ArtifactRecorder;
 use crate::dispatch::{apply_native_fem_runtime_contract, fem_poisson_demag_provenance, FemEngine};
 use crate::native_fem::NativeFemBackend;
 use crate::relaxation::{resolve_stage_completion, RelaxationCompletionMetrics};
-use crate::schedules::OutputSchedule;
+use crate::schedules::{same_time, OutputSchedule};
 use crate::types::{
     ExecutedRun, FieldSnapshot, LiveStepConsumer, RunError, RunResult, RunStatus, StepStats,
     StepUpdate,
@@ -20,12 +20,59 @@ use super::preview::FemPreviewHandoff;
 use super::scalars::ensure_fem_object_scalars;
 use super::snapshots::copy_native_fem_field_snapshot;
 
+#[cfg(test)]
+mod tests {
+    use super::terminal_scheduled_field_actions;
+    use crate::schedules::OutputSchedule;
+
+    fn schedule(name: &str, last_sampled_time: Option<f64>) -> OutputSchedule {
+        OutputSchedule {
+            name: name.to_string(),
+            every_seconds: 1.0e-14,
+            next_time: 2.0e-14,
+            last_sampled_time,
+        }
+    }
+
+    #[test]
+    fn terminal_actions_deduplicate_payload_but_retain_streaming_demag_diagnostics() {
+        assert_eq!(
+            terminal_scheduled_field_actions(&schedule("m", Some(2.0e-14)), 2.0e-14, true),
+            (false, false)
+        );
+        assert_eq!(
+            terminal_scheduled_field_actions(&schedule("H_demag", Some(2.0e-14)), 2.0e-14, true,),
+            (false, true)
+        );
+        assert_eq!(
+            terminal_scheduled_field_actions(&schedule("demag_phi", None), 2.0e-14, true),
+            (true, true)
+        );
+        assert_eq!(
+            terminal_scheduled_field_actions(&schedule("m", None), 2.0e-14, false),
+            (true, false)
+        );
+    }
+}
+
 pub(crate) struct NativeFemRelaxationFinalization {
     pub(crate) latest_stats: Option<StepStats>,
     pub(crate) backend_completion: Option<fullmag_ir::StageCompletionIR>,
     pub(crate) cancelled: bool,
     pub(crate) paused: bool,
     pub(crate) preview_handoff: FemPreviewHandoff,
+}
+
+fn terminal_scheduled_field_actions(
+    schedule: &OutputSchedule,
+    final_time: f64,
+    streaming: bool,
+) -> (bool, bool) {
+    let payload_already_sampled = schedule
+        .last_sampled_time
+        .is_some_and(|time| same_time(time, final_time));
+    let diagnostic_copy = streaming && matches!(schedule.name.as_str(), "H_demag" | "demag_phi");
+    (!payload_already_sampled, diagnostic_copy)
 }
 
 pub(crate) fn finalize_native_fem_relaxation(
@@ -203,16 +250,23 @@ pub(crate) fn finalize_native_fem_relaxation(
     }
 
     for schedule in &mut field_schedules {
+        let (enqueue_payload, copy_diagnostic) =
+            terminal_scheduled_field_actions(schedule, final_stats.time, artifacts.is_streaming());
+        if !enqueue_payload && !copy_diagnostic {
+            continue;
+        }
         let copy_start = std::time::Instant::now();
         if artifacts.is_streaming() {
-            let snapshot = backend.begin_field_snapshot(
-                &schedule.name,
-                final_stats.step,
-                final_stats.time,
-                final_stats.dt,
-            )?;
-            artifacts.record_native_fem_field_snapshot(snapshot)?;
-            if matches!(schedule.name.as_str(), "H_demag" | "demag_phi") {
+            if enqueue_payload {
+                let snapshot = backend.begin_field_snapshot(
+                    &schedule.name,
+                    final_stats.step,
+                    final_stats.time,
+                    final_stats.dt,
+                )?;
+                artifacts.record_native_fem_field_snapshot(snapshot)?;
+            }
+            if copy_diagnostic {
                 let values = copy_native_fem_field_snapshot(backend, &schedule.name, node_count)?;
                 diagnostic_field_snapshots.push(FieldSnapshot {
                     name: schedule.name.clone(),

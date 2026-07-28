@@ -46,6 +46,14 @@ class LoadedStage:
             include_geometry_assets=include_geometry_assets,
             study_pipeline=study_pipeline,
         )
+        study = ir.get("study")
+        sampling = study.get("sampling") if isinstance(study, dict) else None
+        if not isinstance(sampling, dict):
+            raise ValueError("ProblemIR study.sampling must be an object")
+        if self.table_autosave is not None:
+            sampling["table_autosave"] = self.table_autosave.to_ir()
+        if self.autosave is not None:
+            sampling["stage_autosave"] = self.autosave.to_ir()
         if self.stage_id is not None:
             runtime_metadata = ir.get("problem_meta", {}).get("runtime_metadata")
             if not isinstance(runtime_metadata, dict):

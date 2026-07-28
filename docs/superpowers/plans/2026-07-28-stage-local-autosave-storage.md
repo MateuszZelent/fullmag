@@ -393,3 +393,130 @@ Record React Doctor as an environment failure, not a passing score, if the insta
 - [ ] Run `git diff --cached --name-only` as a separate command immediately before each final commit.
 - [ ] Push `master`, then verify remote equality with `git ls-remote origin refs/heads/master` and local `git rev-parse HEAD`.
 - [ ] Summarize implemented, production-executable, validated, and any capability-gated behavior separately.
+
+---
+
+## Execution log — 2026-07-28 final production qualification
+
+### Defects found during Task 17
+
+1. Explicit stage normalization discarded `SamplingIR.stage_autosave`. The
+   materializer now preserves the policy on the owning Relax/Run stage without
+   copying it into an unconfigured following stage.
+2. `LoadedStage.to_ir()` retained the Python policy object but did not inject it
+   into the materialized stage `study.sampling`. It now lowers both stage-local
+   autosave and the readable legacy table-autosave policy into that stage IR.
+3. Native FEM LLG aligned accepted steps with field-output events, but did not
+   enqueue field snapshots during the physical-time loop. Due field schedules
+   are now captured through the existing bounded `ArtifactRecorder`, advanced
+   after the accepted step, and excluded from terminal finalization when the
+   final coordinate was already sampled.
+4. Final review found that a successful native FEM step-zero snapshot did not
+   advance its physical-time schedule. The initial helper now mutates and
+   advances the schedule at the sampled initial time, preventing an additional
+   off-cadence snapshot when `dt` is smaller than the output period.
+5. Final review also found that payload deduplication at the terminal time could
+   suppress the in-memory `H_demag`/`demag_phi` copy required by periodic-demag
+   seam diagnostics. Terminal actions now distinguish the artifact enqueue from
+   the diagnostic copy: an already-enqueued payload is not duplicated, while the
+   diagnostic field remains available.
+
+### Fresh verification evidence
+
+- Python DSL/materialization/round-trip:
+
+  ```text
+  PYTHONPATH=packages/fullmag-py/src packages/fullmag-py/.venv/bin/python -m pytest -q \
+    packages/fullmag-py/tests/test_table_autosave.py \
+    packages/fullmag-py/tests/test_study_stages.py \
+    packages/fullmag-py/tests/test_script_builder_roundtrip.py
+  72 passed, 1 warning, 22 subtests passed
+  ```
+
+- Rust storage/pipeline tests:
+
+  ```text
+  CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=.fullmag/target cargo +nightly test \
+    -p fullmag-runner autosave_ --no-default-features
+  10 passed, 0 failed
+  ```
+
+- Rust stage materialization tests:
+
+  ```text
+  CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=.fullmag/target cargo +nightly test \
+    -p fullmag-cli step_utils::tests --no-default-features
+  54 passed, 0 failed
+  ```
+
+- Resource-first artifact metadata test:
+
+  ```text
+  CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=.fullmag/target cargo +nightly test \
+    -p fullmag-api \
+    router_v2::tests::artifacts_list_exposes_stage_autosave_progress_completion_and_failure \
+    --no-default-features -- --exact --test-threads=1
+  1 passed, 0 failed
+  ```
+
+- Managed native runtime:
+
+  ```text
+  just rebuild-fem-runtime
+  Finished release profile; exported fem-gpu-host
+  compute_capability=8.9, HYPRE provider=libHYPRE-3.1.0.so
+
+  just ensure-managed-fem-runtime
+  bundle=valid, compute_capability=8.9
+
+  just ensure-managed-fem-runtime
+  bundle=valid, compute_capability=8.9; no rebuild triggered
+  ```
+
+- Bounded end-to-end execution:
+
+  ```text
+  just fem-managed-headless gpu \
+    /tmp/fullmag_stage_autosave_gpu_smoke.py \
+    /tmp/fullmag-stage-autosave-gpu-smoke-output
+  status=completed, backend=fem, precision=double, total_steps=5
+  engine=fem_native_gpu
+  device=NVIDIA GeForce RTX 4080 SUPER
+  cc=8.9
+  demag_mode=device_hypre_poisson
+  ```
+
+  Artifact assertions over `main.autosave.json` and
+  `main.zarr/continuous/index.jsonl` passed:
+
+  - Relax: 3 table samples and 6 field samples (`m`, `H_demag`) at
+    accepted steps `0, 2, 3`;
+  - Run: 2 table samples at `1e-14 s, 2e-14 s` and 6 field samples
+    (`m`, `H_demag`) at `0 s, 1e-14 s, 2e-14 s`;
+  - continuous target indexes are exactly `0..16`;
+  - both stage manifests are complete;
+  - no duplicate `(stage, kind, coordinate, payload_ref)` entry exists;
+  - the final Run sample is stored once, not once in-loop plus once in finalization.
+
+- A second managed GPU run used a first-stage headless Run with `dt=5e-15 s`
+  and field cadence `1e-14 s`. Its continuous index contains exactly
+  `0 s, 1e-14 s, 2e-14 s`; the former off-cadence `5e-15 s` sample is absent
+  and the terminal sample is not duplicated.
+
+### Qualification boundary
+
+This run proves the production FEM GPU lane and the end-to-end scheduling and
+storage contract on a deliberately small mesh. It is a correctness and runtime
+identity qualification, not a throughput benchmark: the mesh has only 202
+nodes, so its timings must not be used to claim a solver speedup or sustained
+GPU occupancy. Autosave work remains on the bounded artifact pipeline; a
+representative large-case callback/fence comparison is still required before
+making a quantitative performance-overhead claim.
+
+### Final review
+
+The final correctness review found no remaining Critical or Important issue in
+scope. In particular, headless scheduled fields now force the initial sample
+and advance their schedules, while terminal duplicate suppression still
+materializes the in-memory `H_demag` and `demag_phi` diagnostic copies required
+by live streaming without enqueueing duplicate artifacts.

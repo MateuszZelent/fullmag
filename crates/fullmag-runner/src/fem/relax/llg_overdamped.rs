@@ -28,10 +28,12 @@ use crate::relaxation::llg_overdamped_uses_pure_damping;
 #[cfg(feature = "fem-gpu")]
 use crate::relaxation::{RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation};
 #[cfg(feature = "fem-gpu")]
+use crate::schedules::{advance_due_schedules, is_due, OutputSchedule};
+#[cfg(feature = "fem-gpu")]
 use crate::solver_profile::{current_thread_cpu_time_ns, elapsed_current_thread_cpu_ns};
 use crate::types::{ExecutionProvenance, RelaxationControllerPolicyProvenance};
 #[cfg(feature = "fem-gpu")]
-use crate::types::{LiveStepConsumer, RunError, StepAction, StepStats, StepUpdate};
+use crate::types::{FieldSnapshot, LiveStepConsumer, RunError, StepAction, StepStats, StepUpdate};
 
 #[cfg(feature = "fem-gpu")]
 use super::preview::FemPreviewHandoff;
@@ -184,6 +186,7 @@ pub(crate) fn execute_llg_overdamped(
     artifacts: &mut ArtifactRecorder,
     steps: &mut Vec<StepStats>,
     energy_plateau: &mut RelaxationEnergyPlateauWindow,
+    field_schedules: &mut [OutputSchedule],
     mut last_preview_revision: Option<u64>,
 ) -> Result<LlgOverdampedExecution, RunError> {
     let mut latest_stats: Option<StepStats> = None;
@@ -561,6 +564,31 @@ pub(crate) fn execute_llg_overdamped(
         if cancelled || paused {
             break;
         }
+
+        let due_field_names = field_schedules
+            .iter()
+            .filter(|schedule| is_due(stats.time, schedule.next_time))
+            .map(|schedule| schedule.name.clone())
+            .collect::<Vec<_>>();
+        for name in due_field_names {
+            let metrics = if artifacts.is_streaming() {
+                let snapshot =
+                    backend.begin_field_snapshot(&name, stats.step, stats.time, stats.dt)?;
+                artifacts.record_native_fem_field_snapshot(snapshot)?
+            } else {
+                let values =
+                    super::snapshots::copy_native_fem_field_snapshot(backend, &name, node_count)?;
+                artifacts.record_field_snapshot(FieldSnapshot {
+                    name,
+                    step: stats.step,
+                    time: stats.time,
+                    solver_dt: stats.dt,
+                    values,
+                })?
+            };
+            apply_artifact_enqueue_metrics(&mut stats, metrics);
+        }
+        advance_due_schedules(field_schedules, stats.time);
 
         let artifact_metrics = artifacts.record_scalar(&stats)?;
         apply_artifact_enqueue_metrics(&mut stats, artifact_metrics);

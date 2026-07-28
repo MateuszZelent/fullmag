@@ -65,7 +65,7 @@ use crate::schedules::{
     OutputSchedule,
 };
 #[cfg(all(feature = "fem-gpu", not(feature = "cuda")))]
-use crate::schedules::{collect_field_schedules, OutputSchedule};
+use crate::schedules::{advance_due_schedules, collect_field_schedules, OutputSchedule};
 pub(crate) use crate::solver_runtime::engine::{EngineResolution, FdmEngine};
 use crate::solver_runtime::fem_crossover::resolve_auto_fem_plan_device;
 #[cfg(feature = "fem-gpu")]
@@ -5184,15 +5184,19 @@ pub(crate) fn apply_native_fem_runtime_contract(
 }
 
 #[cfg(feature = "fem-gpu")]
-fn native_fem_requires_initial_snapshot(live_present: bool, direct_minimization: bool) -> bool {
-    live_present || direct_minimization
+fn native_fem_requires_initial_snapshot(
+    live_present: bool,
+    direct_minimization: bool,
+    scheduled_fields_present: bool,
+) -> bool {
+    live_present || direct_minimization || scheduled_fields_present
 }
 
 #[cfg(feature = "fem-gpu")]
 fn record_native_fem_initial_field_snapshots(
     backend: &mut NativeFemBackend,
     artifacts: &mut ArtifactRecorder,
-    field_schedules: &[OutputSchedule],
+    field_schedules: &mut [OutputSchedule],
     node_count: usize,
     current_stats: &StepStats,
 ) -> Result<(), RunError> {
@@ -5226,6 +5230,7 @@ fn record_native_fem_initial_field_snapshots(
             })?;
         }
     }
+    advance_due_schedules(field_schedules, current_stats.time);
 
     Ok(())
 }
@@ -5256,10 +5261,12 @@ fn execute_native_fem(
         crate::schedules::OUTPUT_TIME_TOLERANCE,
         native_relaxation_step.is_none(),
     );
+    let mut field_schedules = collect_field_schedules(outputs)?;
     let needs_initial_snapshot = native_fem_requires_initial_snapshot(
         live.as_ref()
             .is_some_and(|consumer| consumer.initial_snapshot),
         native_relaxation_step.is_some(),
+        !field_schedules.is_empty(),
     );
 
     let mut backend =
@@ -5397,12 +5404,11 @@ fn execute_native_fem(
     } else {
         ArtifactRecorder::in_memory(provenance.clone())
     };
-    let field_schedules = collect_field_schedules(outputs)?;
     if needs_initial_snapshot && current_stats.step == 0 {
         record_native_fem_initial_field_snapshots(
             &mut backend,
             &mut artifacts,
-            &field_schedules,
+            &mut field_schedules,
             node_count,
             &current_stats,
         )?;
@@ -5459,6 +5465,7 @@ fn execute_native_fem(
             &mut artifacts,
             &mut steps,
             &mut energy_plateau,
+            &mut field_schedules,
             last_preview_revision,
         )?;
         latest_stats = outcome.latest_stats;
@@ -6225,9 +6232,10 @@ mod tests {
     #[cfg(feature = "fem-gpu")]
     #[test]
     fn native_fem_initial_snapshot_is_lazy_for_headless_time_domain() {
-        assert!(!native_fem_requires_initial_snapshot(false, false));
-        assert!(native_fem_requires_initial_snapshot(true, false));
-        assert!(native_fem_requires_initial_snapshot(false, true));
+        assert!(!native_fem_requires_initial_snapshot(false, false, false));
+        assert!(native_fem_requires_initial_snapshot(true, false, false));
+        assert!(native_fem_requires_initial_snapshot(false, true, false));
+        assert!(native_fem_requires_initial_snapshot(false, false, true));
     }
 
     #[test]
@@ -6256,6 +6264,15 @@ mod tests {
         assert!(
             execute_body.contains("current_stats.step == 0"),
             "initial native FEM field snapshots must be tied to the computed step-0 stats"
+        );
+        let helper_body = &source[helper_pos..execute_pos];
+        assert!(
+            helper_body.contains("field_schedules: &mut [OutputSchedule]"),
+            "initial native FEM field snapshots must mutate their schedules"
+        );
+        assert!(
+            helper_body.contains("advance_due_schedules(field_schedules, current_stats.time)"),
+            "a successful step-0 snapshot must advance the schedule before the first accepted step"
         );
     }
 
