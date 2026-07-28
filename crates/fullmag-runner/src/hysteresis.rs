@@ -5825,6 +5825,7 @@ mod tests {
             minor_loops: None,
             sampling: fullmag_ir::SamplingIR {
                 table_autosave: None,
+                stage_autosave: None,
                 outputs: vec![fullmag_ir::OutputIR::Scalar {
                     name: "mz".to_string(),
                     every_seconds: 1.0e-13,

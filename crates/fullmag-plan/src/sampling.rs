@@ -107,6 +107,27 @@ pub fn validate_continuous_autosave_targets(
     }
 }
 
+pub fn validate_stage_autosave_capabilities(
+    stages: &[ResolvedStageAutosave],
+    hdf5_available: bool,
+) -> Result<(), PlanError> {
+    let reasons = stages
+        .iter()
+        .filter(|stage| stage.format == AutosaveFormatIR::Hdf5 && !hdf5_available)
+        .map(|stage| {
+            format!(
+                "stage '{}' requests HDF5 autosave, but capability 'stage_autosave_hdf5' is unavailable",
+                stage.stage_id
+            )
+        })
+        .collect::<Vec<_>>();
+    if reasons.is_empty() {
+        Ok(())
+    } else {
+        Err(PlanError { reasons })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplingResolutionIR {
     pub schema_version: String,

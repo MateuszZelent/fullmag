@@ -15,6 +15,11 @@
 pub const MU0: f64 = 4.0 * std::f64::consts::PI * 1e-7;
 
 mod antenna_fields;
+pub mod autosave_storage;
+pub mod autosave_txt;
+pub mod autosave_zarr;
+#[cfg(feature = "stage-autosave-hdf5")]
+pub mod autosave_hdf5;
 pub mod artifact_pipeline;
 mod artifacts;
 pub mod capabilities;
@@ -1690,7 +1695,8 @@ pub fn run_planned_problem(
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
         return hysteresis::run_planned_hysteresis(problem, plan, until_seconds, output_dir, None);
     }
-    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
+    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start_for_problem(
+        problem,
         output_dir.to_path_buf(),
         artifacts::build_field_context(problem, plan),
         artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
@@ -1999,7 +2005,8 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
     let fem_stage_context = fem_mesh_identity
         .cloned()
         .map(types::FemStageExecutionContext::from_mesh_identity);
-    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
+    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start_for_problem(
+        problem,
         output_dir.to_path_buf(),
         artifacts::build_field_context(problem, plan),
         artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
@@ -2367,7 +2374,8 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     let fem_stage_context = fem_mesh_identity
         .cloned()
         .map(types::FemStageExecutionContext::from_mesh_identity);
-    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
+    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start_for_problem(
+        problem,
         output_dir.to_path_buf(),
         artifacts::build_field_context(problem, plan),
         artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
@@ -2683,7 +2691,8 @@ pub fn run_problem_with_interactive_fdm_runtime_live_preview_interruptible(
         });
     };
 
-    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
+    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start_for_problem(
+        problem,
         output_dir.to_path_buf(),
         artifacts::build_field_context(problem, &plan),
         artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
@@ -2813,7 +2822,8 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
     };
     let fem_mesh_generation_id = runtime.stage_context().generation_id();
 
-    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
+    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start_for_problem(
+        problem,
         output_dir.to_path_buf(),
         artifacts::build_field_context(problem, &plan),
         artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
@@ -3965,6 +3975,7 @@ mod tests {
             solver_policy: None,
             sampling: fullmag_ir::SamplingIR {
                 table_autosave: None,
+                stage_autosave: None,
                 outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
                     observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
                 }],
@@ -6211,6 +6222,7 @@ mod tests {
             solver_policy: None,
             sampling: fullmag_ir::SamplingIR {
                 table_autosave: None,
+                stage_autosave: None,
                 outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
                     observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
                 }],

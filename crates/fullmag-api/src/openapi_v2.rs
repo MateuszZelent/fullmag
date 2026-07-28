@@ -422,6 +422,11 @@ use utoipa::OpenApi;
         crate::schemas::authoring::SamplingPeriodPolicyResource,
         crate::schemas::authoring::AutomaticOutputSamplingResource,
         crate::schemas::authoring::AutomaticTableAutosaveResource,
+        crate::schemas::authoring::StageAutosaveLayoutResource,
+        crate::schemas::authoring::StageAutosaveFormatResource,
+        crate::schemas::authoring::StageTableAutosaveResource,
+        crate::schemas::authoring::FieldAutosaveResource,
+        crate::schemas::authoring::StageAutosaveResource,
         crate::schemas::authoring::NullableU32PatchValue,
         crate::schemas::authoring::NullableF64PatchValue,
         crate::schemas::authoring::NullableStringPatchValue,
@@ -785,6 +790,22 @@ mod tests {
         assert!(schemas["AutomaticOutputSamplingResource"]
             .to_string()
             .contains("scalar_auto"));
+    }
+
+    #[test]
+    fn openapi_declares_stage_autosave_authoring_contract() {
+        let document = openapi_json();
+        let schemas = &document["components"]["schemas"];
+        let stage = schemas["StageAutosaveResource"].to_string();
+        assert!(stage.contains("target"));
+        assert!(stage.contains("layout"));
+        assert!(stage.contains("format"));
+        assert!(schemas["StageAutosaveFormatResource"]
+            .to_string()
+            .contains("hdf5"));
+        assert!(schemas["StageAutosaveLayoutResource"]
+            .to_string()
+            .contains("continuous"));
     }
 
     #[test]

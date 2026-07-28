@@ -140,6 +140,14 @@ impl TableStore {
         self.rows.len() as u64
     }
 
+    pub fn last_row(&self) -> Option<&TableRow> {
+        self.rows.last()
+    }
+
+    pub fn cadence(&self) -> &TableAutosaveCadence {
+        &self.config.cadence
+    }
+
     pub fn append_if_due(&mut self, stats: &StepStats) -> Result<bool, String> {
         let sample_policy = match &self.config.cadence {
             TableAutosaveCadence::SimulationTime { sample_period_s } => {

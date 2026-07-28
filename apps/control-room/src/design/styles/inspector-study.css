@@ -207,6 +207,55 @@ button.fm-study-stage-card:focus-visible {
   border-bottom: 1px solid var(--fm-border-subtle);
 }
 
+.fm-stage-autosave {
+  display: grid;
+  gap: var(--fm-space-2);
+  margin: var(--fm-space-2);
+  padding: var(--fm-space-2);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: color-mix(in srgb, var(--fm-bg-panel-raised) 70%, transparent);
+}
+
+.fm-stage-autosave__heading,
+.fm-stage-autosave__fields-heading,
+.fm-stage-autosave__field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+}
+
+.fm-stage-autosave__heading p,
+.fm-stage-autosave__notice {
+  margin: var(--fm-space-1) 0 0;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-2xs);
+  line-height: 1.4;
+}
+
+.fm-stage-autosave__body,
+.fm-stage-autosave__subsection,
+.fm-stage-autosave__fields {
+  display: grid;
+  gap: var(--fm-space-2);
+}
+
+.fm-stage-autosave__subsection,
+.fm-stage-autosave__fields {
+  padding-top: var(--fm-space-2);
+  border-top: 1px solid var(--fm-border-subtle);
+}
+
+.fm-stage-autosave__field {
+  align-items: end;
+}
+
+.fm-stage-autosave__field > .fm-inspector-form-field {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
 /* Stage card meta: pill-style tags */
 .fm-study-stage-card__meta span {
   display: inline-flex;

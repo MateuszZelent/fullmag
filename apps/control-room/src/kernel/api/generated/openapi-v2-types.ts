@@ -4016,6 +4016,14 @@ export interface components {
         };
         /** @enum {string} */
         FerromagnetVisibilityMode: "hide" | "ghost";
+        FieldAutosaveResource: {
+            /** Format: double */
+            every_seconds?: number | null;
+            /** Format: int64 */
+            every_steps?: number | null;
+            kind?: string;
+            quantity: string;
+        };
         FieldCatalog: {
             domain_generation_id: string;
             quantities: components["schemas"]["FieldDescriptor"][];
@@ -8012,6 +8020,18 @@ export interface components {
             /** Format: double */
             power: number;
         };
+        /** @enum {string} */
+        StageAutosaveFormatResource: "zarr" | "hdf5" | "txt";
+        /** @enum {string} */
+        StageAutosaveLayoutResource: "continuous" | "separate";
+        StageAutosaveResource: {
+            fields?: components["schemas"]["FieldAutosaveResource"][];
+            format: components["schemas"]["StageAutosaveFormatResource"];
+            kind?: string;
+            layout: components["schemas"]["StageAutosaveLayoutResource"];
+            table?: null | components["schemas"]["StageTableAutosaveResource"];
+            target: string;
+        };
         StageExecutionRecordResource: {
             action?: string | null;
             artifact_refs?: string[];
@@ -8079,6 +8099,15 @@ export interface components {
         StageMetricUnit: "A/m" | "J" | "s" | "1";
         /** @enum {string} */
         StageStopReason: "torque" | "energy" | "max_steps" | "max_pseudotime" | "max_physical_time" | "user_cancelled" | "backend_error" | "gradient";
+        StageTableAutosaveResource: {
+            /** Format: int64 */
+            every_steps?: number | null;
+            kind?: string;
+            quantities: string[];
+            /** Format: double */
+            sample_period_s?: number | null;
+            table_id?: string;
+        };
         StructuredCommandRequest: (components["schemas"]["RuntimeCommandIntent"] & {
             /** Format: double */
             fixed_timestep?: number | null;
