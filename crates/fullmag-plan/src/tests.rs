@@ -99,6 +99,21 @@ fn stage_autosave_planning_keeps_separate_targets_independent() {
         .expect("separate layouts do not share a schema registry");
 }
 
+#[test]
+fn stage_autosave_hdf5_capability_fails_closed_when_unavailable() {
+    let stage = resolved_stage_autosave(
+        "run",
+        AutosaveFormatIR::Hdf5,
+        AutosaveLayoutIR::Continuous,
+        ResolvedAutosaveClock::PhysicalTime,
+    );
+    let error = validate_stage_autosave_capabilities(&[stage.clone()], false)
+        .expect_err("missing HDF5 capability must fail closed");
+    assert!(error.reasons[0].contains("stage_autosave_hdf5"));
+    validate_stage_autosave_capabilities(&[stage], true)
+        .expect("available HDF5 capability should accept the stage");
+}
+
 fn auto_sampling_problem(cutoffs_hz: &[f64], active_stage_id: Option<&str>) -> ProblemIR {
     let mut problem = ProblemIR::bootstrap_example();
     if let Some(stage_id) = active_stage_id {

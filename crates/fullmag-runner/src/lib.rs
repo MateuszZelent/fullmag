@@ -18,6 +18,8 @@ mod antenna_fields;
 pub mod autosave_storage;
 pub mod autosave_txt;
 pub mod autosave_zarr;
+#[cfg(feature = "stage-autosave-hdf5")]
+pub mod autosave_hdf5;
 pub mod artifact_pipeline;
 mod artifacts;
 pub mod capabilities;

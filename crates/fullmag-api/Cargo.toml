@@ -8,6 +8,7 @@ publish.workspace = true
 default = []
 cuda = ["fullmag-runner/cuda"]
 fem-gpu = ["fullmag-runner/fem-gpu"]
+stage-autosave-hdf5 = ["fullmag-runner/stage-autosave-hdf5"]
 swagger-ui = ["dep:utoipa-swagger-ui"]
 
 [dependencies]
