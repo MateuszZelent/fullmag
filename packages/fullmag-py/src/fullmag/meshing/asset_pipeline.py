@@ -2111,6 +2111,110 @@ def realize_fem_domain_mesh_asset(
     return mesh, region_markers
 
 
+def _qualified_mixed_per_geometry_body_hmax(
+    mesh_workflow: Mapping[str, object] | None,
+    geometries: list[Geometry],
+) -> float | None:
+    if not isinstance(mesh_workflow, Mapping):
+        return None
+    raw_per_geometry = mesh_workflow.get("per_geometry")
+    if raw_per_geometry in (None, []):
+        return None
+    if not isinstance(raw_per_geometry, list) or len(raw_per_geometry) != 1:
+        raise ValueError(
+            "qualified mixed shared-domain route rejects: per-geometry controls"
+        )
+    recipe = raw_per_geometry[0]
+    if not isinstance(recipe, Mapping) or len(geometries) != 1:
+        raise ValueError(
+            "qualified mixed shared-domain route rejects: per-geometry controls"
+        )
+
+    allowed_keys = {
+        "geometry",
+        "mode",
+        "hmax",
+        "maximum_element_size",
+        "hmin",
+        "minimum_element_size",
+        "order",
+        "interface_hmax",
+        "interface_thickness",
+        "transition_distance",
+        "edge_hmax",
+        "edge_thickness",
+        "edge_transition_distance",
+        "corner_hmax",
+        "corner_extent",
+        "corner_transition_distance",
+        "mesh_strategy",
+        "through_thickness_elements",
+        "through_thickness_distribution",
+        "sweep_face_meshing",
+        "topology",
+        "sweep_direction",
+        "element_family",
+        "transition_policy",
+        "exact_layer_count",
+    }
+    unsupported = sorted(str(key) for key in recipe if key not in allowed_keys)
+    body_hmax = _coerce_positive_float(recipe.get("maximum_element_size"))
+    alias_hmax = _coerce_positive_float(recipe.get("hmax"))
+    optional_size_keys = (
+        "interface_hmax",
+        "interface_thickness",
+        "transition_distance",
+        "edge_hmax",
+        "edge_thickness",
+        "edge_transition_distance",
+        "corner_hmax",
+        "corner_extent",
+        "corner_transition_distance",
+    )
+    invalid_size_keys = [
+        key
+        for key in optional_size_keys
+        if recipe.get(key) is not None
+        and _coerce_positive_float(recipe.get(key)) is None
+    ]
+    body_hmin = _coerce_positive_float(recipe.get("minimum_element_size"))
+    alias_hmin = _coerce_positive_float(recipe.get("hmin"))
+    hmin_is_canonical = (
+        recipe.get("minimum_element_size") is None
+        and recipe.get("hmin") is None
+    ) or (body_hmin is not None and alias_hmin == body_hmin)
+    geometry_names = _geometry_name_aliases(geometries[0].geometry_name)
+    canonical = (
+        recipe.get("geometry") in geometry_names
+        and recipe.get("mode") == "custom"
+        and body_hmax is not None
+        and alias_hmax == body_hmax
+        and hmin_is_canonical
+        and not invalid_size_keys
+        and recipe.get("order") == 1
+        and recipe.get("mesh_strategy") == "swept_prism"
+        and recipe.get("through_thickness_elements") is not None
+        and not isinstance(recipe.get("through_thickness_elements"), bool)
+        and isinstance(recipe.get("through_thickness_elements"), int)
+        and int(recipe["through_thickness_elements"]) == 1
+        and recipe.get("through_thickness_distribution") == "fixed"
+        and recipe.get("sweep_face_meshing") == "triangular"
+        and recipe.get("topology") in (None, "prismatic")
+        and recipe.get("sweep_direction") == "auto"
+        and recipe.get("element_family") == "prism"
+        and recipe.get("transition_policy") == "pyramid_to_tetrahedra"
+        and recipe.get("exact_layer_count") is True
+    )
+    if unsupported or not canonical:
+        rejected = unsupported + invalid_size_keys
+        detail = f" ({', '.join(rejected)})" if rejected else ""
+        raise ValueError(
+            "qualified mixed shared-domain route rejects: "
+            f"per-geometry controls{detail}"
+        )
+    return body_hmax
+
+
 def _realize_fem_domain_mesh_asset_from_components_impl(
     geometries: list[Geometry],
     hints: FEM,
@@ -2222,7 +2326,12 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         bounds_by_name=None,
         include_size_fields=False,
     )
+    qualified_mixed_body_hmax: float | None = None
     if surface_mesh_options.mesh_strategy == "swept_prism":
+        qualified_mixed_body_hmax = _qualified_mixed_per_geometry_body_hmax(
+            mesh_workflow,
+            geometries,
+        )
         reasons: list[str] = []
         raw_mesh_options = (
             mesh_workflow.get("mesh_options", {})
@@ -2239,19 +2348,22 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             reasons.append("object/conformal regions")
         if hints.order != 1:
             reasons.append("element order")
-        if isinstance(mesh_workflow, Mapping) and mesh_workflow.get("per_geometry"):
-            reasons.append("per-geometry controls")
         if isinstance(raw_mesh_options, Mapping):
             if raw_mesh_options.get("size_fields"):
                 reasons.append("local/size fields")
+            if (
+                raw_mesh_options.get("hmin") is not None
+                or raw_mesh_options.get("minimum_element_size") is not None
+            ):
+                reasons.append("minimum element size")
             if raw_mesh_options.get("recombine") is True:
                 reasons.append("recombine")
         for name, active in (
             ("local/size fields", bool(surface_mesh_options.size_fields)),
-            ("minimum element size", surface_mesh_options.hmin is not None),
             ("boundary layers", surface_mesh_options.boundary_layer_count is not None),
             ("optimizer", surface_mesh_options.optimize is not None),
             ("periodic pairs", bool(surface_mesh_options.periodic_pair_ids)),
+            ("layer count", surface_mesh_options.through_thickness_elements not in (None, 1)),
             ("non-fixed distribution", surface_mesh_options.through_thickness_distribution not in (None, "fixed")),
             ("graded distribution", surface_mesh_options.through_thickness_element_ratio not in (None, 1.0)),
             ("symmetric distribution", surface_mesh_options.through_thickness_symmetric),
@@ -2486,7 +2598,11 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                     f"Shared-domain local sizing active ({len(mesh_options.size_fields)} size fields)"
                 )
 
-            effective_hmax = float(hints.hmax)
+            effective_hmax = (
+                qualified_mixed_body_hmax
+                if mixed_shared_geo_direct and qualified_mixed_body_hmax is not None
+                else float(hints.hmax)
+            )
             if (
                 not mixed_shared_geo_direct
                 and airbox is not None

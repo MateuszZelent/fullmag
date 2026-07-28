@@ -106,6 +106,193 @@ def _add_geo_box_surface_loop(
     return surfaces, int(gmsh.model.geo.addSurfaceLoop(surfaces))
 
 
+def _add_partitioned_transition_shell_geo(
+    gmsh: Any,
+    *,
+    magnetic_volume: int,
+    shell_min: np.ndarray,
+    body_min: np.ndarray,
+    body_max: np.ndarray,
+    shell_max: np.ndarray,
+    mesh_size: float,
+) -> tuple[list[int], list[int]]:
+    """Build 26 convex GEO blocks around an existing magnetic Box volume."""
+    axes = tuple(
+        np.asarray(values, dtype=np.float64)
+        for values in zip(shell_min, body_min, body_max, shell_max, strict=True)
+    )
+    tolerance = np.finfo(np.float64).eps * max(
+        1.0, *(float(np.max(np.abs(values))) for values in axes)
+    ) * 64.0
+
+    def point_key(coordinates: object) -> tuple[int, int, int]:
+        values = np.asarray(coordinates, dtype=np.float64).reshape(3)
+        result = tuple(
+            int(np.argmin(np.abs(axis_values - values[axis])))
+            for axis, axis_values in enumerate(axes)
+        )
+        if any(
+            abs(float(values[axis] - axes[axis][result[axis]])) > tolerance
+            for axis in range(3)
+        ):
+            raise RuntimeError("magnetic GEO entity is not aligned to transition lattice")
+        return result
+
+    gmsh.model.geo.synchronize()
+    signed_magnetic_boundary = gmsh.model.getBoundary(
+        [(3, int(magnetic_volume))], combined=False, oriented=True
+    )
+    if len(signed_magnetic_boundary) != 6:
+        raise RuntimeError("magnetic GEO Box must have exactly six boundary surfaces")
+
+    points: dict[tuple[int, int, int], int] = {}
+    edges: dict[
+        frozenset[tuple[int, int, int]],
+        tuple[int, tuple[int, int, int], tuple[int, int, int]],
+    ] = {}
+    faces: dict[tuple[int, int, int, int], int] = {}
+    curve_tags: set[int] = set()
+    for _dim, signed_surface in signed_magnetic_boundary:
+        surface = abs(int(signed_surface))
+        bounds = np.asarray(gmsh.model.getBoundingBox(2, surface), dtype=np.float64)
+        extents = bounds[3:] - bounds[:3]
+        normal_axis = int(np.argmin(np.abs(extents)))
+        if abs(float(extents[normal_axis])) > tolerance:
+            raise RuntimeError("magnetic GEO boundary is not an axis-aligned plane")
+        coordinate = 0.5 * float(bounds[normal_axis] + bounds[normal_axis + 3])
+        plane_index = int(np.argmin(np.abs(axes[normal_axis] - coordinate)))
+        if plane_index not in (1, 2):
+            raise RuntimeError("magnetic GEO boundary does not match body lattice planes")
+        canonical_surface = int(signed_surface) * (-1 if plane_index == 1 else 1)
+        faces[(normal_axis, plane_index, 1, 1)] = canonical_surface
+        for curve_dim, curve_tag in gmsh.model.getBoundary(
+            [(2, surface)], combined=False, oriented=False
+        ):
+            if curve_dim == 1:
+                curve_tags.add(abs(int(curve_tag)))
+
+    for curve in sorted(curve_tags):
+        point_dimtags = gmsh.model.getBoundary(
+            [(1, curve)], combined=False, oriented=False
+        )
+        for point_dim, point_tag in point_dimtags:
+            if point_dim != 0:
+                continue
+            key = point_key(gmsh.model.getValue(0, abs(int(point_tag)), []))
+            points[key] = abs(int(point_tag))
+        lower, upper = gmsh.model.getParametrizationBounds(1, curve)
+        start = point_key(gmsh.model.getValue(1, curve, [float(lower[0])]))
+        end = point_key(gmsh.model.getValue(1, curve, [float(upper[0])]))
+        edges[frozenset((start, end))] = (curve, start, end)
+
+    if len(points) != 8 or len(edges) != 12 or len(faces) != 6:
+        raise RuntimeError(
+            "magnetic GEO Box entity recovery did not produce 8 points, 12 curves, and 6 surfaces"
+        )
+
+    for i, j, k in itertools.product(range(4), repeat=3):
+        key = (i, j, k)
+        if key not in points:
+            points[key] = gmsh.model.geo.addPoint(
+                float(axes[0][i]),
+                float(axes[1][j]),
+                float(axes[2][k]),
+                float(mesh_size),
+            )
+
+    for axis in range(3):
+        other_axes = [value for value in range(3) if value != axis]
+        for interval in range(3):
+            for first, second in itertools.product(range(4), repeat=2):
+                start = [0, 0, 0]
+                start[axis] = interval
+                start[other_axes[0]] = first
+                start[other_axes[1]] = second
+                end = list(start)
+                end[axis] += 1
+                start_key = tuple(start)
+                end_key = tuple(end)
+                edge_key = frozenset((start_key, end_key))
+                if edge_key not in edges:
+                    tag = gmsh.model.geo.addLine(points[start_key], points[end_key])
+                    edges[edge_key] = (int(tag), start_key, end_key)
+
+    def signed_edge(
+        start: tuple[int, int, int], end: tuple[int, int, int]
+    ) -> int:
+        tag, stored_start, stored_end = edges[frozenset((start, end))]
+        if (stored_start, stored_end) == (start, end):
+            return int(tag)
+        if (stored_start, stored_end) == (end, start):
+            return -int(tag)
+        raise RuntimeError("transition lattice edge direction is inconsistent")
+
+    def face_ring(
+        axis: int, plane: int, first: int, second: int
+    ) -> tuple[tuple[int, int, int], ...]:
+        if axis == 0:
+            return (
+                (plane, first, second),
+                (plane, first + 1, second),
+                (plane, first + 1, second + 1),
+                (plane, first, second + 1),
+            )
+        if axis == 1:
+            return (
+                (first, plane, second),
+                (first, plane, second + 1),
+                (first + 1, plane, second + 1),
+                (first + 1, plane, second),
+            )
+        return (
+            (first, second, plane),
+            (first + 1, second, plane),
+            (first + 1, second + 1, plane),
+            (first, second + 1, plane),
+        )
+
+    for axis in range(3):
+        for plane in range(4):
+            for first, second in itertools.product(range(3), repeat=2):
+                key = (axis, plane, first, second)
+                if key in faces:
+                    continue
+                ring = face_ring(axis, plane, first, second)
+                loop = [
+                    signed_edge(ring[index], ring[(index + 1) % 4])
+                    for index in range(4)
+                ]
+                curve_loop = gmsh.model.geo.addCurveLoop(loop)
+                faces[key] = int(gmsh.model.geo.addPlaneSurface([curve_loop]))
+
+    transition_volumes: list[int] = []
+    for i, j, k in itertools.product(range(3), repeat=3):
+        if (i, j, k) == (1, 1, 1):
+            continue
+        volume_faces = [
+            -faces[(0, i, j, k)],
+            faces[(0, i + 1, j, k)],
+            -faces[(1, j, i, k)],
+            faces[(1, j + 1, i, k)],
+            -faces[(2, k, i, j)],
+            faces[(2, k + 1, i, j)],
+        ]
+        transition_volumes.append(
+            int(gmsh.model.geo.addVolume([gmsh.model.geo.addSurfaceLoop(volume_faces)]))
+        )
+
+    shell_outward: list[int] = []
+    for axis in range(3):
+        for first, second in itertools.product(range(3), repeat=2):
+            shell_outward.extend(
+                [
+                    -faces[(axis, 0, first, second)],
+                    faces[(axis, 3, first, second)],
+                ]
+            )
+    return transition_volumes, shell_outward
+
+
 def _add_conforming_swept_box_airbox_geo(
     gmsh: Any,
     *,
@@ -116,11 +303,12 @@ def _add_conforming_swept_box_airbox_geo(
     hmax_scaled: float,
     scale: float,
 ) -> tuple[
-    tuple[int, int, int],
+    tuple[int, tuple[int, ...], int],
     list[int],
     tuple[float, float, float],
     float,
     list[int],
+    int | None,
 ]:
     """Add dedicated transition-shell and far-air GEO volumes."""
     if str(airbox.shape).strip().lower() != "bbox":
@@ -194,24 +382,24 @@ def _add_conforming_swept_box_airbox_geo(
         bounds_max=outer_max,
         mesh_size=h_outer,
     )
-    shell_surfaces, shell_outer_loop = _add_geo_box_surface_loop(
+    transition_air_volumes, shell_outward = _add_partitioned_transition_shell_geo(
         gmsh,
-        bounds_min=shell_min,
-        bounds_max=shell_max,
+        magnetic_volume=magnetic_volumes[0],
+        shell_min=shell_min,
+        body_min=body_min,
+        body_max=body_max,
+        shell_max=shell_max,
         mesh_size=shell_outer_mesh_size,
     )
-    magnetic_loop = gmsh.model.geo.addSurfaceLoop(interface_surfaces)
-    transition_air_volume = gmsh.model.geo.addVolume(
-        [shell_outer_loop, magnetic_loop]
-    )
-    shell_inner_loop = gmsh.model.geo.addSurfaceLoop(shell_surfaces)
+    shell_surfaces = sorted({abs(tag) for tag in shell_outward})
+    shell_inner_loop = gmsh.model.geo.addSurfaceLoop([-tag for tag in shell_outward])
     far_air_volume = gmsh.model.geo.addVolume([outer_loop, shell_inner_loop])
     gmsh.model.geo.synchronize()
 
     gmsh.model.addPhysicalGroup(3, magnetic_volumes, tag=1)
     gmsh.model.setPhysicalName(3, 1, "magnetic")
     gmsh.model.addPhysicalGroup(
-        3, [transition_air_volume, far_air_volume], tag=2
+        3, [*transition_air_volumes, far_air_volume], tag=2
     )
     gmsh.model.setPhysicalName(3, 2, "air")
     gmsh.model.addPhysicalGroup(2, interface_surfaces, tag=10)
@@ -219,8 +407,9 @@ def _add_conforming_swept_box_airbox_geo(
     gmsh.model.addPhysicalGroup(2, outer_surfaces, tag=int(airbox.boundary_marker))
     gmsh.model.setPhysicalName(2, int(airbox.boundary_marker), "Gamma_out")
 
+    airbox_grading_field: int | None = None
     if float(airbox.grading_ratio) > 1.0:
-        field = _add_airbox_grading_field(
+        airbox_grading_field = _add_airbox_grading_field(
             gmsh,
             surface_tags=shell_surfaces,
             h_inner=shell_outer_mesh_size,
@@ -238,14 +427,15 @@ def _add_conforming_swept_box_airbox_geo(
             airbox_shape="bbox",
             air_volume_tags=[far_air_volume],
         )
-        if field is not None:
-            gmsh.model.mesh.field.setAsBackgroundMesh(field)
+        if airbox_grading_field is not None:
+            gmsh.model.mesh.field.setAsBackgroundMesh(airbox_grading_field)
     return (
-        (magnetic_volumes[0], transition_air_volume, far_air_volume),
+        (magnetic_volumes[0], tuple(transition_air_volumes), far_air_volume),
         outer_surfaces,
         tuple(float(value / scale) for value in outer_size),
         float(shell_thickness / scale),
         shell_surfaces,
+        airbox_grading_field,
     )
 
 

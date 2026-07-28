@@ -23,6 +23,7 @@ from __future__ import annotations
 import math
 import numbers
 import tempfile
+from dataclasses import replace as _dc_replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -40,6 +41,10 @@ from ._gmsh_types import (
     MeshQualityReport,
     _infer_axis_aligned_periodic_pairs,
     _count_exact_layer_planes,
+    _mixed_cell_scaled_jacobians,
+    MIXED_PYRAMID_APEX_SCALE_MAX,
+    MIXED_PYRAMID_APEX_SCALE_STEP,
+    MIXED_SCALED_JACOBIAN_P05_MIN,
 )
 from ._gmsh_infra import (
     _import_gmsh,
@@ -47,7 +52,7 @@ from ._gmsh_infra import (
     _GmshProgressLogger,
 )
 from ._gmsh_extraction import _extract_mesh_data
-from ._gmsh_fields import _apply_mesh_options
+from ._gmsh_fields import _add_surface_threshold_field, _apply_mesh_options
 from ._gmsh_airbox import (
     _MIXED_SHARED_GMSH_VERSION,
     _add_conforming_swept_box_airbox_geo,
@@ -70,6 +75,309 @@ SWEEP_STRATEGY_FREE_TET = "free_tetrahedral"
 DISTRIBUTION_FIXED = "fixed"
 DISTRIBUTION_LINEAR = "linear"
 DISTRIBUTION_EXPONENTIAL = "exponential"
+
+
+def _apply_mixed_source_face_mesh_options(
+    gmsh: Any,
+    *,
+    source_surface: int,
+    hmax_scaled: float,
+    order: int,
+    opts: MeshOptions,
+    hscale: float,
+) -> int:
+    """Apply canonical film sizing only to the pre-extrusion source face."""
+    source_field_ids: list[int] = []
+    generic_fields: list[dict[str, Any]] = []
+    geometry_names: set[str] = set()
+    for config in opts.size_fields:
+        params = config.get("params") if isinstance(config, dict) else None
+        if not isinstance(params, dict):
+            generic_fields.append(config)
+            continue
+        geometry_name = params.get("GeometryName")
+        if isinstance(geometry_name, str):
+            geometry_names.add(geometry_name)
+        kind = config.get("kind")
+        if kind == "ComponentVolumeConstant":
+            field_id = gmsh.model.mesh.field.add("Constant")
+            gmsh.model.mesh.field.setNumbers(field_id, "SurfacesList", [source_surface])
+            gmsh.model.mesh.field.setNumber(
+                field_id, "VIn", float(params["VIn"]) * hscale
+            )
+            gmsh.model.mesh.field.setNumber(
+                field_id, "VOut", float(params.get("VOut", 1.0e22)) * hscale
+            )
+            gmsh.model.mesh.field.setNumber(field_id, "IncludeBoundary", 1)
+            source_field_ids.append(field_id)
+            config["_gmsh_status"] = "applied"
+            config["_gmsh_field_id"] = int(field_id)
+            continue
+        if kind == "ComponentRestrictedBox":
+            field_id = gmsh.model.mesh.field.add("Box")
+            for parameter in (
+                "VIn", "VOut", "XMin", "XMax", "YMin", "YMax", "ZMin", "ZMax"
+            ):
+                gmsh.model.mesh.field.setNumber(
+                    field_id, parameter, float(params[parameter]) * hscale
+                )
+            source_field_ids.append(field_id)
+            config["_gmsh_status"] = "applied"
+            config["_gmsh_field_id"] = int(field_id)
+            continue
+        generic_fields.append(config)
+
+    _apply_mesh_options(
+        gmsh,
+        hmax_scaled,
+        order,
+        _dc_replace(opts, size_fields=generic_fields),
+        hscale=hscale,
+        preexisting_field_ids=source_field_ids,
+        component_surface_tags={name: [source_surface] for name in geometry_names},
+    )
+    field_ids = [int(field_id) for field_id in gmsh.model.mesh.field.list()]
+    if not field_ids:
+        raise RuntimeError("mixed source-face refinement produced no Gmsh field")
+    source_field = max(field_ids)
+    restricted = gmsh.model.mesh.field.add("Restrict")
+    gmsh.model.mesh.field.setNumber(restricted, "InField", source_field)
+    gmsh.model.mesh.field.setNumbers(restricted, "SurfacesList", [source_surface])
+    gmsh.model.mesh.field.setAsBackgroundMesh(restricted)
+    return int(restricted)
+
+
+def _apply_mixed_air_interface_mesh_options(
+    gmsh: Any,
+    *,
+    interface_surfaces: list[int],
+    transition_air_volumes: tuple[int, ...],
+    opts: MeshOptions,
+    hscale: float,
+) -> list[int]:
+    """Realize interface ramps in air after the magnetic GEO extrusion."""
+    restricted_fields: list[int] = []
+    for config in opts.size_fields:
+        if not isinstance(config, dict) or config.get("kind") not in {
+            "InterfaceShellThreshold",
+            "TransitionShellThreshold",
+        }:
+            continue
+        params = config.get("params")
+        if not isinstance(params, dict):
+            continue
+        field_id = _add_surface_threshold_field(
+            gmsh,
+            surface_tags=interface_surfaces,
+            size_min=float(params["SizeMin"]),
+            size_max=float(params["SizeMax"]),
+            dist_min=float(params["DistMin"]),
+            dist_max=float(params["DistMax"]),
+            sampling=int(params.get("Sampling", 20)),
+            hscale=hscale,
+            grading=params.get("Grading"),
+            growth_rate=params.get("GrowthRate"),
+        )
+        if field_id is None:
+            config["_gmsh_status"] = "ignored"
+            config["_gmsh_reason"] = "mixed air interface has no recovered surfaces"
+            continue
+        restricted = gmsh.model.mesh.field.add("Restrict")
+        gmsh.model.mesh.field.setNumber(restricted, "InField", field_id)
+        gmsh.model.mesh.field.setNumbers(
+            restricted,
+            "VolumesList",
+            [int(volume) for volume in transition_air_volumes],
+        )
+        restricted_fields.append(int(restricted))
+        config["_gmsh_status"] = "applied"
+        config["_gmsh_field_id"] = int(restricted)
+    return restricted_fields
+
+
+def _mixed_gmsh_scaled_jacobian_p05(gmsh: Any) -> dict[str, float]:
+    node_tags, coordinates, _ = gmsh.model.mesh.getNodes()
+    coordinate_by_tag = {
+        int(tag): point
+        for tag, point in zip(
+            node_tags,
+            np.asarray(coordinates, dtype=np.float64).reshape((-1, 3)),
+            strict=True,
+        )
+    }
+    values: dict[str, list[float]] = {}
+    for element_type, family, arity in (
+        (4, "tet4", 4),
+        (6, "prism6", 6),
+        (7, "pyramid5", 5),
+    ):
+        element_tags, element_nodes = gmsh.model.mesh.getElementsByType(element_type)
+        if len(element_tags) == 0:
+            continue
+        connectivity = np.asarray(element_nodes, dtype=np.int64).reshape((-1, arity))
+        for cell in connectivity:
+            cell_coordinates = np.asarray(
+                [coordinate_by_tag[int(tag)] for tag in cell], dtype=np.float64
+            )
+            values.setdefault(family, []).extend(
+                _mixed_cell_scaled_jacobians(family, cell_coordinates).tolist()
+            )
+    return {
+        family: float(np.percentile(family_values, 5.0))
+        for family, family_values in sorted(values.items())
+    }
+
+
+def _optimize_mixed_pyramid_apices(gmsh: Any) -> float:
+    """Deterministically improve pyramid p05 without degrading incident cells."""
+    pyramid_tags, pyramid_nodes = gmsh.model.mesh.getElementsByType(7)
+    if len(pyramid_tags) == 0:
+        raise RuntimeError("mixed shared-domain realization produced no pyramid5 cells")
+    pyramids = np.asarray(pyramid_nodes, dtype=np.int64).reshape((-1, 5))
+    node_tags, node_coordinates, _ = gmsh.model.mesh.getNodes()
+    coordinates = {
+        int(tag): point
+        for tag, point in zip(
+            node_tags,
+            np.asarray(node_coordinates, dtype=np.float64).reshape((-1, 3)),
+            strict=True,
+        )
+    }
+    apex_tags = sorted({int(tag) for tag in pyramids[:, 4]})
+    original_apex_coordinates = {
+        tag: np.array(coordinates[tag], copy=True) for tag in apex_tags
+    }
+    parametric: dict[int, list[float]] = {}
+    for tag in apex_tags:
+        _point, parameters, _dim, _entity = gmsh.model.mesh.getNode(tag)
+        parametric[tag] = list(parameters)
+
+    pyramids_by_apex: dict[int, list[np.ndarray]] = {}
+    directions: dict[int, list[np.ndarray]] = {}
+    for pyramid in pyramids:
+        apex = int(pyramid[4])
+        pyramids_by_apex.setdefault(apex, []).append(pyramid)
+        base_center = np.mean(
+            np.asarray([coordinates[int(tag)] for tag in pyramid[:4]]), axis=0
+        )
+        directions.setdefault(apex, []).append(coordinates[apex] - base_center)
+    mean_direction = {
+        apex: np.mean(np.asarray(apex_directions), axis=0)
+        for apex, apex_directions in directions.items()
+    }
+
+    incident_by_apex: dict[int, list[tuple[str, np.ndarray]]] = {
+        apex: [] for apex in apex_tags
+    }
+    apex_set = set(apex_tags)
+    for element_type, family, arity in (
+        (4, "tet4", 4),
+        (6, "prism6", 6),
+    ):
+        element_tags, element_nodes = gmsh.model.mesh.getElementsByType(element_type)
+        if len(element_tags) == 0:
+            continue
+        connectivity = np.asarray(element_nodes, dtype=np.int64).reshape((-1, arity))
+        for cell in connectivity:
+            cell_apices = sorted(apex_set.intersection(int(tag) for tag in cell))
+            for apex in cell_apices:
+                incident_by_apex[apex].append((family, cell))
+
+    def cell_qualities(
+        family: str,
+        cell: np.ndarray,
+        *,
+        apex: int,
+        candidate: np.ndarray,
+    ) -> list[float]:
+        cell_coordinates = np.asarray(
+            [
+                candidate if int(tag) == apex else coordinates[int(tag)]
+                for tag in cell
+            ],
+            dtype=np.float64,
+        )
+        return _mixed_cell_scaled_jacobians(family, cell_coordinates).tolist()
+
+    step_count = int(
+        round((MIXED_PYRAMID_APEX_SCALE_MAX - 1.0) / MIXED_PYRAMID_APEX_SCALE_STEP)
+    )
+    selected_factors: list[float] = []
+    for apex in sorted(mean_direction):
+        original_incident = [
+            value
+            for family, cell in incident_by_apex[apex]
+            for value in cell_qualities(
+                family, cell, apex=apex, candidate=coordinates[apex]
+            )
+        ]
+        incident_floor = min(
+            min(original_incident, default=MIXED_SCALED_JACOBIAN_P05_MIN),
+            MIXED_SCALED_JACOBIAN_P05_MIN,
+        )
+        best_factor = 1.0
+        best_candidate = coordinates[apex]
+        best_pyramid_min = min(
+            value
+            for pyramid in pyramids_by_apex[apex]
+            for value in cell_qualities(
+                "pyramid5", pyramid, apex=apex, candidate=coordinates[apex]
+            )
+        )
+        for step in range(step_count + 1):
+            factor = 1.0 + step * MIXED_PYRAMID_APEX_SCALE_STEP
+            candidate = coordinates[apex] + (factor - 1.0) * mean_direction[apex]
+            incident_qualities = [
+                value
+                for family, cell in incident_by_apex[apex]
+                for value in cell_qualities(
+                    family, cell, apex=apex, candidate=candidate
+                )
+            ]
+            if any(
+                value <= 0.0 or value < incident_floor
+                for value in incident_qualities
+            ):
+                continue
+            pyramid_min = min(
+                value
+                for pyramid in pyramids_by_apex[apex]
+                for value in cell_qualities(
+                    "pyramid5", pyramid, apex=apex, candidate=candidate
+                )
+            )
+            if pyramid_min > best_pyramid_min:
+                best_factor = factor
+                best_candidate = candidate
+                best_pyramid_min = pyramid_min
+            if pyramid_min >= MIXED_SCALED_JACOBIAN_P05_MIN:
+                break
+        gmsh.model.mesh.setNode(
+            apex, best_candidate.tolist(), parametric[apex]
+        )
+        coordinates[apex] = np.array(best_candidate, copy=True)
+        selected_factors.append(best_factor)
+
+    p05 = _mixed_gmsh_scaled_jacobian_p05(gmsh)
+    if not p05 or any(
+        value < MIXED_SCALED_JACOBIAN_P05_MIN for value in p05.values()
+    ):
+        for apex in sorted(mean_direction):
+            gmsh.model.mesh.setNode(
+                apex,
+                original_apex_coordinates[apex].tolist(),
+                parametric[apex],
+            )
+        raise RuntimeError(
+            "mixed shared-domain pyramid apex optimization could not satisfy all-family "
+            f"scaled-Jacobian p05 >= {MIXED_SCALED_JACOBIAN_P05_MIN}: {p05}"
+        )
+    emit_progress(
+        "Gmsh mixed pyramid apex quality optimization: "
+        f"moved={sum(factor > 1.0 for factor in selected_factors)}/{len(selected_factors)}, "
+        f"max_scale={max(selected_factors):.3f}, p05={p05}"
+    )
+    return max(selected_factors)
 
 
 class SweepabilityResult:
@@ -517,6 +825,10 @@ def generate_swept_box_mesh(
     if opts.periodic_pair_ids:
         raise ValueError("body-only swept prism meshing does not support periodic pairs")
     if airbox is not None:
+        if n_layers != 1:
+            raise ValueError(
+                "mixed shared-domain swept meshing is qualified for exactly one layer"
+            )
         if str(airbox.shape).strip().lower() != "bbox":
             raise ValueError(
                 "mixed shared-domain swept meshing supports only a bbox airbox"
@@ -528,8 +840,26 @@ def generate_swept_box_mesh(
             unsupported.append("algorithm_2d")
         if opts.algorithm_3d != 1:
             unsupported.append("algorithm_3d")
-        if opts.size_fields:
-            unsupported.append("size_fields")
+        qualified_field_kinds = {
+            "ComponentVolumeConstant",
+            "InterfaceShellThreshold",
+            "TransitionShellThreshold",
+            "ComponentRestrictedBox",
+            "EdgeDistanceThreshold",
+            "CornerDistanceThreshold",
+        }
+        unsupported_field_kinds = sorted(
+            {
+                str(field.get("kind")) if isinstance(field, dict) else type(field).__name__
+                for field in opts.size_fields
+                if not isinstance(field, dict)
+                or field.get("kind") not in qualified_field_kinds
+            }
+        )
+        if unsupported_field_kinds:
+            unsupported.append(
+                "size_fields=" + ",".join(unsupported_field_kinds)
+            )
         if opts.boundary_layer_count is not None:
             unsupported.append("boundary layers")
         if opts.optimize is not None:
@@ -648,6 +978,27 @@ def generate_swept_box_mesh(
         if opts.hmin is not None:
             gmsh.option.setNumber("Mesh.CharacteristicLengthMin", opts.hmin * SCALE)
         gmsh.option.setNumber("Mesh.Algorithm", opts.algorithm_2d)
+        source_refinement_field: int | None = None
+        if airbox is not None and opts.size_fields:
+            source_refinement_field = _apply_mixed_source_face_mesh_options(
+                gmsh,
+                source_surface=source_surf,
+                hmax_scaled=hmax_scaled,
+                order=order,
+                opts=opts,
+                hscale=SCALE,
+            )
+            gmsh.model.mesh.generate(2)
+            gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 1)
+            gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 1)
+            gmsh.option.setNumber(
+                "Mesh.CharacteristicLengthMax",
+                (
+                    float(airbox.maximum_element_size) * SCALE
+                    if airbox.maximum_element_size is not None
+                    else hmax_scaled
+                ),
+            )
         # Extrude the geometry before generating the mesh. One layer group
         # with a terminal normalized height is the documented uniform Gmsh
         # contract: exactly ``n_layers`` subdivisions ending at height 1.0.
@@ -660,8 +1011,10 @@ def generate_swept_box_mesh(
         )
         outer_size_m: tuple[float, float, float] | None = None
         transition_shell_thickness_m: float | None = None
-        domain_volume_entities: tuple[int, int, int] | None = None
+        domain_volume_entities: tuple[int, tuple[int, ...], int] | None = None
         transition_shell_surfaces: list[int] | None = None
+        airbox_grading_field: int | None = None
+        air_interface_fields: list[int] = []
         if airbox is not None:
             (
                 domain_volume_entities,
@@ -669,6 +1022,7 @@ def generate_swept_box_mesh(
                 outer_size_m,
                 transition_shell_thickness_m,
                 transition_shell_surfaces,
+                airbox_grading_field,
             ) = (
                 _add_conforming_swept_box_airbox_geo(
                     gmsh,
@@ -680,13 +1034,49 @@ def generate_swept_box_mesh(
                     scale=SCALE,
                 )
             )
+            assert domain_volume_entities is not None
+            air_interface_fields = _apply_mixed_air_interface_mesh_options(
+                gmsh,
+                interface_surfaces=[
+                    int(source_surf),
+                    *[
+                        int(tag)
+                        for dim, tag in extrusion_entities
+                        if int(dim) == 2
+                    ],
+                ],
+                transition_air_volumes=domain_volume_entities[1],
+                opts=opts,
+                hscale=SCALE,
+            )
         else:
             gmsh.model.geo.synchronize()
         gmsh.option.setNumber("Mesh.Algorithm3D", opts.algorithm_3d)
         gmsh.option.setNumber("Mesh.RandomFactor", 0.0)
         gmsh.option.setNumber("Mesh.ElementOrder", 1)
+        active_background_fields = [
+            field_id
+            for field_id in (
+                source_refinement_field,
+                *air_interface_fields,
+                airbox_grading_field,
+            )
+            if field_id is not None
+        ]
+        if len(active_background_fields) > 1:
+            combined_background = gmsh.model.mesh.field.add("Min")
+            gmsh.model.mesh.field.setNumbers(
+                combined_background,
+                "FieldsList",
+                active_background_fields,
+            )
+            gmsh.model.mesh.field.setAsBackgroundMesh(combined_background)
+        elif active_background_fields:
+            gmsh.model.mesh.field.setAsBackgroundMesh(active_background_fields[0])
         with _GmshProgressLogger(gmsh):
             gmsh.model.mesh.generate(3)
+        if airbox is not None:
+            _optimize_mixed_pyramid_apices(gmsh)
 
         # Extract → same pipeline as cylinder
         if airbox is not None:
@@ -716,14 +1106,14 @@ def generate_swept_box_mesh(
             )
             (
                 magnetic_volume,
-                transition_air_volume,
+                transition_air_volumes,
                 far_air_volume,
             ) = domain_volume_entities
             cell_mesh_parts = _gmsh_cell_parts_in_extraction_order(
                 gmsh,
                 {
                     "magnetic": [magnetic_volume],
-                    "transition_air": [transition_air_volume],
+                    "transition_air": list(transition_air_volumes),
                     "far_air": [far_air_volume],
                 },
             )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import itertools
 import json
 from collections import Counter
 from dataclasses import replace
@@ -13,12 +14,18 @@ import pytest
 import fullmag as fm
 import fullmag.meshing._gmsh_generators as gmsh_generators
 import fullmag.meshing._gmsh_types as gmsh_types
+from fullmag import world as flat_world
 from fullmag.meshing._gmsh_extraction import (
     _GMSH_TO_FULLMAG_NODE_PERMUTATION,
     _extract_mesh_data,
 )
 from fullmag.meshing._gmsh_infra import _scale_mesh_nodes
-from fullmag.meshing._gmsh_types import MeshData, MeshOptions, _cell_jacobian_determinants
+from fullmag.meshing._gmsh_types import (
+    MeshData,
+    MeshOptions,
+    _cell_jacobian_determinants,
+    _mixed_same_side_two_owner_face_count,
+)
 from fullmag.meshing._gmsh_swept import (
     SWEEP_STRATEGY_PRISM,
     _extract_swept_mesh_data,
@@ -51,6 +58,33 @@ CELL_FACES = {
 
 def test_gmsh_prism6_node_order_has_an_explicit_canonical_permutation() -> None:
     assert _GMSH_TO_FULLMAG_NODE_PERMUTATION[6] == (0, 1, 2, 3, 4, 5)
+
+
+def test_mixed_overlap_gate_detects_two_tetrahedra_on_the_same_face_side() -> None:
+    mesh = MeshData(
+        nodes=np.asarray(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.2, 0.2, 2.0],
+            ]
+        ),
+        cell_types=np.asarray(["tet4", "tet4"]),
+        cell_offsets=np.asarray([0, 4, 8]),
+        cell_nodes=np.asarray([0, 1, 2, 3, 0, 1, 2, 4]),
+        element_markers=np.asarray([0, 0]),
+        facet_types=np.asarray([], dtype=np.str_),
+        facet_roles=np.asarray([], dtype=np.str_),
+        facet_offsets=np.asarray([0]),
+        facet_nodes=np.asarray([], dtype=np.int32),
+        boundary_markers=np.asarray([], dtype=np.int32),
+        cell_global_ordinals=np.asarray([0, 1]),
+        facet_global_ordinals=np.asarray([], dtype=np.int64),
+    )
+
+    assert _mixed_same_side_two_owner_face_count(mesh, tolerance=1.0e-12) == 1
 
 
 def _physical_entities(gmsh, *, dim: int, name: str) -> list[int]:
@@ -830,13 +864,9 @@ def _mixed_shared_domain_case(
     return tuple(body_size), airbox, mesh
 
 
-@pytest.mark.parametrize(("layers", "expected_planes"), [(1, 2), (2, 3)])
-def test_shared_domain_box_prism_mesh_has_exact_requested_layers(
-    layers: int,
-    expected_planes: int,
-) -> None:
+def test_shared_domain_box_prism_mesh_has_exact_requested_layer() -> None:
     pytest.importorskip("gmsh")
-    body_size, _airbox, mesh = _mixed_shared_domain_case(layers=layers)
+    body_size, _airbox, mesh = _mixed_shared_domain_case(layers=1)
 
     magnetic_nodes = np.unique(
         np.concatenate(
@@ -853,12 +883,18 @@ def test_shared_domain_box_prism_mesh_has_exact_requested_layers(
         if not planes or abs(coordinate - planes[-1]) > tolerance:
             planes.append(coordinate)
 
-    assert len(planes) == expected_planes
+    assert len(planes) == 2
     assert mesh.mixed_layer_topology_certificate is not None
-    assert mesh.mixed_layer_topology_certificate.realized_layer_count == layers
+    assert mesh.mixed_layer_topology_certificate.realized_layer_count == 1
     assert mesh.mixed_layer_topology_certificate.magnetic_plane_coordinates_m == pytest.approx(
         planes
     )
+
+
+def test_shared_domain_box_prism_rejects_unqualified_multiple_layers() -> None:
+    pytest.importorskip("gmsh")
+    with pytest.raises(ValueError, match="qualified for exactly one layer"):
+        _mixed_shared_domain_case(layers=2)
 
 
 @pytest.mark.parametrize("axis", [0, 1, 2])
@@ -1079,6 +1115,362 @@ def test_shared_domain_box_asset_pipeline_routes_to_strict_mixed_geo_path() -> N
     assert set(mesh.cell_types.tolist()) == {"prism6", "pyramid5", "tet4"}
 
 
+def test_public_prismatic_thin_film_materializes_qualified_mixed_asset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("gmsh")
+    monkeypatch.setenv("FULLMAG_FEM_MESH_CACHE_DIR", "")
+    fm.reset()
+    study = fm.study("public-prismatic-asset")
+    study.engine("fem")
+    study.mode("strict")
+    study.universe(
+        mode="manual",
+        size=(100e-9, 80e-9, 65e-9),
+        center=(0.0, 0.0, 0.0),
+    )
+    study.universe.mesh(
+        maximum_element_size=40e-9,
+        minimum_element_size=15e-9,
+        growth_rate=1.3,
+        grading="geometric",
+    )
+    film = study.geometry(
+        fm.Box(size=(24e-9, 12e-9, 1e-9), name="magnet"),
+        name="magnet",
+    )
+    film.Ms = 800e3
+    film.Aex = 13e-12
+    film.alpha = 0.1
+    film.mesh.thin_film(
+        maximum_element_size=3e-9,
+        minimum_element_size=1e-9,
+        interface_maximum_element_size=2e-9,
+        interface_thickness=2e-9,
+        transition_distance=3e-9,
+        edge_maximum_element_size=1.5e-9,
+        edge_thickness=2e-9,
+        edge_transition_distance=3e-9,
+        corner_maximum_element_size=1e-9,
+        corner_extent=2e-9,
+        corner_transition_distance=3e-9,
+        layers=1,
+        topology="prismatic",
+        exact_layers=True,
+        transition="pyramid_to_tetrahedra",
+        order=1,
+    )
+
+    problem = flat_world._build_problem()
+    workflow = problem.runtime_metadata["mesh_workflow"]
+    assert workflow["per_geometry"] == [
+        {
+            "geometry": "magnet",
+            "mode": "custom",
+            "hmax": 3e-9,
+            "maximum_element_size": 3e-9,
+            "hmin": 1e-9,
+            "minimum_element_size": 1e-9,
+            "order": 1,
+            "interface_hmax": 2e-9,
+            "interface_thickness": 2e-9,
+            "transition_distance": 3e-9,
+            "edge_hmax": 1.5e-9,
+            "edge_thickness": 2e-9,
+            "edge_transition_distance": 3e-9,
+            "corner_hmax": 1e-9,
+            "corner_extent": 2e-9,
+            "corner_transition_distance": 3e-9,
+            "mesh_strategy": "swept_prism",
+            "through_thickness_elements": 1,
+            "through_thickness_distribution": "fixed",
+            "sweep_face_meshing": "triangular",
+            "topology": "prismatic",
+            "sweep_direction": "auto",
+            "element_family": "prism",
+            "transition_policy": "pyramid_to_tetrahedra",
+            "exact_layer_count": True,
+        }
+    ]
+
+    ir = problem.to_ir(requested_backend=fm.BackendTarget.FEM)
+    domain_asset = ir["geometry_assets"]["fem_domain_mesh_asset"]
+    mesh = domain_asset["mesh"]
+    assert set(mesh["cells"]["types"]) == {"prism6", "pyramid5", "tet4"}
+    build_report = domain_asset["build_report"]
+    assert build_report["build_mode"] == "single_geometry_geo_mixed"
+    assert build_report["fallbacks_triggered"] == []
+    realized_fields = build_report["size_fields_realized"]
+    assert realized_fields
+    assert all(field["status"] == "applied" for field in realized_fields)
+    assert {
+        "ComponentVolumeConstant",
+        "InterfaceShellThreshold",
+        "TransitionShellThreshold",
+        "EdgeDistanceThreshold",
+        "CornerDistanceThreshold",
+    }.issubset({field["kind"] for field in realized_fields})
+    certificate = mesh["mixed_layer_topology_certificate"]
+    assert certificate["realized_layer_count"] == 1
+    assert certificate["fallbacks_triggered"] == []
+    assert len(certificate["magnetic_plane_coordinates_m"]) == 2
+    assert certificate["shared_domain_relative_volume_error"] <= 1.0e-8
+    assert certificate["nonconforming_face_count"] == 0
+    assert certificate["strategy"] == (
+        "shared_geo_extrusion_partitioned_pyramid_tet.v2"
+    )
+    assert certificate["deterministic_inputs"]["transition_volume_count"] == 26
+
+    nodes = np.asarray(mesh["nodes"], dtype=np.float64)
+    cell_types = mesh["cells"]["types"]
+    cell_offsets = mesh["cells"]["offsets"]
+    cell_nodes = mesh["cells"]["nodes"]
+    mesh_parts = mesh["cells"]["mesh_parts"]
+    assert all(
+        cell_type == "prism6"
+        for cell_type, mesh_part in zip(cell_types, mesh_parts)
+        if mesh_part == "magnetic"
+    )
+    assert all(
+        cell_type in {"pyramid5", "tet4"}
+        for cell_type, mesh_part in zip(cell_types, mesh_parts)
+        if mesh_part == "transition_air"
+    )
+    assert all(
+        cell_type == "tet4"
+        for cell_type, mesh_part in zip(cell_types, mesh_parts)
+        if mesh_part == "far_air"
+    )
+    bottom_z = min(certificate["magnetic_plane_coordinates_m"])
+    in_plane_edges: set[tuple[int, int]] = set()
+    magnetic_node_ids: set[int] = set()
+    far_air_edges: set[tuple[int, int]] = set()
+    for index, (cell_type, mesh_part) in enumerate(zip(cell_types, mesh_parts)):
+        cell = cell_nodes[cell_offsets[index] : cell_offsets[index + 1]]
+        if mesh_part == "far_air":
+            far_air_edges.update(
+                tuple(sorted((node_a, node_b)))
+                for node_a, node_b in itertools.combinations(cell, 2)
+            )
+        if cell_type != "prism6" or mesh_part != "magnetic":
+            continue
+        prism = cell
+        magnetic_node_ids.update(prism)
+        bottom = [node for node in prism if np.isclose(nodes[node, 2], bottom_z, atol=1e-15)]
+        assert len(bottom) == 3
+        for offset, node_a in enumerate(bottom):
+            node_b = bottom[(offset + 1) % 3]
+            in_plane_edges.add(tuple(sorted((node_a, node_b))))
+    edge_lengths = np.asarray(
+        [np.linalg.norm(nodes[a, :2] - nodes[b, :2]) for a, b in in_plane_edges]
+    )
+    assert edge_lengths.min() < 2.5e-9
+    assert edge_lengths.max() > edge_lengths.min() * 1.2
+    assert set(
+        np.round(nodes[sorted(magnetic_node_ids), 2], decimals=15).tolist()
+    ) == set(
+        np.round(certificate["magnetic_plane_coordinates_m"], decimals=15).tolist()
+    )
+    far_air_edge_lengths = np.asarray(
+        [np.linalg.norm(nodes[a] - nodes[b]) for a, b in far_air_edges]
+    )
+    assert np.percentile(far_air_edge_lengths, 50.0) > edge_lengths.max() * 2.0
+
+
+def _public_prismatic_refinement_asset(
+    *,
+    refined: bool,
+    transition_distance: float = 3e-9,
+    interface_thickness: float = 2e-9,
+) -> dict[str, object]:
+    fm.reset()
+    study = fm.study("public-prismatic-refinement-pair")
+    study.engine("fem")
+    study.mode("strict")
+    study.universe(
+        mode="manual",
+        size=(100e-9, 80e-9, 65e-9),
+        center=(0.0, 0.0, 0.0),
+    )
+    study.universe.mesh(
+        maximum_element_size=40e-9,
+        minimum_element_size=15e-9,
+        growth_rate=1.3,
+        grading="geometric",
+    )
+    film = study.geometry(
+        fm.Box(size=(24e-9, 12e-9, 1e-9), name="magnet"),
+        name="magnet",
+    )
+    film.Ms = 800e3
+    film.Aex = 13e-12
+    film.alpha = 0.1
+    film.mesh.thin_film(
+        maximum_element_size=3e-9,
+        minimum_element_size=1e-9,
+        interface_maximum_element_size=2e-9 if refined else 3e-9,
+        interface_thickness=interface_thickness,
+        transition_distance=transition_distance,
+        edge_maximum_element_size=1.5e-9 if refined else 3e-9,
+        edge_thickness=2e-9,
+        edge_transition_distance=3e-9,
+        corner_maximum_element_size=1e-9 if refined else 3e-9,
+        corner_extent=2e-9,
+        corner_transition_distance=3e-9,
+        layers=1,
+        topology="prismatic",
+        exact_layers=True,
+        transition="pyramid_to_tetrahedra",
+        order=1,
+    )
+    problem = flat_world._build_problem()
+    return problem.to_ir(requested_backend=fm.BackendTarget.FEM)["geometry_assets"][
+        "fem_domain_mesh_asset"
+    ]
+
+
+def _mixed_asset_edge_lengths(
+    asset: dict[str, object], *, mesh_part: str
+) -> np.ndarray:
+    mesh = asset["mesh"]
+    nodes = np.asarray(mesh["nodes"], dtype=np.float64)
+    cells = mesh["cells"]
+    edges: set[tuple[int, int]] = set()
+    for index, part in enumerate(cells["mesh_parts"]):
+        if part != mesh_part:
+            continue
+        cell = cells["nodes"][cells["offsets"][index] : cells["offsets"][index + 1]]
+        if mesh_part == "magnetic":
+            bottom_z = min(mesh["mixed_layer_topology_certificate"]["magnetic_plane_coordinates_m"])
+            cell = [node for node in cell if np.isclose(nodes[node, 2], bottom_z, atol=1e-15)]
+        edges.update(
+            tuple(sorted((node_a, node_b)))
+            for node_a, node_b in itertools.combinations(cell, 2)
+        )
+    return np.asarray([np.linalg.norm(nodes[a] - nodes[b]) for a, b in edges])
+
+
+def _magnetic_source_edge_regions(
+    asset: dict[str, object],
+) -> dict[str, np.ndarray]:
+    mesh = asset["mesh"]
+    nodes = np.asarray(mesh["nodes"], dtype=np.float64)
+    cells = mesh["cells"]
+    bottom_z = min(
+        mesh["mixed_layer_topology_certificate"]["magnetic_plane_coordinates_m"]
+    )
+    edges: set[tuple[int, int]] = set()
+    for index, part in enumerate(cells["mesh_parts"]):
+        if part != "magnetic":
+            continue
+        prism = cells["nodes"][
+            cells["offsets"][index] : cells["offsets"][index + 1]
+        ]
+        bottom = [
+            node
+            for node in prism
+            if np.isclose(nodes[node, 2], bottom_z, atol=1e-15)
+        ]
+        edges.update(
+            tuple(sorted((node_a, node_b)))
+            for node_a, node_b in itertools.combinations(bottom, 2)
+        )
+
+    regions: dict[str, list[float]] = {"corner": [], "edge": [], "center": []}
+    for node_a, node_b in edges:
+        midpoint = 0.5 * (nodes[node_a] + nodes[node_b])
+        distance_x = 12e-9 - abs(float(midpoint[0]))
+        distance_y = 6e-9 - abs(float(midpoint[1]))
+        if distance_x <= 2e-9 and distance_y <= 2e-9:
+            region = "corner"
+        elif min(distance_x, distance_y) <= 2e-9:
+            region = "edge"
+        elif distance_x >= 5e-9 and distance_y >= 3e-9:
+            region = "center"
+        else:
+            continue
+        regions[region].append(float(np.linalg.norm(nodes[node_a] - nodes[node_b])))
+    return {
+        region: np.asarray(lengths, dtype=np.float64)
+        for region, lengths in regions.items()
+    }
+
+
+def test_public_local_refinement_changes_source_mesh_without_collapsing_air_grading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("gmsh")
+    monkeypatch.setenv("FULLMAG_FEM_MESH_CACHE_DIR", "")
+    neutral = _public_prismatic_refinement_asset(refined=False)
+    refined = _public_prismatic_refinement_asset(refined=True)
+
+    neutral_certificate = neutral["mesh"]["mixed_layer_topology_certificate"]
+    refined_certificate = refined["mesh"]["mixed_layer_topology_certificate"]
+    neutral_prisms = neutral_certificate["cell_family_counts_by_part"]["magnetic"]["prism6"]
+    refined_prisms = refined_certificate["cell_family_counts_by_part"]["magnetic"]["prism6"]
+    neutral_magnetic_edges = _mixed_asset_edge_lengths(neutral, mesh_part="magnetic")
+    refined_magnetic_edges = _mixed_asset_edge_lengths(refined, mesh_part="magnetic")
+    neutral_far_edges = _mixed_asset_edge_lengths(neutral, mesh_part="far_air")
+    refined_far_edges = _mixed_asset_edge_lengths(refined, mesh_part="far_air")
+    neutral_regions = _magnetic_source_edge_regions(neutral)
+    refined_regions = _magnetic_source_edge_regions(refined)
+
+    assert refined_prisms > neutral_prisms
+    assert np.percentile(refined_magnetic_edges, 25.0) < np.percentile(
+        neutral_magnetic_edges, 25.0
+    )
+    for region in ("corner", "edge", "center"):
+        assert len(neutral_regions[region]) > 0
+        assert len(refined_regions[region]) > 0
+        assert np.percentile(refined_regions[region], 50.0) < np.percentile(
+            neutral_regions[region], 50.0
+        )
+    assert np.percentile(refined_regions["corner"], 50.0) < np.percentile(
+        refined_regions["edge"], 50.0
+    ) < np.percentile(refined_regions["center"], 50.0)
+    assert neutral["build_report"]["effective_airbox_target"] == refined[
+        "build_report"
+    ]["effective_airbox_target"] == {
+        "hmax": 40e-9,
+        "hmin": 15e-9,
+        "growth_rate": 1.3,
+    }
+    assert np.percentile(neutral_far_edges, 50.0) > neutral_magnetic_edges.max() * 2.0
+    assert np.percentile(refined_far_edges, 50.0) > refined_magnetic_edges.max() * 2.0
+
+
+@pytest.mark.parametrize(
+    ("control", "short_value", "long_value"),
+    (
+        ("transition_distance", 5e-9, 22e-9),
+        ("interface_thickness", 1e-9, 8e-9),
+    ),
+)
+def test_public_interface_ramp_controls_change_transition_air_realization(
+    monkeypatch: pytest.MonkeyPatch,
+    control: str,
+    short_value: float,
+    long_value: float,
+) -> None:
+    pytest.importorskip("gmsh")
+    monkeypatch.setenv("FULLMAG_FEM_MESH_CACHE_DIR", "")
+    short = _public_prismatic_refinement_asset(refined=True, **{control: short_value})
+    long = _public_prismatic_refinement_asset(refined=True, **{control: long_value})
+
+    short_certificate = short["mesh"]["mixed_layer_topology_certificate"]
+    long_certificate = long["mesh"]["mixed_layer_topology_certificate"]
+    short_transition_count = sum(
+        short_certificate["cell_family_counts_by_part"]["transition_air"].values()
+    )
+    long_transition_count = sum(
+        long_certificate["cell_family_counts_by_part"]["transition_air"].values()
+    )
+    assert long_certificate["topology_fingerprint"] != short_certificate[
+        "topology_fingerprint"
+    ]
+    assert long_transition_count > short_transition_count
+
+
 @pytest.mark.parametrize(
     "case",
     [
@@ -1092,6 +1484,7 @@ def test_shared_domain_box_asset_pipeline_routes_to_strict_mixed_geo_path() -> N
         "optimizer",
         "algorithm",
         "order",
+        "layers",
         "distribution",
         "sweep_face",
         "recombine",
@@ -1135,6 +1528,8 @@ def test_asset_mixed_route_rejects_unqualified_requests_before_generator(
         mesh_options["algorithm_3d"] = 10
     elif case == "order":
         hints = fm.FEM(order=2, hmax=0.8e-6)
+    elif case == "layers":
+        mesh_options["through_thickness_elements"] = 2
     elif case == "distribution":
         mesh_options["through_thickness_distribution"] = "linear"
     elif case == "sweep_face":
@@ -1175,6 +1570,12 @@ def test_mixed_route_forces_one_effective_gmsh_thread_despite_environment(
         "gmsh_version": "4.15.2",
         "random_factor": 0.0,
         "thread_count": 1,
+        "transition_partition": "cartesian_3x3x3_minus_magnetic_center",
+        "transition_volume_count": 26,
+        "pyramid_apex_optimizer": "bounded_per_apex_outward_scale_line_search",
+        "pyramid_apex_scale_step": 0.001,
+        "pyramid_apex_scale_max": 1.25,
+        "scaled_jacobian_p05_min": 0.1,
     }
 
 
@@ -1370,6 +1771,11 @@ def test_mixed_certificate_uses_recomputable_scaled_jacobian_not_gmsh_sicn() -> 
     assert payload["quality_metric"] == "tetra_decomposition_scaled_jacobian.v1"
     assert "scaled_jacobian_minima_by_family" in payload
     assert "scaled_jacobian_p05_by_family" in payload
+    assert all(
+        value >= 0.1
+        for value in payload["scaled_jacobian_p05_by_family"].values()
+    )
+    assert payload["scaled_jacobian_minima_by_family"]["tet4"] >= 0.058
     assert "sicn_minima_by_family" not in payload
     assert "sicn_p05_by_family" not in payload
 

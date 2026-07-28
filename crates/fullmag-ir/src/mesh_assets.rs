@@ -230,6 +230,23 @@ pub struct SweptMeshHintsIR {
     pub sweep_direction: String,
     /// Layer distribution through the sweep direction.
     pub distribution: SweepDistributionIR,
+    /// Requested swept cell family: "prism" or "hex".
+    #[serde(default = "default_swept_element_family")]
+    pub element_family: String,
+    /// Requested transition policy: "pyramid_to_tetrahedra" or "reject".
+    #[serde(default = "default_swept_transition_policy")]
+    pub transition_policy: String,
+    /// Whether the realized mesh must preserve the exact requested layer count.
+    #[serde(default)]
+    pub exact_layer_count: bool,
+}
+
+fn default_swept_element_family() -> String {
+    "prism".to_string()
+}
+
+fn default_swept_transition_policy() -> String {
+    "reject".to_string()
 }
 
 /// Per-object mesh-size target as resolved by the Python meshing pipeline.

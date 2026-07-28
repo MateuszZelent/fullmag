@@ -237,6 +237,7 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
     draft = {
         "revision": 1,
         "backend": base_problem.runtime.backend_target.value,
+        "requested_mode": base_problem.runtime.execution_mode.value,
         "cpu_threads": base_problem.runtime.cpu_threads,
         "fem_demag_solver_policy": _export_fem_demag_solver_policy(base_problem),
         "exchange_enabled": _problem_has_exchange(base_problem),
@@ -883,6 +884,18 @@ def _render_runtime(
 ) -> list[str]:
     runtime = problem.runtime
     runtime_override = _normalize_mapping(overrides.get("runtime_selection"))
+    requested_mode = overrides.get("requested_mode")
+    override_mode = (
+        requested_mode
+        if isinstance(requested_mode, str)
+        else runtime_override.get("mode") if runtime_override else None
+    )
+    execution_mode = (
+        override_mode
+        if isinstance(override_mode, str)
+        and override_mode in {"strict", "extended", "hybrid"}
+        else runtime.execution_mode.value
+    )
     override_cpu_threads = runtime_override.get("cpu_threads") if runtime_override else None
     cpu_threads = (
         int(override_cpu_threads)
@@ -893,6 +906,8 @@ def _render_runtime(
     if surface == "flat" and problem.name != "fullmag_sim":
         lines.append(f"fm.name({_py_repr(problem.name)})")
     lines.append(f"{_surface_call(surface, 'engine')}({_py_repr(runtime.backend_target.value)})")
+    if execution_mode != "strict":
+        lines.append(f"{_surface_call(surface, 'mode')}({_py_repr(execution_mode)})")
 
     device_spec = _runtime_device_spec(runtime)
     if device_spec == "auto" and runtime.execution_precision.value == "double":
@@ -2681,51 +2696,16 @@ def _render_mesh_kwargs(mesh_config: dict[str, object], *, source_root: Path) ->
     return kwargs
 
 
-def _mesh_value_is_set(value: object) -> bool:
-    if value is None:
-        return False
-    if isinstance(value, str):
-        return bool(value.strip())
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (list, tuple, dict)):
-        return bool(value)
-    return True
-
-
 def _render_thin_film_mesh_kwargs(mesh_config: dict[str, object]) -> list[str] | None:
     strategy = mesh_config.get("mesh_strategy")
-    if not isinstance(strategy, str) or strategy.strip() != "thin_film_tetrahedral":
-        return None
-
-    unsupported_keys = (
-        "source",
-        "calibrate_for",
-        "size_preset",
-        "algorithm_2d",
-        "algorithm_3d",
-        "size_factor",
-        "size_from_curvature",
-        "smoothing_steps",
-        "optimize_iterations",
-        "growth_rate",
-        "maximum_element_growth_rate",
-        "narrow_regions",
-        "transition_growth",
-        "boundary_layer_count",
-        "boundary_layer_thickness",
-        "boundary_layer_stretching",
-        "boundary_layer_target_surface_tags",
-        "boundary_layer_target_curve_tags",
-        "boundary_layer_target_surface_selectors",
-        "boundary_layer_target_curve_selectors",
-        "optimize",
-        "compute_quality",
-        "per_element_quality",
-        "through_thickness_element_ratio",
-        "through_thickness_symmetric",
+    topology = mesh_config.get("topology")
+    legacy_tetrahedral = isinstance(strategy, str) and strategy.strip() == "thin_film_tetrahedral"
+    prismatic = (
+        isinstance(strategy, str)
+        and strategy.strip() == "swept_prism"
+        and topology == "prismatic"
     )
-    if any(_mesh_value_is_set(mesh_config.get(key)) for key in unsupported_keys):
+    if not legacy_tetrahedral and not prismatic:
         return None
 
     distribution = mesh_config.get("through_thickness_distribution")
@@ -2825,10 +2805,63 @@ def _render_thin_film_mesh_kwargs(mesh_config: dict[str, object]) -> list[str] |
         )
 
     layers_value = mesh_config.get("through_thickness_elements")
-    if isinstance(layers_value, (int, float)):
-        kwargs.append(f"layers={int(layers_value)}")
+    if layers_value is not None:
+        kwargs.append(
+            f"layers={_render_element_layer_count(layers_value, context='thin-film layers')}"
+        )
+
+    if prismatic:
+        kwargs.append('topology="prismatic"')
+        transition = mesh_config.get("transition_policy")
+        if isinstance(transition, str) and transition.strip():
+            kwargs.append(f"transition={_py_repr(transition)}")
+        exact_layers = mesh_config.get("exact_layer_count")
+        if isinstance(exact_layers, bool):
+            kwargs.append(f"exact_layers={_py_literal(exact_layers)}")
 
     return kwargs
+
+
+def _render_swept_mesh_kwargs(mesh_config: dict[str, object]) -> list[str] | None:
+    strategy = mesh_config.get("mesh_strategy")
+    if strategy not in {"swept_prism", "swept_hex"} or mesh_config.get("topology") is not None:
+        return None
+
+    kwargs: list[str] = []
+    elements = mesh_config.get("through_thickness_elements")
+    if elements is not None:
+        kwargs.append(
+            f"elements={_render_element_layer_count(elements, context='swept elements')}"
+        )
+    distribution = mesh_config.get("through_thickness_distribution")
+    if isinstance(distribution, str) and distribution.strip():
+        kwargs.append(f"distribution={_py_repr(distribution)}")
+    element_ratio = _number_or_none(mesh_config.get("through_thickness_element_ratio"))
+    if element_ratio is not None:
+        kwargs.append(f"element_ratio={_py_number(element_ratio)}")
+    if mesh_config.get("through_thickness_symmetric") is True:
+        kwargs.append("symmetric=True")
+    face_meshing = mesh_config.get("sweep_face_meshing")
+    if isinstance(face_meshing, str) and face_meshing.strip():
+        kwargs.append(f"face_meshing={_py_repr(face_meshing)}")
+    sweep_direction = mesh_config.get("sweep_direction")
+    if isinstance(sweep_direction, str) and sweep_direction.strip():
+        kwargs.append(f"sweep_direction={_py_repr(sweep_direction)}")
+    transition = mesh_config.get("transition_policy")
+    if isinstance(transition, str) and transition.strip():
+        kwargs.append(f"transition={_py_repr(transition)}")
+    exact_layers = mesh_config.get("exact_layer_count")
+    if isinstance(exact_layers, bool):
+        kwargs.append(f"exact_layers={_py_literal(exact_layers)}")
+    return kwargs
+
+
+def _render_element_layer_count(value: object, *, context: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{context} must be an integer element-layer count")
+    if value < 1:
+        raise ValueError(f"{context} must be >= 1")
+    return value
 
 
 def _render_geometry_mesh_call(
@@ -2839,7 +2872,69 @@ def _render_geometry_mesh_call(
 ) -> str | None:
     thin_film_kwargs = _render_thin_film_mesh_kwargs(mesh_config)
     if thin_film_kwargs is not None:
-        return f"{target_var}.mesh.thin_film({', '.join(thin_film_kwargs)})"
+        base_config = dict(mesh_config)
+        for key in (
+            "hmax",
+            "maximum_element_size",
+            "hmin",
+            "minimum_element_size",
+            "order",
+            "curvature_factor",
+            "narrow_region_resolution",
+            "interface_hmax",
+            "interface_thickness",
+            "transition_distance",
+            "edge_hmax",
+            "edge_maximum_element_size",
+            "edge_thickness",
+            "edge_transition_distance",
+            "corner_hmax",
+            "corner_maximum_element_size",
+            "corner_extent",
+            "corner_transition_distance",
+            "mesh_strategy",
+            "through_thickness_elements",
+            "through_thickness_distribution",
+            "through_thickness_element_ratio",
+            "through_thickness_symmetric",
+            "sweep_face_meshing",
+            "topology",
+            "sweep_direction",
+            "element_family",
+            "transition_policy",
+            "exact_layer_count",
+        ):
+            base_config.pop(key, None)
+        base_kwargs = _render_mesh_kwargs(base_config, source_root=source_root)
+        target = (
+            f"{target_var}.mesh({', '.join(base_kwargs)})"
+            if base_kwargs
+            else f"{target_var}.mesh"
+        )
+        return f"{target}.thin_film({', '.join(thin_film_kwargs)})"
+    swept_kwargs = _render_swept_mesh_kwargs(mesh_config)
+    if swept_kwargs is not None:
+        base_config = dict(mesh_config)
+        for key in (
+            "mesh_strategy",
+            "through_thickness_elements",
+            "through_thickness_distribution",
+            "through_thickness_element_ratio",
+            "through_thickness_symmetric",
+            "sweep_face_meshing",
+            "sweep_direction",
+            "element_family",
+            "transition_policy",
+            "exact_layer_count",
+        ):
+            base_config.pop(key, None)
+        base_kwargs = _render_mesh_kwargs(base_config, source_root=source_root)
+        target = (
+            f"{target_var}.mesh({', '.join(base_kwargs)})"
+            if base_kwargs
+            else f"{target_var}.mesh"
+        )
+        return f"{target}.swept({', '.join(swept_kwargs)})"
     kwargs = _render_mesh_kwargs(mesh_config, source_root=source_root)
     if kwargs:
         return f"{target_var}.mesh({', '.join(kwargs)})"
@@ -4937,6 +5032,11 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
             ),
             "through_thickness_symmetric": bool(mesh_entry["through_thickness_symmetric"]) if isinstance(mesh_entry.get("through_thickness_symmetric"), bool) else None,
             "sweep_face_meshing": str(mesh_entry["sweep_face_meshing"]) if isinstance(mesh_entry.get("sweep_face_meshing"), str) else None,
+            "topology": str(mesh_entry["topology"]) if isinstance(mesh_entry.get("topology"), str) else None,
+            "sweep_direction": str(mesh_entry["sweep_direction"]) if isinstance(mesh_entry.get("sweep_direction"), str) else None,
+            "element_family": str(mesh_entry["element_family"]) if isinstance(mesh_entry.get("element_family"), str) else None,
+            "transition_policy": str(mesh_entry["transition_policy"]) if isinstance(mesh_entry.get("transition_policy"), str) else None,
+            "exact_layer_count": bool(mesh_entry["exact_layer_count"]) if isinstance(mesh_entry.get("exact_layer_count"), bool) else None,
             "source": str(mesh_entry["source"]) if isinstance(mesh_entry.get("source"), str) else None,
             "algorithm_2d": int(mesh_entry["algorithm_2d"]) if isinstance(mesh_entry.get("algorithm_2d"), (int, float)) else None,
             "algorithm_3d": int(mesh_entry["algorithm_3d"]) if isinstance(mesh_entry.get("algorithm_3d"), (int, float)) else None,
@@ -5037,6 +5137,11 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
             "through_thickness_element_ratio": None,
             "through_thickness_symmetric": None,
             "sweep_face_meshing": None,
+            "topology": None,
+            "sweep_direction": None,
+            "element_family": None,
+            "transition_policy": None,
+            "exact_layer_count": None,
             "source": None,
             "algorithm_2d": None,
             "algorithm_3d": None,

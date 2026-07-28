@@ -305,7 +305,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "requested_backend": "auto",
             "requested_device": "auto",
             "requested_precision": "double",
-            "requested_mode": "strict",
+            "requested_mode": builder.get("requested_mode", "strict"),
             "requested_cpu_threads": builder.get("cpu_threads"),
             "fem_demag_solver_policy": builder.get("fem_demag_solver_policy"),
             "exchange_enabled": bool(builder.get("exchange_enabled", True)),
@@ -425,6 +425,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
     return {
         "revision": int(scene.get("revision", 0)),
         "backend": study.get("backend"),
+        "requested_mode": study.get("requested_mode", "strict"),
         "cpu_threads": study.get("requested_cpu_threads"),
         "fem_demag_solver_policy": study.get("fem_demag_solver_policy"),
         "exchange_enabled": bool(study.get("exchange_enabled", True)),

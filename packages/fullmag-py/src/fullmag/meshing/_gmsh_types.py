@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 import hashlib
+import itertools
 import json
 import math
 from pathlib import Path
@@ -16,9 +17,12 @@ FEM_TOPOLOGY_VOLUME_EPS = FEM_TOPOLOGY_DETERMINANT_EPS / 6.0
 FEM_EXACT_LAYER_PLANE_ABS_TOLERANCE_M = 1.0e-15
 FEM_EXACT_LAYER_PLANE_REL_TOLERANCE = 1.0e-8
 MIXED_SHARED_GMSH_VERSION = "4.15.2"
-MIXED_SHARED_GEO_STRATEGY = "shared_geo_extrusion_pyramid_tet.v1"
+MIXED_SHARED_GEO_STRATEGY = "shared_geo_extrusion_partitioned_pyramid_tet.v2"
 MIXED_INTERFACE_MARKER = 10
 MIXED_QUALITY_METRIC = "tetra_decomposition_scaled_jacobian.v1"
+MIXED_SCALED_JACOBIAN_P05_MIN = 0.1
+MIXED_PYRAMID_APEX_SCALE_STEP = 0.001
+MIXED_PYRAMID_APEX_SCALE_MAX = 1.25
 
 FEM_CELL_ARITIES = {"tet4": 4, "prism6": 6, "pyramid5": 5, "hex8": 8}
 FEM_FACET_ARITIES = {"tri3": 3, "quad4": 4}
@@ -34,6 +38,12 @@ def _mixed_deterministic_inputs() -> dict[str, object]:
         "gmsh_version": MIXED_SHARED_GMSH_VERSION,
         "random_factor": 0.0,
         "thread_count": 1,
+        "transition_partition": "cartesian_3x3x3_minus_magnetic_center",
+        "transition_volume_count": 26,
+        "pyramid_apex_optimizer": "bounded_per_apex_outward_scale_line_search",
+        "pyramid_apex_scale_step": MIXED_PYRAMID_APEX_SCALE_STEP,
+        "pyramid_apex_scale_max": MIXED_PYRAMID_APEX_SCALE_MAX,
+        "scaled_jacobian_p05_min": MIXED_SCALED_JACOBIAN_P05_MIN,
     }
 
 
@@ -812,6 +822,14 @@ class MixedLayerTopologyCertificate:
             raise ValueError(
                 "mixed layer topology certificate quality_metric must be "
                 f"{MIXED_QUALITY_METRIC}"
+            )
+        if any(
+            value < MIXED_SCALED_JACOBIAN_P05_MIN
+            for value in self.scaled_jacobian_p05_by_family.values()
+        ):
+            raise ValueError(
+                "mixed layer topology certificate scaled_jacobian_p05_by_family "
+                f"must be >= {MIXED_SCALED_JACOBIAN_P05_MIN}"
             )
 
     def to_dict(self) -> dict[str, object]:
@@ -1999,6 +2017,10 @@ def _mixed_mesh_conformity_counts(
                 nonconforming += 1
 
     nonmanifold = sum(1 for owners in adjacency.values() if len(owners) > 2)
+    same_side_two_owner_faces = _mixed_same_side_two_owner_face_count(
+        mesh, tolerance=tolerance
+    )
+    nonconforming += same_side_two_owner_faces
     nonconforming += sum(
         1
         for key, owners in adjacency.items()
@@ -2034,6 +2056,63 @@ def _mixed_mesh_conformity_counts(
             duplicate_interface_faces + duplicate_interface_nodes
         ),
     }
+
+
+def _mixed_same_side_two_owner_face_count(
+    mesh: MeshData, *, tolerance: float
+) -> int:
+    """Count shared faces whose two owner interiors lie on the same plane side."""
+    adjacency: dict[tuple[int, ...], list[int]] = {}
+    for ordinal, family in enumerate(mesh.cell_types.tolist()):
+        cell = mesh.cell_node_ids(ordinal)
+        for local_face in _MIXED_CELL_LOCAL_FACETS[str(family)]:
+            key = tuple(sorted(int(cell[index]) for index in local_face))
+            adjacency.setdefault(key, []).append(ordinal)
+
+    count = 0
+    for face, owners in adjacency.items():
+        if len(owners) != 2:
+            continue
+        face_coordinates = mesh.nodes[list(face)]
+        normal: NDArray[np.float64] | None = None
+        for first, second in itertools.combinations(range(1, len(face)), 2):
+            candidate = np.cross(
+                face_coordinates[first] - face_coordinates[0],
+                face_coordinates[second] - face_coordinates[0],
+            )
+            candidate_norm = float(np.linalg.norm(candidate))
+            if candidate_norm > 0.0:
+                normal = candidate / candidate_norm
+                break
+        if normal is None:
+            count += 1
+            continue
+        face_scale = max(
+            float(np.linalg.norm(right - left))
+            for left, right in itertools.combinations(face_coordinates, 2)
+        )
+        side_tolerance = max(
+            float(tolerance),
+            np.finfo(np.float64).eps * max(face_scale, 1.0e-30) * 64.0,
+        )
+        distances: list[float] = []
+        for owner in owners:
+            owner_nodes = mesh.cell_node_ids(owner)
+            opposite_nodes = [int(node) for node in owner_nodes if int(node) not in face]
+            if not opposite_nodes:
+                distances.append(0.0)
+                continue
+            owner_interior = np.mean(mesh.nodes[opposite_nodes], axis=0)
+            distances.append(
+                float(np.dot(owner_interior - face_coordinates[0], normal))
+            )
+        if (
+            abs(distances[0]) > side_tolerance
+            and abs(distances[1]) > side_tolerance
+            and distances[0] * distances[1] > 0.0
+        ):
+            count += 1
+    return count
 
 
 def _mixed_cell_volume(family: str, coordinates: NDArray[np.float64]) -> float:

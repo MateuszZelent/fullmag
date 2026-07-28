@@ -76,7 +76,10 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
                 .unwrap_or_else(|| "auto".to_string()),
             requested_device: "auto".to_string(),
             requested_precision: "double".to_string(),
-            requested_mode: "strict".to_string(),
+            requested_mode: builder
+                .requested_mode
+                .clone()
+                .unwrap_or_else(|| "strict".to_string()),
             requested_cpu_threads: builder.cpu_threads,
             fem_demag_solver_policy: builder.fem_demag_solver_policy.clone(),
             exchange_enabled: builder.exchange_enabled,
@@ -196,6 +199,7 @@ pub fn scene_document_to_script_builder(
     Ok(ScriptBuilderState {
         revision: scene.revision,
         backend: normalized_scene.study.backend.clone(),
+        requested_mode: Some(normalized_scene.study.requested_mode.clone()),
         cpu_threads: normalized_scene.study.requested_cpu_threads,
         fem_demag_solver_policy: normalized_scene.study.fem_demag_solver_policy.clone(),
         exchange_enabled: normalized_scene.study.exchange_enabled,
@@ -279,7 +283,7 @@ pub fn scene_document_to_script_builder_overrides(
             "per_element_quality": builder.mesh.per_element_quality,
             "interface_hmax": builder.mesh.interface_hmax.as_deref().map(parse_optional_text_f64).unwrap_or(Value::Null),
             "interface_thickness": builder.mesh.interface_thickness.as_deref().map(parse_optional_text_f64).unwrap_or(Value::Null),
-            "transition_distance": builder.mesh.transition_distance.as_deref().map(parse_optional_text_f64).unwrap_or(Value::Null),
+            "transition_distance": builder.mesh.transition_distance.as_deref().map(parse_transition_distance_value).unwrap_or(Value::Null),
             "transition_growth": builder.mesh.transition_growth.as_deref().map(parse_optional_text_f64).unwrap_or(Value::Null),
             "adaptive_mesh": if !builder.mesh.adaptive_enabled {
                 Value::Null
@@ -695,6 +699,38 @@ fn geometry_mesh_override_value(mesh: &ScriptBuilderPerGeometryMeshState) -> Val
             .unwrap_or(Value::Null),
     );
     map.insert(
+        "topology".to_string(),
+        mesh.topology
+            .clone()
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
+        "sweep_direction".to_string(),
+        mesh.sweep_direction
+            .clone()
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
+        "element_family".to_string(),
+        mesh.element_family
+            .clone()
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
+        "transition_policy".to_string(),
+        mesh.transition_policy
+            .clone()
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
+        "exact_layer_count".to_string(),
+        serde_json::to_value(mesh.exact_layer_count).unwrap_or(Value::Null),
+    );
+    map.insert(
         "source".to_string(),
         mesh.source
             .clone()
@@ -816,6 +852,13 @@ fn geometry_mesh_override_value(mesh: &ScriptBuilderPerGeometryMeshState) -> Val
             .map(parse_optional_text_f64)
             .unwrap_or(Value::Null),
     );
+    map.insert(
+        "edge_transition_distance".to_string(),
+        mesh.edge_transition_distance
+            .as_deref()
+            .map(parse_transition_distance_value)
+            .unwrap_or(Value::Null),
+    );
     let corner_hmax = mesh
         .corner_hmax
         .as_deref()
@@ -831,10 +874,17 @@ fn geometry_mesh_override_value(mesh: &ScriptBuilderPerGeometryMeshState) -> Val
             .unwrap_or(Value::Null),
     );
     map.insert(
+        "corner_transition_distance".to_string(),
+        mesh.corner_transition_distance
+            .as_deref()
+            .map(parse_transition_distance_value)
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
         "transition_distance".to_string(),
         mesh.transition_distance
             .as_deref()
-            .map(parse_optional_text_f64)
+            .map(parse_transition_distance_value)
             .unwrap_or(Value::Null),
     );
     map.insert(
@@ -1444,6 +1494,14 @@ fn parse_optional_text_f64(raw: &str) -> Value {
         .map_or(Value::Null, Value::from)
 }
 
+fn parse_transition_distance_value(raw: &str) -> Value {
+    let trimmed = raw.trim();
+    if trimmed.eq_ignore_ascii_case("airbox_boundary") {
+        return Value::String("airbox_boundary".to_string());
+    }
+    parse_optional_text_f64(trimmed)
+}
+
 fn parse_optional_text_f64_or_auto(raw: &str) -> Value {
     let trimmed = raw.trim();
     if trimmed.eq_ignore_ascii_case("auto") {
@@ -1871,6 +1929,21 @@ mod tests {
     };
 
     #[test]
+    fn per_geometry_transition_distance_sentinels_survive_override_projection() {
+        let mesh = ScriptBuilderPerGeometryMeshState {
+            transition_distance: Some("airbox_boundary".to_string()),
+            edge_transition_distance: Some("airbox_boundary".to_string()),
+            corner_transition_distance: Some("airbox_boundary".to_string()),
+            ..ScriptBuilderPerGeometryMeshState::default()
+        };
+
+        let projected = geometry_mesh_override_value(&mesh);
+        assert_eq!(projected["transition_distance"], "airbox_boundary");
+        assert_eq!(projected["edge_transition_distance"], "airbox_boundary");
+        assert_eq!(projected["corner_transition_distance"], "airbox_boundary");
+    }
+
+    #[test]
     fn scene_document_round_trips_typed_regional_field_drives() {
         let value = serde_json::json!({
             "version": "scene.v2",
@@ -1903,6 +1976,7 @@ mod tests {
         ScriptBuilderState {
             revision: 7,
             backend: Some("fem".to_string()),
+            requested_mode: Some("strict".to_string()),
             cpu_threads: Some(8),
             fem_demag_solver_policy: Some(fullmag_ir::FemLinearSolverPolicy::default()),
             exchange_enabled: true,
@@ -2105,6 +2179,11 @@ mod tests {
                     through_thickness_element_ratio: None,
                     through_thickness_symmetric: None,
                     sweep_face_meshing: Some("triangular".to_string()),
+                    topology: None,
+                    sweep_direction: Some("auto".to_string()),
+                    element_family: Some("prism".to_string()),
+                    transition_policy: Some("reject".to_string()),
+                    exact_layer_count: Some(true),
                     source: None,
                     algorithm_2d: Some(6),
                     algorithm_3d: Some(10),
@@ -2129,8 +2208,10 @@ mod tests {
                     interface_thickness: None,
                     edge_hmax: Some("8e-9".to_string()),
                     edge_thickness: Some("20e-9".to_string()),
+                    edge_transition_distance: Some("30e-9".to_string()),
                     corner_hmax: Some("5e-9".to_string()),
                     corner_extent: Some("12e-9".to_string()),
+                    corner_transition_distance: Some("24e-9".to_string()),
                     transition_distance: None,
                     transition_growth: None,
                     size_fields: vec![ScriptBuilderMeshSizeFieldState {
@@ -2190,6 +2271,11 @@ mod tests {
                     through_thickness_element_ratio: None,
                     through_thickness_symmetric: None,
                     sweep_face_meshing: None,
+                    topology: None,
+                    sweep_direction: None,
+                    element_family: None,
+                    transition_policy: None,
+                    exact_layer_count: None,
                     source: None,
                     algorithm_2d: None,
                     algorithm_3d: None,
@@ -2214,8 +2300,10 @@ mod tests {
                     interface_thickness: Some("8e-9".to_string()),
                     edge_hmax: None,
                     edge_thickness: None,
+                    edge_transition_distance: None,
                     corner_hmax: None,
                     corner_extent: None,
+                    corner_transition_distance: None,
                     transition_distance: Some("24e-9".to_string()),
                     transition_growth: Some(1.2),
                     size_fields: Vec::new(),
@@ -2316,6 +2404,122 @@ mod tests {
                 .as_ref()
                 .map(|document| document.version.as_str()),
             Some("study_pipeline.v1")
+        );
+    }
+
+    #[test]
+    fn scene_document_round_trips_requested_prismatic_layered_mesh_fields() {
+        let mut builder = sample_builder();
+        let mesh = builder.geometries[0].mesh.as_mut().unwrap();
+        mesh.topology = Some("prismatic".to_string());
+        mesh.sweep_direction = Some("auto".to_string());
+        mesh.element_family = Some("prism".to_string());
+        mesh.transition_policy = Some("pyramid_to_tetrahedra".to_string());
+        mesh.exact_layer_count = Some(true);
+
+        let scene = scene_document_from_script_builder(&builder);
+        let projection = scene_document_problem_projection(&scene)
+            .expect("requested layered mesh should project");
+        let mesh = projection.builder.geometries[0].mesh.as_ref().unwrap();
+
+        assert_eq!(mesh.topology.as_deref(), Some("prismatic"));
+        assert_eq!(mesh.sweep_direction.as_deref(), Some("auto"));
+        assert_eq!(mesh.element_family.as_deref(), Some("prism"));
+        assert_eq!(
+            mesh.transition_policy.as_deref(),
+            Some("pyramid_to_tetrahedra")
+        );
+        assert_eq!(mesh.exact_layer_count, Some(true));
+        assert_eq!(
+            projection.rewrite_overrides["geometries"][0]["mesh"]["exact_layer_count"],
+            serde_json::json!(true)
+        );
+    }
+
+    #[test]
+    fn scene_document_rejects_invalid_requested_layered_mesh_before_projection() {
+        let mut cases = Vec::new();
+
+        let mut zero_layers = sample_builder();
+        zero_layers.geometries[0]
+            .mesh
+            .as_mut()
+            .unwrap()
+            .through_thickness_elements = Some(0);
+        cases.push(zero_layers);
+
+        let mut high_order = sample_builder();
+        let mesh = high_order.geometries[0].mesh.as_mut().unwrap();
+        mesh.topology = Some("prismatic".to_string());
+        mesh.element_family = Some("prism".to_string());
+        mesh.transition_policy = Some("pyramid_to_tetrahedra".to_string());
+        mesh.exact_layer_count = Some(true);
+        mesh.order = Some(2);
+        cases.push(high_order);
+
+        let mut contradictory_hex = sample_builder();
+        let mesh = contradictory_hex.geometries[0].mesh.as_mut().unwrap();
+        mesh.element_family = Some("hex".to_string());
+        mesh.sweep_face_meshing = Some("quadrilateral".to_string());
+        mesh.transition_policy = Some("pyramid_to_tetrahedra".to_string());
+        mesh.exact_layer_count = Some(true);
+        cases.push(contradictory_hex);
+
+        let mut unknown_transition = sample_builder();
+        unknown_transition.geometries[0]
+            .mesh
+            .as_mut()
+            .unwrap()
+            .transition_policy = Some("unknown".to_string());
+        cases.push(unknown_transition);
+
+        for builder in cases {
+            let scene = scene_document_from_script_builder(&builder);
+            let error = scene_document_problem_projection(&scene)
+                .expect_err("invalid requested layered mesh must fail before projection");
+            assert!(error.message.contains("mesh"), "{}", error.message);
+        }
+    }
+
+    #[test]
+    fn scene_document_only_rejects_inexact_prismatic_intent_in_explicit_strict_mode() {
+        let mut builder = sample_builder();
+        let mesh = builder.geometries[0].mesh.as_mut().unwrap();
+        mesh.topology = Some("prismatic".to_string());
+        mesh.element_family = Some("prism".to_string());
+        mesh.transition_policy = Some("pyramid_to_tetrahedra".to_string());
+        mesh.exact_layer_count = Some(false);
+
+        let mut scene = scene_document_from_script_builder(&builder);
+        scene.study.requested_mode = "extended".to_string();
+        scene_document_problem_projection(&scene)
+            .expect("extended mode should preserve inexact requested prism intent");
+
+        scene.study.requested_mode = "strict".to_string();
+        let error = scene_document_problem_projection(&scene)
+            .expect_err("explicit strict mode should reject inexact requested prism intent");
+        assert!(
+            error.message.contains("exact_layer_count=true"),
+            "{}",
+            error.message
+        );
+
+        scene.study.requested_mode = "hybrid".to_string();
+        let error = scene_document_problem_projection(&scene)
+            .expect_err("hybrid mode should reject inexact requested prism intent");
+        assert!(
+            error.message.contains("exact_layer_count=true"),
+            "{}",
+            error.message
+        );
+
+        scene.study.requested_mode = "unknown".to_string();
+        let error = scene_document_problem_projection(&scene)
+            .expect_err("unknown requested mode must fail closed");
+        assert!(
+            error.message.contains("requested_mode"),
+            "{}",
+            error.message
         );
     }
 

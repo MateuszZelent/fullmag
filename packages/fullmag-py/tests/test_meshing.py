@@ -150,6 +150,144 @@ from fullmag.meshing._size_field_plan import _build_perimeter_refinement_fields
 from fullmag.meshing.voxelization import VoxelMaskData, voxelize_geometry
 
 
+class LayeredMeshDslValidationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        fm.reset()
+        self.film = fm.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+
+    def tearDown(self) -> None:
+        fm.reset()
+
+    def test_thin_film_rejects_invalid_prismatic_requests_before_lowering(self) -> None:
+        invalid = (
+            {"layers": 0, "topology": "prismatic"},
+            {"layers": True, "topology": "prismatic"},
+            {"layers": 1.5, "topology": "prismatic"},
+            {"layers": 1, "topology": "unknown"},
+            {"layers": 1, "topology": "prismatic", "order": 2},
+            {"layers": 1, "topology": "prismatic", "transition": "unknown"},
+        )
+        for kwargs in invalid:
+            with self.subTest(kwargs=kwargs), self.assertRaises((TypeError, ValueError)):
+                self.film.mesh.thin_film(**kwargs)
+
+        with self.assertRaises(ValueError):
+            self.film.mesh.thin_film(
+                layers=1,
+                topology="prismatic",
+                exact_layers=False,
+            )
+        fm.mode("hybrid")
+        with self.assertRaises(ValueError):
+            self.film.mesh.thin_film(
+                layers=1,
+                topology="prismatic",
+                exact_layers=False,
+            )
+
+    def test_swept_rejects_invalid_or_contradictory_requests_before_lowering(self) -> None:
+        invalid = (
+            {"elements": 0},
+            {"elements": True},
+            {"elements": 1.5},
+            {"elements": 1, "transition": "unknown"},
+            {
+                "elements": 1,
+                "face_meshing": "quadrilateral",
+                "transition": "pyramid_to_tetrahedra",
+            },
+        )
+        for kwargs in invalid:
+            with self.subTest(kwargs=kwargs), self.assertRaises((TypeError, ValueError)):
+                self.film.mesh.swept(**kwargs)
+
+    def test_layered_mesh_mutation_sequences_replace_stale_typed_intent(self) -> None:
+        self.film.mesh.thin_film(layers=2, topology="prismatic")
+        self.film.mesh.thin_film(layers=3)
+        legacy = self.film._mesh_spec
+        self.assertEqual(legacy.mesh_strategy, "thin_film_tetrahedral")
+        self.assertEqual(legacy.through_thickness_elements, 3)
+        self.assertIsNone(legacy.topology)
+        self.assertIsNone(legacy.sweep_direction)
+        self.assertIsNone(legacy.element_family)
+        self.assertIsNone(legacy.transition_policy)
+        self.assertIsNone(legacy.exact_layer_count)
+
+        self.film.mesh.thin_film(layers=2, topology="prismatic")
+        self.film.mesh.swept(elements=4, sweep_direction="x", transition="reject")
+        swept = self.film._mesh_spec
+        self.assertEqual(swept.mesh_strategy, "swept_prism")
+        self.assertEqual(swept.through_thickness_elements, 4)
+        self.assertIsNone(swept.topology)
+        self.assertEqual(swept.sweep_direction, "x")
+        self.assertEqual(swept.element_family, "prism")
+        self.assertEqual(swept.transition_policy, "reject")
+        self.assertIs(swept.exact_layer_count, True)
+
+    def test_prismatic_configure_rejects_contradiction_atomically(self) -> None:
+        self.film.mesh.thin_film(layers=2, topology="prismatic")
+        before = self.film._mesh_spec
+        with self.assertRaisesRegex(ValueError, "order=1"):
+            self.film.mesh(order=2)
+        after = self.film._mesh_spec
+        self.assertIs(after, before)
+        self.assertEqual(after.order, 1)
+        self.assertEqual(after.topology, "prismatic")
+
+        with self.assertRaisesRegex(ValueError, "layered mesh intent is incomplete"):
+            fm.geometry(fm.Box(20e-9, 10e-9, 1e-9), name="incomplete").mesh(
+                mesh_strategy="swept_prism"
+            )
+
+    def test_per_object_recipe_rejects_invalid_or_incoherent_layered_intent(self) -> None:
+        invalid = (
+            {"through_thickness_elements": 0},
+            {"through_thickness_elements": True},
+            {"topology": "unknown"},
+            {"sweep_direction": "diagonal"},
+            {"element_family": "tet"},
+            {"transition_policy": "unknown"},
+            {
+                "mesh_strategy": "swept_prism",
+                "through_thickness_elements": 1,
+                "through_thickness_distribution": "fixed",
+                "sweep_face_meshing": "triangular",
+                "topology": "tetrahedral",
+                "sweep_direction": "auto",
+                "element_family": "prism",
+                "transition_policy": "pyramid_to_tetrahedra",
+                "exact_layer_count": True,
+            },
+            {
+                "mesh_strategy": "swept_prism",
+                "through_thickness_elements": 1,
+                "through_thickness_distribution": "fixed",
+                "sweep_face_meshing": "triangular",
+                "topology": "prismatic",
+                "sweep_direction": "auto",
+                "element_family": "prism",
+                "transition_policy": "pyramid_to_tetrahedra",
+                "exact_layer_count": False,
+            },
+        )
+        for kwargs in invalid:
+            with self.subTest(kwargs=kwargs), self.assertRaises((TypeError, ValueError)):
+                PerObjectMeshRecipe(**kwargs)
+
+        valid = PerObjectMeshRecipe(
+            mesh_strategy="swept_prism",
+            order=1,
+            through_thickness_elements=1,
+            through_thickness_distribution="fixed",
+            sweep_face_meshing="triangular",
+            sweep_direction="x",
+            element_family="prism",
+            transition_policy="reject",
+            exact_layer_count=True,
+        )
+        self.assertEqual(valid.to_ir()["transition_policy"], "reject")
+
+
 class MeshScaffoldTests(unittest.TestCase):
     def test_periodic_boundary_faces_are_oriented_outward_from_owner_tetrahedron(self) -> None:
         nodes = np.asarray(

@@ -561,6 +561,16 @@ pub struct ScriptBuilderPerGeometryMeshState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sweep_face_meshing: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topology: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sweep_direction: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub element_family: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exact_layer_count: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub algorithm_2d: Option<i64>,
@@ -614,6 +624,8 @@ pub struct ScriptBuilderPerGeometryMeshState {
     pub edge_hmax: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edge_thickness: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_transition_distance: Option<String>,
     #[serde(
         default,
         rename = "corner_maximum_element_size",
@@ -623,6 +635,8 @@ pub struct ScriptBuilderPerGeometryMeshState {
     pub corner_hmax: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub corner_extent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub corner_transition_distance: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transition_distance: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -653,6 +667,11 @@ impl Default for ScriptBuilderPerGeometryMeshState {
             through_thickness_element_ratio: None,
             through_thickness_symmetric: None,
             sweep_face_meshing: None,
+            topology: None,
+            sweep_direction: None,
+            element_family: None,
+            transition_policy: None,
+            exact_layer_count: None,
             source: None,
             algorithm_2d: None,
             algorithm_3d: None,
@@ -677,8 +696,10 @@ impl Default for ScriptBuilderPerGeometryMeshState {
             interface_thickness: None,
             edge_hmax: None,
             edge_thickness: None,
+            edge_transition_distance: None,
             corner_hmax: None,
             corner_extent: None,
+            corner_transition_distance: None,
             transition_distance: None,
             transition_growth: None,
             size_fields: Vec::new(),
@@ -761,6 +782,8 @@ pub struct ScriptBuilderState {
     pub revision: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_threads: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -852,8 +875,39 @@ fn default_solver_max_steps() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ScriptBuilderSolverState, StudyPipelineDocument, StudyPipelineNode, StudyPrimitiveStageKind,
+        ScriptBuilderPerGeometryMeshState, ScriptBuilderSolverState, StudyPipelineDocument,
+        StudyPipelineNode, StudyPrimitiveStageKind,
     };
+
+    #[test]
+    fn legacy_swept_ir_defaults_do_not_claim_exact_mixed_topology() {
+        let hints: fullmag_ir::SweptMeshHintsIR = serde_json::from_value(serde_json::json!({
+            "sweep_direction": "auto",
+            "distribution": {"kind": "uniform", "num_layers": 1}
+        }))
+        .expect("legacy swept hints should remain readable");
+
+        assert_eq!(hints.element_family, "prism");
+        assert_eq!(hints.transition_policy, "reject");
+        assert!(!hints.exact_layer_count);
+    }
+
+    #[test]
+    fn legacy_authoring_mesh_defaults_new_layered_fields_to_absent() {
+        let mesh: ScriptBuilderPerGeometryMeshState = serde_json::from_value(serde_json::json!({
+            "mesh_strategy": "thin_film_tetrahedral",
+            "through_thickness_elements": 1,
+            "through_thickness_distribution": "fixed",
+            "sweep_face_meshing": "triangular"
+        }))
+        .expect("legacy authored mesh should remain readable");
+
+        assert_eq!(mesh.topology, None);
+        assert_eq!(mesh.sweep_direction, None);
+        assert_eq!(mesh.element_family, None);
+        assert_eq!(mesh.transition_policy, None);
+        assert_eq!(mesh.exact_layer_count, None);
+    }
 
     #[test]
     fn solver_defaults_match_canonical_relax_defaults() {
