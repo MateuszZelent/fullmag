@@ -16,6 +16,7 @@ pub const MU0: f64 = 4.0 * std::f64::consts::PI * 1e-7;
 
 mod antenna_fields;
 pub mod autosave_storage;
+pub mod autosave_txt;
 pub mod artifact_pipeline;
 mod artifacts;
 pub mod capabilities;
