@@ -26,6 +26,7 @@ use crate::planar_sampling::PlanarSampleResult;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use tokio::sync::Mutex;
 
 /// Maximum number of cached projection entries (configurable at construction time).
@@ -35,6 +36,8 @@ const DEFAULT_MAX_SLICE_ENTRIES: usize = 128;
 /// Maximum number of cached analysis resource entries.
 const DEFAULT_MAX_ANALYSIS_RESOURCE_ENTRIES: usize = 128;
 const DEFAULT_MAX_PLANAR_SAMPLE_ENTRIES: usize = 8;
+const DEFAULT_MAX_TOPOLOGY_ENTRIES: usize = 2;
+const DEFAULT_MAX_TOPOLOGY_BYTES: usize = 512 * 1024 * 1024;
 /// Default memory budget for each sub-cache in bytes (128 MiB).
 const DEFAULT_MAX_BYTES: usize = 128 * 1024 * 1024;
 
@@ -59,6 +62,89 @@ pub(crate) struct BinaryCache {
     generation: u64,
     max_entries: usize,
     max_bytes: usize,
+}
+
+pub(crate) struct SharedBinaryCache {
+    entries: HashMap<String, CachedSharedBinary>,
+    total_bytes: usize,
+    generation: u64,
+    max_entries: usize,
+    max_bytes: usize,
+}
+
+struct CachedSharedBinary {
+    bytes: Arc<[u8]>,
+    generation: u64,
+}
+
+impl SharedBinaryCache {
+    pub fn new(max_entries: usize, max_bytes: usize) -> Self {
+        Self {
+            entries: HashMap::with_capacity(max_entries.min(16)),
+            total_bytes: 0,
+            generation: 0,
+            max_entries,
+            max_bytes,
+        }
+    }
+
+    pub fn get(&mut self, key: &str) -> Option<Arc<[u8]>> {
+        let entry = self.entries.get_mut(key)?;
+        self.generation += 1;
+        entry.generation = self.generation;
+        Some(Arc::clone(&entry.bytes))
+    }
+
+    pub fn insert(&mut self, key: String, bytes: Vec<u8>) -> Arc<[u8]> {
+        let bytes: Arc<[u8]> = bytes.into();
+        if bytes.len() > self.max_bytes || self.max_entries == 0 {
+            return bytes;
+        }
+        if let Some(previous) = self.entries.remove(&key) {
+            self.total_bytes = self.total_bytes.saturating_sub(previous.bytes.len());
+        }
+        while self.entries.len() >= self.max_entries
+            || self.total_bytes + bytes.len() > self.max_bytes
+        {
+            let Some(oldest_key) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.generation)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            if let Some(previous) = self.entries.remove(&oldest_key) {
+                self.total_bytes = self.total_bytes.saturating_sub(previous.bytes.len());
+            }
+        }
+        self.generation += 1;
+        self.total_bytes += bytes.len();
+        self.entries.insert(
+            key,
+            CachedSharedBinary {
+                bytes: Arc::clone(&bytes),
+                generation: self.generation,
+            },
+        );
+        bytes
+    }
+
+    pub fn get_or_try_insert_with<E>(
+        &mut self,
+        key: &str,
+        build: impl FnOnce() -> Result<Vec<u8>, E>,
+    ) -> Result<Arc<[u8]>, E> {
+        if let Some(bytes) = self.get(key) {
+            return Ok(bytes);
+        }
+        Ok(self.insert(key.to_string(), build()?))
+    }
+
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 #[derive(Clone)]
@@ -432,9 +518,11 @@ pub(crate) fn topological_charge_cache_key(
 
 /// Data-plane store holding the binary projection cache and the binary slice cache.
 ///
-/// Held in `AppState` as `Arc<QuantityDataPlaneStore>`.  Both sub-caches are protected by their
-/// own `Mutex` so projection and slice requests never block each other.
+/// Held in `AppState` as `Arc<QuantityDataPlaneStore>`. Independent locks keep unrelated
+/// topology, projection, slice, and analysis resources from blocking one another.
 pub(crate) struct QuantityDataPlaneStore {
+    /// Bounded shared FMMT buffers keyed by exact route-specific topology ETag.
+    pub topology_cache: StdMutex<SharedBinaryCache>,
     /// Cache for projected (component-selected or magnitude) field vector binaries.
     pub projection_cache: Mutex<BinaryCache>,
     /// Cache for 2-D scalar slice binaries.
@@ -476,6 +564,10 @@ impl QuantityDataPlaneStore {
         max_bytes_each: usize,
     ) -> Self {
         Self {
+            topology_cache: StdMutex::new(SharedBinaryCache::new(
+                DEFAULT_MAX_TOPOLOGY_ENTRIES,
+                DEFAULT_MAX_TOPOLOGY_BYTES,
+            )),
             projection_cache: Mutex::new(BinaryCache::new(max_projection, max_bytes_each)),
             scalar_slice_cache: Mutex::new(BinaryCache::new(max_scalar_slices, max_bytes_each)),
             arrow_slice_cache: Mutex::new(BinaryCache::new(max_arrow_slices, max_bytes_each)),
@@ -536,6 +628,28 @@ mod tests {
         assert_eq!(hit.unwrap().bytes.len(), 100);
         assert_eq!(cache.total_bytes(), 100);
         assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn shared_binary_cache_builds_each_exact_identity_once() {
+        let mut cache = SharedBinaryCache::new(2, 1024);
+        let mut build_count = 0;
+
+        let first = cache
+            .get_or_try_insert_with("topology-etag", || {
+                build_count += 1;
+                Ok::<_, ()>(vec![1u8; 64])
+            })
+            .expect("first topology build");
+        let second = cache
+            .get_or_try_insert_with("topology-etag", || {
+                build_count += 1;
+                Ok::<_, ()>(vec![2u8; 64])
+            })
+            .expect("cached topology build");
+
+        assert_eq!(build_count, 1);
+        assert!(Arc::ptr_eq(&first, &second));
     }
 
     #[test]

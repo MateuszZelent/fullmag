@@ -19,6 +19,10 @@ const PARAM_LABELS: Record<string, string> = {
   maximum_element_growth_rate: "Growth rate",
   curvature_factor: "Curvature factor",
   mesh_strategy: "Mesh strategy",
+  topology: "Requested topology",
+  exact_layer_count: "Exact layer count",
+  transition_policy: "Transition policy",
+  element_family: "Element family",
   algorithm_2d: "Algorithm 2D",
   algorithm_3d: "Algorithm 3D",
   smoothing_steps: "Smoothing steps",
@@ -27,7 +31,7 @@ const PARAM_LABELS: Record<string, string> = {
   corner_maximum_element_size: "Corner max size",
   transition_distance: "Transition distance",
   boundary_layer_count: "Boundary layer count",
-  through_thickness_elements: "Through-thickness elements",
+  through_thickness_elements: "Element layers / node planes",
   size_preset: "Size preset",
   airbox_hmax: "Max element size (Hmax)",
   airbox_hmin: "Min element size (Hmin)",
@@ -37,6 +41,9 @@ function formatPolicyValue(path: string, value: string): string {
   if (value === "unset" || value === "null" || value === "MISSING" || !value) return "unset";
   const num = parseFloat(value);
   if (!isNaN(num)) {
+    if (path === "through_thickness_elements" && Number.isInteger(num) && num > 0) {
+      return `${num} ${num === 1 ? "layer" : "layers"} / ${num + 1} node planes`;
+    }
     const isLength =
       path.includes("size") ||
       path.includes("distance") ||

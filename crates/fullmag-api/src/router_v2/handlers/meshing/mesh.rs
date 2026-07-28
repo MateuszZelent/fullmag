@@ -24,20 +24,19 @@ use crate::fem_cross_section_image::{
 };
 use crate::fem_slice_overlay::{collect_fem_slice_overlay, FemSliceOverlayInput};
 use crate::field_slice::{resolve_slice_query, FieldSliceQuery, SlicePlane};
-use crate::field_store::serialize_fem_mesh_topology_binary_v1;
 use crate::schemas::mesh::{
     MeshActiveBuildResource, MeshBuildDiagnosticsResource, MeshBuildHistoryResource,
     MeshBuildPolicyDiffResource, MeshBuildProvenanceResource, MeshBuildPublishedResourcesResource,
     MeshCapabilitiesResource, MeshHistogramBinElementsResource, MeshInterfaceConfigReplaceRequest,
     MeshInterfaceConfigResource, MeshInterfaceQualityResource, MeshInterfaceReportResource,
-    MeshLastSuccessfulBuildResource, MeshObjectConfigEntryResource, MeshObjectConfigReplaceRequest,
-    MeshObjectConfigResource, MeshObjectQualityResource, MeshObjectReportResource,
-    MeshObjectSegmentResource, MeshObjectSizeFieldResource, MeshPartResource,
-    MeshPeriodicBoundaryFacePairResource, MeshPeriodicDomainNodePairCountsResource,
-    MeshPeriodicPairResource, MeshPeriodicPairsResource, MeshQualityGatesResource,
-    MeshRealizedSizeFieldResource, MeshRealizedSizeFieldsPayload, MeshRealizedSizeFieldsResource,
-    MeshRegionMembershipResource, MeshRegionQualityResource, MeshRegionResource,
-    MeshSemanticsResource, MeshSharedDomainBuildReportResource,
+    MeshLastSuccessfulBuildResource, MeshMixedLayerTopologyRejectionResource,
+    MeshObjectConfigEntryResource, MeshObjectConfigReplaceRequest, MeshObjectConfigResource,
+    MeshObjectQualityResource, MeshObjectReportResource, MeshObjectSegmentResource,
+    MeshObjectSizeFieldResource, MeshPartResource, MeshPeriodicBoundaryFacePairResource,
+    MeshPeriodicDomainNodePairCountsResource, MeshPeriodicPairResource, MeshPeriodicPairsResource,
+    MeshQualityGatesResource, MeshRealizedSizeFieldResource, MeshRealizedSizeFieldsPayload,
+    MeshRealizedSizeFieldsResource, MeshRegionMembershipResource, MeshRegionQualityResource,
+    MeshRegionResource, MeshSemanticsResource, MeshSharedDomainBuildReportResource,
     MeshSharedDomainConfigReplaceRequest, MeshSharedDomainConfigResource,
     MeshSharedDomainManifestResource, MeshSharedDomainQualityResource,
     MeshSharedDomainReportResource, MeshSolverMeshResource, MeshSummaryResource,
@@ -132,9 +131,31 @@ pub async fn get_mesh_capabilities(
     let mesh_workspace = current_mesh_workspace(&snapshot)?;
     Ok(Json(MeshCapabilitiesResource {
         revision: snapshot.mesh_revision,
-        mesh_capabilities: mesh_workspace.get("mesh_capabilities").cloned(),
+        mesh_capabilities: projected_mesh_capabilities(&snapshot, mesh_workspace),
         mesh_adaptivity_state: mesh_workspace.get("mesh_adaptivity_state").cloned(),
     }))
+}
+
+fn projected_mesh_capabilities(
+    snapshot: &SessionStateResponse,
+    mesh_workspace: &Value,
+) -> Option<Value> {
+    let mut projected = mesh_workspace
+        .get("mesh_capabilities")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    for id in fullmag_runner::MIXED_P1_MESH_FEATURE_CAPABILITY_IDS {
+        projected.remove(id);
+        if let Some(capabilities) = snapshot.capabilities.as_ref() {
+            if let Some(capability) = capabilities.feature_capabilities.get(id) {
+                if let Ok(value) = serde_json::to_value(capability) {
+                    projected.insert(id.to_string(), value);
+                }
+            }
+        }
+    }
+    (!projected.is_empty()).then_some(Value::Object(projected))
 }
 
 #[utoipa::path(
@@ -194,8 +215,7 @@ pub async fn get_mesh_semantics(
             build_report: mesh
                 .build_report
                 .as_ref()
-                .and_then(|report| serde_json::to_value(report).ok())
-                .and_then(|value| serde_json::from_value(value).ok()),
+                .and_then(|report| typed_shared_domain_build_report_from_ir(&snapshot, report)),
         });
     let mesh_build_diagnostics =
         snapshot
@@ -259,7 +279,13 @@ pub async fn get_mesh_active_build(
         effective_airbox_target: mesh_workspace.get("effective_airbox_target").cloned(),
         effective_per_object_targets: mesh_workspace.get("effective_per_object_targets").cloned(),
         last_build_summary: mesh_workspace.get("last_build_summary").cloned(),
-        shared_domain_build_report: typed_shared_domain_build_report(mesh_workspace),
+        shared_domain_build_report: snapshot
+            .fem_mesh
+            .as_ref()
+            .and_then(|mesh| mesh.build_report.as_ref())
+            .and_then(|report| typed_shared_domain_build_report_from_ir(&snapshot, report))
+            .or_else(|| typed_shared_domain_build_report(&snapshot, mesh_workspace)),
+        mixed_layer_topology_rejection: mixed_layer_topology_rejection(mesh_workspace),
         last_build_error: mesh_workspace
             .get("last_build_error")
             .and_then(Value::as_str)
@@ -377,14 +403,51 @@ fn mesh_build_policy_diff(mesh_workspace: &Value) -> Option<Vec<MeshBuildPolicyD
 }
 
 fn typed_shared_domain_build_report(
+    snapshot: &SessionStateResponse,
     mesh_workspace: &Value,
 ) -> Option<MeshSharedDomainBuildReportResource> {
-    first_workspace_value(
+    let value = first_workspace_value(
         mesh_workspace,
         &[
             &["shared_domain_build_report"],
             &["last_build_summary", "shared_domain_build_report"],
             &["shared_domain_report", "shared_domain_build_report"],
+        ],
+    )?;
+    serde_json::from_value::<fullmag_ir::FemSharedDomainBuildReportIR>(value.clone())
+        .ok()
+        .as_ref()
+        .and_then(|report| typed_shared_domain_build_report_from_ir(snapshot, report))
+        .or_else(|| serde_json::from_value(value).ok())
+}
+
+fn typed_shared_domain_build_report_from_ir(
+    snapshot: &SessionStateResponse,
+    report: &fullmag_ir::FemSharedDomainBuildReportIR,
+) -> Option<MeshSharedDomainBuildReportResource> {
+    let mut resource = MeshSharedDomainBuildReportResource::from_ir(report)?;
+    if let Some(provenance) = resource.mixed_topology_provenance.as_mut() {
+        provenance.capability_reason = snapshot
+            .capabilities
+            .as_ref()
+            .and_then(|capabilities| {
+                capabilities
+                    .feature_capabilities
+                    .get("mesh.topology.mixed_p1")
+            })
+            .map(|capability| capability.reason.clone());
+    }
+    Some(resource)
+}
+
+fn mixed_layer_topology_rejection(
+    mesh_workspace: &Value,
+) -> Option<MeshMixedLayerTopologyRejectionResource> {
+    first_workspace_value(
+        mesh_workspace,
+        &[
+            &["last_build_summary", "mixed_layer_topology_rejection"],
+            &["mixed_layer_topology_rejection"],
         ],
     )
     .and_then(|value| serde_json::from_value(value).ok())
@@ -667,16 +730,29 @@ pub async fn get_mesh_shared_domain_report(
 ) -> Result<Json<MeshSharedDomainReportResource>, ApiError> {
     let snapshot = current_snapshot(&state).await?;
     let mesh_workspace = current_mesh_workspace(&snapshot)?;
-    let report = Some(json!({
+    let mut report = json!({
         "mesh_summary": mesh_workspace.get("mesh_summary").cloned().unwrap_or(Value::Null),
         "mesh_statistics": workspace_mesh_statistics(mesh_workspace).cloned().unwrap_or(Value::Null),
         "mesh_cost_report": mesh_workspace.get("mesh_cost_report").cloned().unwrap_or(Value::Null),
         "mesh_pipeline_status": mesh_workspace.get("mesh_pipeline_status").cloned().unwrap_or(Value::Null),
         "last_build_summary": mesh_workspace.get("last_build_summary").cloned().unwrap_or(Value::Null),
-    }));
+    });
+    if let Some(build_report) = snapshot
+        .fem_mesh
+        .as_ref()
+        .and_then(|mesh| mesh.build_report.as_ref())
+        .and_then(|report| typed_shared_domain_build_report_from_ir(&snapshot, report))
+        .or_else(|| typed_shared_domain_build_report(&snapshot, mesh_workspace))
+    {
+        if let (Some(target), Ok(Value::Object(fields))) =
+            (report.as_object_mut(), serde_json::to_value(build_report))
+        {
+            target.extend(fields);
+        }
+    }
     Ok(Json(MeshSharedDomainReportResource {
         revision: snapshot.mesh_revision,
-        report,
+        report: Some(report),
     }))
 }
 
@@ -1639,6 +1715,10 @@ pub async fn get_mesh_shared_domain_manifest(
         Some(mesh) => {
             let provenance = mesh_build_provenance(&snapshot);
             let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
+            let topology_truth = mesh
+                .build_report
+                .as_ref()
+                .and_then(|report| typed_shared_domain_build_report_from_ir(&snapshot, report));
             let facet_index =
                 crate::router_v2::handlers::shared::FacetGlobalOrdinalIndex::new(&mesh.facets);
             let body = MeshSharedDomainManifestResource {
@@ -1648,6 +1728,33 @@ pub async fn get_mesh_shared_domain_manifest(
                 mesh_name: mesh.mesh_name.clone(),
                 mesh_id: mesh.mesh_id.clone(),
                 topology_fingerprint: topology_hash.clone(),
+                topology_schema_version: Some(2),
+                element_counts_by_type: topology_truth
+                    .as_ref()
+                    .map(|truth| truth.element_counts_by_type.clone())
+                    .unwrap_or_default(),
+                facet_counts_by_type_and_role: topology_truth
+                    .as_ref()
+                    .map(|truth| truth.facet_counts_by_type_and_role.clone())
+                    .unwrap_or_default(),
+                requested_layered_policy: topology_truth
+                    .as_ref()
+                    .and_then(|truth| truth.requested_layered_policy.clone()),
+                resolved_layered_policy: topology_truth
+                    .as_ref()
+                    .and_then(|truth| truth.resolved_layered_policy.clone()),
+                mixed_layer_topology_certificate: topology_truth
+                    .as_ref()
+                    .and_then(|truth| truth.mixed_layer_topology_certificate.clone()),
+                mixed_topology_provenance: topology_truth
+                    .as_ref()
+                    .and_then(|truth| truth.mixed_topology_provenance.clone()),
+                gmsh_version: topology_truth
+                    .as_ref()
+                    .and_then(|truth| truth.gmsh_version.clone()),
+                fallbacks_triggered: topology_truth
+                    .as_ref()
+                    .and_then(|truth| truth.fallbacks_triggered.clone()),
                 generation_id: mesh.generation_id.clone(),
                 domain_mesh_mode: mesh.domain_mesh_mode.clone(),
                 object_segments: mesh
@@ -1660,13 +1767,17 @@ pub async fn get_mesh_shared_domain_manifest(
                     .iter()
                     .map(|part| {
                         let mut resource = MeshPartResource::from(part);
-                        resource.surface_faces =
-                            crate::router_v2::handlers::shared::mesh_part_surface_faces(
+                        resource.element_counts_by_type = mesh_part_family_counts(mesh, part);
+                        if let Some((resolved_indices, surface_faces)) =
+                            crate::router_v2::handlers::shared::mesh_part_surface_faces_with_indices(
                                 mesh,
                                 part,
                                 &facet_index,
                             )
-                            .unwrap_or_default();
+                        {
+                            resource.boundary_face_indices = resolved_indices;
+                            resource.surface_faces = surface_faces;
+                        }
                         resource.surface_node_indices =
                             (!resource.surface_faces.is_empty()).then(|| {
                                 crate::router_v2::handlers::shared::surface_node_indices_from_faces(
@@ -1705,6 +1816,35 @@ pub async fn get_mesh_shared_domain_manifest(
     }
 }
 
+fn mesh_part_family_counts(
+    mesh: &FemMeshPayload,
+    part: &FemMeshPartPayload,
+) -> BTreeMap<String, u64> {
+    let Some(certificate) = mesh
+        .build_report
+        .as_ref()
+        .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
+    else {
+        return BTreeMap::new();
+    };
+    let source_parts: &[&str] = if part.role == "air" || part.id == "airbox" {
+        &["transition_air", "far_air"]
+    } else if part.role == "magnetic_object" || part.object_id.is_some() {
+        &["magnetic"]
+    } else {
+        &[]
+    };
+    let mut counts = BTreeMap::new();
+    for source_part in source_parts {
+        if let Some(families) = certificate.cell_family_counts_by_part.get(*source_part) {
+            for (family, count) in families {
+                *counts.entry(family.clone()).or_default() += count;
+            }
+        }
+    }
+    counts
+}
+
 #[utoipa::path(
     get,
     path = "/v2/sessions/current/meshing/meshes/shared-domain/topology",
@@ -1713,10 +1853,10 @@ pub async fn get_mesh_shared_domain_manifest(
         ("Range" = Option<String>, Header, description = "Optional single byte range for chunked FMMT topology reads")
     ),
     responses(
-        (status = 200, description = "Binary shared-domain FEM topology (FMMT)", content_type = "application/octet-stream"),
-        (status = 206, description = "Partial shared-domain FEM topology range (FMMT)", content_type = "application/octet-stream"),
+        (status = 200, description = "Binary shared-domain FEM topology (FMMT v2)", content_type = "application/octet-stream"),
+        (status = 206, description = "Partial shared-domain FEM topology range (FMMT v2)", content_type = "application/octet-stream"),
         (status = 304, description = "Shared-domain topology not modified for the supplied ETag"),
-        (status = 409, description = "FMMT v1 cannot represent the active mixed or malformed FEM topology"),
+        (status = 409, description = "Active FEM topology is malformed"),
         (status = 416, description = "Requested topology byte range is not satisfiable"),
         (status = 204, description = "No FEM mesh available"),
         (status = 404, description = "No active workspace"),
@@ -1730,16 +1870,17 @@ pub async fn get_mesh_shared_domain_topology(
     let snapshot = current_snapshot(&state).await?;
     match snapshot.fem_mesh.as_ref() {
         Some(mesh) => {
-            let binary = serialize_fem_mesh_topology_binary_v1(mesh).map_err(ApiError::conflict)?;
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
             let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
             let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
                 "mesh-shared-domain-topology:{generation_id}:{topology_hash}:{}",
                 snapshot.mesh_revision,
             ));
-            let mut response = crate::router_v2::handlers::shared::conditional_binary_response(
-                &headers, &etag, binary,
-            );
+            let mut response =
+                crate::router_v2::handlers::shared::conditional_fem_topology_response(
+                    &state, &headers, &etag, mesh,
+                )
+                .map_err(ApiError::conflict)?;
             crate::router_v2::handlers::shared::insert_mesh_topology_hash_header(
                 &mut response,
                 &topology_hash,
@@ -2009,10 +2150,10 @@ pub async fn get_mesh_object_size_field(
         ("object_id" = String, Path, description = "Canonical scene object id")
     ),
     responses(
-        (status = 200, description = "Binary per-object FEM topology (FMMT)", content_type = "application/octet-stream"),
-        (status = 206, description = "Partial per-object FEM topology range (FMMT)", content_type = "application/octet-stream"),
+        (status = 200, description = "Binary per-object FEM topology (FMMT v2)", content_type = "application/octet-stream"),
+        (status = 206, description = "Partial per-object FEM topology range (FMMT v2)", content_type = "application/octet-stream"),
         (status = 304, description = "Per-object topology not modified for the supplied ETag"),
-        (status = 409, description = "FMMT v1 cannot represent the selected mixed or malformed FEM topology"),
+        (status = 409, description = "Selected FEM topology is malformed"),
         (status = 416, description = "Requested topology byte range is not satisfiable"),
         (status = 204, description = "No FEM mesh available"),
         (status = 404, description = "No active workspace or object mesh"),
@@ -2032,17 +2173,20 @@ pub async fn get_mesh_object_topology(
                 .ok_or_else(|| {
                     ApiError::not_found(format!("object mesh not found: {object_id}"))
                 })?;
-            let binary =
-                serialize_fem_mesh_topology_binary_v1(&object_mesh).map_err(ApiError::conflict)?;
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
             let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(&object_mesh);
             let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
                 "mesh-object-topology:{object_id}:{generation_id}:{topology_hash}:{}",
                 snapshot.mesh_revision,
             ));
-            let mut response = crate::router_v2::handlers::shared::conditional_binary_response(
-                &headers, &etag, binary,
-            );
+            let mut response =
+                crate::router_v2::handlers::shared::conditional_fem_topology_response(
+                    &state,
+                    &headers,
+                    &etag,
+                    &object_mesh,
+                )
+                .map_err(ApiError::conflict)?;
             crate::router_v2::handlers::shared::insert_mesh_topology_hash_header(
                 &mut response,
                 &topology_hash,
@@ -2062,10 +2206,10 @@ pub async fn get_mesh_object_topology(
         ("part_id" = String, Path, description = "Stable FEM mesh part id, for example an airbox part")
     ),
     responses(
-        (status = 200, description = "Binary per-part FEM topology (FMMT)", content_type = "application/octet-stream"),
-        (status = 206, description = "Partial per-part FEM topology range (FMMT)", content_type = "application/octet-stream"),
+        (status = 200, description = "Binary per-part FEM topology (FMMT v2)", content_type = "application/octet-stream"),
+        (status = 206, description = "Partial per-part FEM topology range (FMMT v2)", content_type = "application/octet-stream"),
         (status = 304, description = "Per-part topology not modified for the supplied ETag"),
-        (status = 409, description = "FMMT v1 cannot represent the selected mixed or malformed FEM topology"),
+        (status = 409, description = "Selected FEM topology is malformed"),
         (status = 416, description = "Requested topology byte range is not satisfiable"),
         (status = 204, description = "No FEM mesh available"),
         (status = 404, description = "No active workspace or mesh part"),
@@ -2083,17 +2227,17 @@ pub async fn get_mesh_part_topology(
             let part_mesh = subset_part_mesh(mesh, &part_id)
                 .map_err(ApiError::conflict)?
                 .ok_or_else(|| ApiError::not_found(format!("mesh part not found: {part_id}")))?;
-            let binary =
-                serialize_fem_mesh_topology_binary_v1(&part_mesh).map_err(ApiError::conflict)?;
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
             let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(&part_mesh);
             let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
                 "mesh-part-topology:{part_id}:{generation_id}:{topology_hash}:{}",
                 snapshot.mesh_revision,
             ));
-            let mut response = crate::router_v2::handlers::shared::conditional_binary_response(
-                &headers, &etag, binary,
-            );
+            let mut response =
+                crate::router_v2::handlers::shared::conditional_fem_topology_response(
+                    &state, &headers, &etag, &part_mesh,
+                )
+                .map_err(ApiError::conflict)?;
             crate::router_v2::handlers::shared::insert_mesh_topology_hash_header(
                 &mut response,
                 &topology_hash,

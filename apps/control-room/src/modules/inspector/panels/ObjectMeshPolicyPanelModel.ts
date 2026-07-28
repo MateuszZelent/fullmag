@@ -40,6 +40,7 @@ export interface ObjectMeshPolicyDraft {
   edgeMaximumElementSize: string;
   edgeThickness: string;
   edgeTransitionDistance: string;
+  exactLayerCount: string;
   interfaceMaximumElementSize: string;
   interfaceThickness: string;
   manualBoxSizeFieldEnabled: boolean;
@@ -76,8 +77,134 @@ export interface ObjectMeshPolicyDraft {
   throughThicknessElementRatio: string;
   throughThicknessElements: string;
   throughThicknessSymmetric: string;
+  topology: string;
   transitionDistance: string;
   transitionGrowth: string;
+  transitionPolicy: string;
+}
+
+export interface ObjectMeshTopologyCapabilityOption {
+  enabled: boolean;
+  reason: string;
+  status: string;
+}
+
+export interface ObjectMeshTopologyCapabilities {
+  layeredPrism: ObjectMeshTopologyCapabilityOption;
+  sweptHex: ObjectMeshTopologyCapabilityOption;
+}
+
+const LAYERED_PRISM_CAPABILITY_IDS = [
+  "mesh.topology.mixed_p1",
+  "mesh.swept.prism",
+  "mesh.transition.pyramid_tet",
+  "mesh.exact_layer_count",
+] as const;
+
+const LAYERED_PRISM_EXECUTABLE_STATUSES = new Set([
+  "production_executable",
+  "validated",
+]);
+
+function capabilityRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function capabilityValue(capabilities: unknown, id: string): unknown {
+  const root = capabilityRecord(capabilities);
+  if (!root) return undefined;
+  if (root[id] !== undefined) return root[id];
+  let current: unknown = root;
+  for (const segment of id.split(".")) {
+    current = capabilityRecord(current)?.[segment];
+    if (current === undefined) return undefined;
+  }
+  return current;
+}
+
+function capabilityStatus(value: unknown): string {
+  if (value === false) return "unsupported";
+  const status = capabilityRecord(value)?.status;
+  return typeof status === "string" ? status : "unavailable";
+}
+
+function capabilityReason(value: unknown, id: string, status: string): string {
+  const record = capabilityRecord(value);
+  for (const key of ["reason", "capability_reason", "disabled_reason"]) {
+    const reason = record?.[key];
+    if (typeof reason === "string" && reason.trim()) return reason;
+  }
+  return status === "unavailable"
+    ? `Capability ${id} is not advertised by the meshing resource.`
+    : `Capability ${id} is ${status}.`;
+}
+
+export function resolveObjectMeshTopologyCapabilities(
+  resource: { mesh_capabilities?: unknown } | null | undefined,
+): ObjectMeshTopologyCapabilities {
+  const capabilities = resource?.mesh_capabilities;
+  for (const id of LAYERED_PRISM_CAPABILITY_IDS) {
+    const value = capabilityValue(capabilities, id);
+    const status = capabilityStatus(value);
+    if (!LAYERED_PRISM_EXECUTABLE_STATUSES.has(status)) {
+      return {
+        layeredPrism: {
+          enabled: false,
+          reason: capabilityReason(value, id, status),
+          status,
+        },
+        sweptHex: {
+          enabled: false,
+          reason: "Swept hex has not passed the mixed-P1 capability gate.",
+          status: "unsupported",
+        },
+      };
+    }
+  }
+  return {
+    layeredPrism: {
+      enabled: true,
+      reason: "All exact layered prism capabilities are executable.",
+      status: "validated",
+    },
+    sweptHex: {
+      enabled: false,
+      reason: "Swept hex has not passed the mixed-P1 capability gate.",
+      status: "unsupported",
+    },
+  };
+}
+
+export function nodePlaneCount(layerText: string): number | null {
+  const layers = Number(layerText);
+  return Number.isInteger(layers) && layers > 0 ? layers + 1 : null;
+}
+
+function requestsExactLayeredPrism(config: JsonObject): boolean {
+  return (
+    config.mesh_strategy === "swept_prism" ||
+    config.topology === "prismatic" ||
+    config.element_family === "prism" ||
+    config.exact_layer_count === true
+  );
+}
+
+export function validateObjectMeshTopologyCapabilities(
+  draft: ObjectMeshPolicyDraft,
+  capabilities: ObjectMeshTopologyCapabilities,
+): string | null {
+  const rawConfig = parseConfig(draft.configText);
+  const built = buildObjectMeshPolicyReplaceRequest(draft);
+  const rawRequestsMixed = rawConfig.ok && requestsExactLayeredPrism(rawConfig.value);
+  const builtRequestsMixed =
+    "request" in built &&
+    built.request.config !== null &&
+    requestsExactLayeredPrism(built.request.config ?? {});
+  if (!rawRequestsMixed && !builtRequestsMixed) return null;
+  if (capabilities.layeredPrism.enabled) return null;
+  return `Exact layered prism authoring is unavailable: ${capabilities.layeredPrism.reason}`;
 }
 
 export function formatObjectMeshPolicyConfig(
@@ -144,6 +271,7 @@ export function draftFromObjectMeshPolicyResource(
     edgeTransitionDistance: readTransitionDistanceText(
       config.edge_transition_distance,
     ),
+    exactLayerCount: readBooleanText(config.exact_layer_count),
     interfaceMaximumElementSize: readNumberText(
       config.interface_hmax ?? config.interface_maximum_element_size,
     ),
@@ -187,8 +315,10 @@ export function draftFromObjectMeshPolicyResource(
     ),
     throughThicknessElements: readNumberText(config.through_thickness_elements),
     throughThicknessSymmetric: readBooleanText(config.through_thickness_symmetric),
+    topology: readStringText(config.topology),
     transitionDistance: readTransitionDistanceText(config.transition_distance),
     transitionGrowth: readNumberText(config.transition_growth),
+    transitionPolicy: readStringText(config.transition_policy),
   };
 }
 
@@ -286,6 +416,7 @@ export function buildObjectMeshPolicyReplaceRequest({
   edgeMaximumElementSize,
   edgeThickness,
   edgeTransitionDistance,
+  exactLayerCount,
   interfaceMaximumElementSize,
   interfaceThickness,
   manualBoxSizeFieldEnabled,
@@ -322,8 +453,10 @@ export function buildObjectMeshPolicyReplaceRequest({
   throughThicknessElementRatio,
   throughThicknessElements,
   throughThicknessSymmetric,
+  topology,
   transitionDistance,
   transitionGrowth,
+  transitionPolicy,
 }: ObjectMeshPolicyDraft):
   | { error: string }
   | { request: MeshObjectConfigReplaceRequest } {
@@ -439,6 +572,8 @@ export function buildObjectMeshPolicyReplaceRequest({
   );
 
   applyOptionalString(value, "mesh_strategy", meshStrategy);
+  applyOptionalString(value, "topology", topology);
+  applyOptionalString(value, "transition_policy", transitionPolicy);
   applyOptionalString(value, "optimize", optimize);
   applyOptionalString(value, "source", source);
   applyOptionalString(
@@ -456,6 +591,20 @@ export function buildObjectMeshPolicyReplaceRequest({
     "through_thickness_symmetric",
     throughThicknessSymmetric,
   );
+  applyOptionalBoolean(value, "exact_layer_count", exactLayerCount);
+  if (meshStrategy === "swept_prism") {
+    value.topology = "prismatic";
+    value.element_family = "prism";
+    value.sweep_direction = "auto";
+    value.transition_policy = "pyramid_to_tetrahedra";
+    value.exact_layer_count = true;
+  } else if (meshStrategy === "free_tetrahedral") {
+    value.topology = "tetrahedral";
+    delete value.element_family;
+    delete value.sweep_direction;
+    delete value.transition_policy;
+    delete value.exact_layer_count;
+  }
   applyOptionalBoolean(value, "compute_quality", computeQuality);
   applyOptionalBoolean(value, "per_element_quality", perElementQuality);
   const surfaceTags = parseIntegerList(

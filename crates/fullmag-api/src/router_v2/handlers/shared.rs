@@ -1,6 +1,6 @@
 use std::collections::{BTreeSet, HashMap};
 
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::http::header::{
     ACCEPT_RANGES, CACHE_CONTROL, CONTENT_RANGE, CONTENT_TYPE, ETAG, IF_NONE_MATCH, RANGE,
 };
@@ -39,6 +39,14 @@ pub(crate) fn mesh_part_surface_faces(
     part: &FemMeshPartPayload,
     facet_index: &FacetGlobalOrdinalIndex,
 ) -> Option<Vec<Vec<u32>>> {
+    mesh_part_surface_faces_with_indices(mesh, part, facet_index).map(|(_, faces)| faces)
+}
+
+pub(crate) fn mesh_part_surface_faces_with_indices(
+    mesh: &FemMeshPayload,
+    part: &FemMeshPartPayload,
+    facet_index: &FacetGlobalOrdinalIndex,
+) -> Option<(Vec<u32>, Vec<Vec<u32>>)> {
     let face_indices = if !part.facet_global_ordinals.is_empty() {
         let mut indices = Vec::with_capacity(part.facet_global_ordinals.len());
         for global_ordinal in &part.facet_global_ordinals {
@@ -58,10 +66,17 @@ pub(crate) fn mesh_part_surface_faces(
         return None;
     };
 
-    face_indices
+    let resolved_indices = face_indices
+        .iter()
+        .copied()
+        .map(u32::try_from)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    let faces = face_indices
         .into_iter()
         .map(|index| mesh.facets.item_nodes(index).map(<[u32]>::to_vec))
-        .collect()
+        .collect::<Option<Vec<_>>>()?;
+    Some((resolved_indices, faces))
 }
 
 pub(crate) fn mesh_part_surface_node_indices(
@@ -125,6 +140,15 @@ pub(crate) fn conditional_binary_response_with_content_type(
     body: Vec<u8>,
     content_type: HeaderValue,
 ) -> Response {
+    conditional_binary_bytes_response(headers, etag, Bytes::from(body), content_type)
+}
+
+fn conditional_binary_bytes_response(
+    headers: &HeaderMap,
+    etag: &str,
+    body: Bytes,
+    content_type: HeaderValue,
+) -> Response {
     let mut response = if if_none_match_matches(headers, etag) {
         let mut response = Response::new(Body::empty());
         *response.status_mut() = StatusCode::NOT_MODIFIED;
@@ -132,7 +156,7 @@ pub(crate) fn conditional_binary_response_with_content_type(
     } else if let Some(range_header) = headers.get(RANGE).and_then(|value| value.to_str().ok()) {
         match parse_single_byte_range(range_header, body.len()) {
             Some((start, end)) => {
-                let mut response = Response::new(Body::from(body[start..=end].to_vec()));
+                let mut response = Response::new(Body::from(body.slice(start..end + 1)));
                 *response.status_mut() = StatusCode::PARTIAL_CONTENT;
                 response.headers_mut().insert(CONTENT_TYPE, content_type);
                 if let Ok(value) =
@@ -168,6 +192,39 @@ pub(crate) fn conditional_binary_response_with_content_type(
         .headers_mut()
         .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     response
+}
+
+pub(crate) fn conditional_fem_topology_response(
+    state: &crate::types::AppState,
+    headers: &HeaderMap,
+    etag: &str,
+    mesh: &FemMeshPayload,
+) -> Result<Response, String> {
+    if if_none_match_matches(headers, etag) {
+        return Ok(conditional_binary_bytes_response(
+            headers,
+            etag,
+            Bytes::new(),
+            HeaderValue::from_static("application/octet-stream"),
+        ));
+    }
+
+    let body = {
+        let mut cache = state
+            .quantity_data_plane
+            .topology_cache
+            .lock()
+            .map_err(|_| "FMMT topology cache lock poisoned".to_string())?;
+        cache.get_or_try_insert_with(etag, || {
+            crate::field_store::serialize_fem_mesh_topology_binary_v2(mesh)
+        })?
+    };
+    Ok(conditional_binary_bytes_response(
+        headers,
+        etag,
+        Bytes::from_owner(body),
+        HeaderValue::from_static("application/octet-stream"),
+    ))
 }
 
 fn parse_single_byte_range(raw: &str, len: usize) -> Option<(usize, usize)> {

@@ -49,11 +49,34 @@ export interface DecodedComplexFieldVector {
 }
 
 export interface DecodedTopology {
+  /** Canonical CSR cell count. */
+  cellCount?: number;
+  /** Canonical Fullmag cell type codes: 1=tet4, 2=prism6, 3=pyramid5, 4=hex8. */
+  cellTypes?: Uint32Array;
+  cellOffsets?: Uint32Array;
+  cellNodes?: Uint32Array;
+  cellMarkers?: Uint32Array;
+  /** Canonical CSR facet count. */
+  facetCount?: number;
+  /** Canonical Fullmag facet type codes: 1=tri3, 2=quad4. */
+  facetTypes?: Uint32Array;
+  /** Canonical facet role codes: 1=exterior, 2=material_interface, 3=periodic_seam. */
+  facetRoles?: Uint32Array;
+  facetOffsets?: Uint32Array;
+  facetNodes?: Uint32Array;
+  facetMarkers?: Uint32Array;
+  formatVersion?: 1 | 2;
+  /** @deprecated Use facetCount. Kept during the FMMT v1 migration window. */
   boundaryFaceCount: number;
+  /** @deprecated Use facetNodes. Kept during the FMMT v1 migration window. */
   boundaryFaces: Uint32Array;
+  /** @deprecated Use facetMarkers. Kept during the FMMT v1 migration window. */
   boundaryMarkers: Uint32Array;
+  /** @deprecated Use cellCount. Kept during the FMMT v1 migration window. */
   elementCount: number;
+  /** @deprecated Use cellMarkers. Kept during the FMMT v1 migration window. */
   elementMarkers: Uint32Array;
+  /** @deprecated Use cellNodes. Kept during the FMMT v1 migration window. */
   indices: Uint32Array;
   nodeCount: number;
   positions: Float64Array;

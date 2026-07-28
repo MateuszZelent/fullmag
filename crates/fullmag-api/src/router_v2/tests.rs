@@ -2548,9 +2548,11 @@ async fn domain_topology_supports_byte_ranges_for_large_topology_payloads() {
         snapshot.fem_mesh = Some(sample_fem_mesh_payload());
         snapshot.mesh_revision = 18;
     }
+    let cache_state = state.clone();
     let app = build_v2_router().with_state(state);
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v2/sessions/current/data/domain/topology")
@@ -2574,10 +2576,70 @@ async fn domain_topology_supports_byte_ranges_for_large_topology_payloads() {
             .headers()
             .get("content-range")
             .and_then(|value| value.to_str().ok()),
-        Some("bytes 0-3/164")
+        Some("bytes 0-3/244")
     );
     let body = body_bytes(response).await;
     assert_eq!(&body[..], b"FMMT");
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/topology")
+                .header("range", "bytes=64-71")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        cache_state
+            .quantity_data_plane
+            .topology_cache
+            .lock()
+            .expect("topology cache lock")
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn domain_topology_matching_etag_does_not_populate_binary_cache() {
+    let state = test_app_state_with_live_session().await;
+    let mesh = sample_fem_mesh_payload();
+    let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(&mesh);
+    let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
+    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+        "domain-topology:{generation_id}:{topology_hash}:19"
+    ));
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_revision = 19;
+    }
+    let cache_state = state.clone();
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/topology")
+                .header("if-none-match", etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(
+        cache_state
+            .quantity_data_plane
+            .topology_cache
+            .lock()
+            .expect("topology cache lock")
+            .len(),
+        0
+    );
 }
 
 #[tokio::test]
@@ -5829,6 +5891,266 @@ async fn mesh_semantics_returns_three_level_projection() {
 }
 
 #[tokio::test]
+async fn mesh_capabilities_replace_stale_workspace_mixed_features_fail_closed() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "mesh_capabilities": {
+                "has_volume_mesh": true,
+                "mesh.topology.mixed_p1": { "status": "production_executable" },
+                "mesh.swept.prism": { "status": "production_executable" },
+                "mesh.transition.pyramid_tet": { "status": "production_executable" },
+                "mesh.exact_layer_count": { "status": "production_executable" }
+            }
+        }));
+        snapshot.capabilities = Some(
+            serde_json::from_value(serde_json::json!({
+                "engine_id": "fem_cpu_native",
+                "capability_profile_version": "2026-07-28",
+                "supported_terms": [],
+                "feature_capabilities": {
+                    "mesh.topology.mixed_p1": {
+                        "status": "semantic_only",
+                        "reason": "native mixed-P1 execution is not advertised",
+                        "scope": "conforming P1"
+                    },
+                    "mesh.swept.prism": {
+                        "status": "semantic_only",
+                        "reason": "native mixed-P1 execution is not advertised",
+                        "scope": "prism6 magnetic cells"
+                    },
+                    "mesh.transition.pyramid_tet": {
+                        "status": "semantic_only",
+                        "reason": "native mixed-P1 execution is not advertised",
+                        "scope": "pyramid5 transition and tet4 far air"
+                    },
+                    "fem.cpu.exchange_demag.mixed_p1": {
+                        "status": "unsupported",
+                        "reason": "operator unavailable",
+                        "scope": "cpu"
+                    }
+                },
+                "supported_demag_realizations": [],
+                "preview_quantities": [],
+                "snapshot_quantities": [],
+                "scalar_outputs": [],
+                "approximate_operators": [],
+                "supports_frequency_response": false,
+                "supports_coupled_magnetoelastic_quasistatic": false,
+                "supports_coupled_magnetoelastic_elastodynamic": false,
+                "supports_frequency_domain_elastodynamics": false,
+                "supports_coupled_eigenmodes": false,
+                "supports_lossy_fallback_override": false
+            }))
+            .expect("backend capabilities fixture should deserialize"),
+        );
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/capabilities")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let capabilities = json["mesh_capabilities"]
+        .as_object()
+        .expect("mesh capabilities should be an object");
+    assert_eq!(capabilities["has_volume_mesh"], true);
+    for id in [
+        "mesh.topology.mixed_p1",
+        "mesh.swept.prism",
+        "mesh.transition.pyramid_tet",
+    ] {
+        assert_eq!(capabilities[id]["status"], "semantic_only", "{id}");
+        assert!(capabilities[id]["reason"].is_string(), "{id}");
+        assert!(capabilities[id]["scope"].is_string(), "{id}");
+    }
+    assert!(!capabilities.contains_key("mesh.exact_layer_count"));
+    assert!(!capabilities.contains_key("fem.cpu.exchange_demag.mixed_p1"));
+}
+
+#[tokio::test]
+async fn mixed_shared_domain_resources_publish_typed_topology_truth() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+        ))
+        .expect("mixed certificate fixture should parse");
+        let mut mesh = sample_fem_mesh_payload_with_manifest();
+        mesh.build_report = Some(
+            serde_json::from_value(serde_json::json!({
+                "build_mode": "component_aware",
+                "fallbacks_triggered": [],
+                "mixed_layer_topology_certificate": fixture["certificate"].clone(),
+                "mixed_topology_provenance": {
+                    "requested_topology": "mixed_p1",
+                    "resolved_topology": "mixed_p1",
+                    "accepted_certificate_fingerprint": fixture["certificate"]["topology_fingerprint"].clone(),
+                    "requested_device": "auto",
+                    "precision": "double",
+                    "capability_status": "semantic_only"
+                }
+            }))
+            .expect("mixed build report fixture should deserialize"),
+        );
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.capabilities = Some(
+            serde_json::from_value(serde_json::json!({
+                "engine_id": "fem_cpu_native",
+                "capability_profile_version": "2026-07-28",
+                "supported_terms": [],
+                "feature_capabilities": {
+                    "mesh.topology.mixed_p1": {
+                        "status": "semantic_only",
+                        "reason": "native mixed-P1 execution is not advertised",
+                        "scope": "conforming P1"
+                    }
+                },
+                "supported_demag_realizations": [],
+                "preview_quantities": [],
+                "snapshot_quantities": [],
+                "scalar_outputs": [],
+                "approximate_operators": [],
+                "supports_frequency_response": false,
+                "supports_coupled_magnetoelastic_quasistatic": false,
+                "supports_coupled_magnetoelastic_elastodynamic": false,
+                "supports_frequency_domain_elastodynamics": false,
+                "supports_coupled_eigenmodes": false,
+                "supports_lossy_fallback_override": false
+            }))
+            .expect("backend capabilities fixture should deserialize"),
+        );
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "mesh_summary": { "mesh_name": "test-mesh" }
+        }));
+        snapshot.mesh_revision = 91;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let report_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/semantics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(report_response.status(), StatusCode::OK);
+    let report_json = body_json(report_response).await;
+    let report = &report_json["solver_mesh"]["build_report"];
+    assert_eq!(report["topology_schema_version"], 2);
+    assert_eq!(report["element_counts_by_type"]["prism6"], 2);
+    assert_eq!(report["element_counts_by_type"]["pyramid5"], 4);
+    assert_eq!(report["element_counts_by_type"]["tet4"], 8);
+    assert_eq!(
+        report["facet_counts_by_type_and_role"]["exterior"]["tri3"],
+        38
+    );
+    assert_eq!(report["requested_layered_policy"]["layers"], 1);
+    assert_eq!(report["resolved_layered_policy"]["layers"], 1);
+    assert_eq!(
+        report["mixed_layer_topology_certificate"]["certificate_status"],
+        "accepted"
+    );
+    assert_eq!(
+        report["mixed_layer_topology_certificate"]["actual_node_plane_count"],
+        2
+    );
+    assert_eq!(report["gmsh_version"], "4.15.2");
+    assert_eq!(report["fallbacks_triggered"], serde_json::json!([]));
+    assert_eq!(
+        report["mixed_topology_provenance"]["requested_topology"],
+        "mixed_p1"
+    );
+    assert_eq!(
+        report["mixed_topology_provenance"]["capability_reason"],
+        "native mixed-P1 execution is not advertised"
+    );
+
+    let manifest_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/manifest")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(manifest_response.status(), StatusCode::OK);
+    let manifest = body_json(manifest_response).await;
+    assert_eq!(manifest["topology_schema_version"], 2);
+    assert_eq!(manifest["element_counts_by_type"]["prism6"], 2);
+    assert_eq!(manifest["element_counts_by_type"]["pyramid5"], 4);
+    assert_eq!(manifest["element_counts_by_type"]["tet4"], 8);
+    assert_eq!(manifest["gmsh_version"], "4.15.2");
+    assert_eq!(manifest["fallbacks_triggered"], serde_json::json!([]));
+    assert_eq!(
+        manifest["mixed_topology_provenance"]["capability_reason"],
+        "native mixed-P1 execution is not advertised"
+    );
+    let airbox = manifest["mesh_parts"]
+        .as_array()
+        .and_then(|parts| parts.iter().find(|part| part["id"] == "airbox"))
+        .expect("airbox part should be present");
+    assert_eq!(airbox["element_counts_by_type"]["pyramid5"], 4);
+    assert_eq!(airbox["element_counts_by_type"]["tet4"], 8);
+    assert!(manifest.get("cells").is_none());
+    assert!(manifest.get("connectivity").is_none());
+}
+
+#[tokio::test]
+async fn mesh_active_build_publishes_mixed_layer_rejection_evidence() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "last_build_summary": {
+                "kind": "mesh_build_failed",
+                "mixed_layer_topology_rejection": {
+                    "schema_version": "mixed_layer_topology_rejection.v1",
+                    "certificate_status": "rejected",
+                    "requested_layer_count": 1,
+                    "rejection_reason": "resolved 2 layers"
+                }
+            },
+            "last_build_error": "resolved 2 layers"
+        }));
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/builds/current")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(
+        json["mixed_layer_topology_rejection"]["certificate_status"],
+        "rejected"
+    );
+    assert_eq!(
+        json["mixed_layer_topology_rejection"]["rejection_reason"],
+        "resolved 2 layers"
+    );
+}
+
+#[tokio::test]
 async fn mesh_semantics_returns_404_without_scene_document() {
     let app = test_router_with_session().await;
     let response = app
@@ -6876,7 +7198,7 @@ async fn mesh_shared_domain_topology_returns_binary_fmmt_payload() {
 }
 
 #[tokio::test]
-async fn all_fmmt_v1_topology_routes_reject_mixed_cells() {
+async fn all_fmmt_v2_topology_routes_serve_mixed_cells() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         let mut mesh = sample_fem_mesh_payload_with_manifest();
@@ -6904,17 +7226,32 @@ async fn all_fmmt_v1_topology_routes_reject_mixed_cells() {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::CONFLICT, "{uri}");
-        let body = body_json(response).await;
-        assert!(
-            body.to_string().contains("FMMT v1 requires tet4 topology"),
+        assert_eq!(response.status(), StatusCode::OK, "{uri}");
+        let body = body_bytes(response).await;
+        assert_eq!(&body[0..4], b"FMMT", "{uri}");
+        assert_eq!(body[4], 2, "{uri}");
+        assert_eq!(
+            u32::from_le_bytes(body[12..16].try_into().unwrap()),
+            1,
+            "{uri}"
+        );
+
+        let node_count = u32::from_le_bytes(body[8..12].try_into().unwrap()) as usize;
+        let cell_types_offset = 64 + node_count * 3 * std::mem::size_of::<f64>();
+        assert_eq!(
+            u32::from_le_bytes(
+                body[cell_types_offset..cell_types_offset + 4]
+                    .try_into()
+                    .unwrap()
+            ),
+            2,
             "{uri}"
         );
     }
 }
 
 #[test]
-fn openapi_documents_conflict_for_all_fmmt_v1_topology_routes() {
+fn openapi_documents_malformed_topology_without_claiming_fmmt_v1_limitations() {
     let openapi = crate::openapi_v2::openapi_json();
     for path in [
         "/v2/sessions/current/data/domain/topology",
@@ -6922,21 +7259,31 @@ fn openapi_documents_conflict_for_all_fmmt_v1_topology_routes() {
         "/v2/sessions/current/meshing/meshes/objects/{object_id}/topology",
         "/v2/sessions/current/meshing/meshes/parts/{part_id}/topology",
     ] {
+        let responses = &openapi["paths"][path]["get"]["responses"];
+        assert!(responses
+            .as_object()
+            .is_some_and(|responses| responses.contains_key("409")));
         assert!(
-            openapi["paths"][path]["get"]["responses"]
-                .as_object()
-                .is_some_and(|responses| responses.contains_key("409")),
-            "missing 409 response for {path}"
+            responses["200"]["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("FMMT v2")),
+            "missing FMMT v2 success contract for {path}"
+        );
+        assert!(
+            !responses["409"]["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("FMMT v1")),
+            "stale FMMT v1 limitation documented for {path}"
         );
     }
 }
 
 #[tokio::test]
-async fn fmmt_v1_topology_routes_reject_malformed_csr_instead_of_truncating() {
+async fn fmmt_v2_topology_routes_reject_malformed_csr_instead_of_truncating() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         let mut mesh = sample_fem_mesh_payload();
-        mesh.cells.global_ordinals.clear();
+        mesh.cells.offsets[1] = 3;
         snapshot.fem_mesh = Some(mesh);
     }
     let app = build_v2_router().with_state(state);
@@ -6976,7 +7323,7 @@ async fn scoped_topology_routes_distinguish_missing_resources_from_malformed_top
     let malformed_state = test_app_state_with_live_session().await;
     if let Some(snapshot) = malformed_state.current_live_state.write().await.as_mut() {
         let mut mesh = sample_fem_mesh_payload_with_manifest();
-        mesh.cells.global_ordinals.clear();
+        mesh.cells.offsets[1] = 3;
         snapshot.fem_mesh = Some(mesh);
     }
     let malformed_app = build_v2_router().with_state(malformed_state);
@@ -7324,6 +7671,37 @@ async fn mesh_shared_domain_manifest_includes_topology_fingerprint() {
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["topology_fingerprint"], expected_hash);
+    assert!(json.get("fallbacks_triggered").is_none());
+}
+
+#[tokio::test]
+async fn mesh_shared_domain_manifest_omits_unpublished_fallback_evidence() {
+    let state = test_app_state_with_live_session().await;
+    let mut mesh = sample_fem_mesh_payload_with_manifest();
+    mesh.build_report = Some(
+        serde_json::from_value(serde_json::json!({
+            "build_mode": "component_aware"
+        }))
+        .expect("legacy build report should deserialize"),
+    );
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/manifest")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert!(json.get("fallbacks_triggered").is_none());
 }
 
 #[tokio::test]
@@ -7359,13 +7737,17 @@ async fn mesh_shared_domain_manifest_projects_quad_surface_faces_without_interna
     let state = test_app_state_with_live_session().await;
     let mut mesh = sample_fem_mesh_payload_with_manifest();
     mesh.facets = fullmag_ir::FemFacetConnectivityIR {
-        types: vec![fullmag_ir::FemFacetTypeIR::Quad4],
-        roles: vec![fullmag_ir::FemFacetRoleIR::MaterialInterface],
-        offsets: vec![0, 4],
-        nodes: vec![0, 1, 2, 3],
-        global_ordinals: vec![700],
+        types: vec![fullmag_ir::FemFacetTypeIR::Quad4; 2],
+        roles: vec![fullmag_ir::FemFacetRoleIR::MaterialInterface; 2],
+        offsets: vec![0, 4, 8],
+        nodes: vec![0, 1, 2, 3, 3, 2, 1, 0],
+        global_ordinals: vec![700, 12],
     };
-    mesh.mesh_parts[1].facet_global_ordinals = vec![700];
+    mesh.boundary_markers = vec![1, 2];
+    mesh.mesh_parts[1].boundary_face_indices.clear();
+    mesh.mesh_parts[1].boundary_face_start = 99;
+    mesh.mesh_parts[1].boundary_face_count = 2;
+    mesh.mesh_parts[1].facet_global_ordinals = vec![12, 700];
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.fem_mesh = Some(mesh);
     }
@@ -7385,7 +7767,11 @@ async fn mesh_shared_domain_manifest_projects_quad_surface_faces_without_interna
     let json = body_json(response).await;
     assert_eq!(
         json["mesh_parts"][1]["surface_faces"],
-        serde_json::json!([[0, 1, 2, 3]])
+        serde_json::json!([[3, 2, 1, 0], [0, 1, 2, 3]])
+    );
+    assert_eq!(
+        json["mesh_parts"][1]["boundary_face_indices"],
+        serde_json::json!([1, 0])
     );
     assert!(json["mesh_parts"][1]
         .as_object()
@@ -7399,7 +7785,48 @@ fn openapi_mesh_part_schema_keeps_surface_faces_and_hides_internal_facet_ids() {
         .as_object()
         .expect("MeshPartResource properties");
     assert!(properties.contains_key("surface_faces"));
+    assert!(properties.contains_key("element_counts_by_type"));
     assert!(!properties.contains_key("facet_global_ordinals"));
+}
+
+#[test]
+fn openapi_registers_typed_mixed_topology_truth_fields() {
+    let openapi = crate::openapi_v2::openapi_json();
+    let schemas = openapi["components"]["schemas"]
+        .as_object()
+        .expect("OpenAPI schemas");
+    for schema in [
+        "MeshLayeredPolicyResource",
+        "MeshMixedLayerTopologyCertificateSummaryResource",
+        "MeshMixedLayerTopologyRejectionResource",
+        "MeshMixedTopologyProvenanceResource",
+        "MeshSharedDomainBuildReportResource",
+    ] {
+        assert!(schemas.contains_key(schema), "missing schema {schema}");
+    }
+    let manifest = schemas["MeshSharedDomainManifestResource"]["properties"]
+        .as_object()
+        .expect("manifest properties");
+    for field in [
+        "topology_schema_version",
+        "element_counts_by_type",
+        "facet_counts_by_type_and_role",
+        "requested_layered_policy",
+        "resolved_layered_policy",
+        "mixed_layer_topology_certificate",
+        "mixed_topology_provenance",
+        "gmsh_version",
+        "fallbacks_triggered",
+    ] {
+        assert!(
+            manifest.contains_key(field),
+            "missing manifest field {field}"
+        );
+    }
+    let active_build = schemas["MeshActiveBuildResource"]["properties"]
+        .as_object()
+        .expect("active build properties");
+    assert!(active_build.contains_key("mixed_layer_topology_rejection"));
 }
 
 #[tokio::test]
@@ -26489,7 +26916,7 @@ async fn v2_mesh_part_topology_returns_scoped_mesh() {
         &(1u32).to_le_bytes(),
         "airbox topology elements"
     );
-    let full_len = crate::field_store::serialize_fem_mesh_topology_binary_v1(
+    let full_len = crate::field_store::serialize_fem_mesh_topology_binary_v2(
         &sample_scoped_fem_mesh_payload(),
     )
     .unwrap()

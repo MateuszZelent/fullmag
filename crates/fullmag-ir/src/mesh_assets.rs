@@ -2612,8 +2612,8 @@ fn mesh_has_mixed_topology(mesh: &MeshIR) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FemSharedDomainBuildReportIR {
     pub build_mode: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub fallbacks_triggered: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallbacks_triggered: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effective_airbox_target: Option<FemAirboxTargetIR>,
     #[serde(

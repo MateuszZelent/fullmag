@@ -30,6 +30,26 @@ import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRende
 import { resolveViewport3DScalarColorBufferKey } from "../viewport3dFieldMapping";
 
 describe("MeshPartLayer", () => {
+  it("maps both render triangles of a quad back to the same global facet", () => {
+    const part = {
+      boundary_face_count: 2,
+      boundary_face_start: 7,
+    };
+    const mapping = new Uint32Array([7, 8, 8]);
+
+    expect(resolveMeshPartBoundaryFaceIndexForPick({
+      expandedSurfaceFaces: false,
+      faceIndex: 1,
+      part,
+      surfaceTriangleFacetIndices: mapping,
+    })).toBe(8);
+    expect(resolveMeshPartBoundaryFaceIndexForPick({
+      expandedSurfaceFaces: false,
+      faceIndex: 2,
+      part,
+      surfaceTriangleFacetIndices: mapping,
+    })).toBe(8);
+  });
   it("changes scalar upload retention identity when the requested field appearance changes", () => {
     const key = ({
       mode = "orientation",
@@ -342,17 +362,17 @@ describe("MeshPartLayer", () => {
     ).toBe("indexed");
   });
 
-  it("maps face-expanded picks back to canonical boundary face indices", () => {
+  it("requires positional facet mapping for face-expanded picks", () => {
     expect(
       resolveMeshPartBoundaryFaceIndexForPick({
         expandedSurfaceFaces: true,
-        faceIndex: 1,
+        faceIndex: 2,
         part: {
           boundary_face_count: 2,
           boundary_face_start: 7,
         },
       }),
-    ).toBe(8);
+    ).toBeNull();
     expect(
       resolveMeshPartBoundaryFaceIndexForPick({
         expandedSurfaceFaces: true,
@@ -362,6 +382,7 @@ describe("MeshPartLayer", () => {
           boundary_face_indices: [11, 13],
           boundary_face_start: 7,
         },
+        surfaceTriangleFacetIndices: new Uint32Array([11, 13, 13]),
       }),
     ).toBe(13);
   });

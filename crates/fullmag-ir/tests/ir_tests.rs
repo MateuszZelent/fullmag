@@ -4405,7 +4405,7 @@ fn problem_ir_validation_accepts_valid_mesh_semantics() {
             generation_id: Some("mesh-gen-1".to_string()),
             build_report: Some(FemSharedDomainBuildReportIR {
                 build_mode: "shared_domain".to_string(),
-                fallbacks_triggered: Vec::new(),
+                fallbacks_triggered: Some(Vec::new()),
                 effective_airbox_target: None,
                 effective_airbox_hmax: Some(8e-9),
                 effective_per_object_targets: HashMap::new(),
@@ -4548,6 +4548,31 @@ fn shared_domain_build_report_preserves_full_mesh_v2_fields() {
     assert_eq!(
         round_trip["magnetic_submesh_signatures"][0]["digest"],
         "44067a65a859016cea21ecf2d902837ea7322183d996d420de0ec0d942d29642"
+    );
+}
+
+#[test]
+fn shared_domain_build_report_preserves_fallback_publication_presence() {
+    let omitted: FemSharedDomainBuildReportIR = serde_json::from_value(serde_json::json!({
+        "build_mode": "component_aware"
+    }))
+    .expect("build report without fallback evidence should deserialize");
+    assert_eq!(omitted.fallbacks_triggered, None);
+    assert!(serde_json::to_value(&omitted)
+        .expect("build report should serialize")
+        .get("fallbacks_triggered")
+        .is_none());
+
+    let explicit_empty: FemSharedDomainBuildReportIR = serde_json::from_value(serde_json::json!({
+        "build_mode": "component_aware",
+        "fallbacks_triggered": []
+    }))
+    .expect("build report with strict fallback evidence should deserialize");
+    assert_eq!(explicit_empty.fallbacks_triggered, Some(Vec::new()));
+    assert_eq!(
+        serde_json::to_value(&explicit_empty).expect("build report should serialize")
+            ["fallbacks_triggered"],
+        serde_json::json!([])
     );
 }
 

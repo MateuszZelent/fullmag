@@ -2555,34 +2555,42 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         build_mode = "component_aware"
 
         def _emit_mesh_build_failed(exc: Exception) -> None:
-            emit_progress_event(
-                {
-                    "kind": "mesh_build_failed",
-                    "phase": latest_mesh_phase,
-                    "shared_domain_build_mode": build_mode,
-                    "effective_airbox_target": effective_airbox_target,
-                    "effective_per_object_targets": effective_per_object_targets,
-                    "used_size_field_kinds": used_size_field_kinds,
-                    "fallbacks_triggered": fallbacks_triggered,
-                    "rejected_element_types": [
-                        dict(element)
-                        for element in getattr(exc, "rejected_element_types", [])
-                    ],
-                    "operation_statuses": [
-                        status.to_dict()
-                        for status in _build_mesh_operation_statuses(
-                            geometries,
-                            mesh_options,
-                            airbox=airbox,
-                            build_mode=build_mode,
-                            fallbacks_triggered=fallbacks_triggered,
-                            mesh_workflow=mesh_workflow,
-                        )
-                    ],
-                    "error": str(exc),
-                    "message": "Shared-domain mesh build failed",
+            payload: dict[str, object] = {
+                "kind": "mesh_build_failed",
+                "phase": latest_mesh_phase,
+                "shared_domain_build_mode": build_mode,
+                "effective_airbox_target": effective_airbox_target,
+                "effective_per_object_targets": effective_per_object_targets,
+                "used_size_field_kinds": used_size_field_kinds,
+                "fallbacks_triggered": fallbacks_triggered,
+                "rejected_element_types": [
+                    dict(element)
+                    for element in getattr(exc, "rejected_element_types", [])
+                ],
+                "operation_statuses": [
+                    status.to_dict()
+                    for status in _build_mesh_operation_statuses(
+                        geometries,
+                        mesh_options,
+                        airbox=airbox,
+                        build_mode=build_mode,
+                        fallbacks_triggered=fallbacks_triggered,
+                        mesh_workflow=mesh_workflow,
+                    )
+                ],
+                "error": str(exc),
+                "message": "Shared-domain mesh build failed",
+            }
+            if mixed_shared_geo_direct:
+                payload["mixed_layer_topology_rejection"] = {
+                    "schema_version": "mixed_layer_topology_rejection.v1",
+                    "certificate_status": "rejected",
+                    "requested_layer_count": int(
+                        mesh_options.through_thickness_elements or 0
+                    ),
+                    "rejection_reason": str(exc),
                 }
-            )
+            emit_progress_event(payload)
 
         latest_mesh_phase = "preparing_domain"
         try:

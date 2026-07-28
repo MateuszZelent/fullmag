@@ -44,10 +44,12 @@ import { resolveViewport3DFieldDomainCompatibility } from "./model/viewport3DFie
 import {
   buildPartSurfaceIndices as buildPartSurfaceIndicesUncached,
   buildPartSurfaceIndicesWithSupplemental as buildPartSurfaceIndicesWithSupplementalUncached,
+  buildPartSurfaceEdgeIndicesWithSupplemental,
+  buildPartSurfaceTriangleFacetIndicesWithSupplemental,
   buildPartVolumeEdgeIndices as buildPartVolumeEdgeIndicesUncached,
-  buildSurfaceEdgeIndices,
-  buildTetraSurfaceIndices,
-  buildTetraVolumeEdgeIndices,
+  buildTopologySurfaceIndices,
+  buildTopologySurfaceEdgeIndices,
+  buildTopologyVolumeEdgeIndices,
   buildUnclaimedVolumeEdgeIndices,
   uniqueSortedIndices,
   type Viewport3DPreparedPartTopologyIndices,
@@ -97,6 +99,7 @@ export interface Viewport3DTopologyPartRenderModel<
   fullNodeSelection: Viewport3DNodeSelection;
   part: TPart;
   surfaceIndices: Uint32Array | null;
+  surfaceTriangleFacetIndices?: Uint32Array | null;
   surfaceNodeIndices: Uint32Array | null;
   surfaceNodeSelection: Viewport3DNodeSelection | null;
   volumeEdgeIndices: Uint32Array | null;
@@ -359,6 +362,10 @@ const partVectorSegmentCache = new WeakMap<
 >();
 const topologyPositionCache = new WeakMap<DecodedTopology, Float32Array>();
 const topologySurfaceIndexCache = new WeakMap<DecodedTopology, Uint32Array>();
+const topologySurfaceEdgeIndexCache = new WeakMap<
+  DecodedTopology,
+  Uint32Array | null
+>();
 const topologyVolumeEdgeIndexCache = new WeakMap<DecodedTopology, Uint32Array>();
 const partSurfaceIndexCache = new WeakMap<
   DecodedTopology,
@@ -395,7 +402,7 @@ function buildCachedTopologySurfaceIndices(
 
   const surfaceIndices = measureViewport3DTopologyBuild(
     "fullmag.viewport3d.buildTopologySurfaceIndices",
-    () => buildTetraSurfaceIndices(topology.indices),
+    () => buildTopologySurfaceIndices(topology),
   );
   topologySurfaceIndexCache.set(topology, surfaceIndices);
   return surfaceIndices;
@@ -409,10 +416,24 @@ function buildCachedTopologyVolumeEdgeIndices(
 
   const volumeEdgeIndices = measureViewport3DTopologyBuild(
     "fullmag.viewport3d.buildTopologyVolumeEdgeIndices",
-    () => buildTetraVolumeEdgeIndices(topology.indices),
+    () => buildTopologyVolumeEdgeIndices(topology),
   );
   topologyVolumeEdgeIndexCache.set(topology, volumeEdgeIndices);
   return volumeEdgeIndices;
+}
+
+function buildCachedTopologySurfaceEdgeIndices(
+  topology: DecodedTopology,
+): Uint32Array | null {
+  if (topologySurfaceEdgeIndexCache.has(topology)) {
+    return topologySurfaceEdgeIndexCache.get(topology) ?? null;
+  }
+  const edges = measureViewport3DTopologyBuild(
+    "fullmag.viewport3d.buildTopologySurfaceEdgeIndices",
+    () => buildTopologySurfaceEdgeIndices(topology),
+  );
+  topologySurfaceEdgeIndexCache.set(topology, edges);
+  return edges;
 }
 
 function getCachedPartTopologyValue<TValue>(
@@ -435,22 +456,6 @@ function getCachedPartTopologyValue<TValue>(
   const value = measureViewport3DTopologyBuild(measureName, build);
   partCache.set(part, value);
   return value;
-}
-
-function buildCachedSurfaceEdgeIndices(
-  surfaceIndices: Uint32Array | null,
-): Uint32Array | null {
-  if (!surfaceIndices) return null;
-  if (surfaceEdgeIndexCache.has(surfaceIndices)) {
-    return surfaceEdgeIndexCache.get(surfaceIndices) ?? null;
-  }
-
-  const edgeIndices = measureViewport3DTopologyBuild(
-    "fullmag.viewport3d.buildSurfaceEdgeIndices",
-    () => buildSurfaceEdgeIndices(surfaceIndices),
-  );
-  surfaceEdgeIndexCache.set(surfaceIndices, edgeIndices);
-  return edgeIndices;
 }
 
 function buildCachedSurfaceNodeIndices(
@@ -548,7 +553,7 @@ export function buildViewport3DTopologyRenderModel<
     topologyIndexBundle?.fallbackSurfaceEdgeIndices ??
     (topologyIndexPending
       ? null
-      : buildCachedSurfaceEdgeIndices(fallbackSurfaceIndices())),
+      : buildCachedTopologySurfaceEdgeIndices(topology)),
   );
   const fallbackSurfaceNodeIndices = lazyValue(() =>
     topologyIndexBundle?.fallbackSurfaceNodeIndices ??
@@ -660,6 +665,9 @@ function buildViewport3DTopologyPartRenderModel<
     part,
     get surfaceIndices() {
       return topologyModel.surfaceIndices;
+    },
+    get surfaceTriangleFacetIndices() {
+      return topologyModel.surfaceTriangleFacetIndices;
     },
     get surfaceNodeIndices() {
       return topologyModel.surfaceNodeIndices;
@@ -2197,6 +2205,7 @@ function buildPartTopologyModel(
   Viewport3DTopologyPartRenderModel,
   | "edgeIndices"
   | "surfaceIndices"
+  | "surfaceTriangleFacetIndices"
   | "surfaceNodeIndices"
   | "surfaceNodeSelection"
   | "volumeEdgeIndices"
@@ -2217,7 +2226,24 @@ function buildPartTopologyModel(
       ? preparedIndices.edgeIndices
       : topologyIndexPending
         ? null
-        : buildCachedSurfaceEdgeIndices(surfaceIndices()),
+        : buildCachedPartSurfaceEdgeIndicesWithSupplemental(
+            part,
+            topology,
+            supplementalSurfaceParts,
+            surfaceIndices(),
+          ),
+  );
+  const surfaceTriangleFacetIndices = lazyValue(() =>
+    preparedIndices
+      ? preparedIndices.surfaceTriangleFacetIndices
+      : topologyIndexPending
+        ? null
+        : buildPartSurfaceTriangleFacetIndicesWithSupplemental(
+            part,
+            topology,
+            supplementalSurfaceParts,
+            surfaceIndices(),
+          ),
   );
   const surfaceNodeSelection = lazyValue(() => {
     if (preparedIndices) return preparedIndices.surfaceNodeSelection;
@@ -2255,6 +2281,9 @@ function buildPartTopologyModel(
     get surfaceIndices() {
       return surfaceIndices();
     },
+    get surfaceTriangleFacetIndices() {
+      return surfaceTriangleFacetIndices();
+    },
     get surfaceNodeIndices() {
       return surfaceNodeIndices();
     },
@@ -2265,6 +2294,29 @@ function buildPartTopologyModel(
       return volumeEdgeIndices();
     },
   };
+}
+
+function buildCachedPartSurfaceEdgeIndicesWithSupplemental(
+  part: Viewport3DSurfacePart,
+  topology: DecodedTopology,
+  supplementalSurfaceParts: readonly Viewport3DSurfacePart[],
+  surfaceIndices: Uint32Array | null,
+): Uint32Array | null {
+  if (!surfaceIndices) return null;
+  if (surfaceEdgeIndexCache.has(surfaceIndices)) {
+    return surfaceEdgeIndexCache.get(surfaceIndices) ?? null;
+  }
+  const edges = measureViewport3DTopologyBuild(
+    "fullmag.viewport3d.buildPartSurfaceEdgeIndices",
+    () =>
+      buildPartSurfaceEdgeIndicesWithSupplemental(
+        part,
+        topology,
+        supplementalSurfaceParts,
+      ),
+  );
+  surfaceEdgeIndexCache.set(surfaceIndices, edges);
+  return edges;
 }
 
 function buildCachedPartSurfaceIndicesWithSupplemental(

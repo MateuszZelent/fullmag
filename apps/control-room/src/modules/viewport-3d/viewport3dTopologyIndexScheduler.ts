@@ -18,6 +18,12 @@ export interface Viewport3DTopologyIndexBuildRequest {
   >;
   topology: {
     boundaryFaces: Uint32Array;
+    cellNodes?: Uint32Array;
+    cellOffsets?: Uint32Array;
+    cellTypes?: Uint32Array;
+    facetNodes?: Uint32Array;
+    facetOffsets?: Uint32Array;
+    facetTypes?: Uint32Array;
     indices: Uint32Array;
     nodeCount: number;
   };
@@ -193,7 +199,14 @@ function getTopologyIndexWorkerClient(): TopologyIndexWorkerClient | null {
 function estimateTopologyIndexBuildInputBytes(
   request: Viewport3DTopologyIndexBuildRequest,
 ): number {
-  return request.topology.boundaryFaces.byteLength + request.topology.indices.byteLength;
+  return request.topology.boundaryFaces.byteLength +
+    request.topology.indices.byteLength +
+    (request.topology.cellNodes?.byteLength ?? 0) +
+    (request.topology.cellOffsets?.byteLength ?? 0) +
+    (request.topology.cellTypes?.byteLength ?? 0) +
+    (request.topology.facetNodes?.byteLength ?? 0) +
+    (request.topology.facetOffsets?.byteLength ?? 0) +
+    (request.topology.facetTypes?.byteLength ?? 0);
 }
 
 class TopologyIndexWorkerClient {
@@ -230,6 +243,12 @@ class TopologyIndexWorkerClient {
     const id = this.nextId++;
     const boundaryFaces = new Uint32Array(input.topology.boundaryFaces);
     const indices = new Uint32Array(input.topology.indices);
+    const cellNodes = cloneOptionalArray(input.topology.cellNodes);
+    const cellOffsets = cloneOptionalArray(input.topology.cellOffsets);
+    const cellTypes = cloneOptionalArray(input.topology.cellTypes);
+    const facetNodes = cloneOptionalArray(input.topology.facetNodes);
+    const facetOffsets = cloneOptionalArray(input.topology.facetOffsets);
+    const facetTypes = cloneOptionalArray(input.topology.facetTypes);
     const request: TopologyIndexWorkerRequest = {
       airboxParts: clonePartInputs(input.airboxParts),
       id,
@@ -240,6 +259,12 @@ class TopologyIndexWorkerClient {
       ),
       topology: {
         boundaryFaces,
+        cellNodes,
+        cellOffsets,
+        cellTypes,
+        facetNodes,
+        facetOffsets,
+        facetTypes,
         indices,
         nodeCount: input.topology.nodeCount,
       },
@@ -247,6 +272,12 @@ class TopologyIndexWorkerClient {
     const transferables: Transferable[] = [];
     addArrayBufferTransferable(transferables, boundaryFaces.buffer);
     addArrayBufferTransferable(transferables, indices.buffer);
+    addArrayBufferTransferable(transferables, cellNodes?.buffer);
+    addArrayBufferTransferable(transferables, cellOffsets?.buffer);
+    addArrayBufferTransferable(transferables, cellTypes?.buffer);
+    addArrayBufferTransferable(transferables, facetNodes?.buffer);
+    addArrayBufferTransferable(transferables, facetOffsets?.buffer);
+    addArrayBufferTransferable(transferables, facetTypes?.buffer);
 
     return new Promise((resolve, reject) => {
       const signal = options.signal ?? null;
@@ -383,6 +414,12 @@ function clonePartInputs(
       ? part.surface_faces.map((face) => [...face])
       : undefined,
   }));
+}
+
+function cloneOptionalArray(
+  source: Uint32Array | undefined,
+): Uint32Array | undefined {
+  return source ? new Uint32Array(source) : undefined;
 }
 
 function serializePartMap(

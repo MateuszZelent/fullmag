@@ -39,6 +39,11 @@ export function MeshBuildConfirmDialogContent({
   const phase = mode ?? "pre-build";
   const buildButtonLabel =
     phase === "submitting" ? "Submitting..." : "Accept & Build";
+  const requestsExactLayeredPrism = diffRows.some(
+    (row) =>
+      (row.path === "topology" && row.draftValue === "prismatic") ||
+      (row.path === "mesh_strategy" && row.draftValue === "swept_prism"),
+  );
 
   return (
     <div className="fm-mesh-build-confirm">
@@ -72,6 +77,20 @@ export function MeshBuildConfirmDialogContent({
 
       {phase === "post-build" ? (
         <MeshBuildPostBuildSummary rows={postBuildRows ?? []} />
+      ) : null}
+
+      {requestsExactLayeredPrism ? (
+        <section
+          className="fm-mesh-build-confirm__section fm-mesh-build-confirm__banner"
+          aria-label="Exact layered prism requirements"
+        >
+          <h3 className="fm-mesh-build-confirm__section-title">Strict no-fallback</h3>
+          <p className="fm-mesh-build-confirm__empty">
+            The build must realize the requested prism, pyramid, and tetrahedra families exactly;
+            unsupported lanes reject before execution. A one-layer result still requires
+            layer-convergence evidence before scientific qualification.
+          </p>
+        </section>
       ) : null}
 
       <MeshBuildParameterDiff rows={diffRows} />

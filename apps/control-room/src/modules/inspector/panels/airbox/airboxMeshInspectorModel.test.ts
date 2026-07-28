@@ -33,6 +33,29 @@ const part = (
 });
 
 describe("airboxMeshInspectorModel", () => {
+  it("distinguishes missing fallback evidence from an explicit strict empty list", () => {
+    const missing = buildAirboxMeshBuildModel({
+      current: ({
+        revision: 1,
+        shared_domain_build_report: { build_mode: "shared_domain" },
+      } as unknown) as Parameters<typeof buildAirboxMeshBuildModel>[0]["current"],
+      report: null,
+    });
+    const explicit = buildAirboxMeshBuildModel({
+      current: ({
+        revision: 1,
+        shared_domain_build_report: {
+          build_mode: "shared_domain",
+          fallbacks_triggered: [],
+        },
+      } as unknown) as Parameters<typeof buildAirboxMeshBuildModel>[0]["current"],
+      report: null,
+    });
+
+    expect(missing.fallbacksPublished).toBe(false);
+    expect(explicit.fallbacksPublished).toBe(true);
+  });
+
   it.each([
     "FAILED",
     "failure",
@@ -412,19 +435,24 @@ describe("airboxMeshInspectorModel", () => {
   });
 
   it("exposes counts, bounds, and shared interface nodes with honest ownership", () => {
+    const airboxPart = part({
+      bounds_max: [2, 3, 4],
+      bounds_min: [-2, -3, -4],
+      boundary_face_indices: [1, 2],
+      node_count: 16,
+      node_indices: [0, 1, 2],
+      surface_faces: [[0, 1, 2]],
+    });
+    (airboxPart as unknown as Record<string, unknown>).element_counts_by_type = {
+      pyramid5: 4,
+      tet4: 20,
+    };
     const model = buildAirboxMeshInspectorModel({
       manifest: {
         mesh_id: "mesh-8",
         mesh_name: "Shared mesh",
         mesh_parts: [
-          part({
-            bounds_max: [2, 3, 4],
-            bounds_min: [-2, -3, -4],
-            boundary_face_indices: [1, 2],
-            node_count: 16,
-            node_indices: [0, 1, 2],
-            surface_faces: [[0, 1, 2]],
-          }),
+          airboxPart,
         ],
         revision: 8,
         topology_fingerprint: "topology-8",
@@ -442,13 +470,43 @@ describe("airboxMeshInspectorModel", () => {
       boundaryFaceCount: 12,
       elementCount: 24,
       nodeCount: 16,
+      pyramid5Count: 4,
       surfaceFaceCount: 1,
+      tet4Count: 20,
     });
     expect(model.topology.bounds).toEqual({ max: [2, 3, 4], min: [-2, -3, -4] });
     expect(model.topology.sharedInterfaceNodes).toEqual({
       count: 5,
       label: "Shared interface nodes",
       ownership: "shared",
+    });
+  });
+
+  it("uses typed shared-domain family counts as a labeled fallback when part counts are absent", () => {
+    const manifest: MeshSharedDomainManifestResource = {
+      mesh_id: "mesh-mixed",
+      mesh_name: "Mixed mesh",
+      mesh_parts: [part()],
+      revision: 9,
+      topology_fingerprint: "topology-mixed",
+    };
+    (manifest as unknown as Record<string, unknown>).element_counts_by_type = {
+      pyramid5: 8,
+      tet4: 40,
+    };
+
+    const model = buildAirboxMeshInspectorModel({
+      manifest,
+      policy: { config: {}, effective_config: {}, revision: 9 },
+      quality: null,
+      report: null,
+      summary: null,
+    });
+
+    expect(model.statistics).toMatchObject({
+      pyramid5Count: 8,
+      tet4Count: 40,
+      volumeElementCountScope: "shared-domain",
     });
   });
 

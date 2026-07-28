@@ -541,6 +541,7 @@ export interface HysteresisExecutionTreeQuery {
 
 const CHUNKED_TOPOLOGY_THRESHOLD_BYTES = 16 * 1024 * 1024;
 const TOPOLOGY_RANGE_CHUNK_BYTES = 8 * 1024 * 1024;
+export const MAX_TOPOLOGY_BYTES = 512 * 1024 * 1024;
 const FIELD_MATERIALIZATION_TIMEOUT_MS = 5_000;
 const FIELD_MATERIALIZATION_RETRY_MS = 250;
 const FIELD_MATERIALIZATION_REQUEST_KEY = "current-field-cache";
@@ -2254,8 +2255,37 @@ export class ControlRoomApi {
       return headerResult;
     }
 
+    const headerContentRange = requireExactContentRange(
+      headerResult.contentRange,
+      0,
+      FMMT_HEADER_LEN - 1,
+    );
+    if (headerResult.byteLength !== headerContentRange.end + 1) {
+      throw new ControlRoomApiError(
+        `Expected topology header byte range 0-${headerContentRange.end} to contain ${headerContentRange.end + 1} bytes, got ${headerResult.byteLength}`,
+        0,
+      );
+    }
+    if (!isStrongEtag(headerResult.etag)) {
+      throw new ControlRoomApiError(
+        "Chunked FMMT topology requires a strong ETag",
+        0,
+      );
+    }
     const header = decodeTopologyHeader(headerResult.data);
     const expectedByteLength = expectedTopologyByteLength(header);
+    if (expectedByteLength > MAX_TOPOLOGY_BYTES) {
+      throw new ControlRoomApiError(
+        `FMMT topology exceeds ${MAX_TOPOLOGY_BYTES} byte limit: ${expectedByteLength}`,
+        0,
+      );
+    }
+    if (headerContentRange.total !== expectedByteLength) {
+      throw new ControlRoomApiError(
+        `FMMT content length mismatch: expected ${expectedByteLength}, got ${headerContentRange.total}`,
+        0,
+      );
+    }
     if (expectedByteLength <= CHUNKED_TOPOLOGY_THRESHOLD_BYTES) {
       return this.requestBinaryResource(
         path,
@@ -2266,18 +2296,11 @@ export class ControlRoomApi {
       );
     }
 
-    const contentLength =
-      parseContentRangeTotal(headerResult.contentRange) ?? expectedByteLength;
-    if (contentLength !== expectedByteLength) {
-      throw new ControlRoomApiError(
-        `FMMT content length mismatch: expected ${expectedByteLength}, got ${contentLength}`,
-        0,
-      );
-    }
-
     const data = await this.loadTopologySectionsByRange(
       path,
       header,
+      headerResult.etag,
+      expectedByteLength,
       options,
       pathParams,
     );
@@ -2292,55 +2315,55 @@ export class ControlRoomApi {
   private async loadTopologySectionsByRange(
     path: OpenApiV2Path,
     header: TopologyHeader,
+    expectedEtag: string | null,
+    expectedTotal: number,
     options: BinaryRequestOptions,
     pathParams?: PathParams,
   ): Promise<DecodedTopology> {
     const layout = topologyByteLayout(header);
     const sections: TopologySections = {
-      boundaryFaces: new Uint32Array(header.boundaryFaceCount * 3),
-      boundaryMarkers: new Uint32Array(header.boundaryMarkerCount),
-      elementMarkers: new Uint32Array(header.elementMarkerCount),
-      indices: new Uint32Array(header.elementCount * 4),
+      cellMarkers: new Uint32Array(header.cellMarkerCount),
+      cellNodes: new Uint32Array(header.cellConnectivityCount),
+      cellOffsets:
+        header.version === 1
+          ? sequentialTopologyOffsets(header.cellCount, 4)
+          : new Uint32Array(header.cellCount + 1),
+      cellTypes: new Uint32Array(header.cellCount).fill(1),
+      facetMarkers: new Uint32Array(header.facetMarkerCount),
+      facetNodes: new Uint32Array(header.facetConnectivityCount),
+      facetOffsets:
+        header.version === 1
+          ? sequentialTopologyOffsets(header.facetCount, 3)
+          : new Uint32Array(header.facetCount + 1),
+      facetRoles: new Uint32Array(header.facetCount).fill(1),
+      facetTypes: new Uint32Array(header.facetCount).fill(1),
       positions: new Float64Array(header.nodeCount * 3),
     };
 
-    await Promise.all([
-      this.loadTopologySectionByRange(
-        path,
-        options,
-        pathParams,
-        layout.positions,
-        new Uint8Array(sections.positions.buffer),
-      ),
-      this.loadTopologySectionByRange(
-        path,
-        options,
-        pathParams,
-        layout.indices,
-        new Uint8Array(sections.indices.buffer),
-      ),
-      this.loadTopologySectionByRange(
-        path,
-        options,
-        pathParams,
-        layout.boundaryFaces,
-        new Uint8Array(sections.boundaryFaces.buffer),
-      ),
-      this.loadTopologySectionByRange(
-        path,
-        options,
-        pathParams,
-        layout.elementMarkers,
-        new Uint8Array(sections.elementMarkers.buffer),
-      ),
-      this.loadTopologySectionByRange(
-        path,
-        options,
-        pathParams,
-        layout.boundaryMarkers,
-        new Uint8Array(sections.boundaryMarkers.buffer),
-      ),
-    ]);
+    for (const [range, target] of [
+      [layout.positions, sections.positions],
+      [layout.cellNodes, sections.cellNodes],
+      [layout.facetNodes, sections.facetNodes],
+      [layout.cellMarkers, sections.cellMarkers],
+      [layout.facetMarkers, sections.facetMarkers],
+      [layout.cellTypes, sections.cellTypes],
+      [layout.cellOffsets, sections.cellOffsets],
+      [layout.facetTypes, sections.facetTypes],
+      [layout.facetRoles, sections.facetRoles],
+      [layout.facetOffsets, sections.facetOffsets],
+    ] as const) {
+      if (range) {
+        await this.loadTopologySectionByRange(
+          path,
+          options,
+          pathParams,
+          range,
+          new Uint8Array(target.buffer),
+          expectedEtag,
+          expectedTotal,
+        );
+      }
+    }
 
     return decodeTopologySections(header, sections);
   }
@@ -2351,6 +2374,8 @@ export class ControlRoomApi {
     pathParams: PathParams | undefined,
     range: { end: number; start: number },
     target: Uint8Array,
+    expectedEtag: string | null,
+    expectedTotal: number,
   ): Promise<void> {
     if (target.byteLength === 0 || range.end < range.start) return;
 
@@ -2377,7 +2402,22 @@ export class ControlRoomApi {
         );
       }
 
+      if (expectedEtag !== null && result.etag !== expectedEtag) {
+        throw new ControlRoomApiError(
+          `FMMT topology ETag mismatch for byte range ${start}-${end}: expected ${expectedEtag}, got ${result.etag ?? "missing"}`,
+          0,
+        );
+      }
+      requireExactContentRange(result.contentRange, start, end, expectedTotal);
+
       const bytes = new Uint8Array(result.data);
+      const expectedChunkLength = end - start + 1;
+      if (bytes.byteLength !== expectedChunkLength) {
+        throw new ControlRoomApiError(
+          `Expected topology byte range ${start}-${end} to contain ${expectedChunkLength} bytes, got ${bytes.byteLength}`,
+          0,
+        );
+      }
       target.set(bytes, written);
       written += bytes.byteLength;
     }
@@ -3042,12 +3082,46 @@ function pathFromUrl(url: string): string {
   }
 }
 
-function parseContentRangeTotal(value: string | null | undefined): number | null {
-  if (!value) return null;
-  const match = /^bytes\s+\d+-\d+\/(\d+)$/i.exec(value.trim());
-  if (!match) return null;
-  const total = Number(match[1]);
-  return Number.isFinite(total) ? total : null;
+function requireExactContentRange(
+  value: string | null | undefined,
+  expectedStart: number,
+  requestedEnd: number,
+  expectedTotal?: number,
+): { end: number; start: number; total: number } {
+  const match = value ? /^bytes\s+(\d+)-(\d+)\/(\d+)$/i.exec(value.trim()) : null;
+  if (!match) {
+    throw new ControlRoomApiError("Expected an exact topology Content-Range header", 0);
+  }
+  const start = Number(match[1]);
+  const end = Number(match[2]);
+  const total = Number(match[3]);
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(end) ||
+    !Number.isSafeInteger(total) ||
+    total <= 0 ||
+    start !== expectedStart ||
+    end !== Math.min(requestedEnd, total - 1) ||
+    (expectedTotal !== undefined && total !== expectedTotal)
+  ) {
+    throw new ControlRoomApiError(
+      `Unexpected topology Content-Range: expected bytes ${expectedStart}-${Math.min(requestedEnd, (expectedTotal ?? total) - 1)}/${expectedTotal ?? total}, got ${value}`,
+      0,
+    );
+  }
+  return { end, start, total };
+}
+
+function isStrongEtag(value: string | null | undefined): value is string {
+  return Boolean(value && !value.startsWith("W/") && /^"[^"\r\n]*"$/.test(value));
+}
+
+function sequentialTopologyOffsets(count: number, arity: number): Uint32Array {
+  const offsets = new Uint32Array(count + 1);
+  for (let index = 0; index <= count; index += 1) {
+    offsets[index] = index * arity;
+  }
+  return offsets;
 }
 
 function scalarWindowQueryParams(query: ScalarWindowQuery): QueryParams {

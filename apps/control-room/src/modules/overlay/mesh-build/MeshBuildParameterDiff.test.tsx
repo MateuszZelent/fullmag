@@ -6,6 +6,37 @@ import type { MeshPolicyDiffRow } from "@/shared/domain/mesh/meshPolicyDiff";
 import { MeshBuildParameterDiff } from "./MeshBuildParameterDiff";
 
 describe("MeshBuildParameterDiff", () => {
+  it("shows element layers, node planes, and canonical layered topology labels", () => {
+    const rows: MeshPolicyDiffRow[] = [
+      {
+        currentValue: "unset",
+        draftValue: "1",
+        impact: "geometry",
+        label: "through_thickness_elements",
+        path: "through_thickness_elements",
+        realizedValue: "unset",
+        scope: "object",
+        state: "changed",
+      },
+      {
+        currentValue: "tetrahedral",
+        draftValue: "prismatic",
+        impact: "geometry",
+        label: "topology",
+        path: "topology",
+        realizedValue: "tetrahedral",
+        scope: "object",
+        state: "changed",
+      },
+    ];
+
+    const html = renderToStaticMarkup(<MeshBuildParameterDiff rows={rows} />);
+
+    expect(html).toContain("Element layers / node planes");
+    expect(html).toContain("1 layer / 2 node planes");
+    expect(html).toContain("Requested topology");
+  });
+
   it("renders current new realized and impact columns", () => {
     const rows: MeshPolicyDiffRow[] = [
       {

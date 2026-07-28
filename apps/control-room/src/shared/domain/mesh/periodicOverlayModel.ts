@@ -101,19 +101,48 @@ function faceVertices(
   topology: DecodedTopology,
   faceId: number,
 ): readonly PeriodicOverlayPoint[] | null {
-  if (!Number.isInteger(faceId) || faceId < 0 || faceId >= topology.boundaryFaceCount) {
+  const count = topologyFacetCount(topology);
+  if (!Number.isInteger(faceId) || faceId < 0 || faceId >= count) {
     return null;
   }
-  const offset = faceId * 3;
-  const vertices = [
-    topology.boundaryFaces[offset],
-    topology.boundaryFaces[offset + 1],
-    topology.boundaryFaces[offset + 2],
-  ];
+  const vertices = topologyFacetNodes(topology, faceId);
+  if (!vertices || vertices.length < 3) return null;
   if (vertices.some((nodeId) => nodeId == null || nodeId >= topology.nodeCount)) {
     return null;
   }
   return vertices.map((nodeId) => point(topology, nodeId!));
+}
+
+function topologyFacetCount(topology: DecodedTopology): number {
+  if (
+    topology.facetTypes &&
+    topology.facetOffsets &&
+    topology.facetNodes &&
+    topology.facetOffsets.length === topology.facetTypes.length + 1
+  ) {
+    return topology.facetTypes.length;
+  }
+  return topology.boundaryFaceCount;
+}
+
+function topologyFacetNodes(
+  topology: DecodedTopology,
+  facet: number,
+): readonly number[] | null {
+  if (
+    topology.facetTypes &&
+    topology.facetOffsets &&
+    topology.facetNodes &&
+    topology.facetOffsets.length === topology.facetTypes.length + 1
+  ) {
+    const start = topology.facetOffsets[facet] ?? 0;
+    const end = topology.facetOffsets[facet + 1] ?? start;
+    return Array.from(topology.facetNodes.subarray(start, end));
+  }
+  const start = facet * 3;
+  return start + 2 < topology.boundaryFaces.length
+    ? Array.from(topology.boundaryFaces.subarray(start, start + 3))
+    : null;
 }
 
 function centroid(vertices: readonly PeriodicOverlayPoint[]): PeriodicOverlayPoint {
@@ -257,7 +286,7 @@ export function buildPeriodicOverlayModel({
   const unpaired: PeriodicUnpairedFaceGlyph[] = [];
   for (
     let faceId = 0;
-    faceId < topology.boundaryFaceCount && unpaired.length < Math.max(0, maxUnpairedFaces);
+    faceId < topologyFacetCount(topology) && unpaired.length < Math.max(0, maxUnpairedFaces);
     faceId += 1
   ) {
     if (pairedFaceIds.has(faceId)) continue;
@@ -270,7 +299,7 @@ export function buildPeriodicOverlayModel({
         `Topology contains an invalid boundary face at index ${faceId}.`,
       );
     }
-    const marker = topology.boundaryMarkers[faceId];
+    const marker = topology.facetMarkers?.[faceId] ?? topology.boundaryMarkers[faceId];
     unpaired.push({
       domain: domainForPair(marker ?? 0, marker ?? 0, markerDomainById),
       id: `unpaired-face:${faceId}`,

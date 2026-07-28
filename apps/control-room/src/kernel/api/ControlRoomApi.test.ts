@@ -3,6 +3,7 @@ import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   collectFieldVectorIdentityIssues,
   ControlRoomApi,
+  MAX_TOPOLOGY_BYTES,
   parseFieldVectorResponseMetadata,
   transformFieldMetaForDisplay,
   transformFieldVectorForDisplay,
@@ -501,6 +502,65 @@ function makeLargeTopologyBuffer(): ArrayBuffer {
   new Uint32Array(buffer, offset, markerCount).set([10]);
   offset += markerCount * Uint32Array.BYTES_PER_ELEMENT;
   new Uint32Array(buffer, offset, markerCount).set([20]);
+  return buffer;
+}
+
+function makeLargeMixedTopologyBuffer(): ArrayBuffer {
+  const align = (value: number) => Math.ceil(value / 8) * 8;
+  const nodeCount = 700_000;
+  const cellTypes = [1, 2, 3];
+  const cellOffsets = [0, 4, 10, 15];
+  const cellNodes = [0, 1, 2, 3, 0, 1, 2, 4, 5, 6, 0, 1, 2, 3, 7];
+  const facetTypes = [1, 2];
+  const facetRoles = [1, 2];
+  const facetOffsets = [0, 3, 7];
+  const facetNodes = [0, 1, 2, 0, 1, 4, 3];
+  const cellMarkers = [10, 11, 12];
+  const facetMarkers = [20, 21];
+
+  let offset = 64;
+  offset = align(offset + nodeCount * 3 * 8);
+  const cellTypesOffset = offset;
+  offset = align(offset + cellTypes.length * 4);
+  const cellOffsetsOffset = offset;
+  offset = align(offset + cellOffsets.length * 4);
+  const cellNodesOffset = offset;
+  offset = align(offset + cellNodes.length * 4);
+  const facetTypesOffset = offset;
+  offset = align(offset + facetTypes.length * 4);
+  const facetRolesOffset = offset;
+  offset = align(offset + facetRoles.length * 4);
+  const facetOffsetsOffset = offset;
+  offset = align(offset + facetOffsets.length * 4);
+  const facetNodesOffset = offset;
+  offset = align(offset + facetNodes.length * 4);
+  const cellMarkersOffset = offset;
+  offset = align(offset + cellMarkers.length * 4);
+  const facetMarkersOffset = offset;
+  const buffer = new ArrayBuffer(facetMarkersOffset + facetMarkers.length * 4);
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMMT"].entries()) {
+    view.setUint8(index, code.charCodeAt(0));
+  }
+  view.setUint8(4, 2);
+  view.setUint8(5, 1);
+  view.setUint32(8, nodeCount, true);
+  view.setUint32(12, cellTypes.length, true);
+  view.setUint32(16, facetTypes.length, true);
+  view.setUint32(20, cellNodes.length, true);
+  view.setUint32(24, facetNodes.length, true);
+  view.setUint32(28, cellMarkers.length, true);
+  view.setUint32(32, facetMarkers.length, true);
+  view.setUint32(36, 64, true);
+  new Uint32Array(buffer, cellTypesOffset, cellTypes.length).set(cellTypes);
+  new Uint32Array(buffer, cellOffsetsOffset, cellOffsets.length).set(cellOffsets);
+  new Uint32Array(buffer, cellNodesOffset, cellNodes.length).set(cellNodes);
+  new Uint32Array(buffer, facetTypesOffset, facetTypes.length).set(facetTypes);
+  new Uint32Array(buffer, facetRolesOffset, facetRoles.length).set(facetRoles);
+  new Uint32Array(buffer, facetOffsetsOffset, facetOffsets.length).set(facetOffsets);
+  new Uint32Array(buffer, facetNodesOffset, facetNodes.length).set(facetNodes);
+  new Uint32Array(buffer, cellMarkersOffset, cellMarkers.length).set(cellMarkers);
+  new Uint32Array(buffer, facetMarkersOffset, facetMarkers.length).set(facetMarkers);
   return buffer;
 }
 
@@ -2606,8 +2666,205 @@ describe("ControlRoomApi", () => {
     expect(result.data.nodeCount).toBe(700_000);
     expect(result.data.indices.length).toBe(4);
     expect(result.data.boundaryFaces.length).toBe(3);
-    expect(observedRanges[0]).toBe("bytes=0-31");
+    expect(observedRanges[0]).toBe("bytes=0-63");
     expect(observedRanges.length).toBeGreaterThan(2);
+  });
+
+  it("loads every FMMT v2 CSR section through chunked byte ranges", async () => {
+    const topologyBuffer = makeLargeMixedTopologyBuffer();
+    const observedRanges: string[] = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (_url, init) => {
+        const range = new Headers(init?.headers).get("range");
+        if (!range) throw new Error("Expected chunked topology request to use Range");
+        observedRanges.push(range);
+        const [start, end] = parseByteRange(range);
+        return binaryResponse(topologyBuffer.slice(start, end + 1), {
+          headers: {
+            "content-range": `bytes ${start}-${end}/${topologyBuffer.byteLength}`,
+            etag: '"topology-mixed"',
+            ...contractHeaders,
+          },
+          status: 206,
+        });
+      },
+      requestIdFactory: () => "req-topology-mixed-chunked",
+    });
+
+    const result = await api.data.domain.topologyChunked();
+
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") throw new Error("Expected ready mixed topology");
+    expect(result.data.formatVersion).toBe(2);
+    expect(Array.from(result.data.cellTypes ?? [])).toEqual([1, 2, 3]);
+    expect(Array.from(result.data.cellOffsets ?? [])).toEqual([0, 4, 10, 15]);
+    expect(Array.from(result.data.cellNodes ?? [])).toEqual([
+      0, 1, 2, 3, 0, 1, 2, 4, 5, 6, 0, 1, 2, 3, 7,
+    ]);
+    expect(Array.from(result.data.facetTypes ?? [])).toEqual([1, 2]);
+    expect(Array.from(result.data.facetRoles ?? [])).toEqual([1, 2]);
+    expect(Array.from(result.data.facetOffsets ?? [])).toEqual([0, 3, 7]);
+    expect(Array.from(result.data.facetNodes ?? [])).toEqual([0, 1, 2, 0, 1, 4, 3]);
+    expect(Array.from(result.data.cellMarkers ?? [])).toEqual([10, 11, 12]);
+    expect(Array.from(result.data.facetMarkers ?? [])).toEqual([20, 21]);
+    expect(result.data.elementCount).toBe(3);
+    expect(result.data.indices).toHaveLength(0);
+    expect(result.data.elementMarkers).toBe(result.data.cellMarkers);
+    expect(result.data.boundaryFaceCount).toBe(2);
+    expect(result.data.boundaryFaces).toHaveLength(0);
+    expect(result.data.boundaryMarkers).toBe(result.data.facetMarkers);
+    expect(observedRanges[0]).toBe("bytes=0-63");
+    expect(observedRanges).toHaveLength(13);
+  });
+
+  it.each([
+    ["missing", null],
+    ["changed", '"topology-changed"'],
+  ])("rejects a %s ETag on a topology section range", async (_label, sectionEtag) => {
+    const topologyBuffer = makeLargeMixedTopologyBuffer();
+    let requestCount = 0;
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (_url, init) => {
+        const range = new Headers(init?.headers).get("range");
+        if (!range) throw new Error("Expected chunked topology request to use Range");
+        const [start, end] = parseByteRange(range);
+        const headers = new Headers({
+          "content-range": `bytes ${start}-${end}/${topologyBuffer.byteLength}`,
+          ...contractHeaders,
+        });
+        headers.set("etag", requestCount++ === 0 ? '"topology-stable"' : sectionEtag ?? "");
+        if (sectionEtag === null && requestCount > 1) headers.delete("etag");
+        return binaryResponse(topologyBuffer.slice(start, end + 1), {
+          headers,
+          status: 206,
+        });
+      },
+      requestIdFactory: () => "req-topology-etag-mutation",
+    });
+
+    await expect(api.data.domain.topologyChunked()).rejects.toThrow(/ETag mismatch.*(missing|changed)/);
+  });
+
+  it.each([
+    ["missing", null],
+    ["weak", 'W/"topology-weak"'],
+  ])("rejects a %s header ETag before loading topology sections", async (_label, etag) => {
+    const topologyBuffer = makeLargeMixedTopologyBuffer();
+    let requestCount = 0;
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (_url, init) => {
+        requestCount += 1;
+        const range = new Headers(init?.headers).get("range");
+        if (!range) throw new Error("Expected chunked topology request to use Range");
+        const [start, end] = parseByteRange(range);
+        const headers = new Headers({
+          "content-range": `bytes ${start}-${end}/${topologyBuffer.byteLength}`,
+          ...contractHeaders,
+        });
+        if (etag !== null) headers.set("etag", etag);
+        return binaryResponse(topologyBuffer.slice(start, end + 1), {
+          headers,
+          status: 206,
+        });
+      },
+      requestIdFactory: () => "req-topology-header-etag",
+    });
+
+    await expect(api.data.domain.topologyChunked()).rejects.toThrow(/strong ETag/);
+    expect(requestCount).toBe(1);
+  });
+
+  it("loads topology section ranges with bounded sequential concurrency", async () => {
+    const topologyBuffer = makeLargeMixedTopologyBuffer();
+    let activeRequests = 0;
+    let maximumActiveRequests = 0;
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (_url, init) => {
+        activeRequests += 1;
+        maximumActiveRequests = Math.max(maximumActiveRequests, activeRequests);
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        const range = new Headers(init?.headers).get("range");
+        if (!range) throw new Error("Expected chunked topology request to use Range");
+        const [start, end] = parseByteRange(range);
+        activeRequests -= 1;
+        return binaryResponse(topologyBuffer.slice(start, end + 1), {
+          headers: {
+            "content-range": `bytes ${start}-${end}/${topologyBuffer.byteLength}`,
+            etag: '"topology-sequential"',
+            ...contractHeaders,
+          },
+          status: 206,
+        });
+      },
+      requestIdFactory: () => "req-topology-sequential",
+    });
+
+    const result = await api.data.domain.topologyChunked();
+
+    expect(result.status).toBe("ready");
+    expect(maximumActiveRequests).toBe(1);
+  });
+
+  it.each([
+    ["missing", () => null],
+    ["wrong start", (start: number, end: number, total: number) => `bytes ${start + 1}-${end}/${total}`],
+    ["wrong end", (start: number, end: number, total: number) => `bytes ${start}-${end - 1}/${total}`],
+    ["wrong total", (start: number, end: number, total: number) => `bytes ${start}-${end}/${total + 1}`],
+  ])(
+    "rejects %s Content-Range metadata on a topology section",
+    async (_label, mutateContentRange) => {
+      const topologyBuffer = makeLargeMixedTopologyBuffer();
+      let requestCount = 0;
+      const api = new ControlRoomApi({
+        baseUrl: "http://127.0.0.1:8765",
+        fetchImpl: async (_url, init) => {
+          const range = new Headers(init?.headers).get("range");
+          if (!range) throw new Error("Expected chunked topology request to use Range");
+          const [start, end] = parseByteRange(range);
+          const headers = new Headers({ etag: '"topology-stable"', ...contractHeaders });
+          const contentRange =
+            requestCount++ === 0
+              ? `bytes ${start}-${end}/${topologyBuffer.byteLength}`
+              : mutateContentRange(start, end, topologyBuffer.byteLength);
+          if (contentRange !== null) headers.set("content-range", contentRange);
+          return binaryResponse(topologyBuffer.slice(start, end + 1), {
+            headers,
+            status: 206,
+          });
+        },
+        requestIdFactory: () => "req-topology-content-range-mutation",
+      });
+
+      await expect(api.data.domain.topologyChunked()).rejects.toThrow(/Content-Range/);
+    },
+  );
+
+  it("rejects topology above the explicit byte limit before section allocation", async () => {
+    const header = makeLargeMixedTopologyBuffer().slice(0, 64);
+    new DataView(header).setUint32(8, Math.floor(MAX_TOPOLOGY_BYTES / 24) + 1, true);
+    let requestCount = 0;
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async () => {
+        requestCount += 1;
+        return binaryResponse(header, {
+          headers: {
+            "content-range": "bytes 0-63/999999999",
+            etag: '"topology-oversized"',
+            ...contractHeaders,
+          },
+          status: 206,
+        });
+      },
+      requestIdFactory: () => "req-topology-oversized",
+    });
+
+    await expect(api.data.domain.topologyChunked()).rejects.toThrow(/exceeds.*byte limit/);
+    expect(requestCount).toBe(1);
   });
 
   it("schedules binary decoders through the configured binary decode scheduler", async () => {

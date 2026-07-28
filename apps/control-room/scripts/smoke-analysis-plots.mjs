@@ -80,6 +80,7 @@ async function main() {
     await verifyInspectorOwnsChartControls(page);
     await verifyLast160PointsFetch(page, rowsBinRequests);
     await verifyPointSelection(page);
+    await verifySeriesSelectionEvent(page, rowsBinRequests);
     if (await hasAxisControlPanel(page)) {
       await verifyAxisControlInteraction(page, rowsBinRequests);
       await verifyThirdUnitSelectionDisabled(page);

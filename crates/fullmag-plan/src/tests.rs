@@ -9839,7 +9839,7 @@ fn fem_domain_mesh_asset_accepts_optional_build_report() {
         object_region_markers: Vec::new(),
         build_report: Some(fullmag_ir::FemSharedDomainBuildReportIR {
             build_mode: "component_aware".to_string(),
-            fallbacks_triggered: vec![],
+            fallbacks_triggered: Some(vec![]),
             effective_airbox_target: None,
             effective_airbox_hmax: Some(100e-9),
             effective_per_object_targets: std::collections::HashMap::new(),
@@ -11191,7 +11191,7 @@ fn valid_mixed_certificate_asset() -> fullmag_ir::FemDomainMeshAssetIR {
         object_region_markers: Vec::new(),
         build_report: Some(fullmag_ir::FemSharedDomainBuildReportIR {
             build_mode: "shared_domain".to_string(),
-            fallbacks_triggered: Vec::new(),
+            fallbacks_triggered: Some(Vec::new()),
             effective_airbox_target: None,
             effective_airbox_hmax: None,
             effective_per_object_targets: std::collections::HashMap::new(),

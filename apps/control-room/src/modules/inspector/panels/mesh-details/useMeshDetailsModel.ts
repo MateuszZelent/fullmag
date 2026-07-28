@@ -57,6 +57,10 @@ import {
 } from "../MeshResourceView";
 import type { MeshSizeDistributionHoverBin } from "../MeshQualityChart";
 import { emitMeshSizeHistogramHover } from "../meshSizeHistogramHover";
+import {
+  resolveMixedTopologyPresentation,
+  type MixedTopologyPresentation,
+} from "./MixedTopologyProvenanceSection";
 
 type MeshDetailsRuntimeStatus = {
   capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology">;
@@ -100,6 +104,7 @@ export interface MeshDetailsModel {
   meshSourceSceneRevision: number | null;
   meshStatistics: unknown;
   meshSummary: Record<string, unknown> | null;
+  mixedTopology: MixedTopologyPresentation;
   objectPolicyCount: number;
   operationStatuses: readonly unknown[];
   policyDiffRows: MeshPolicyDiffRow[];
@@ -459,6 +464,14 @@ export function useMeshDetailsModel(
     meshSourceSceneRevision,
     meshStatistics,
     meshSummary,
+    mixedTopology: resolveMixedTopologyPresentation({
+      buildReport:
+        activeBuild.data?.shared_domain_build_report ??
+        semantics.data?.solver_mesh?.build_report ??
+        sharedReport.data?.report,
+      manifest: manifest.data,
+      rejectionEvidence: activeBuild.data?.mixed_layer_topology_rejection,
+    }),
     objectPolicyCount: objectConfigs.length,
     operationStatuses,
     policyDiffRows: buildSharedDomainPolicyDiffRows({

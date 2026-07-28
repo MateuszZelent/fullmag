@@ -12,6 +12,10 @@ import type {
   Viewport3DRenderablePart,
   Viewport3DTopologyRenderModel,
 } from "./viewport3dRenderModel";
+import {
+  topologyCellAt,
+  topologyCellEdges,
+} from "./viewport3dTopologyIndexModel";
 
 export interface Viewport3DMeshSizeHighlightModel {
   edgeIndices: Uint32Array;
@@ -68,16 +72,8 @@ interface ElementRange {
   start: number;
 }
 
-const TETRA_EDGES: readonly (readonly [number, number])[] = [
-  [0, 1],
-  [0, 2],
-  [0, 3],
-  [1, 2],
-  [1, 3],
-  [2, 3],
-];
 const REGULAR_TETRA_CHARACTERISTIC_FACTOR = 6 * Math.sqrt(2);
-const MAX_HIGHLIGHTED_TETRAHEDRA = 20_000;
+const MAX_HIGHLIGHTED_ELEMENTS = 20_000;
 
 export function buildViewport3DMeshSizeHighlightModel(
   topology: DecodedTopology | null | undefined,
@@ -90,7 +86,6 @@ export function buildViewport3DMeshSizeHighlightModel(
   selection: Viewport3DMeshHistogramSelection | null = null,
 ): Viewport3DMeshSizeHighlightModel | null {
   if (!topology || !topologyModel || !highlight) return null;
-  if (topology.indices.length !== topology.elementCount * 4) return null;
 
   const scope = resolveElementScope(topology, femDomain, highlight);
   const matchingElements = selection
@@ -104,7 +99,7 @@ export function buildViewport3DMeshSizeHighlightModel(
 
   const sampledElements = sampleElements(
     matchingElements,
-    MAX_HIGHLIGHTED_TETRAHEDRA,
+    MAX_HIGHLIGHTED_ELEMENTS,
   );
   return {
     edgeIndices: buildElementEdgeIndices(topology, sampledElements),
@@ -261,10 +256,12 @@ function elementMatchesDistribution(
   range: { hi: number | null; lo: number | null },
 ): boolean {
   if (distributionId === "edge_length") {
-    return tetraEdgeLengths(topology, element).some((length) =>
+    return cellEdgeLengths(topology, element).some((length) =>
       valueInRange(length, range),
     );
   }
+
+  if (topologyCellAt(topology, element)?.type !== 1) return false;
 
   const volume = tetraVolume(topology, element);
   if (!Number.isFinite(volume) || volume <= 0) return false;
@@ -310,27 +307,19 @@ function tetraVolume(topology: DecodedTopology, element: number): number {
   return Math.abs(crossX * dx + crossY * dy + crossZ * dz) / 6;
 }
 
-function tetraEdgeLengths(topology: DecodedTopology, element: number): number[] {
-  const nodes = tetraNodes(topology, element);
-  if (!nodes) return [];
-  return TETRA_EDGES.flatMap(([leftCorner, rightCorner]) => {
-    const leftNode = nodes[leftCorner];
-    const rightNode = nodes[rightCorner];
-    return leftNode === undefined || rightNode === undefined
-      ? []
-      : [nodeDistance(topology.positions, leftNode, rightNode)];
-  });
+function cellEdgeLengths(topology: DecodedTopology, element: number): number[] {
+  return topologyCellEdges(topology, element).map(([leftNode, rightNode]) =>
+    nodeDistance(topology.positions, leftNode, rightNode),
+  );
 }
 
 function tetraNodes(
   topology: DecodedTopology,
   element: number,
 ): [number, number, number, number] | null {
-  const offset = element * 4;
-  const a = topology.indices[offset];
-  const b = topology.indices[offset + 1];
-  const c = topology.indices[offset + 2];
-  const d = topology.indices[offset + 3];
+  const cell = topologyCellAt(topology, element);
+  if (!cell || cell.type !== 1 || cell.nodes.length !== 4) return null;
+  const [a, b, c, d] = cell.nodes;
   if (
     a === undefined ||
     b === undefined ||
@@ -380,12 +369,7 @@ function buildElementEdgeIndices(
   const edgeKeys = new Set<string>();
   const edgeIndices: number[] = [];
   for (const element of elements) {
-    const nodes = tetraNodes(topology, element);
-    if (!nodes) continue;
-    for (const [leftCorner, rightCorner] of TETRA_EDGES) {
-      const leftNode = nodes[leftCorner];
-      const rightNode = nodes[rightCorner];
-      if (leftNode === undefined || rightNode === undefined) continue;
+    for (const [leftNode, rightNode] of topologyCellEdges(topology, element)) {
       pushDedupedEdge(edgeKeys, edgeIndices, leftNode, rightNode);
     }
   }

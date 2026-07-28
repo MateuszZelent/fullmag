@@ -35,8 +35,9 @@ describe("viewport3dTopologyIndexModel", () => {
       node_start: 0,
     };
     const supplementalPart: Viewport3DTopologyIndexPartInput = {
-      boundary_face_count: 0,
-      boundary_face_start: 0,
+      boundary_face_count: 1,
+      boundary_face_indices: [1],
+      boundary_face_start: 1,
       id: "magnet-interface",
       surface_faces: [[3, 2, 1]],
     };
@@ -101,5 +102,140 @@ describe("viewport3dTopologyIndexModel", () => {
     expect(bundle.airboxPartsById.get("airbox")?.surfaceNodeSelection).toEqual({
       nodeIndices: [0, 3],
     });
+  });
+
+  it("builds mixed tet, prism, and pyramid surfaces and edges from canonical CSR", () => {
+    const topology: DecodedTopology = {
+      boundaryFaceCount: 2,
+      boundaryFaces: new Uint32Array([7, 8, 11, 7, 8, 9, 10, 11]),
+      boundaryMarkers: new Uint32Array([1, 2]),
+      cellCount: 3,
+      cellMarkers: new Uint32Array([1, 1, 2]),
+      cellNodes: new Uint32Array([
+        0, 1, 2, 3,
+        0, 1, 2, 4, 5, 6,
+        7, 8, 9, 10, 11,
+      ]),
+      cellOffsets: new Uint32Array([0, 4, 10, 15]),
+      cellTypes: new Uint32Array([1, 2, 3]),
+      elementCount: 3,
+      elementMarkers: new Uint32Array([1, 1, 2]),
+      facetCount: 2,
+      facetMarkers: new Uint32Array([1, 2]),
+      facetNodes: new Uint32Array([7, 8, 11, 7, 8, 9, 10]),
+      facetOffsets: new Uint32Array([0, 3, 7]),
+      facetRoles: new Uint32Array([1, 1]),
+      facetTypes: new Uint32Array([1, 2]),
+      formatVersion: 2,
+      indices: new Uint32Array([
+        0, 1, 2, 3,
+        0, 1, 2, 4, 5, 6,
+        7, 8, 9, 10, 11,
+      ]),
+      nodeCount: 12,
+      positions: new Float64Array(36),
+    };
+    const prismPart: Viewport3DTopologyIndexPartInput = {
+      boundary_face_count: 0,
+      boundary_face_start: 0,
+      element_count: 1,
+      element_start: 1,
+      id: "prism",
+    };
+    const pyramidSurface: Viewport3DTopologyIndexPartInput = {
+      boundary_face_count: 2,
+      boundary_face_start: 0,
+      id: "pyramid-surface",
+    };
+
+    const bundle = buildViewport3DTopologyIndexBundle({
+      airboxParts: [],
+      magneticParts: [prismPart, pyramidSurface],
+      topology,
+    });
+
+    expect(bundle.fallbackSurfaceIndices).toHaveLength(48);
+    expect(bundle.fallbackVolumeEdgeIndices).toHaveLength(40);
+    expect(bundle.magneticPartsById.get("prism")?.volumeEdgeIndices).toHaveLength(18);
+    expect(Array.from(bundle.magneticPartsById.get("pyramid-surface")?.surfaceIndices ?? []))
+      .toEqual([7, 8, 11, 7, 8, 9, 7, 9, 10]);
+    expect(Array.from(
+      bundle.magneticPartsById.get("pyramid-surface")
+        ?.surfaceTriangleFacetIndices ?? [],
+    )).toEqual([0, 1, 1]);
+    const fallbackEdges = Array.from(bundle.fallbackSurfaceEdgeIndices ?? []);
+    const fallbackEdgeKeys = new Set(
+      Array.from({ length: fallbackEdges.length / 2 }, (_unused, index) =>
+        [fallbackEdges[index * 2], fallbackEdges[index * 2 + 1]]
+          .toSorted((left, right) => (left ?? 0) - (right ?? 0))
+          .join(":"),
+      ),
+    );
+    expect(fallbackEdgeKeys.has("7:9")).toBe(false);
+  });
+
+  it("keeps surface_faces and supplemental quad picking mapped to global facets", () => {
+    const topology = topologyFixture();
+    const bundle = buildViewport3DTopologyIndexBundle({
+      airboxParts: [],
+      magneticParts: [{
+        boundary_face_count: 1,
+        boundary_face_indices: [10],
+        boundary_face_start: 10,
+        id: "production-surface",
+        surface_faces: [[0, 1, 2]],
+      }],
+      magneticSurfacePartsByPartId: new Map([["production-surface", [{
+        boundary_face_count: 1,
+        boundary_face_indices: [20],
+        boundary_face_start: 20,
+        id: "supplemental-quad",
+        surface_faces: [[0, 1, 3, 2]],
+      }]]]),
+      topology,
+    });
+    const prepared = bundle.magneticPartsById.get("production-surface");
+
+    expect(Array.from(prepared?.surfaceTriangleFacetIndices ?? []))
+      .toEqual([10, 20, 20]);
+    const edges = Array.from(prepared?.edgeIndices ?? []);
+    const edgeKeys = new Set(
+      Array.from({ length: edges.length / 2 }, (_unused, index) =>
+        [edges[index * 2], edges[index * 2 + 1]]
+          .toSorted((left, right) => (left ?? 0) - (right ?? 0))
+          .join(":"),
+      ),
+    );
+    expect(edgeKeys.has("0:3")).toBe(false);
+    expect(edgeKeys.has("1:3")).toBe(true);
+    expect(edgeKeys.has("0:2")).toBe(true);
+  });
+
+  it("keeps colliding Tri3 and Quad4 render triangles mapped positionally", () => {
+    const topology = topologyFixture();
+    const bundle = buildViewport3DTopologyIndexBundle({
+      airboxParts: [],
+      magneticParts: [{
+        boundary_face_count: 1,
+        boundary_face_indices: [4],
+        boundary_face_start: 4,
+        id: "tri",
+        surface_faces: [[0, 1, 2]],
+      }],
+      magneticSurfacePartsByPartId: new Map([["tri", [{
+        boundary_face_count: 1,
+        boundary_face_indices: [9],
+        boundary_face_start: 9,
+        id: "quad",
+        surface_faces: [[0, 1, 2, 3]],
+      }]]]),
+      topology,
+    });
+    const prepared = bundle.magneticPartsById.get("tri");
+
+    expect(Array.from(prepared?.surfaceIndices ?? []))
+      .toEqual([0, 1, 2, 0, 1, 2, 0, 2, 3]);
+    expect(Array.from(prepared?.surfaceTriangleFacetIndices ?? []))
+      .toEqual([4, 9, 9]);
   });
 });

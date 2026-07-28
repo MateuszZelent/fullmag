@@ -6881,6 +6881,59 @@ class MeshScaffoldTests(unittest.TestCase):
         ]
         self.assertEqual(emitted_phases[-1], failed_event["phase"])
 
+    def test_mixed_mesh_build_failed_event_preserves_rejection_evidence(self) -> None:
+        geometry = fm.Box(size=(1.0, 1.0, 0.1), name="magnet")
+
+        with patch(
+            "fullmag.meshing.asset_pipeline.emit_progress_event"
+        ) as emit_event, patch(
+            "fullmag.meshing.asset_pipeline.generate_mesh",
+            side_effect=RuntimeError("resolved 2 layers"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "resolved 2 layers"):
+                realize_fem_domain_mesh_asset(
+                    [geometry],
+                    fm.FEM(order=1, hmax=0.1),
+                    study_universe={
+                        "mode": "manual",
+                        "size": [4.0, 4.0, 4.0],
+                        "center": [0.0, 0.0, 0.0],
+                    },
+                    mesh_workflow={
+                        "per_geometry": [{
+                            "geometry": "magnet",
+                            "mode": "custom",
+                            "hmax": 0.1,
+                            "maximum_element_size": 0.1,
+                            "order": 1,
+                            "mesh_strategy": "swept_prism",
+                            "through_thickness_elements": 1,
+                            "through_thickness_distribution": "fixed",
+                            "sweep_face_meshing": "triangular",
+                            "topology": "prismatic",
+                            "sweep_direction": "auto",
+                            "element_family": "prism",
+                            "transition_policy": "pyramid_to_tetrahedra",
+                            "exact_layer_count": True,
+                        }],
+                    },
+                )
+
+        failed_event = next(
+            call.args[0]
+            for call in emit_event.call_args_list
+            if call.args[0]["kind"] == "mesh_build_failed"
+        )
+        self.assertEqual(
+            failed_event["mixed_layer_topology_rejection"],
+            {
+                "schema_version": "mixed_layer_topology_rejection.v1",
+                "certificate_status": "rejected",
+                "requested_layer_count": 1,
+                "rejection_reason": "resolved 2 layers",
+            },
+        )
+
     def test_mesh_build_failed_event_reports_postprocessing_failure_once(self) -> None:
         geometry = fm.Box(size=(1.0, 1.0, 1.0), name="magnet")
         failure = RuntimeError("postprocessing failed")

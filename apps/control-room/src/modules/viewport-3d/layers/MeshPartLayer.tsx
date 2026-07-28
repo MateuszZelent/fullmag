@@ -172,6 +172,7 @@ export function resolveMeshPartBoundaryFaceIndexForPick({
   expandedSurfaceFaces,
   faceIndex,
   part,
+  surfaceTriangleFacetIndices,
 }: {
   expandedSurfaceFaces: boolean;
   faceIndex: number | null | undefined;
@@ -179,6 +180,7 @@ export function resolveMeshPartBoundaryFaceIndexForPick({
     Viewport3DMeshPart,
     "boundary_face_count" | "boundary_face_indices" | "boundary_face_start"
   >;
+  surfaceTriangleFacetIndices?: Uint32Array | null;
 }): number | null {
   if (faceIndex === null || faceIndex === undefined || faceIndex < 0) {
     return null;
@@ -191,6 +193,9 @@ export function resolveMeshPartBoundaryFaceIndexForPick({
     return null;
   }
   const localFaceIndex = Math.floor(faceIndex);
+  const mappedFacetIndex = surfaceTriangleFacetIndices?.[localFaceIndex];
+  if (expandedSurfaceFaces) return mappedFacetIndex ?? null;
+  if (mappedFacetIndex !== undefined) return mappedFacetIndex;
   const explicitFaceIndex = part.boundary_face_indices?.[localFaceIndex];
   if (explicitFaceIndex !== undefined) return explicitFaceIndex;
   if (localFaceIndex >= part.boundary_face_count) return null;
@@ -764,6 +769,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
           expandedSurfaceFaces: expandSurfaceFaces,
           faceIndex: event.faceIndex,
           part,
+          surfaceTriangleFacetIndices: partModel.surfaceTriangleFacetIndices,
         }),
       ),
     );

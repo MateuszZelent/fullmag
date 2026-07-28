@@ -89,6 +89,7 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     rangeMode,
     targetPoints,
   });
+  const setDescriptorRange = preferences.setDescriptorRange;
 
   useEffect(() => {
     const normalized = normalizeTableRangeModeForXAxis(
@@ -96,9 +97,9 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
       tableData.xAxisId,
     );
     if (normalized === rangeMode) return;
-    preferences.setDescriptorRange(descriptorId, { mode: "follow" });
+    setDescriptorRange(descriptorId, { mode: "follow" });
     analysisPlotsWorkspaceStore.setRangeMode(normalized);
-  }, [descriptorId, preferences.setDescriptorRange, rangeMode, tableData.xAxisId]);
+  }, [descriptorId, rangeMode, setDescriptorRange, tableData.xAxisId]);
 
   const energyData = useAnalysisEnergyData(activeSurface);
 
