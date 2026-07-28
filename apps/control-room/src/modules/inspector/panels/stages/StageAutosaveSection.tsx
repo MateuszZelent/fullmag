@@ -124,7 +124,7 @@ export function StageAutosaveSection({
                 />
                 <Button
                   aria-label={`Remove field ${field.quantity || index + 1}`}
-                  size="icon-sm"
+                  size="icon"
                   type="button"
                   variant="ghost"
                   onClick={() => onChange({ ...draft, fields: draft.fields.filter((_, itemIndex) => itemIndex !== index) })}
