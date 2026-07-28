@@ -182,10 +182,30 @@ relax stage 'relax' already has table autosave configured
 physical-time table autosave is not valid for relax stage 'relax'
 ```
 
-The interactive launcher must surface the underlying preparation error in the
-terminal before it enters the failed-workspace wait loop. This observability
-correction is part of the implementation because the current summary hides the
-root cause in interactive mode.
+The preparation failure resource must not collapse an actionable validation
+error to the generic `Simulation validation failed` summary. For a safe
+validation error it publishes the concrete cause in `failure.summary` and
+assigns a non-null `diagnostics_correlation_id`. For example:
+
+```json
+{
+  "error_code": "validation_failed",
+  "stage_id": "validation",
+  "summary": "Relax stage 'relax' table autosave must use a positive every_steps cadence",
+  "diagnostics_correlation_id": "preparation-validation-..."
+}
+```
+
+The corresponding preparation `log_tail` error entry carries the same safe
+summary. Full technical context is stored in the correlated diagnostic log;
+internal paths, backtraces, or unsafe exception content are not copied into the
+public resource.
+
+The interactive launcher prints the concrete safe cause and correlation ID in
+the terminal before entering the failed-workspace wait loop. The Control Room
+renders the same cause and offers the correlation ID for diagnostics. This
+observability correction is part of the implementation because the current
+API resource, UI, and terminal all hide the root cause.
 
 ## Tests and Acceptance Criteria
 
@@ -204,11 +224,13 @@ root cause in interactive mode.
    deprecation warning at Python authoring time.
 9. Canonical script export emits
    `study.stages.add_relax(...).tableautosave(...)` for stage-local ownership.
-10. Interactive preparation failures print their underlying error before the
-    Control Room remains open.
-11. Focused Python, ProblemIR, CLI materialization, runner, and script-export
-    tests pass.
-12. The managed FEM runtime builds through the repository `just` route, and a
+10. Validation failures expose a safe concrete summary and non-null diagnostic
+    correlation ID in the preparation resource and its `log_tail`.
+11. Interactive preparation failures print the safe cause and correlation ID
+    before the Control Room remains open; the UI renders both values.
+12. Focused Python, ProblemIR, CLI materialization, API resource, Control Room,
+    runner, and script-export tests pass.
+13. The managed FEM runtime builds through the repository `just` route, and a
     headless SP4 preparation reaches solver initialization on the GPU lane.
 
 ## Non-goals
