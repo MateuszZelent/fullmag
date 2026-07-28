@@ -8,3 +8,8 @@ export {
   getViewport3DWorkerRuntimeSnapshot,
 } from "./viewport3dWorkerRuntime";
 export { manifestRenderableCarriers } from "./viewport3dDomainAdapter";
+export {
+  useViewport3DRenderedScalarRange,
+  type Viewport3DRenderedScalarRange,
+  type Viewport3DRenderedScalarRangeQuery,
+} from "./viewport3dStore";

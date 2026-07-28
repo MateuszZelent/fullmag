@@ -766,12 +766,13 @@ impl ProblemIR {
                 table_autosave.sample_period_s,
                 table_autosave.sample_period_policy.as_ref(),
                 table_autosave.resolved_sample_period_s,
+                table_autosave.every_steps,
             ) {
-                (None, None, None) => errors.push(
+                (None, None, None, None) => errors.push(
                     "sampling.table_autosave requires sample_period_s or sample_period_policy"
                         .to_string(),
                 ),
-                (Some(sample_period_s), None, None) => {
+                (Some(sample_period_s), None, None, None) => {
                     if !sample_period_s.is_finite() || sample_period_s <= 0.0 {
                         errors.push(
                             "sampling.table_autosave.sample_period_s must be finite and positive"
@@ -779,12 +780,12 @@ impl ProblemIR {
                         );
                     }
                 }
-                (None, Some(policy), None) => validate_sampling_period_policy(
+                (None, Some(policy), None, None) => validate_sampling_period_policy(
                     "sampling.table_autosave.sample_period_policy",
                     policy,
                     &mut errors,
                 ),
-                (None, Some(policy), Some(resolved_sample_period_s)) => {
+                (None, Some(policy), Some(resolved_sample_period_s), None) => {
                     if !resolved_sample_period_s.is_finite() || resolved_sample_period_s <= 0.0 {
                         errors.push(
                             "sampling.table_autosave.resolved_sample_period_s must be finite and positive"
@@ -797,10 +798,31 @@ impl ProblemIR {
                         &mut errors,
                     );
                 }
+                (None, None, None, Some(every_steps)) => {
+                    if every_steps == 0 {
+                        errors.push(
+                            "sampling.table_autosave.every_steps must be a positive accepted-step count"
+                                .to_string(),
+                        );
+                    }
+                }
                 _ => errors.push(
-                    "sampling.table_autosave cadence state is ambiguous; use exactly one of explicit sample_period_s, unresolved sample_period_policy, or sample_period_policy with resolved_sample_period_s"
+                    "sampling.table_autosave cadence state is ambiguous; use exactly one of explicit sample_period_s, unresolved sample_period_policy, sample_period_policy with resolved_sample_period_s, or every_steps"
                         .to_string(),
                 ),
+            }
+            let is_relaxation = matches!(&self.study, StudyIR::Relaxation { .. });
+            if table_autosave.accepted_step_cadence().is_some() && !is_relaxation {
+                errors.push(
+                    "sampling.table_autosave.every_steps is only valid for relaxation studies"
+                        .to_string(),
+                );
+            }
+            if table_autosave.accepted_step_cadence().is_none() && is_relaxation {
+                errors.push(
+                    "relaxation table_autosave must use every_steps; simulation-time cadence is not physically meaningful for relaxation"
+                        .to_string(),
+                );
             }
             if table_autosave.quantities.is_empty() {
                 errors.push("sampling.table_autosave.quantities must not be empty".to_string());

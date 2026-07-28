@@ -3235,16 +3235,16 @@ class StudyStagesBuilder:
         t_sampling: SamplingPeriod | None = None,
         quantities: Sequence[str] | None = None,
         *,
+        every_steps: int | None = None,
         enabled: bool = True,
         stage_id: str | None = None,
     ) -> "StudyStagesBuilder":
         """Enable or disable the scalar table clock for subsequent stages."""
         configured: TableAutosave | None
         if enabled:
-            if t_sampling is None:
-                raise TypeError("tableautosave() requires t_sampling when enabled=True")
             configured = TableAutosave(
                 t_sampl=t_sampling,
+                every_steps=every_steps,
                 quantities=quantities,
             )
         else:
@@ -6586,7 +6586,12 @@ def snapshot(
     _state._outputs.append(Snapshot(field=field, component=component, every=every, layer=layer_name))
 
 
-def tableautosave(every: SamplingPeriod, quantities: Sequence[str] | None = None) -> None:
+def tableautosave(
+    every: SamplingPeriod | None = None,
+    quantities: Sequence[str] | None = None,
+    *,
+    every_steps: int | None = None,
+) -> None:
     """Configure a mumax-style scalar table autosave cadence.
 
     Registers the canonical ``sampling.table_autosave`` observable table.
@@ -6595,6 +6600,7 @@ def tableautosave(every: SamplingPeriod, quantities: Sequence[str] | None = None
     """
     _state._table_autosave = TableAutosave(
         t_sampl=every,
+        every_steps=every_steps,
         quantities=quantities,
     )
 

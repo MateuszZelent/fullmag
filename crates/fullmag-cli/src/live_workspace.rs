@@ -1383,9 +1383,9 @@ mod tests {
         fem_mesh_payload_clone_count, ingest_preview_fields_from_update,
         merge_detailed_mesh_workspace, merge_pending_publish_payload,
         replace_cached_preview_fields, reset_fem_mesh_payload_clone_count,
-        upsert_cached_preview_field, CurrentLivePublisher, CurrentLiveScalarRow,
-        CurrentLiveSnapshotPayload, LiveTelemetryPublishGate, LocalLiveWorkspace,
-        LocalLiveWorkspaceState,
+        table_autosave_sample_due, upsert_cached_preview_field, CurrentLivePublisher,
+        CurrentLiveScalarRow, CurrentLiveSnapshotPayload, LiveTelemetryPublishGate,
+        LocalLiveWorkspace, LocalLiveWorkspaceState,
     };
     use crate::simulation_preparation::{
         PreparationStageId, PreparationStageStatus, SimulationPreparationState,
@@ -3190,6 +3190,28 @@ mod tests {
             Some(3)
         );
     }
+
+    #[test]
+    fn table_autosave_step_cadence_controls_live_scalar_publication() {
+        let metadata = serde_json::json!({
+            "table_autosave": { "every_steps": 10 }
+        });
+        let mut stats = fullmag_runner::StepStats::default();
+        for step in [0, 9, 10, 23] {
+            stats.step = step;
+            assert_eq!(
+                table_autosave_sample_due(Some(&metadata), None, &stats, false),
+                step == 0 || step == 10,
+            );
+        }
+        stats.step = 23;
+        assert!(table_autosave_sample_due(
+            Some(&metadata),
+            None,
+            &stats,
+            true
+        ));
+    }
 }
 
 fn current_live_publisher_loop(
@@ -3534,10 +3556,14 @@ pub(crate) fn set_latest_scalar_row_if_due(
     if feature_flags().disable_charts {
         return;
     }
-    // Always record the scalar row for live streaming whenever the orchestrator decides
-    // to publish a workspace update.  The `scalar_row_due` flag is an artifact-recorder
-    // concern (zarr on disk); for live telemetry we want every throttled live-update to
-    // carry a new chart point so the Charts panel populates continuously.
+    if !table_autosave_sample_due(
+        state.metadata.as_ref(),
+        state.latest_scalar_row.as_ref(),
+        &update.stats,
+        update.finished,
+    ) {
+        return;
+    }
     let previous_runtime_s = state
         .latest_scalar_row
         .as_ref()
@@ -3548,6 +3574,42 @@ pub(crate) fn set_latest_scalar_row_if_due(
         &update.stats,
         active_runtime_s,
     ));
+}
+
+fn table_autosave_sample_due(
+    metadata: Option<&serde_json::Value>,
+    previous: Option<&CurrentLiveScalarRow>,
+    stats: &fullmag_runner::StepStats,
+    finished: bool,
+) -> bool {
+    let Some(autosave) = metadata
+        .and_then(|value| value.get("table_autosave"))
+        .filter(|value| !value.is_null())
+    else {
+        return true;
+    };
+
+    if finished {
+        return true;
+    }
+    if let Some(every_steps) = autosave
+        .get("every_steps")
+        .and_then(serde_json::Value::as_u64)
+    {
+        return every_steps > 0 && (stats.step == 0 || stats.step % every_steps == 0);
+    }
+    let Some(sample_period_s) = autosave
+        .get("sample_period_s")
+        .and_then(serde_json::Value::as_f64)
+        .filter(|period| period.is_finite() && *period > 0.0)
+    else {
+        return true;
+    };
+    let Some(previous) = previous else {
+        return true;
+    };
+    let epsilon = sample_period_s * 1e-9;
+    stats.time + epsilon >= previous.time + sample_period_s
 }
 
 pub(crate) fn clear_cached_preview_fields(state: &mut LocalLiveWorkspaceState) {

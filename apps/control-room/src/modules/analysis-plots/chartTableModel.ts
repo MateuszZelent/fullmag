@@ -43,6 +43,11 @@ export interface ChartValueRange {
   toValue: number;
 }
 
+/** The table rows API can slice by simulation time only, never by an arbitrary quantity. */
+export function isTableTimeAxisId(columnId: string): boolean {
+  return columnId === "t" || columnId === "time";
+}
+
 interface TableColumnMeta {
   column_id: string;
   dimension?: string;
@@ -114,6 +119,8 @@ export function buildTableRowsQuery({
   cursor,
   fromRow,
   fromT,
+  includeTail,
+  limit,
   range,
   targetPoints,
   toRow,
@@ -123,6 +130,8 @@ export function buildTableRowsQuery({
   cursor?: number;
   fromRow?: number;
   fromT?: number;
+  includeTail?: boolean;
+  limit?: number;
   range?: TableRowsRangeQuery | null;
   targetPoints?: number;
   toRow?: number;
@@ -140,8 +149,8 @@ export function buildTableRowsQuery({
     decimation: "minmax_lttb",
     fromRow: visibleRange.fromRow,
     fromT: visibleRange.fromT,
-    includeTail: !hasVisibleRange,
-    limit: DEFAULT_TABLE_ROW_LIMIT,
+    includeTail: includeTail ?? !hasVisibleRange,
+    limit: clampInteger(limit ?? DEFAULT_TABLE_ROW_LIMIT, 10, DEFAULT_TABLE_ROW_LIMIT),
     targetPoints: clampInteger(
       targetPoints ?? 1_600,
       MIN_TARGET_POINTS,
@@ -164,9 +173,10 @@ export function tableRowsVisibleRangeQuery({
   if (!Number.isFinite(fromValue) || !Number.isFinite(toValue)) return null;
   const from = Math.min(fromValue, toValue);
   const to = Math.max(fromValue, toValue);
-  if (xAxisId === "t" || xAxisId === "time") {
+  if (isTableTimeAxisId(xAxisId)) {
     return { fromT: from, toT: to };
   }
+  if (xAxisId !== "step") return null;
   return {
     fromRow: Math.max(0, Math.floor(from)),
     toRow: Math.max(0, Math.ceil(to)),

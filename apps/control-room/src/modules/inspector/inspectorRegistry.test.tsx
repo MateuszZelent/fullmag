@@ -121,6 +121,12 @@ function frequencyDomainPanelId(kind: string): string {
 }
 
 describe("inspectorRegistry", () => {
+  it("routes a pinned Quick Chart to its preview-only Inspector", () => {
+    expect(resolveInspectorPanel({ kind: "results.quick_chart" })?.id).toBe(
+      "quick-chart",
+    );
+  });
+
   it("resolves geometry object selections to their correct panels", () => {
     expect(resolveInspectorPanel({ kind: "object.root" })?.id).toBe(
       "object-general",

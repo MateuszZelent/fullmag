@@ -30,6 +30,51 @@ export interface FrequencyDomainChartRoute {
   unavailableReason: string | null;
 }
 
+export function frequencyDomainChartRouteOverrideFromSelection(
+  state: import("@/kernel/selection/selectionTypes").Selection | { kind?: string | null; ref?: { kind?: string | null; type?: string | null } | null } | null | undefined,
+): Pick<FrequencyDomainChartRoute, "mode" | "primaryChart"> | null {
+  if (!state) return null;
+  const ref = "ref" in state ? state.ref : undefined;
+  const kind = ref?.type === "frequency-domain"
+    ? ref.kind
+    : ("kind" in state ? state.kind : undefined);
+  if (!kind) return null;
+  if (kind === "results.frequency_domain.fmr_modal_spectrum") {
+    return { mode: "fmr_modal", primaryChart: "modal-spectrum" };
+  }
+  if (
+    kind.startsWith("results.frequency_response") ||
+    kind.startsWith("resources.analysis.frequency_response") ||
+    kind === "study.stage.frequency_response.sweep" ||
+    kind === "study.stage.frequency_response.outputs" ||
+    kind === "results.frequency_domain.fmr_response_sweep"
+  ) {
+    return { mode: "fmr_response", primaryChart: "response-sweep" };
+  }
+  if (
+    kind === "results.frequency_domain.response_map" ||
+    kind === "resources.analysis.frequency_domain.response_map" ||
+    kind === "study.stage.frequency_response.k_grid"
+  ) {
+    return { mode: "response_map", primaryChart: "response-map" };
+  }
+  if (
+    kind.includes("dispersion") ||
+    kind.includes("k_path") ||
+    kind === "study.stage.eigenmodes.k_path"
+  ) {
+    return { mode: "dispersion_modal", primaryChart: "dispersion" };
+  }
+  if (
+    kind.startsWith("results.eigen") ||
+    kind.startsWith("resources.analysis.eigen") ||
+    kind === "study.stage.eigenmodes.outputs"
+  ) {
+    return { mode: "free_modes", primaryChart: "modal-spectrum" };
+  }
+  return null;
+}
+
 export interface FrequencyDomainJsonArtifactLike {
   artifact_path?: string | null;
   payload?: unknown;

@@ -133,17 +133,8 @@ async function main() {
     errors.push(text);
   });
   page.on("pageerror", (error) => errors.push(error.message));
-  page.on("response", async (response) => {
+  page.on("response", (response) => {
     const responsePath = currentSessionPath(response.url());
-    if (responsePath && ROWS_BIN_PATTERN.test(responsePath)) {
-      const record = rowsBinRequests.findLast(
-        (entry) => entry.request === response.request(),
-      );
-      if (record) {
-        const sizes = await response.request().sizes();
-        record.responseBytes = sizes.responseBodySize;
-      }
-    }
     if (response.status() < 400) return;
     failedResponses.push({
       path: responsePath,
@@ -161,9 +152,18 @@ async function main() {
       timestamp: Date.now(),
     });
   });
+  page.on("requestfinished", async (request) => {
+    const requestPath = currentSessionPath(request.url());
+    if (!requestPath || !ROWS_BIN_PATTERN.test(requestPath)) return;
+    const record = findRowsBinRequest(rowsBinRequests, request);
+    if (!record) return;
+    const sizes = await request.sizes();
+    record.responseBytes = sizes.responseBodySize;
+  });
   page.on("requestfailed", (request) => {
     const requestPath = currentSessionPath(request.url());
     if (!requestPath || !ROWS_BIN_PATTERN.test(requestPath)) return;
+    discardCancelledRowsBinRequest(rowsBinRequests, request);
     if (fixtureRouteState.delayedRequest === request) {
       fixtureRouteState.abortObserved = true;
     }
@@ -180,7 +180,9 @@ async function main() {
     await waitForAnalysisChart(page);
     await waitForStableChartDiagnostics(page);
     const coldDurationMs = performance.now() - coldStartedAt;
+    await pauseAnalysisUpdates(page);
     await waitForQuietRowsBinRequests(page, rowsBinRequests);
+    await waitForRowsTransportSizes(page, rowsBinRequests);
     const coldTransport = collectRowsTransport(rowsBinRequests);
     rowsBinRequests.length = 0;
     const coldDiagnostics = await collectChartDiagnostics(page);
@@ -192,6 +194,7 @@ async function main() {
       tabSwitches,
     );
     await waitForQuietRowsBinRequests(page, rowsBinRequests);
+    await waitForRowsTransportSizes(page, rowsBinRequests);
     const warmTransport = collectRowsTransport(rowsBinRequests);
     rowsBinRequests.length = 0;
     idleProofs.push(await verifyIdleChartBudget(page, rowsBinRequests));
@@ -438,6 +441,26 @@ async function verifyIdleChartBudget(page, rowsBinRequests) {
   };
 }
 
+/**
+ * An active simulation legitimately publishes new table revisions. The idle
+ * budget is meaningful only after the user pauses the Analysis view, which
+ * freezes the accepted revision without disconnecting revision invalidation.
+ */
+async function pauseAnalysisUpdates(page) {
+  const pauseButton = page.getByRole("button", {
+    exact: true,
+    name: "Pause chart — freeze current revision",
+  });
+  await pauseButton.waitFor({ state: "visible", timeout: timeoutMs });
+  await pauseButton.click({ timeout: timeoutMs });
+  await page
+    .getByRole("button", {
+      exact: true,
+      name: "Resume live chart updates",
+    })
+    .waitFor({ state: "visible", timeout: timeoutMs });
+}
+
 async function waitForQuietRowsBinRequests(page, rowsBinRequests) {
   const quietMs = Math.max(1_500, Math.min(idleObserveMs, 3_000));
   const deadline = Date.now() + timeoutMs;
@@ -457,6 +480,32 @@ async function waitForQuietRowsBinRequests(page, rowsBinRequests) {
   throw new Error(
     `rows.bin requests did not settle before idle audit: ${rowsBinRequests.length} ${summarizeRowsBinRequests(rowsBinRequests)}`,
   );
+}
+
+async function waitForRowsTransportSizes(page, rowsBinRequests) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const missingSize = rowsBinRequests.find(
+      (request) => !Number.isFinite(request.responseBytes),
+    );
+    if (!missingSize) return;
+    await page.waitForTimeout(50);
+  }
+  const missingSize = rowsBinRequests.find(
+    (request) => !Number.isFinite(request.responseBytes),
+  );
+  throw new Error(
+    `rows.bin response size was not measured before transport audit: ${missingSize?.path ?? "unknown request"}`,
+  );
+}
+
+function findRowsBinRequest(rowsBinRequests, request) {
+  return rowsBinRequests.findLast((entry) => entry.request === request) ?? null;
+}
+
+function discardCancelledRowsBinRequest(rowsBinRequests, request) {
+  const index = rowsBinRequests.findLastIndex((entry) => entry.request === request);
+  if (index >= 0) rowsBinRequests.splice(index, 1);
 }
 
 function summarizeRowsBinRequests(rowsBinRequests) {

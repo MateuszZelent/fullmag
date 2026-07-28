@@ -113,10 +113,12 @@ export function buildViewport3DColorbarRenderKey({
 }
 
 export function planViewport3DColorbars({
+  includeInspectorRanges = false,
   previousPlans,
   rangeStatesByGroupKey,
   targets,
 }: {
+  includeInspectorRanges?: boolean;
   previousPlans?: ReadonlyMap<string, Viewport3DColorbarPlan> | null;
   rangeStatesByGroupKey?:
     | ReadonlyMap<string, Viewport3DColorbarRangeState>
@@ -136,7 +138,13 @@ export function planViewport3DColorbars({
   }>();
 
   for (const target of targets) {
-    if (!target.visible || !target.colorbar.viewportVisible) continue;
+    if (
+      !target.visible ||
+      (!target.colorbar.viewportVisible &&
+        !(includeInspectorRanges && target.colorbar.inspectorVisible))
+    ) {
+      continue;
+    }
     const colorMode = target.colorbar.scalarColorMode;
     if (!colorMode || !viewport3DColorModeHasNumericColorbar(colorMode)) {
       continue;

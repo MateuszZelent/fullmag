@@ -3,11 +3,14 @@
 import { useMemo } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
-import { useTableRowsBinaryResource } from "@/kernel/resources/studyRuntimeResources";
+import {
+  useTableColumnsResource,
+  useTableRowsBinaryResource,
+} from "@/kernel/resources/studyRuntimeResources";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import {
-  buildSharedAnalysisTableQuery,
   analysisColumnDescriptorsForQuery,
+  buildSharedAnalysisTableQuery,
   chartTableWindowFromBinary,
 } from "@/shared/domain/analysis/chartDataPlan";
 import { useAnalysisPlotsWorkspaceSelector } from "@/kernel/workspace/useAnalysisPlotsWorkspace";
@@ -15,30 +18,54 @@ import { useAnalysisPlotsWorkspaceSelector } from "@/kernel/workspace/useAnalysi
 import { QuickChartView } from "./QuickChartView";
 import {
   buildQuickChartRenderModel,
+  quickChartColumnIdsForQuery,
   quickChartDescriptorFromSelection,
 } from "./quickChart";
 
 export function QuickChartResourceView({ selection }: { selection: Selection }) {
   const kernel = useKernel();
-  const { availableColumns, xAxisId, yAxisIds } =
+  const { xAxisId, yAxisIds } =
     useAnalysisPlotsWorkspaceSelector((state) => state);
-  const descriptor = quickChartDescriptorFromSelection({ selection, xAxisId, yAxisIds });
+  const descriptor = useMemo(
+    () => quickChartDescriptorFromSelection({ selection, xAxisId, yAxisIds }),
+    [selection, xAxisId, yAxisIds],
+  );
   const tableId = descriptor?.tableId ?? "default";
-  const query = useMemo(() => buildSharedAnalysisTableQuery(), []);
-  const rows = useTableRowsBinaryResource(tableId, { ...query, enabled: Boolean(descriptor) });
+  const tableColumns = useTableColumnsResource(tableId, {
+    enabled: Boolean(descriptor),
+  });
+  const queryColumns = useMemo(
+    () => quickChartColumnIdsForQuery(tableColumns.data, descriptor),
+    [descriptor, tableColumns.data],
+  );
+  const query = useMemo(
+    () => buildSharedAnalysisTableQuery({ columns: queryColumns }),
+    [queryColumns],
+  );
+  const rows = useTableRowsBinaryResource(tableId, {
+    ...query,
+    enabled: queryColumns.length > 0,
+  });
   const window = useMemo(() => {
     const decoded = rows.data;
     if (!descriptor || !decoded || decoded.status !== "ready") return null;
-    const selectedColumns = analysisColumnDescriptorsForQuery(
-      availableColumns,
-      query.columns,
+    const columns = analysisColumnDescriptorsForQuery(
+      tableColumns.data ?? [],
+      queryColumns,
     );
-    if (selectedColumns.length !== decoded.data.columnCount) return null;
-    return chartTableWindowFromBinary({ columns: selectedColumns, decoded: decoded.data, tableId });
-  }, [availableColumns, descriptor, query.columns, rows.data, tableId]);
+    if (columns.length !== decoded.data.columnCount) return null;
+    return chartTableWindowFromBinary({ columns, decoded: decoded.data, tableId });
+  }, [descriptor, queryColumns, rows.data, tableColumns.data, tableId]);
+  const resourceStatus = tableColumns.status === "error"
+    ? "error"
+    : tableColumns.status === "ready" && queryColumns.length === 0
+      ? "unsupported"
+      : tableColumns.status === "ready"
+        ? rows.status
+        : tableColumns.status;
   const model = buildQuickChartRenderModel({
     descriptor: descriptor ?? { chartId: "none", resourceKey: "data.table:none", tableId, xAxisId, yAxisIds },
-    status: rows.status,
+    status: resourceStatus,
     window,
   });
 

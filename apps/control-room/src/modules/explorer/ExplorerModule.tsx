@@ -52,6 +52,7 @@ import {
 } from "@/kernel/object-extensions/useObjectExtensionActivation";
 import type { ModuleProps } from "@/kernel/types";
 import { useCrossSectionWorkspaceSelector } from "@/kernel/workspace/useCrossSectionWorkspace";
+import { useQuickChartWorkspaceSelector } from "@/kernel/workspace/useQuickChartWorkspace";
 import { usePlanarMonitorsResource } from "@/kernel/resources/planarMonitorResources";
 import {
   meshPipelineStatusIsActive,
@@ -181,6 +182,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     (explorer) => explorer.textureLoadObjectIds,
   );
   const objectExtensionActivation = useObjectExtensionActivationSnapshot();
+  const pinnedQuickChart = useQuickChartWorkspaceSelector((state) => state.pinned);
   const selectedNodeId = useSelectionSelector((selection) => selection.nodeId);
   const crossSections = useCrossSectionWorkspaceSelector(
     selectExplorerCrossSections,
@@ -391,6 +393,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
             frequencyDomainResponseProgress: frequencyDomainResponseProgress.data,
             frequencyDomainResponseSweep: frequencyDomainResponseSweep.data,
             frequencyDomainSpectrum: frequencyDomainSpectrum.data,
+            pinnedQuickChart,
           });
     return filterExplorerNodes(baseNodes, filterText, selectedNodeId);
   }, [
@@ -423,6 +426,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     frequencyDomainResponseProgress.data,
     frequencyDomainResponseSweep.data,
     frequencyDomainSpectrum.data,
+    pinnedQuickChart,
   ]);
 
   useEffect(() => {
@@ -462,6 +466,12 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     );
     return unsubscribe;
   }, [kernel.bus, kernel.selection]);
+
+  useEffect(() => {
+    return kernel.bus.on("explorer:tab-requested", ({ tab }) => {
+      setExplorerActiveTab(tab);
+    });
+  }, [kernel.bus]);
 
   useEffect(() => {
     if (crossSectionExpansionIds.length === 0) return;

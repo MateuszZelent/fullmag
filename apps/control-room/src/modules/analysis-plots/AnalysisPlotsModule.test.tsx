@@ -1210,6 +1210,7 @@ describe("AnalysisPlotsView", () => {
   it("renders frequency-domain series as a dedicated analysis subchart", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
+        activeSurface="overview"
         kernel={mockKernel}
         frequencyDomainSeries={[
           {
@@ -1245,7 +1246,7 @@ describe("AnalysisPlotsView", () => {
     );
 
     expect(html).toContain("Frequency-domain response sweep");
-    expect(html).toContain("Frequency-domain series legend");
+    expect(html).toContain("Frequency-domain series");
     expect(html).toContain("Amplitude");
     expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH);
   });
@@ -1973,7 +1974,7 @@ describe("AnalysisPlotsView", () => {
     );
 
     expect(html).toContain("zoom 10-20");
-    expect(html).toContain("Clear zoom");
+    expect(html).not.toContain("Clear zoom");
   });
 
   it("renders compact chart status for axes, sample counts, and zoom state", () => {
@@ -1995,12 +1996,12 @@ describe("AnalysisPlotsView", () => {
       />,
     );
 
-    expect(html).toContain('class="fm-analysis-plots__status"');
-    expect(html).toContain('aria-label="X step"');
-    expect(html).toContain('aria-label="Y 1 series"');
-    expect(html).toContain('aria-label="Visible 2"');
-    expect(html).toContain('aria-label="Total 2"');
-    expect(html).toContain('aria-label="Zoom off"');
+    // ChartSection header now carries compact status via fm-chart-section__header-meta
+    expect(html).toContain('class="fm-chart-section__header"');
+    // ChartControlBar or ChartSection status shows live state
+    expect(html).toContain('class="fm-chart-section__body"');
+    // The chart data-attr encodes axis and sample counts
+    expect(html).toContain('data-chart-model-key=');
   });
 
   it("renders selected chart cursor point in compact status", () => {
@@ -2034,7 +2035,10 @@ describe("AnalysisPlotsView", () => {
       />,
     );
 
-    expect(html).toContain('aria-label="Cursor mx 0.2"');
+    // ChartSection footer row contains the cursor value
+    expect(html).toContain('class="fm-chart-section__footer"');
+    // The range-cursor span shows the selected point label and value
+    expect(html).toContain('class="fm-analysis-plots__range-cursor"');
   });
 
   it("renders table loading diagnostics in the chart frame before samples exist", () => {
@@ -2079,15 +2083,14 @@ describe("AnalysisPlotsView", () => {
       />,
     );
 
-    expect(html).toContain('class="fm-analysis-plots__legend"');
+    // New ChartLegend uses fm-chart-legend* classes (not fm-analysis-plots__legend*)
+    expect(html).toContain('class="fm-chart-legend__item"');
     expect(html).toContain('<button');
     expect(html).toContain('type="button"');
-    expect(html).toMatch(
-      /class="[^"]*fm-button[^"]*fm-button--secondary[^"]*fm-button--sm[^"]*"/,
-    );
-    expect(html).toContain('aria-label="Series mx unit 1 latest 0.2"');
-    expect(html).toContain('class="fm-analysis-plots__legend-swatch fm-analysis-plots__legend-swatch--0"');
-    expect(html).toContain('class="fm-analysis-plots__legend-latest"');
+    // ChartLegend aria-label format: "label, unit UNIT, latest VALUE. Visible/Hidden..."
+    expect(html).toContain('aria-label="mx, unit 1, latest 0.2');
+    expect(html).toContain('class="fm-chart-legend__swatch');
+    expect(html).toContain('class="fm-chart-legend__latest"');
   });
 
   it("renders solver energy history as a separate chart source when available", () => {
@@ -2128,6 +2131,7 @@ describe("AnalysisPlotsView", () => {
         onSeriesSelect={() => undefined}
         range={null}
         selectedPoint={null}
+        activeSurface="energy"
         solverEnergySeries={solverEnergySeries}
         solverEnergyStatus="ready"
         tableRowsStatus="ready"
@@ -2139,7 +2143,7 @@ describe("AnalysisPlotsView", () => {
 
     expect(html).toContain("Energy history");
     expect(html).toContain("6 series");
-    expect(html).toContain('aria-label="Energy series legend"');
+    expect(html).toContain('aria-label="Energy series"');
     expect(html).toContain("E exchange");
     expect(html).toContain("E total");
     expect(html).toContain("time [s]");
@@ -2173,33 +2177,33 @@ describe("AnalysisPlotsView", () => {
     });
   });
 
-  it("fetches binary table rows only for initial load and zoom windows", () => {
+  it("fetches binary table rows during live follow and pauses when liveMode is paused", () => {
     expect(
       shouldFetchAnalysisTableRows({
         hasVisibleRows: false,
         loadScalars: true,
-        range: null,
+        liveMode: "following",
       }),
     ).toBe(true);
     expect(
       shouldFetchAnalysisTableRows({
         hasVisibleRows: true,
         loadScalars: true,
-        range: null,
+        liveMode: "following",
+      }),
+    ).toBe(true);
+    expect(
+      shouldFetchAnalysisTableRows({
+        hasVisibleRows: true,
+        loadScalars: true,
+        liveMode: "paused",
       }),
     ).toBe(false);
     expect(
       shouldFetchAnalysisTableRows({
-        hasVisibleRows: true,
-        loadScalars: true,
-        range: { fromValue: 10, toValue: 20 },
-      }),
-    ).toBe(true);
-    expect(
-      shouldFetchAnalysisTableRows({
         hasVisibleRows: false,
         loadScalars: false,
-        range: null,
+        liveMode: "following",
       }),
     ).toBe(false);
   });

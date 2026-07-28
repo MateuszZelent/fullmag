@@ -276,6 +276,17 @@ describe("createViewport3DPointerHoldLifecycle", () => {
 });
 
 describe("resolveViewport3DColorbarLegend", () => {
+  it("renders the viewport legend as an Inspector-style scientific range card", () => {
+    const source = readFileSync(
+      "src/modules/viewport-3d/Viewport3DModule.tsx",
+      "utf8",
+    );
+
+    expect(source).toContain("fm-viewport-3d__colorbar-context");
+    expect(source).toContain("fm-viewport-3d__colorbar-range-label");
+    expect(source).toContain("Component X");
+  });
+
   it("describes numeric component coloring with quantity, component, unit, and range", () => {
     expect(
       resolveViewport3DColorbarLegend({

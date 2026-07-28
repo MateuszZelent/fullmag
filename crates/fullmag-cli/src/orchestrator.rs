@@ -830,6 +830,7 @@ fn current_live_metadata(
         "ir_version": &problem.ir_version,
         "source_hash": &problem.problem_meta.source_hash,
         "problem_meta": &problem.problem_meta,
+        "table_autosave": problem.study.sampling().table_autosave.as_ref(),
         "execution_plan": plan,
         "runtime_engine": runtime_engine,
         "resolved_execution": resolved_execution,

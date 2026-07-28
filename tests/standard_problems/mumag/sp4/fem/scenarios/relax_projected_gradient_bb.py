@@ -18,15 +18,14 @@ study.interactive(True)
 
 study.universe(
     mode="manual",
-    size=(1000e-9, 350e-9, 350e-9),
+    size=(800e-9, 250e-9, 200e-9),
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )
 study.universe.mesh(
-    
-    minimum_element_size=10e-9,
+    minimum_element_size=15e-9,
     maximum_element_size=100e-9,
-    maximum_element_growth_rate=2.0,
+    maximum_element_growth_rate=2.5,
     grading="geometric",
 )
 
@@ -49,8 +48,8 @@ study.fem_demag_solver(
 )
 study.build_domain_mesh()
 
-study.tableautosave(
-    1e-12,
+study.stages.tableautosave(
+    every_steps=10,
     quantities=[
         "step",
         "mx",
@@ -69,4 +68,3 @@ study.stages.add_relax(
     max_steps=50_000,
     tol=7.957747154594767,
 )
-

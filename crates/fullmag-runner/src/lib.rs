@@ -3517,6 +3517,7 @@ mod tests {
                 nyquist_guard_factor: fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR,
             }),
             resolved_sample_period_s: Some(sample_period_s),
+            every_steps: None,
             quantities: vec!["t".into(), "my".into()],
         });
         problem.study.sampling_mut().outputs = vec![OutputIR::FieldResolvedAuto {

@@ -9,10 +9,21 @@ export function buildMeshPartScalarColorRetentionKey(input: {
   topologyRevision: number | string | null;
   vertexCount: number;
 }): string {
-  const { partId, projection, topologyRevision, vertexCount } = input;
+  const {
+    mode,
+    partId,
+    projection,
+    quantityId,
+    scalarColorPalette,
+    topologyRevision,
+    vertexCount,
+  } = input;
   return [
     "field",
     `part=${partId}`,
+    `mode=${mode}`,
+    `quantity=${quantityId}`,
+    `palette=${scalarColorPalette ?? "none"}`,
     `projection=${projection}`,
     `topology=${topologyRevision ?? "none"}`,
     `vertices=${vertexCount}`,

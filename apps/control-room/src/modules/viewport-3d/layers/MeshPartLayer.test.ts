@@ -30,7 +30,7 @@ import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRende
 import { resolveViewport3DScalarColorBufferKey } from "../viewport3dFieldMapping";
 
 describe("MeshPartLayer", () => {
-  it("keeps scalar upload retention identity stable across style and quantity changes", () => {
+  it("changes scalar upload retention identity when the requested field appearance changes", () => {
     const key = ({
       mode = "orientation",
       palette = "viridis",
@@ -51,9 +51,35 @@ describe("MeshPartLayer", () => {
       });
 
     const initial = key();
-    expect(key({ mode: "x" })).toBe(initial);
-    expect(key({ palette: "magma" })).toBe(initial);
-    expect(key({ quantityId: "H_eff" })).toBe(initial);
+    expect(key({ mode: "x" })).not.toBe(initial);
+    expect(key({ palette: "magma" })).not.toBe(initial);
+    expect(key({ quantityId: "H_eff" })).not.toBe(initial);
+  });
+
+  it("does not retain a previous field texture while another quantity or component is loading", () => {
+    const previous = {
+      colorMode: "x",
+      colorPalette: "viridis",
+      colors: new Float32Array(12),
+      quantityId: "m",
+      range: { max: 1, min: -1 },
+    };
+
+    expect(
+      resolveRetainedMeshPartScalarColors({
+        current: null,
+        previous,
+        scalarColorMode: "y",
+        settings: {
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          activeQuantityId: "H_demag",
+          scalarColorPalette: "viridis",
+          surfaceProjectionMode: "raw_nodal",
+        },
+        topologyRevision: 7,
+        vertexCount: 4,
+      }),
+    ).toBeNull();
   });
 
   it("keeps the committed shader visible while requested vertex colors are pending", () => {
@@ -765,7 +791,7 @@ buildReference: null,
     });
   });
 
-  it("retains the last compatible scalar texture while a different color mode is building", () => {
+  it("does not retain a scalar texture while a different color mode is building", () => {
     const previousOrientation = {
       colors: new Float32Array(0),
       colorMode: "orientation",
@@ -794,7 +820,7 @@ buildReference: null,
         },
         vertexCount: 2,
       }),
-    ).toBe(previousOrientation);
+    ).toBeNull();
     expect(
       resolveRetainedMeshPartScalarColors({
         current: replacementY,
@@ -809,7 +835,7 @@ buildReference: null,
     ).toBe(replacementY);
   });
 
-  it("retains the last renderable scalar texture while a different quantity is pending", () => {
+  it("does not retain a scalar texture while a different quantity is pending", () => {
     const previousMagnetizationY = {
       colors: new Float32Array(0),
       colorMode: "y",
@@ -830,7 +856,7 @@ buildReference: null,
         },
         vertexCount: 2,
       }),
-    ).toBe(previousMagnetizationY);
+    ).toBeNull();
   });
 
   it("retains the last same-mode scalar texture while replacement data is building", () => {
@@ -910,7 +936,7 @@ buildReference: null,
     ).toBeNull();
   });
 
-  it("retains scalar textures across pending quantity changes but not solid color", () => {
+  it("does not retain scalar textures across pending quantity changes or solid color", () => {
     const previousMagnetizationY = {
       colors: new Float32Array(0),
       colorMode: "y",
@@ -931,7 +957,7 @@ buildReference: null,
         },
         vertexCount: 2,
       }),
-    ).toBe(previousMagnetizationY);
+    ).toBeNull();
     expect(
       resolveRetainedMeshPartScalarColors({
         current: null,

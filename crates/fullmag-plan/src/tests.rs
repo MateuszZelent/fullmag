@@ -21,6 +21,7 @@ fn auto_sampling_problem(cutoffs_hz: &[f64], active_stage_id: Option<&str>) -> P
             nyquist_guard_factor: AUTO_SINC_NYQUIST_GUARD_FACTOR,
         }),
         resolved_sample_period_s: None,
+        every_steps: None,
         quantities: vec!["t".into(), "my".into()],
     });
     problem.study.sampling_mut().outputs = vec![
@@ -10088,7 +10089,8 @@ fn fdm_bulk_dmi_rejects_open_boundaries_until_natural_boundary_is_qualified() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.energy_terms.push(EnergyTermIR::BulkDmi { d: 1.0e-3 });
 
-    let error = plan(&ir).expect_err("open-boundary BulkDmi must not plan without its natural boundary condition");
+    let error = plan(&ir)
+        .expect_err("open-boundary BulkDmi must not plan without its natural boundary condition");
     assert!(
         error.reasons.iter().any(|reason| {
             reason.contains("BulkDmi")
@@ -10536,11 +10538,7 @@ fn fem_planner_elementwise_material_legality_distinguishes_a_from_ms() {
             include_a: false,
             gpu: false,
             configure: |fem| fem.use_consistent_mass = None,
-            expected: Some((
-                "Ms_element_field",
-                "lumped-mass exchange projection",
-                "cpu",
-            )),
+            expected: Some(("Ms_element_field", "lumped-mass exchange projection", "cpu")),
         },
         Case {
             name: "CPU Ms Zeeman-only",
@@ -11368,8 +11366,7 @@ fn fem_sharp_conformal_ms_and_aex_use_exclusive_cpu_dg0_realizations() {
     let err = plan(&ir).expect_err("GPU requests must still fail closed for DG0 material upload");
     assert!(
         err.reasons.iter().any(|reason| {
-            reason.contains("Ms_element_field")
-                && reason.contains("GPU material-state upload")
+            reason.contains("Ms_element_field") && reason.contains("GPU material-state upload")
         }),
         "unexpected planner errors: {:?}",
         err.reasons

@@ -1,41 +1,65 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { resetAnalysisPlotsWorkspaceForTests } from "@/kernel/workspace/analysisPlotsWorkspace";
+import {
+  quickChartWorkspaceStore,
+  resetQuickChartWorkspaceForTests,
+} from "@/kernel/workspace/quickChartWorkspace";
 
 import { analysisPlotsManifest } from "./manifest";
 
-describe("Analysis Quick Chart dock ownership", () => {
-  it("leaves panel-bottom ownership to the transport footer", () => {
-    expect(analysisPlotsManifest.slots).toEqual(["viewport-main"]);
-    expect(analysisPlotsManifest.slots).not.toContain("panel-bottom");
-    expect(analysisPlotsManifest.slots).not.toContain("viewport-aux");
+afterEach(() => {
+  resetAnalysisPlotsWorkspaceForTests();
+  resetQuickChartWorkspaceForTests();
+});
 
+describe("pinned Quick Chart ownership", () => {
+  it("keeps Analysis in viewport-main and does not render a bottom-dock variant", () => {
+    expect(analysisPlotsManifest.slots).toEqual(["viewport-main"]);
     const source = readFileSync(new URL("./AnalysisPlotsModule.tsx", import.meta.url), "utf8");
-    expect(source).toContain('props.slotId === "panel-bottom"');
-    expect(source).toContain("<AnalysisQuickChartDock");
-    expect(source).not.toContain("display: none");
+    expect(source).not.toContain("panel-bottom");
+    expect(source).not.toContain("AnalysisQuickChartDock");
   });
 
-  it("opens the canonical Analysis bottom tab without changing viewport-main", () => {
-    const openBottomPanel = vi.fn();
-    const setActiveViewportMainModule = vi.fn();
+  it("pins the current chart for the Inspector while 3D stays active", () => {
+    const emit = vi.fn();
+    const set = vi.fn();
+    const setFocusedSlot = vi.fn();
     const command = analysisPlotsManifest.contributes?.commands?.find(
       (candidate) => candidate.id === "analysis-plots.quick-chart.open",
     );
-    expect(command).toBeDefined();
-    expect(command?.run({
-      layout: { openBottomPanel, setActiveViewportMainModule },
-    } as never)).toEqual({ status: "completed" });
-    expect(openBottomPanel).toHaveBeenCalledWith("analysis");
-    expect(setActiveViewportMainModule).not.toHaveBeenCalled();
+    const context = {
+      bus: { emit },
+      layout: {
+        get: () => ({ activeViewportMainModuleId: "viewport-3d" }),
+        setFocusedSlot,
+      },
+      selection: { set },
+    };
+
+    expect(command?.isEnabled?.(context as never)).toBe(true);
+    expect(command?.run(context as never)).toEqual({ status: "completed" });
+    expect(quickChartWorkspaceStore.getSnapshot().pinned).toEqual(
+      expect.objectContaining({ chartId: "default", tableId: "default" }),
+    );
+    expect(emit).toHaveBeenCalledWith("explorer:tab-requested", {
+      source: "analysis-plots",
+      tab: "results",
+    });
+    expect(set).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "results.quick_chart", ref: expect.objectContaining({ type: "quick-chart" }) }),
+      "analysis-plots",
+    );
+    expect(setFocusedSlot).toHaveBeenCalledWith("panel-right");
   });
 
-  it("uses the footer as the sole bottom-tab host and mounts the shared module variant", () => {
+  it("does not expose Quick Chart as a footer tab", () => {
     const source = readFileSync(
       new URL("../footer/FooterModule.tsx", import.meta.url),
       "utf8",
     );
-    expect(source).toContain('TabsTrigger value="analysis"');
-    expect(source).toContain('slotId="panel-bottom"');
-    expect(source).toContain("MountedModule");
+    expect(source).not.toContain('TabsTrigger value="analysis"');
+    expect(source).not.toContain("Quick Chart");
   });
 });

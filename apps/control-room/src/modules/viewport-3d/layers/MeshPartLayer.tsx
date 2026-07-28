@@ -220,6 +220,7 @@ export function resolveRetainedMeshPartScalarColors({
   if (!scalarColorMode) return null;
   return scalarColorBufferMatchesRetainedSettings(
     previous,
+    scalarColorMode,
     settings,
     topologyRevision,
     vertexCount,
@@ -295,6 +296,7 @@ function scalarColorBufferMatchesSettings(
 
 function scalarColorBufferMatchesRetainedSettings(
   buffer: ScalarColorBuffer | null,
+  scalarColorMode: string,
   settings: Pick<
     VisualizationTargetSettings,
     "activeQuantityId" | "scalarColorPalette"
@@ -304,6 +306,21 @@ function scalarColorBufferMatchesRetainedSettings(
   vertexCount: number,
 ): buffer is ScalarColorBuffer {
   if (!buffer) return false;
+  if (buffer.colorMode && buffer.colorMode !== scalarColorMode) return false;
+  if (
+    buffer.colorPalette &&
+    settings.scalarColorPalette &&
+    buffer.colorPalette !== settings.scalarColorPalette
+  ) {
+    return false;
+  }
+  if (
+    buffer.quantityId &&
+    resolveCanonicalQuantityId(buffer.quantityId) !==
+      resolveCanonicalQuantityId(settings.activeQuantityId)
+  ) {
+    return false;
+  }
   if (
     buffer.topologyRevision &&
     topologyRevision !== undefined &&
@@ -523,6 +540,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       scalarColorMode &&
       scalarColorBufferMatchesRetainedSettings(
         scalarColorsCandidate,
+        scalarColorMode,
         renderSettings,
         topologyRevision,
         surfaceVertexCount,

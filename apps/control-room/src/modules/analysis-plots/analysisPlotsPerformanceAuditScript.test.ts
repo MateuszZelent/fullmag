@@ -49,8 +49,13 @@ describe("analysis plots performance audit", () => {
     expect(auditScript).toContain("collectChartDiagnostics");
     expect(auditScript).toContain("collectChartSurfaceCount");
     expect(auditScript).toContain("verifyIdleChartBudget");
+    expect(auditScript).toContain("pauseAnalysisUpdates(page)");
+    expect(auditScript).toContain("Resume live chart updates");
     expect(auditScript).toContain("verifyChartInstanceLifecycle");
     expect(auditScript).toContain("waitForQuietRowsBinRequests");
+    expect(auditScript).toContain("waitForRowsTransportSizes");
+    expect(auditScript).toContain('page.on("requestfinished"');
+    expect(auditScript).toContain("discardCancelledRowsBinRequest");
     expect(auditScript).toContain("summarizeRowsBinRequests");
     expect(auditScript).toContain("rows.bin requests during chart idle");
     expect(auditScript).toContain("chart redraws during idle");

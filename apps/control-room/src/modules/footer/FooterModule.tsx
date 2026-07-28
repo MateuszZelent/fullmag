@@ -8,7 +8,6 @@ import {
   FileText,
   Gauge,
   Hammer,
-  LineChart,
   Trash2,
 } from "lucide-react";
 import {
@@ -24,7 +23,6 @@ import type { RequestDiagnosticEntry } from "@/kernel/api/RequestDiagnosticsCont
 import type { CommandDiagnosticEntry } from "@/kernel/commands/CommandDiagnosticsController";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import { useLayoutSelector } from "@/kernel/layout/useLayout";
-import { MountedModule } from "@/kernel/layout/SlotHost";
 import type { ModuleProps } from "@/kernel/types";
 import { Button } from "@/shared/ui/Button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
@@ -58,7 +56,6 @@ export default function FooterModule(props: ModuleProps) {
 }
 
 function FooterModuleContent({ kernel }: ModuleProps) {
-  const analysisManifest = kernel.modules.get("analysis-plots") ?? null;
   const activeTab = useLayoutSelector((layout) => layout.activeBottomPanelTab);
 
   useEffect(() => {
@@ -79,12 +76,6 @@ function FooterModuleContent({ kernel }: ModuleProps) {
     >
       <div className="fm-footer__bar">
         <TabsList className="fm-footer__tabs" aria-label="Bottom diagnostics">
-          {analysisManifest ? (
-            <TabsTrigger value="analysis" className="fm-footer__tab">
-              <LineChart size={14} aria-hidden="true" />
-              Quick Chart
-            </TabsTrigger>
-          ) : null}
           <TabsTrigger value="logs" className="fm-footer__tab">
             <Activity size={14} aria-hidden="true" />
             Logs
@@ -123,16 +114,6 @@ function FooterModuleContent({ kernel }: ModuleProps) {
           </Button>
         </div>
       </div>
-
-      <TabsContent value="analysis" className="fm-footer__content">
-        {activeTab === "analysis" && analysisManifest ? (
-          <MountedModule
-            kernel={kernel}
-            manifest={analysisManifest}
-            slotId="panel-bottom"
-          />
-        ) : null}
-      </TabsContent>
 
       <TabsContent value="logs" className="fm-footer__content">
         {activeTab === "logs" ? <FooterLogs kernel={kernel} /> : null}

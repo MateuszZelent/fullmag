@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owners: Fullmag core
-- Last updated: 2026-06-04
+- Last updated: 2026-07-27
 - Related ADRs: `docs/adr/0011-resource-first-api.md`, `docs/adr/0013-frontend-v2-module-kernel.md`
 - Related specs: `docs/specs/resource-first-control-room-api-v2.md`, `docs/specs/frontend-v2/16-charts-analysis-module.md`
 
@@ -14,9 +14,10 @@ or relaxation study, inspect the samples live in the control room, and export
 the same intent through the public Python model. The table is an observable
 stream, not a viewport cache and not a backend-specific debug log.
 
-The first production table is `default`. It records solver-step scalar
-observables at a simulation-time cadence. The live UI may display the data as
-1D, 2D, or 3D charts, but the chart state never owns the physical samples.
+The first production table is `default`. It records solver-state scalar
+observables at a simulation-time cadence or an accepted-relaxation-step
+cadence. The live UI may display the data as 1D, 2D, or 3D charts, but the
+chart state never owns the physical samples.
 
 ## 2. Physical Model
 
@@ -32,7 +33,7 @@ E_total(t_k) = E_ex + E_demag + E_ext + E_ani + E_dmi + ...
 max_torque(t_k) = max_x |torque proxy(x, t_k)|
 ```
 
-Sampling is triggered by simulation time:
+Time-evolution sampling is triggered by simulation time:
 
 ```text
 t_current + eps >= t_next_sample
@@ -42,12 +43,26 @@ When adaptive stepping crosses several requested sample times in one solver
 step, the first implementation records the current solver state once and marks
 the sample policy as coalesced. It does not invent interpolated physics values.
 
+Relaxation uses an explicit accepted-step cadence:
+
+```text
+accepted_step == 0
+or accepted_step mod every_steps == 0
+or accepted_step is the final accepted state
+```
+
+`every_steps` counts accepted solver states only. Rejected line-search,
+trust-region, or adaptive-controller candidates are diagnostics, not table
+rows. A relaxation table always includes the initial and final state; a final
+state already on cadence is not duplicated.
+
 ### 2.2 Symbols and SI Units
 
 | Symbol or column | Meaning | SI unit |
 |---|---|---|
 | `step` | solver step index | `1` |
-| `t` | simulation time | `s` |
+| `t` | physical simulation time, only for time evolution | `s` |
+| `pseudo_time_s` | algorithmic relaxation clock, never physical time | `s` |
 | `dt` | solver timestep | `s` |
 | `mx`, `my`, `mz` | volume averaged normalized magnetization components | `1` |
 | `e_total` | total magnetic energy | `J` |
@@ -64,7 +79,11 @@ Public authoring and UI labels use `t` and `dt`.
 
 - Table autosave samples reduced observables at solver states only.
 - It is disabled unless the user requests `table_autosave`.
-- The sampling cadence is in simulation seconds, not wall-clock seconds.
+- A time-evolution cadence is in simulation seconds, not wall-clock seconds.
+- A relaxation `every_steps` cadence is dimensionless and counts accepted
+  states. It is the compatible coordinate for direct minimizers.
+- A direct minimizer does not expose `t=0` as physical time. Its table charts
+  default to `step`; pseudo time may be displayed only as `pseudo_time_s`.
 - UI decimation is a display/read-model concern; it must preserve the stored
   table values and never become the canonical artifact.
 - The browser receives invalidations and cursor metadata over realtime events;
@@ -122,10 +141,14 @@ The public DSL adds:
 ```python
 fm.TableAutosave(t_sampl=1e-12)
 study.table_autosave(t_sampl=1e-12)
+
+# relaxation
+fm.TableAutosave(every_steps=10)
+study.table_autosave(every_steps=10)
 ```
 
-`TimeEvolution` and `Relaxation` accept `table_autosave=...`. The default
-column set is:
+`TimeEvolution` accepts only a physical-time cadence; `Relaxation` accepts
+only `every_steps`. The default column set is:
 
 ```text
 step, t, mx, my, mz, e_total, max_torque
@@ -135,7 +158,8 @@ step, t, mx, my, mz, e_total, max_torque
 
 `SamplingIR` gains an optional `table_autosave` field with:
 
-- `sample_period_s`
+- exactly one cadence: `sample_period_s` / `sample_period_policy` or
+  `every_steps`
 - `quantities`
 - `table_id`
 
@@ -144,10 +168,10 @@ and Python-authored studies must lower to the same IR.
 
 ### 4.3 Planner and Capability-Matrix Impact
 
-Planners validate that the requested study has a time-like progression and that
-each requested quantity is supported by the resolved backend. Unsupported
-columns fail clearly or are reported as degraded in provenance; they are not
-silently omitted.
+Planners validate that time cadence is used for physical time evolution and
+that `every_steps` is positive. Each requested quantity must be supported by
+the resolved backend. Unsupported columns fail clearly or are reported as
+degraded in provenance; they are not silently omitted.
 
 ## 5. Runtime, OpenAPI, and UI Impact
 
@@ -172,6 +196,10 @@ to the JSON row payload.
 default table. Status carries only `scalars_revision` and resource pointers.
 WebSocket events carry invalidations only, never full table rows.
 
+`TableResource` is the UI authority for the configured `columns`, `total_rows`
+and cadence metadata. The Analysis Inspector reads this summary resource and
+never guesses quantity availability from a chart or hard-coded scalar list.
+
 The control room renders charts in the existing `analysis-plots` center module.
 Chart zoom, series visibility, axis assignment, and trim range are UI state.
 Table samples stay in resource hooks/cache and are fetched by cursor or visible
@@ -184,6 +212,9 @@ range with bounded row counts.
 - Constant magnetization keeps `mx`, `my`, `mz` constant across table rows.
 - Fixed-step runs sample exactly at the requested cadence.
 - Adaptive-step overshoot emits coalesced samples without interpolation.
+- Relaxation with `every_steps=10` emits `0, 10, 20, ...` accepted states and
+  one final state; rejected candidates do not alter that sequence.
+- Direct minimizer rows cannot be labelled or filtered as physical `t`.
 
 ### 6.2 Cross-Backend Checks
 
@@ -202,9 +233,12 @@ range with bounded row counts.
   interval polling.
 - chart model tests for unit grouping, twin-axis limits, and visible-window
   decimation.
+- Python and script-export tests for mutually exclusive `t_sampl` and
+  `every_steps`, plus IR validation of ambiguous cadence input.
 
 ## 7. Completeness Checklist
 
+- [x] Physics contract
 - [ ] Python API
 - [ ] ProblemIR
 - [ ] Planner

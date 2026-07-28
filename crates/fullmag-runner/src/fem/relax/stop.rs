@@ -152,19 +152,13 @@ impl ConvergenceDiagnostic {
         let torque_ok = control
             .stop
             .torque_tolerance_apm
-            .is_some_and(|threshold| {
-                max_torque_apm.is_finite() && max_torque_apm <= threshold
-            });
+            .is_some_and(|threshold| max_torque_apm.is_finite() && max_torque_apm <= threshold);
         let energy_ok = match (control.stop.energy_tolerance_j, energy_plateau) {
             (Some(threshold), Some(range)) => range.value <= threshold,
             (Some(_), None) => false,
             (None, _) => true,
         };
-        let converged = relaxation_stop_criteria_satisfied(
-            control,
-            energy_plateau,
-            max_torque_apm,
-        );
+        let converged = relaxation_stop_criteria_satisfied(control, energy_plateau, max_torque_apm);
         ConvergenceDiagnostic {
             max_torque_apm,
             torque_threshold_apm: control.stop.torque_tolerance_apm,

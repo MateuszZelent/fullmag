@@ -80,6 +80,16 @@ describe("chartTableModel", () => {
     });
   });
 
+  it("keeps an arbitrary-quantity zoom local instead of mislabelling it as a row range", () => {
+    expect(
+      tableRowsVisibleRangeQuery({
+        fromValue: -0.5,
+        toValue: 0.5,
+        xAxisId: "mx",
+      }),
+    ).toBeNull();
+  });
+
   it("extracts a finite ECharts dataZoom value range", () => {
     expect(
       chartRangeFromDataZoomEvent({

@@ -36,18 +36,29 @@ export function exportChartPng(
   anchor.download = safeChartExportFilename(model, "png");
   anchor.href = dataUrl;
   anchor.click();
+  downloadChartBlob({
+    content: JSON.stringify(chartExportProvenance(model), null, 2),
+    filename: safeChartExportFilename(model, "provenance.json"),
+    mimeType: "application/json",
+  });
 }
 
 export function ChartExportControls({
   model,
   rendererRef,
+  onOpenPointsTable,
 }: {
   model: ChartRenderModel;
   rendererRef: MutableRefObject<ChartRendererOwner | null>;
+  onOpenPointsTable?: () => void;
 }) {
-
   return (
     <div className="fm-analysis-chart-export" aria-label="Chart export">
+      {onOpenPointsTable ? (
+        <Button size="sm" type="button" variant="secondary" onClick={onOpenPointsTable}>
+          Data Table
+        </Button>
+      ) : null}
       <Button size="sm" type="button" variant="secondary" onClick={() => exportChartData(model, "csv")}>CSV</Button>
       <Button size="sm" type="button" variant="secondary" onClick={() => exportChartData(model, "tsv")}>TSV</Button>
       <Button size="sm" type="button" variant="secondary" onClick={() => exportChartPng(model, rendererRef)}>PNG</Button>

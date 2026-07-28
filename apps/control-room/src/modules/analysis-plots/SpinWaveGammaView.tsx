@@ -1,7 +1,7 @@
 "use client";
 
 import type { SpinWaveGammaResource } from "@/kernel/api/apiTypes";
-
+import { ChartSection } from "@/shared/analysis-charts/ChartSection";
 import { EChartsSurface } from "./components/EChartsSurface";
 import {
   spinWaveGammaResponseTraceSeries,
@@ -18,12 +18,21 @@ export function SpinWaveGammaView({
   status: string;
 }) {
   const sampling = spinWaveGammaSamplingSummary(resource);
+  const subtitle = resource
+    ? `${resource.weighting ?? "moment weighted"} · ${resource.detrend ?? "detrend"} · ${resource.window ?? "window"}`
+    : undefined;
+
   return (
-    <section className="fm-analysis-plots__panel" aria-label="Gamma spin-wave response">
-      <header className="fm-analysis-plots__header">
-        <h3>Γ spin-wave response</h3>
-        <span>{resource?.weighting ?? "moment weighted"} · {resource?.detrend ?? "detrend"} · {resource?.window ?? "window"}</span>
-      </header>
+    <ChartSection
+      className="fm-analysis-plots__panel--gamma"
+      status={{
+        primary: status === "ready" ? "Live" : status,
+        trust: "unknown",
+        pointSummary: sampling.sampleCount ? `${sampling.sampleCount} samples` : undefined,
+      }}
+      title="Γ spin-wave response"
+      subtitle={subtitle}
+    >
       <div className="fm-analysis-plots__status" role="list" aria-label="Response FFT sampling parameters">
         <span role="listitem">N {sampling.sampleCount}</span>
         <span role="listitem">t_sampling {formatScientific(sampling.samplePeriodS, "s")}</span>
@@ -58,7 +67,7 @@ export function SpinWaveGammaView({
         <span>Peaks {resource?.peaks.length ?? 0}</span>
         <span>Samples {resource?.time_s.length ?? 0}</span>
       </div>
-    </section>
+    </ChartSection>
   );
 }
 

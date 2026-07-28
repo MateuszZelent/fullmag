@@ -1160,6 +1160,8 @@ describe("study runtime command resource bundles", () => {
     expect(rowsHook).toContain(".rows(");
     expect(binaryRowsHook).toContain(".rowsBinary(");
     expect(binaryRowsHook).toContain("}#binary`");
+    expect(binaryRowsHook).toContain("pauseLoad = false");
+    expect(binaryRowsHook).toContain("pauseLoad,");
     expect(rowsHook).toContain("tableRowsResourceKey");
     expect(binaryRowsHook).toContain("tableRowsResourceKey");
     expect(rowsHook).toContain("minRefetchIntervalMs");

@@ -2800,6 +2800,13 @@ fn write_table_autosave_artifacts(
             .append_if_due(step)
             .map_err(|error| Error::new(ErrorKind::InvalidInput, error))?;
     }
+    if matches!(problem.study, fullmag_ir::StudyIR::Relaxation { .. }) {
+        if let Some(final_step) = steps.last() {
+            store
+                .append_final_if_needed(final_step)
+                .map_err(|error| Error::new(ErrorKind::InvalidInput, error))?;
+        }
+    }
     store.write_artifacts(output_dir)
 }
 

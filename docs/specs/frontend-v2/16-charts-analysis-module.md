@@ -127,7 +127,7 @@
 
 ### 4.2 Współistnienie z 3D
 
-[P] Quick Chart jest slot-aware wariantem `analysis-plots` w `panel-bottom`; etap pierwszy nie aktywuje `viewport-aux`. Uzasadnienie: jeden manifest/descriptor/cache/renderer contract bez nowego modułu i bez importu Inspector → Analysis. Alternatywa osobnego dock module zwiększa lifecycle i cache consumers; `viewport-aux` rezerwujemy dla przyszłego jawnego split view. Ryzyko: root stanie się wielotrybowy; koszt: cienkie slot adapters, manifest/layout tests i stress audit; acceptance: slot adaptery są cienkie i współdzielą neutralne `src/shared` contracts; rollback: disable `panel-bottom` contribution bez zmiany full Analysis.
+[P] Quick Chart jest zakładką w `panel-bottom` transport footera; moduł `analysis-plots` deklaruje wyłącznie `slots: ["viewport-main"]`. Uzasadnienie: transport-footer zachowuje wyłączną własność `panel-bottom`, a Quick Chart używa neutralnych `src/shared/analysis-charts` komponentów.
 
 [C] Przy Quick Chart `viewport-3d` pozostaje zamontowany, widoczny i responsywny. Hover/cursor/zoom/pan/legend/unit conversion: zero field/topology fetch, camera change, topology rebuild, unchanged-buffer upload i 3D dirty frame. Point click publikuje małą `ChartSelection`. Pole/snapshot ładuje tylko jawna anulowalna `ChartViewportHandoff` command.
 

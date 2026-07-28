@@ -4285,6 +4285,67 @@ async fn table_rows_resource_returns_cursor_window_and_column_metadata() {
 }
 
 #[tokio::test]
+async fn table_resources_expose_only_configured_autosave_quantities() {
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard
+            .as_mut()
+            .expect("test live session should be initialized");
+        snapshot.metadata = Some(serde_json::json!({
+            "table_autosave": {
+                "kind": "table_autosave",
+                "table_id": "default",
+                "every_steps": 10,
+                "quantities": ["step", "mx", "e_ex"]
+            }
+        }));
+        snapshot.scalar_rows = vec![sample_scalar_row(1, 1e-12, 6.9)];
+        snapshot.scalar_revision = 1;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/tables/default/columns")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let columns = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{columns:#}");
+    assert_eq!(
+        columns
+            .as_array()
+            .expect("columns response should be an array")
+            .iter()
+            .map(|column| column["column_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["step", "mx", "e_ex"]
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/tables/default/rows?columns=mx,e_total")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = body_json(response).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body:#}");
+    assert!(body["error"]
+        .as_str()
+        .is_some_and(|error| error.contains("not available")));
+}
+
+#[tokio::test]
 async fn table_resources_expose_list_detail_and_columns_metadata() {
     let state = test_app_state_with_live_session().await;
     {
