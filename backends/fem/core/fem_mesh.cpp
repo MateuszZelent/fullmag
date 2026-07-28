@@ -22,7 +22,7 @@ namespace fullmag::fem {
 namespace {
 
 constexpr uint8_t kTetFaceOffsets[] = {0, 3, 6, 9, 12};
-constexpr uint8_t kTetFaceNodes[] = {0, 2, 1, 0, 1, 3, 1, 2, 3, 2, 0, 3};
+constexpr uint8_t kTetFaceNodes[] = {1, 2, 3, 0, 3, 2, 0, 1, 3, 0, 2, 1};
 constexpr uint8_t kTetEdgeOffsets[] = {0, 2, 4, 6, 8, 10, 12};
 constexpr uint8_t kTetEdgeNodes[] = {0, 1, 1, 2, 2, 0, 0, 3, 1, 3, 2, 3};
 constexpr uint8_t kPrismFaceOffsets[] = {0, 3, 6, 10, 14, 18};
@@ -30,11 +30,11 @@ constexpr uint8_t kPrismFaceNodes[] = {0, 2, 1, 3, 4, 5, 0, 1, 4, 3, 1, 2, 5, 4,
 constexpr uint8_t kPrismEdgeOffsets[] = {0, 2, 4, 6, 8, 10, 12, 14, 16, 18};
 constexpr uint8_t kPrismEdgeNodes[] = {0, 1, 1, 2, 2, 0, 3, 4, 4, 5, 5, 3, 0, 3, 1, 4, 2, 5};
 constexpr uint8_t kPyramidFaceOffsets[] = {0, 4, 7, 10, 13, 16};
-constexpr uint8_t kPyramidFaceNodes[] = {0, 3, 2, 1, 0, 1, 4, 1, 2, 4, 2, 3, 4, 3, 0, 4};
+constexpr uint8_t kPyramidFaceNodes[] = {3, 2, 1, 0, 0, 1, 4, 1, 2, 4, 2, 3, 4, 3, 0, 4};
 constexpr uint8_t kPyramidEdgeOffsets[] = {0, 2, 4, 6, 8, 10, 12, 14, 16};
 constexpr uint8_t kPyramidEdgeNodes[] = {0, 1, 1, 2, 2, 3, 3, 0, 0, 4, 1, 4, 2, 4, 3, 4};
 constexpr uint8_t kHexFaceOffsets[] = {0, 4, 8, 12, 16, 20, 24};
-constexpr uint8_t kHexFaceNodes[] = {0, 3, 2, 1, 4, 5, 6, 7, 0, 1, 5, 4, 1, 2, 6, 5, 2, 3, 7, 6, 3, 0, 4, 7};
+constexpr uint8_t kHexFaceNodes[] = {3, 2, 1, 0, 0, 1, 5, 4, 1, 2, 6, 5, 2, 3, 7, 6, 3, 0, 4, 7, 4, 5, 6, 7};
 constexpr uint8_t kHexEdgeOffsets[] = {0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24};
 constexpr uint8_t kHexEdgeNodes[] = {0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7};
 

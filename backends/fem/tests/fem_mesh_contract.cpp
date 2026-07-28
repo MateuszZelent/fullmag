@@ -416,7 +416,7 @@ void element_family_tables_cover_all_supported_cells() {
     };
     check(fullmag::fem::element_topology(FULLMAG_FEM_CELL_TET4, topology), "tet topology exists");
     check(topology.arity == 4u && topology.faces.entity_count == 4u && topology.edges.entity_count == 6u, "tet face/edge counts");
-    exact(topology.faces, {0,3,6,9,12}, {0,2,1,0,1,3,1,2,3,2,0,3}, "tet face orientation");
+    exact(topology.faces, {0,3,6,9,12}, {1,2,3,0,3,2,0,1,3,0,2,1}, "tet MFEM face table");
     exact(topology.edges, {0,2,4,6,8,10,12}, {0,1,1,2,2,0,0,3,1,3,2,3}, "tet edge orientation");
     check(fullmag::fem::element_topology(FULLMAG_FEM_CELL_PRISM6, topology), "prism topology exists");
     check(topology.arity == 6u && topology.faces.entity_count == 5u && topology.edges.entity_count == 9u, "prism face/edge counts");
@@ -424,11 +424,11 @@ void element_family_tables_cover_all_supported_cells() {
     exact(topology.edges, {0,2,4,6,8,10,12,14,16,18}, {0,1,1,2,2,0,3,4,4,5,5,3,0,3,1,4,2,5}, "prism edge orientation");
     check(fullmag::fem::element_topology(FULLMAG_FEM_CELL_PYRAMID5, topology), "pyramid topology exists");
     check(topology.arity == 5u && topology.faces.entity_count == 5u && topology.edges.entity_count == 8u, "pyramid face/edge counts");
-    exact(topology.faces, {0,4,7,10,13,16}, {0,3,2,1,0,1,4,1,2,4,2,3,4,3,0,4}, "pyramid face orientation");
+    exact(topology.faces, {0,4,7,10,13,16}, {3,2,1,0,0,1,4,1,2,4,2,3,4,3,0,4}, "pyramid MFEM face table");
     exact(topology.edges, {0,2,4,6,8,10,12,14,16}, {0,1,1,2,2,3,3,0,0,4,1,4,2,4,3,4}, "pyramid edge orientation");
     check(fullmag::fem::element_topology(FULLMAG_FEM_CELL_HEX8, topology), "hex topology exists");
     check(topology.arity == 8u && topology.faces.entity_count == 6u && topology.edges.entity_count == 12u, "hex face/edge counts");
-    exact(topology.faces, {0,4,8,12,16,20,24}, {0,3,2,1,4,5,6,7,0,1,5,4,1,2,6,5,2,3,7,6,3,0,4,7}, "hex face orientation");
+    exact(topology.faces, {0,4,8,12,16,20,24}, {3,2,1,0,0,1,5,4,1,2,6,5,2,3,7,6,3,0,4,7,4,5,6,7}, "hex MFEM face table");
     exact(topology.edges, {0,2,4,6,8,10,12,14,16,18,20,22,24}, {0,1,1,2,2,3,3,0,4,5,5,6,6,7,7,4,0,4,1,5,2,6,3,7}, "hex edge orientation");
     check(!fullmag::fem::element_topology(99u, topology), "unknown cell topology rejects");
 }

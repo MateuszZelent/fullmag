@@ -12,6 +12,10 @@
 
 #include <mfem.hpp>
 
+#if FULLMAG_HAS_CUDA_RUNTIME
+#include <cuda_runtime.h>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cstdio>
@@ -91,56 +95,85 @@ std::vector<int> sorted_vertices(mfem::Array<int> vertices)
 
 void check_mfem_face_table(
     mfem::Mesh &mesh,
+    int element,
     uint32_t type,
-    const std::vector<uint32_t> &connectivity)
+    const std::vector<uint32_t> &connectivity,
+    bool require_boundary_order = true,
+    bool require_nonzero_orientation = false)
 {
     fullmag::fem::ElementTopology topology{};
     check(fullmag::fem::element_topology(type, topology),
           "canonical element topology must exist for every native family");
     mfem::Array<int> face_ids;
     mfem::Array<int> face_orientations;
-    mesh.GetElementFaces(0, face_ids, face_orientations);
+    mesh.GetElementFaces(element, face_ids, face_orientations);
     check(face_ids.Size() == topology.faces.entity_count,
           "MFEM local face count must match canonical element_topology");
-    std::vector<bool> matched(static_cast<size_t>(topology.faces.entity_count), false);
+    check(face_orientations.Size() == face_ids.Size(),
+          "MFEM must report one element-relative orientation per local face");
+    bool saw_nonzero_orientation = false;
     for (int face = 0; face < face_ids.Size(); ++face) {
+        const uint8_t start = topology.faces.offsets[face];
+        const uint8_t end = topology.faces.offsets[face + 1];
+        std::vector<int> expected;
+        for (uint8_t node = start; node < end; ++node) {
+            expected.push_back(static_cast<int>(connectivity[topology.faces.nodes[node]]));
+        }
         mfem::Array<int> actual;
         mesh.GetFaceVertices(face_ids[face], actual);
-        const auto actual_set = sorted_vertices(actual);
-        int canonical_face = -1;
-        std::vector<int> expected;
-        for (uint8_t candidate = 0; candidate < topology.faces.entity_count; ++candidate) {
-            const uint8_t start = topology.faces.offsets[candidate];
-            const uint8_t end = topology.faces.offsets[candidate + 1u];
-            std::vector<int> candidate_vertices;
-            for (uint8_t node = start; node < end; ++node) {
-                candidate_vertices.push_back(
-                    static_cast<int>(connectivity[topology.faces.nodes[node]]));
-            }
-            auto candidate_set = candidate_vertices;
-            std::sort(candidate_set.begin(), candidate_set.end());
-            if (candidate_set == actual_set) {
-                canonical_face = candidate;
-                expected = std::move(candidate_vertices);
-                break;
-            }
-        }
-        check(canonical_face >= 0 && !matched[static_cast<size_t>(canonical_face)],
-              "every MFEM local face must map uniquely to element_topology");
-        matched[static_cast<size_t>(canonical_face)] = true;
-        const uint8_t start = topology.faces.offsets[canonical_face];
-        const uint8_t end = topology.faces.offsets[canonical_face + 1];
         check(actual.Size() == static_cast<int>(end - start),
               "MFEM local face arity must match canonical face geometry");
+        auto expected_set = expected;
+        std::sort(expected_set.begin(), expected_set.end());
+        check(sorted_vertices(actual) == expected_set,
+              "MFEM local face ordinal must identify the corresponding canonical face");
         check(mesh.GetFaceGeometry(face_ids[face]) ==
                   ((end - start) == 3 ? mfem::Geometry::TRIANGLE : mfem::Geometry::SQUARE),
               "MFEM face geometry must agree with canonical local face arity");
+        std::vector<int> reconstructed;
+        const int orientation = face_orientations[face];
+        saw_nonzero_orientation = saw_nonzero_orientation || orientation != 0;
+        if ((end - start) == 3) {
+            check(orientation >= 0 && orientation < 6,
+                  "MFEM triangle face orientation must index the triangle orientation table");
+            const int inverse =
+                mfem::Geometry::Constants<mfem::Geometry::TRIANGLE>::InvOrient[orientation];
+            const int *permutation =
+                mfem::Geometry::Constants<mfem::Geometry::TRIANGLE>::Orient[inverse];
+            for (int node = 0; node < 3; ++node) {
+                reconstructed.push_back(actual[permutation[node]]);
+            }
+        } else {
+            check(orientation >= 0 && orientation < 8,
+                  "MFEM quadrilateral face orientation must index the square orientation table");
+            const int inverse =
+                mfem::Geometry::Constants<mfem::Geometry::SQUARE>::InvOrient[orientation];
+            const int *permutation =
+                mfem::Geometry::Constants<mfem::Geometry::SQUARE>::Orient[inverse];
+            for (int node = 0; node < 4; ++node) {
+                reconstructed.push_back(actual[permutation[node]]);
+            }
+        }
+        if (reconstructed != expected) {
+            std::fprintf(stderr,
+                         "orientation mismatch: type=%u element=%d face=%d orientation=%d expected=",
+                         type, element, face, orientation);
+            for (int vertex : expected) std::fprintf(stderr, "%d,", vertex);
+            std::fprintf(stderr, " actual=");
+            for (int vertex : actual) std::fprintf(stderr, "%d,", vertex);
+            std::fprintf(stderr, " reconstructed=");
+            for (int vertex : reconstructed) std::fprintf(stderr, "%d,", vertex);
+            std::fprintf(stderr, "\n");
+        }
+        check(reconstructed == expected,
+              "MFEM face orientation must reconstruct canonical element-local face order");
 
+        if (!require_boundary_order) continue;
         bool found_boundary = false;
         for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
             mfem::Array<int> boundary_vertices;
             mesh.GetBdrElementVertices(boundary, boundary_vertices);
-            if (sorted_vertices(boundary_vertices) != actual_set) continue;
+            if (sorted_vertices(boundary_vertices) != expected_set) continue;
             found_boundary = true;
             check(std::vector<int>(boundary_vertices.begin(), boundary_vertices.end()) == expected,
                   "MFEM boundary face order must preserve canonical owner orientation");
@@ -149,6 +182,8 @@ void check_mfem_face_table(
         check(found_boundary,
               "every one-cell canonical face must be represented by an MFEM boundary face");
     }
+    check(!require_nonzero_orientation || saw_nonzero_orientation,
+          "connected second-side element must exercise a nonzero MFEM face orientation");
 }
 
 void single_element_families_preserve_geometry_dofs_vertices_and_attributes()
@@ -187,7 +222,7 @@ void single_element_families_preserve_geometry_dofs_vertices_and_attributes()
         std::vector<int> expected;
         for (uint32_t node : item.connectivity) expected.push_back(static_cast<int>(node));
         check_identity_vertices(*mesh, 0, expected);
-        check_mfem_face_table(*mesh, item.type, item.connectivity);
+        check_mfem_face_table(*mesh, 0, item.type, item.connectivity);
         mfem::H1_FECollection fec(1, 3);
         mfem::FiniteElementSpace fes(mesh.get(), &fec);
         check(fes.GetNDofs() == static_cast<int>(source.n_nodes),
@@ -294,6 +329,9 @@ void conforming_mixed_domain_shares_faces_and_h1_dofs()
           "prism-pyramid quad interface must share four H1 DOFs");
     check(common_dof_count(fes, 1, 2) == 3,
           "pyramid-tet triangle interface must share three H1 DOFs");
+    check_mfem_face_table(*mesh, 0, FULLMAG_FEM_CELL_PRISM6, {0,1,2,3,4,5}, false);
+    check_mfem_face_table(*mesh, 1, FULLMAG_FEM_CELL_PYRAMID5, {0,1,4,3,6}, false, true);
+    check_mfem_face_table(*mesh, 2, FULLMAG_FEM_CELL_TET4, {1,4,6,7}, false, true);
     check_linear_interface_values(source, fes, {0,1,3,4});
     check_linear_interface_values(source, fes, {1,4,6});
 }
@@ -510,6 +548,45 @@ void repeated_incomplete_facets_fail_before_runtime_publication()
     }
 }
 
+void repeated_post_device_fes_failure_rolls_back_runtime_state()
+{
+    const auto source = make_mesh(
+        {0,0,0, 1,0,0, 0,1,0, 0,0,1},
+        {FULLMAG_FEM_CELL_TET4}, {0,4}, {0,1,2,3}, {1});
+    bool use_cuda = false;
+#if FULLMAG_HAS_CUDA_RUNTIME
+    int device_count = 0;
+    use_cuda = cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0;
+#endif
+
+    for (int attempt = 0; attempt < 16; ++attempt) {
+        fullmag::fem::Context context{};
+        context.mesh = source;
+        context.base_plan.fe_order = 2;
+        context.mfem_device.device_string_override = use_cuda ? "cuda" : "cpu";
+        context.mfem_device.gpu_device_index = use_cuda ? 0 : -1;
+        std::string error;
+        check(!fullmag::fem::context_initialize_mfem(context, error),
+              "P2 FES/node mismatch must fail after MFEM device and local FES allocation");
+        check(error.find("DOF count does not match node count") != std::string::npos,
+              error.c_str());
+        check(mfem::Device::IsConfigured(),
+              "failed context teardown must preserve the process-global MFEM Device");
+        check(!context.mfem_context.ready && !context.exchange.mfem.ready &&
+                  context.mfem_context.selected_device_index == -1 &&
+                  context.mfem_context.device == nullptr &&
+                  context.mfem_context.mesh == nullptr &&
+                  context.mfem_context.fec == nullptr &&
+                  context.mfem_context.fes == nullptr &&
+                  context.mfem_context.gf_mx == nullptr &&
+                  context.mfem_context.a_coeff == nullptr &&
+                  context.gpu_state.cuda.compute_stream == nullptr &&
+                  context.gpu_state.cuda.io_stream == nullptr &&
+                  context.gpu_state.cuda.compute_event == nullptr,
+              "post-device/FES failure must roll back MFEM/CUDA handles and device metadata");
+    }
+}
+
 } // namespace
 
 int main()
@@ -523,6 +600,7 @@ int main()
     all_tet_periodic_seam_remains_an_attributed_boundary();
     malformed_face_ownership_and_marker_inputs_fail_closed();
     repeated_incomplete_facets_fail_before_runtime_publication();
+    repeated_post_device_fes_failure_rolls_back_runtime_state();
     return 0;
 }
 

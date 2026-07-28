@@ -421,9 +421,8 @@ void context_destroy_mfem(Context &ctx)
     delete static_cast<mfem::FiniteElementSpace *>(ctx.mfem_context.fes);
     delete static_cast<mfem::FiniteElementCollection *>(ctx.mfem_context.fec);
     delete static_cast<mfem::Mesh *>(ctx.mfem_context.mesh);
-    // Do not delete the global mfem::Device virtual singleton to prevent invalidating
-    // the MemoryManager device environment for subsequent context instances in this process.
-    // delete ctx.mfem_context.device;
+    // Preserve the process-global Device virtual singleton and clear only this
+    // context's non-owning view so subsequent contexts retain the MFEM environment.
     ctx.mfem_context.device = nullptr;
     ctx.exchange.mfem.mass_form = nullptr;
     ctx.exchange.mfem.exchange_form = nullptr;
@@ -443,6 +442,7 @@ void context_destroy_mfem(Context &ctx)
     ctx.mfem_context.fes = nullptr;
     ctx.mfem_context.fec = nullptr;
     ctx.mfem_context.mesh = nullptr;
+    ctx.mfem_context.selected_device_index = -1;
     ctx.mfem_context.ready = false;
     ctx.exchange.mfem.ready = false;
     ctx.gpu_state.legacy_exchange.legacy_sparse_metadata_ready = false;

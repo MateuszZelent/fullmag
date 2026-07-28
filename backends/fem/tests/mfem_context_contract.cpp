@@ -29,6 +29,17 @@ std::string read_text_file(const std::filesystem::path &path) {
     return buffer.str();
 }
 
+std::string remove_cpp_line_comments(const std::string &source) {
+    std::istringstream lines(source);
+    std::ostringstream active;
+    std::string line;
+    while (std::getline(lines, line)) {
+        const size_t comment = line.find("//");
+        active << line.substr(0, comment) << '\n';
+    }
+    return active.str();
+}
+
 std::filesystem::path fem_source_root() {
     const std::filesystem::path this_file(__FILE__);
     if (this_file.is_absolute()) {
@@ -43,6 +54,7 @@ void mfem_context_lifecycle_is_owned_by_runtime_module() {
     const std::string context_header = read_text_file(root / "include" / "context.hpp");
     const std::string runtime =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "mfem_context.cpp");
+    const std::string active_runtime = remove_cpp_line_comments(runtime);
     const std::string runtime_header =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "mfem_context.hpp");
 
@@ -112,8 +124,9 @@ void mfem_context_lifecycle_is_owned_by_runtime_module() {
             runtime.find("auto *gf_mx = new mfem::GridFunction") == std::string::npos,
         "MFEM initialization must not expose raw unpublished allocations");
     check(
-        runtime.find("delete ctx.mfem_context.device") != std::string::npos,
-        "MFEM context destruction must release the per-context mfem::Device handle");
+        active_runtime.find("delete ctx.mfem_context.device") == std::string::npos &&
+            active_runtime.find("ctx.mfem_context.device = nullptr") != std::string::npos,
+        "MFEM context teardown must clear, but never delete, its non-owning global Device view");
     check(
         runtime_header.find("std::vector<double> m_x") != std::string::npos &&
             runtime_header.find("std::vector<double> m_y") != std::string::npos &&
