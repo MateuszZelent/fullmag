@@ -522,6 +522,512 @@ double exchange_energy(
     return magnetization * residual;
 }
 
+void check_close(double actual, double expected, double tolerance, const char *message)
+{
+    if (!std::isfinite(actual) || std::abs(actual - expected) > tolerance) {
+        std::fprintf(
+            stderr,
+            "FAIL: %s (actual=%.17g expected=%.17g tolerance=%.17g)\n",
+            message,
+            actual,
+            expected,
+            tolerance);
+        std::exit(1);
+    }
+}
+
+mfem::Mesh single_exchange_cell(mfem::Geometry::Type geometry)
+{
+    if (geometry == mfem::Geometry::PRISM) {
+        mfem::Mesh mesh(3, 6, 1, 0, 3);
+        const double vertices[][3] = {
+            {0, 0, 0}, {1, 0, 0}, {0, 1, 0},
+            {0, 0, 1}, {1, 0, 1}, {0, 1, 1},
+        };
+        for (const auto &vertex : vertices) mesh.AddVertex(vertex);
+        const int nodes[] = {0, 1, 2, 3, 4, 5};
+        mesh.AddWedge(nodes, 7);
+        mesh.FinalizeTopology();
+        mesh.Finalize(false, true);
+        return mesh;
+    }
+    if (geometry == mfem::Geometry::PYRAMID) {
+        mfem::Mesh mesh(3, 5, 1, 0, 3);
+        const double vertices[][3] = {
+            {0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0}, {0.5, 0.5, 1},
+        };
+        for (const auto &vertex : vertices) mesh.AddVertex(vertex);
+        const int nodes[] = {0, 1, 2, 3, 4};
+        mesh.AddPyramid(nodes, 7);
+        mesh.FinalizeTopology();
+        mesh.Finalize(false, true);
+        return mesh;
+    }
+    mfem::Mesh mesh(3, 4, 1, 0, 3);
+    const double vertices[][3] = {
+        {0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1},
+    };
+    for (const auto &vertex : vertices) mesh.AddVertex(vertex);
+    const int nodes[] = {0, 1, 2, 3};
+    mesh.AddTet(nodes, 7);
+    mesh.FinalizeTopology();
+    mesh.Finalize(false, true);
+    return mesh;
+}
+
+mfem::Mesh conforming_exchange_prism_pyramid_tet()
+{
+    mfem::Mesh mesh(3, 8, 3, 0, 3);
+    const double vertices[][3] = {
+        {0, 0, 0}, {1, 0, 0}, {0, 1, 0},
+        {0, 0, 1}, {1, 0, 1}, {0, 1, 1},
+        {0.5, -1, 0.5}, {1.5, -1, 0.5},
+    };
+    for (const auto &vertex : vertices) mesh.AddVertex(vertex);
+    const int prism[] = {0, 1, 2, 3, 4, 5};
+    const int pyramid[] = {0, 1, 4, 3, 6};
+    const int tet[] = {1, 4, 6, 7};
+    mesh.AddWedge(prism, 7);
+    mesh.AddPyramid(pyramid, 8);
+    mesh.AddTet(tet, 8);
+    mesh.FinalizeTopology();
+    mesh.Finalize(false, true);
+    return mesh;
+}
+
+mfem::Mesh independent_all_tet_prism_reference()
+{
+    mfem::Mesh mesh(3, 6, 3, 0, 3);
+    const double vertices[][3] = {
+        {0, 0, 0}, {1, 0, 0}, {0, 1, 0},
+        {0, 0, 1}, {1, 0, 1}, {0, 1, 1},
+    };
+    for (const auto &vertex : vertices) mesh.AddVertex(vertex);
+    const int tet0[] = {0, 1, 2, 3};
+    const int tet1[] = {1, 2, 3, 4};
+    const int tet2[] = {2, 3, 4, 5};
+    mesh.AddTet(tet0, 7);
+    mesh.AddTet(tet1, 7);
+    mesh.AddTet(tet2, 7);
+    mesh.FinalizeTopology();
+    mesh.Finalize(false, true);
+    return mesh;
+}
+
+void initialize_production_exchange(
+    fullmag::fem::Context &ctx,
+    mfem::Mesh &mesh,
+    mfem::FiniteElementSpace &fes,
+    mfem::Coefficient &a_coeff,
+    mfem::Coefficient &ms_coeff,
+    const std::vector<uint8_t> &magnetic_elements)
+{
+    ctx.exchange.enabled = true;
+    ctx.mesh.magnetic_element_mask = magnetic_elements;
+    std::string error;
+    check(
+        fullmag::fem::initialize_exchange_operator_mfem(
+            ctx, mesh, fes, a_coeff, ms_coeff, error),
+        error.c_str());
+}
+
+void check_production_csr_contract(
+    mfem::BilinearForm &exchange_form,
+    const char *constant_message,
+    const char *symmetry_message,
+    const char *psd_message)
+{
+    const int ndofs = exchange_form.FESpace()->GetNDofs();
+    mfem::Vector constant(ndofs);
+    mfem::Vector first(ndofs);
+    mfem::Vector second(ndofs);
+    mfem::Vector image(ndofs);
+    constant = 1.0;
+    for (int i = 0; i < ndofs; ++i) {
+        first[i] = std::sin(static_cast<double>(i + 1));
+        second[i] = 0.25 + 0.17 * static_cast<double>(i) - 0.03 * i * i;
+    }
+    exchange_form.Mult(constant, image);
+    check(image.Norml2() < 1.0e-11, constant_message);
+
+    mfem::Vector first_image(ndofs);
+    mfem::Vector second_image(ndofs);
+    exchange_form.Mult(first, first_image);
+    exchange_form.Mult(second, second_image);
+    check_close(first * second_image, second * first_image, 1.0e-11, symmetry_message);
+    check(first * first_image >= -1.0e-11, psd_message);
+    check(second * second_image >= -1.0e-11, psd_message);
+}
+
+void check_projection_contracts(
+    fullmag::fem::Context &ctx,
+    mfem::FiniteElementSpace &fes,
+    mfem::BilinearForm &exchange_form,
+    mfem::BilinearForm &ms_mass_form,
+    mfem::GridFunction &ms_field,
+    mfem::GridFunction &field,
+    mfem::GridFunction &direction)
+{
+    constexpr double mu0 = 1.2566370614359172953850573533118e-6;
+    constexpr double epsilon = 1.0e-6;
+    mfem::GridFunction plus(field);
+    mfem::GridFunction minus(field);
+    plus.Add(epsilon, direction);
+    minus.Add(-epsilon, direction);
+    const double finite_difference =
+        (exchange_energy(exchange_form, plus) - exchange_energy(exchange_form, minus)) /
+        (2.0 * epsilon);
+
+    for (bool consistent : {false, true}) {
+        mfem::Vector tmp(fes.GetNDofs());
+        mfem::Vector h_component(fes.GetNDofs());
+        std::vector<double> h_host;
+        double energy = 0.0;
+        check(
+            fullmag::fem::apply_exchange_component_mass_projection(
+                &ctx,
+                false,
+                exchange_form,
+                field,
+                ms_field,
+                *ctx.exchange.mfem.inv_lumped_mass,
+                ms_mass_form,
+                consistent,
+                tmp,
+                h_component,
+                h_host,
+                &energy),
+            "production mixed-P1 exchange mass projection must succeed");
+        for (double value : h_host) {
+            check(std::isfinite(value), "production mixed-P1 exchange field must be finite");
+        }
+        if (consistent) {
+            check(
+                ctx.exchange.mfem.consistent_mass_solver != nullptr &&
+                    ctx.exchange.mfem.consistent_mass_solver->GetConverged(),
+                "production mixed-P1 consistent-mass projection must converge");
+        }
+        double field_derivative = 0.0;
+        if (consistent) {
+            mfem::Vector weighted_h(fes.GetNDofs());
+            ms_mass_form.Mult(h_component, weighted_h);
+            field_derivative = -mu0 * (direction * weighted_h);
+        } else {
+            const auto &weights = ctx.integration_weights.mfem_lumped_mass;
+            for (int i = 0; i < fes.GetNDofs(); ++i) {
+                field_derivative -= mu0 * direction[i] * ms_field[i] *
+                    weights[static_cast<size_t>(i)] * h_component[i];
+            }
+        }
+        const double scale = std::max(
+            1.0,
+            std::max(std::abs(finite_difference), std::abs(field_derivative)));
+        check_close(
+            field_derivative,
+            finite_difference,
+            1.0e-8 * scale,
+            "production mixed-P1 exchange projection must satisfy the energy derivative");
+        check_close(
+            energy,
+            exchange_energy(exchange_form, field),
+            1.0e-11 * std::max(1.0, std::abs(energy)),
+            "production mixed-P1 exchange projection must preserve energy");
+    }
+}
+
+void production_exchange_supports_each_mixed_p1_cell_family()
+{
+    constexpr double a_value = 1.7;
+    constexpr double ms_value = 4.0;
+    struct Case {
+        mfem::Geometry::Type geometry;
+        double volume;
+    };
+    const Case cases[] = {
+        {mfem::Geometry::PRISM, 0.5},
+        {mfem::Geometry::PYRAMID, 1.0 / 3.0},
+        {mfem::Geometry::TETRAHEDRON, 1.0 / 6.0},
+    };
+    for (const auto &item : cases) {
+        mfem::Mesh mesh = single_exchange_cell(item.geometry);
+        mfem::H1_FECollection fec(1, 3);
+        mfem::FiniteElementSpace fes(&mesh, &fec);
+        mfem::ConstantCoefficient a_coeff(a_value);
+        mfem::ConstantCoefficient ms_coeff(ms_value);
+        fullmag::fem::Context ctx;
+        initialize_production_exchange(ctx, mesh, fes, a_coeff, ms_coeff, {1u});
+
+        auto &exchange_form = *ctx.exchange.mfem.exchange_form;
+        auto &mass_form = *ctx.exchange.mfem.mass_form;
+        check_production_csr_contract(
+            exchange_form,
+            "production mixed-P1 exchange must keep the constant nullspace",
+            "production mixed-P1 exchange CSR must remain symmetric after canonicalization",
+            "production mixed-P1 exchange CSR must remain PSD after canonicalization");
+
+        double mass_sum = 0.0;
+        for (double mass : ctx.integration_weights.mfem_lumped_mass) {
+            check(
+                std::isfinite(mass) && mass >= 0.0,
+                "production mixed-P1 magnetic mass row sums must be finite and nonnegative");
+            mass_sum += mass;
+        }
+        check_close(
+            mass_sum,
+            item.volume,
+            1.0e-12,
+            "production mixed-P1 magnetic mass row sums must conserve cell volume");
+
+        mfem::GridFunction field(&fes);
+        mfem::GridFunction direction(&fes);
+        mfem::GridFunction ms_field(&fes);
+        mfem::FunctionCoefficient linear(
+            [](const mfem::Vector &x) { return x[0] + 2.0 * x[1] - 3.0 * x[2]; });
+        mfem::FunctionCoefficient probe(
+            [](const mfem::Vector &x) { return 0.3 - 0.2 * x[0] + 0.4 * x[1] + 0.1 * x[2]; });
+        field.ProjectCoefficient(linear);
+        direction.ProjectCoefficient(probe);
+        ms_field.ProjectCoefficient(ms_coeff);
+        check_close(
+            exchange_energy(exchange_form, field),
+            a_value * 14.0 * item.volume,
+            1.0e-10,
+            "production mixed-P1 exchange must reproduce the analytic linear-field energy");
+        check_projection_contracts(
+            ctx, fes, exchange_form, mass_form, ms_field, field, direction);
+
+        mfem::GridFunction constant(&fes);
+        constant = 1.0;
+        for (bool consistent : {false, true}) {
+            mfem::Vector tmp(fes.GetNDofs());
+            mfem::Vector h_component(fes.GetNDofs());
+            std::vector<double> h_host;
+            double constant_energy = -1.0;
+            check(
+                fullmag::fem::apply_exchange_component_mass_projection(
+                    &ctx, false, exchange_form, constant, ms_field,
+                    *ctx.exchange.mfem.inv_lumped_mass, mass_form, consistent,
+                    tmp, h_component, h_host, &constant_energy),
+                "constant production mixed-P1 exchange projection must succeed");
+            check_close(
+                constant_energy, 0.0, 1.0e-11, "constant P1 exchange energy must vanish");
+            check(h_component.Norml2() < 1.0e-5, "constant P1 exchange field must vanish");
+        }
+        fullmag::fem::context_destroy_mfem(ctx);
+    }
+}
+
+void production_exchange_masks_air_in_conforming_mixed_domain()
+{
+    constexpr double a_value = 1.7;
+    constexpr double ms_value = 4.0;
+    mfem::Mesh mixed_mesh = conforming_exchange_prism_pyramid_tet();
+    mfem::Mesh prism_mesh = single_exchange_cell(mfem::Geometry::PRISM);
+    mfem::H1_FECollection mixed_fec(1, 3);
+    mfem::H1_FECollection prism_fec(1, 3);
+    mfem::FiniteElementSpace mixed_fes(&mixed_mesh, &mixed_fec);
+    mfem::FiniteElementSpace prism_fes(&prism_mesh, &prism_fec);
+    mfem::ConstantCoefficient a_coeff(a_value);
+    mfem::ConstantCoefficient ms_coeff(ms_value);
+    fullmag::fem::Context mixed_ctx;
+    fullmag::fem::Context prism_ctx;
+    initialize_production_exchange(
+        mixed_ctx, mixed_mesh, mixed_fes, a_coeff, ms_coeff, {1u, 0u, 0u});
+    initialize_production_exchange(
+        prism_ctx, prism_mesh, prism_fes, a_coeff, ms_coeff, {1u});
+
+    mfem::GridFunction mixed_field(&mixed_fes);
+    mfem::GridFunction prism_field(&prism_fes);
+    mfem::GridFunction mixed_direction(&mixed_fes);
+    mfem::GridFunction mixed_ms(&mixed_fes);
+    mfem::FunctionCoefficient linear(
+        [](const mfem::Vector &x) { return x[0] + 2.0 * x[1] - 3.0 * x[2]; });
+    mfem::FunctionCoefficient probe(
+        [](const mfem::Vector &x) { return 0.3 - 0.2 * x[0] + 0.4 * x[1] + 0.1 * x[2]; });
+    mixed_field.ProjectCoefficient(linear);
+    prism_field.ProjectCoefficient(linear);
+    mixed_direction.ProjectCoefficient(probe);
+    mixed_ms.ProjectCoefficient(ms_coeff);
+    auto &mixed_exchange = *mixed_ctx.exchange.mfem.exchange_form;
+    auto &prism_exchange = *prism_ctx.exchange.mfem.exchange_form;
+    mfem::Vector mixed_residual(mixed_fes.GetNDofs());
+    mfem::Vector prism_residual(prism_fes.GetNDofs());
+    mixed_exchange.Mult(mixed_field, mixed_residual);
+    prism_exchange.Mult(prism_field, prism_residual);
+    check_close(
+        exchange_energy(mixed_exchange, mixed_field),
+        exchange_energy(prism_exchange, prism_field),
+        1.0e-11,
+        "air pyramid/tetrahedron must make no exchange-energy contribution");
+    for (int vertex = 0; vertex < 6; ++vertex) {
+        mfem::Array<int> mixed_dofs;
+        mfem::Array<int> prism_dofs;
+        mixed_fes.GetVertexDofs(vertex, mixed_dofs);
+        prism_fes.GetVertexDofs(vertex, prism_dofs);
+        check_close(
+            mixed_residual[mixed_dofs[0]],
+            prism_residual[prism_dofs[0]],
+            1.0e-11,
+            "mixed interface nodes must retain the magnetic prism exchange contribution");
+        check_close(
+            mixed_ctx.integration_weights.mfem_lumped_mass[static_cast<size_t>(mixed_dofs[0])],
+            prism_ctx.integration_weights.mfem_lumped_mass[static_cast<size_t>(prism_dofs[0])],
+            1.0e-12,
+            "mixed interface nodes must retain the magnetic prism mass contribution");
+    }
+    for (int vertex : {6, 7}) {
+        mfem::Array<int> dofs;
+        mixed_fes.GetVertexDofs(vertex, dofs);
+        check_close(
+            mixed_residual[dofs[0]], 0.0, 1.0e-12,
+            "air-only nodes must have zero exchange residual");
+        check_close(
+            mixed_ctx.integration_weights.mfem_lumped_mass[static_cast<size_t>(dofs[0])],
+            0.0,
+            1.0e-12,
+            "air-only nodes must have zero magnetic mass");
+    }
+    check_projection_contracts(
+        mixed_ctx,
+        mixed_fes,
+        mixed_exchange,
+        *mixed_ctx.exchange.mfem.mass_form,
+        mixed_ms,
+        mixed_field,
+        mixed_direction);
+    for (bool consistent : {false, true}) {
+        mfem::Vector mixed_tmp(mixed_fes.GetNDofs());
+        mfem::Vector mixed_h(mixed_fes.GetNDofs());
+        mfem::Vector prism_tmp(prism_fes.GetNDofs());
+        mfem::Vector prism_h(prism_fes.GetNDofs());
+        std::vector<double> mixed_h_host;
+        std::vector<double> prism_h_host;
+        check(
+            fullmag::fem::apply_exchange_component_mass_projection(
+                &mixed_ctx, false, mixed_exchange, mixed_field, mixed_ms,
+                *mixed_ctx.exchange.mfem.inv_lumped_mass,
+                *mixed_ctx.exchange.mfem.mass_form,
+                consistent,
+                mixed_tmp,
+                mixed_h,
+                mixed_h_host,
+                nullptr),
+            "conforming mixed-domain exchange projection must succeed");
+        mfem::GridFunction prism_ms(&prism_fes);
+        prism_ms.ProjectCoefficient(ms_coeff);
+        check(
+            fullmag::fem::apply_exchange_component_mass_projection(
+                &prism_ctx, false, prism_exchange, prism_field, prism_ms,
+                *prism_ctx.exchange.mfem.inv_lumped_mass,
+                *prism_ctx.exchange.mfem.mass_form,
+                consistent,
+                prism_tmp,
+                prism_h,
+                prism_h_host,
+                nullptr),
+            "prism-only exchange reference projection must succeed");
+        for (int vertex = 0; vertex < 6; ++vertex) {
+            mfem::Array<int> mixed_dofs;
+            mfem::Array<int> prism_dofs;
+            mixed_fes.GetVertexDofs(vertex, mixed_dofs);
+            prism_fes.GetVertexDofs(vertex, prism_dofs);
+            check_close(
+                mixed_h[mixed_dofs[0]],
+                prism_h[prism_dofs[0]],
+                1.0e-10 * std::max(1.0, std::abs(prism_h[prism_dofs[0]])),
+                "shared mixed-domain nodes must retain the prism-only projected H");
+        }
+        for (int vertex : {6, 7}) {
+            mfem::Array<int> dofs;
+            mixed_fes.GetVertexDofs(vertex, dofs);
+            check_close(
+                mixed_h[dofs[0]],
+                0.0,
+                1.0e-12,
+                "air-only mixed-domain nodes must have zero projected H");
+        }
+    }
+    fullmag::fem::context_destroy_mfem(prism_ctx);
+    fullmag::fem::context_destroy_mfem(mixed_ctx);
+}
+
+void production_prism_exchange_converges_with_independent_all_tet_reference()
+{
+    constexpr double a_value = 1.7;
+    constexpr double exact_energy = a_value * (4.0 / 3.0);
+    mfem::Mesh prism_mesh = single_exchange_cell(mfem::Geometry::PRISM);
+    mfem::Mesh tet_mesh = independent_all_tet_prism_reference();
+    double initial_prism_error = 0.0;
+    double initial_tet_error = 0.0;
+    double previous_prism_error = 0.0;
+    double previous_tet_error = 0.0;
+    double final_prism_energy = 0.0;
+    double final_tet_energy = 0.0;
+    for (int level = 0; level < 3; ++level) {
+        mfem::H1_FECollection prism_fec(1, 3);
+        mfem::H1_FECollection tet_fec(1, 3);
+        mfem::FiniteElementSpace prism_fes(&prism_mesh, &prism_fec);
+        mfem::FiniteElementSpace tet_fes(&tet_mesh, &tet_fec);
+        mfem::ConstantCoefficient a_coeff(a_value);
+        mfem::ConstantCoefficient ms_coeff(4.0);
+        fullmag::fem::Context prism_ctx;
+        fullmag::fem::Context tet_ctx;
+        initialize_production_exchange(
+            prism_ctx,
+            prism_mesh,
+            prism_fes,
+            a_coeff,
+            ms_coeff,
+            std::vector<uint8_t>(static_cast<size_t>(prism_mesh.GetNE()), 1u));
+        initialize_production_exchange(
+            tet_ctx,
+            tet_mesh,
+            tet_fes,
+            a_coeff,
+            ms_coeff,
+            std::vector<uint8_t>(static_cast<size_t>(tet_mesh.GetNE()), 1u));
+        mfem::FunctionCoefficient quadratic([](const mfem::Vector &x) {
+            return x[0] * x[0] + x[1] * x[1] + x[2] * x[2];
+        });
+        mfem::GridFunction prism_field(&prism_fes);
+        mfem::GridFunction tet_field(&tet_fes);
+        prism_field.ProjectCoefficient(quadratic);
+        tet_field.ProjectCoefficient(quadratic);
+        const double prism_energy = exchange_energy(
+            *prism_ctx.exchange.mfem.exchange_form, prism_field);
+        const double tet_energy = exchange_energy(
+            *tet_ctx.exchange.mfem.exchange_form, tet_field);
+        final_prism_energy = prism_energy;
+        final_tet_energy = tet_energy;
+        const double prism_error = std::abs(prism_energy - exact_energy);
+        const double tet_error = std::abs(tet_energy - exact_energy);
+        if (level == 0) {
+            initial_prism_error = prism_error;
+            initial_tet_error = tet_error;
+        } else {
+            check(
+                prism_error < previous_prism_error && tet_error < previous_tet_error,
+                "production prism and independent all-tet exchange errors must converge monotonically");
+        }
+        previous_prism_error = prism_error;
+        previous_tet_error = tet_error;
+        fullmag::fem::context_destroy_mfem(tet_ctx);
+        fullmag::fem::context_destroy_mfem(prism_ctx);
+        if (level < 2) {
+            prism_mesh.UniformRefinement();
+            tet_mesh.UniformRefinement();
+        }
+    }
+    check(
+        previous_prism_error < 0.3 * initial_prism_error &&
+            previous_tet_error < 0.3 * initial_tet_error,
+        "production prism and independent all-tet exchange must show resolved refinement convergence");
+    check(
+        std::abs(final_prism_energy - final_tet_energy) <
+            0.3 * std::max(initial_prism_error, initial_tet_error),
+        "refined production prism exchange must agree with the independent all-tet reference");
+}
+
 void spatial_a_and_ms_exchange_pass_directional_derivative() {
     constexpr double mu0 = 1.2566370614359172953850573533118e-6;
     mfem::Mesh mesh = mfem::Mesh::MakeCartesian3D(
@@ -931,6 +1437,9 @@ int main() {
     exchange_source_files_document_module_boundaries();
     exchange_plan_fields_are_imported_by_aggregate();
 #if FULLMAG_HAS_MFEM_STACK
+    production_exchange_supports_each_mixed_p1_cell_family();
+    production_exchange_masks_air_in_conforming_mixed_domain();
+    production_prism_exchange_converges_with_independent_all_tet_reference();
     spatial_a_and_ms_exchange_pass_directional_derivative();
     exchange_mass_projection_header_documents_ms_weighted_consistent_projection();
     sharp_element_a_and_ms_exchange_pass_directional_derivative();
