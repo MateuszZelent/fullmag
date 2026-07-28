@@ -2,9 +2,9 @@
 
 ## Plan: FEM single-layer prism/pyramid shared domain
 
-- Worktree: `/home/kkingstoun/git/fullmag/fullmag/.worktrees/fem-mixed-prism-pyramid`
-- Branch: `codex/fem-mixed-prism-pyramid`
-- Base: `9853cbc17acfde6c6917942f6323a365f4e9025f`
+- Worktree: `/home/kkingstoun/git/fullmag/fullmag/.worktrees/fem-mixed-prism-pyramid-runtime`
+- Branch: `codex/fem-mixed-prism-pyramid-runtime`
+- Integrated base: `6f695afa2ddb5c0780cb1e1daa632baff0c8de86`
 - Source plan: `/home/kkingstoun/git/fullmag/fullmag/docs/plans/active/2026-07-27-fem-single-layer-prism-pyramid-shared-domain.md`
 
 | Slice | Status | RED evidence | GREEN evidence | Reviews | Commit |
@@ -21,6 +21,18 @@
 | 10 | complete | tet-only viewport faces/edges/quality, unsafe facet-ID fallback, Tri3/Quad4 collision, disabled-control JSON bypass, and misleading airbox labels reproduced | viewport/scoped focused 140; full Control Room 420 files / 3963 tests; typecheck; lint zero warnings; diff-check pass | independent UI/viewport reviews approved after positional facet identity and mixed CSR quality remediation | pending |
 | 11 | pending | pending | pending | pending | pending |
 | 12 | pending | pending | pending | pending | pending |
+
+Task 0.1 documentation remediation: complete (commit dea075a0, review clean).
+
+Task 4.1 native MFEM mesh builder: complete. RED reached the managed target and
+failed on the missing builder header. GREEN evidence is
+`just verify-fem-mixed-p1-native-contract` with explicit separate CPU and CUDA
+rollback processes, plus `just verify-fem-time-domain-native-contract` with
+Rust ABI 31/31. Four implementation/review-fix commits:
+`5ef3ff06`, `afa01f0f`, `bba70b74`, `3a847139`. Three independent review waves
+closed lifecycle, orientation, rollback-matrix, and false-positive source-test
+findings; final verdict `Ready: Yes` with no Critical or Important issues.
+The public mixed solver remains fail-closed before material/MFEM/GPU startup.
 
 ## Global constraints
 
