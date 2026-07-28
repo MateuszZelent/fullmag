@@ -88,6 +88,29 @@ void mfem_context_lifecycle_is_owned_by_runtime_module() {
         runtime.find("std::once_flag") == std::string::npos &&
             runtime.find("std::call_once") == std::string::npos,
         "MFEM context initialization must not use one-shot global device assignment for per-context device state");
+    const size_t mesh_build = runtime.find("build_mfem_mesh(ctx.mesh");
+    const size_t thread_setup = runtime.find("configure_fem_host_runtime_threads(ctx)");
+    const size_t stream_setup = runtime.find("cudaStreamCreateWithPriority");
+    check(
+        mesh_build != std::string::npos && thread_setup != std::string::npos &&
+            mesh_build < thread_setup &&
+            (stream_setup == std::string::npos || mesh_build < stream_setup),
+        "pure MFEM mesh construction must reject invalid topology before device/stream startup");
+    check(
+        runtime.find("MfemInitializationRollback rollback(ctx)") != std::string::npos &&
+            runtime.find("rollback.commit()") != std::string::npos,
+        "MFEM initialization must install and commit a central rollback guard");
+    check(
+        runtime.find("std::make_unique<mfem::H1_FECollection>") != std::string::npos &&
+            runtime.find("std::make_unique<mfem::FiniteElementSpace>") != std::string::npos &&
+            runtime.find("std::make_unique<mfem::GridFunction>") != std::string::npos &&
+            runtime.find("std::unique_ptr<mfem::Coefficient>") != std::string::npos,
+        "every unpublished MFEM FEC/FES/GridFunction/coefficient must have RAII ownership");
+    check(
+        runtime.find("auto *fec = new mfem::H1_FECollection") == std::string::npos &&
+            runtime.find("auto *fes = new mfem::FiniteElementSpace") == std::string::npos &&
+            runtime.find("auto *gf_mx = new mfem::GridFunction") == std::string::npos,
+        "MFEM initialization must not expose raw unpublished allocations");
     check(
         runtime.find("delete ctx.mfem_context.device") != std::string::npos,
         "MFEM context destruction must release the per-context mfem::Device handle");

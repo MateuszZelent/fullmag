@@ -286,11 +286,14 @@ bool volume_attributes(
         maximum_marker = std::max(maximum_marker, marker);
         has_air = has_air || marker == 0u;
     }
-    if (has_air && maximum_marker == static_cast<uint32_t>(std::numeric_limits<int>::max())) {
-        error = "MFEM mesh builder cannot allocate an unoccupied positive air attribute";
-        return false;
+    int air_attribute = 1;
+    if (has_air) {
+        if (maximum_marker == static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+            error = "MFEM mesh builder cannot allocate an unoccupied positive air attribute";
+            return false;
+        }
+        air_attribute = static_cast<int>(maximum_marker + 1u);
     }
-    const int air_attribute = static_cast<int>(maximum_marker + 1u);
     attributes.reserve(source.n_elements);
     for (uint32_t element = 0; element < source.n_elements; ++element) {
         const uint32_t marker = source.cell_markers.empty() ? 1u : source.cell_markers[element];

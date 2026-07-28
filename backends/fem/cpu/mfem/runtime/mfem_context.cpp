@@ -143,12 +143,38 @@ static void cleanup_global_device()
     global_device = nullptr;
 }
 
+class MfemInitializationRollback {
+public:
+    explicit MfemInitializationRollback(Context &ctx) : ctx_(ctx) {}
+
+    ~MfemInitializationRollback()
+    {
+        if (active_) {
+            context_destroy_mfem(ctx_);
+        }
+    }
+
+    void commit() noexcept { active_ = false; }
+
+private:
+    Context &ctx_;
+    bool active_ = true;
+};
+
 } // namespace
 
 bool context_initialize_mfem(Context &ctx, std::string &error)
 {
     try {
         debug_checkpoint("context_initialize_mfem:enter");
+        std::unique_ptr<mfem::Mesh> mesh_owner;
+        if (!build_mfem_mesh(ctx.mesh, mesh_owner, error)) {
+            return false;
+        }
+        auto *mesh = mesh_owner.get();
+        debug_checkpoint("context_initialize_mfem:mesh_ready");
+
+        MfemInitializationRollback rollback(ctx);
         configure_fem_host_runtime_threads(ctx);
 #if FULLMAG_HAS_CUDA_RUNTIME
         const char *device_config = configured_mfem_device_string(ctx);
@@ -190,15 +216,35 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
                 ctx.mfem_context.selected_device_index = selected_device;
                 int low_priority = 0;
                 int high_priority = 0;
-                cudaDeviceGetStreamPriorityRange(&low_priority, &high_priority);
+                cuda_err = cudaDeviceGetStreamPriorityRange(&low_priority, &high_priority);
+                if (cuda_err != cudaSuccess) {
+                    error = std::string("cudaDeviceGetStreamPriorityRange failed for native FEM backend: ") +
+                            cudaGetErrorString(cuda_err);
+                    return false;
+                }
                 cudaStream_t cs{};
                 cudaStream_t ios{};
-                cudaStreamCreateWithPriority(&cs, cudaStreamNonBlocking, high_priority);
-                cudaStreamCreateWithPriority(&ios, cudaStreamNonBlocking, low_priority);
+                cuda_err = cudaStreamCreateWithPriority(&cs, cudaStreamNonBlocking, high_priority);
+                if (cuda_err != cudaSuccess) {
+                    error = std::string("CUDA compute-stream creation failed for native FEM backend: ") +
+                            cudaGetErrorString(cuda_err);
+                    return false;
+                }
                 ctx.gpu_state.cuda.compute_stream = reinterpret_cast<void *>(cs);
+                cuda_err = cudaStreamCreateWithPriority(&ios, cudaStreamNonBlocking, low_priority);
+                if (cuda_err != cudaSuccess) {
+                    error = std::string("CUDA I/O-stream creation failed for native FEM backend: ") +
+                            cudaGetErrorString(cuda_err);
+                    return false;
+                }
                 ctx.gpu_state.cuda.io_stream = reinterpret_cast<void *>(ios);
                 cudaEvent_t ev{};
-                cudaEventCreateWithFlags(&ev, cudaEventDisableTiming);
+                cuda_err = cudaEventCreateWithFlags(&ev, cudaEventDisableTiming);
+                if (cuda_err != cudaSuccess) {
+                    error = std::string("CUDA compute-event creation failed for native FEM backend: ") +
+                            cudaGetErrorString(cuda_err);
+                    return false;
+                }
                 ctx.gpu_state.cuda.compute_event = reinterpret_cast<void *>(ev);
             } else {
                 ctx.mfem_context.selected_device_index = -1;
@@ -231,31 +277,22 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
 #endif
 
         debug_checkpoint("context_initialize_mfem:device_ready");
-        std::unique_ptr<mfem::Mesh> mesh_owner;
-        if (!build_mfem_mesh(ctx.mesh, mesh_owner, error)) {
-            return false;
-        }
-        auto *mesh = mesh_owner.get();
-        debug_checkpoint("context_initialize_mfem:mesh_ready");
-
-        auto *fec = new mfem::H1_FECollection(static_cast<int>(ctx.base_plan.fe_order), mesh->Dimension());
-        auto *fes = new mfem::FiniteElementSpace(mesh, fec);
+        auto fec = std::make_unique<mfem::H1_FECollection>(
+            static_cast<int>(ctx.base_plan.fe_order), mesh->Dimension());
+        auto fes = std::make_unique<mfem::FiniteElementSpace>(mesh, fec.get());
         debug_checkpoint("context_initialize_mfem:fes_ready");
 
         if (fes->GetNDofs() != static_cast<int>(ctx.mesh.n_nodes)) {
             error = "MFEM H1 P1 space DOF count does not match node count";
-            delete fes;
-            delete fec;
-            mesh_owner.reset();
             return false;
         }
 
         unpack_aos_to_components(ctx.state.m_xyz, ctx.mfem_context.m_x, ctx.mfem_context.m_y, ctx.mfem_context.m_z);
-        auto *gf_mx = new mfem::GridFunction(fes);
-        auto *gf_my = new mfem::GridFunction(fes);
-        auto *gf_mz = new mfem::GridFunction(fes);
-        auto *gf_a = new mfem::GridFunction(fes);
-        auto *gf_ms = new mfem::GridFunction(fes);
+        auto gf_mx = std::make_unique<mfem::GridFunction>(fes.get());
+        auto gf_my = std::make_unique<mfem::GridFunction>(fes.get());
+        auto gf_mz = std::make_unique<mfem::GridFunction>(fes.get());
+        auto gf_a = std::make_unique<mfem::GridFunction>(fes.get());
+        auto gf_ms = std::make_unique<mfem::GridFunction>(fes.get());
         gf_mx->UseDevice(mfem::Device::IsEnabled());
         gf_my->UseDevice(mfem::Device::IsEnabled());
         gf_mz->UseDevice(mfem::Device::IsEnabled());
@@ -283,14 +320,6 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
         if (!ctx.material_fields.Ms_element_field.empty() &&
             !ctx.exchange.mfem.use_consistent_mass) {
             error = "per-element Ms coefficient requires consistent-mass exchange projection";
-            delete gf_ms;
-            delete gf_a;
-            delete gf_mx;
-            delete gf_my;
-            delete gf_mz;
-            delete fes;
-            delete fec;
-            mesh_owner.reset();
             return false;
         }
 
@@ -301,65 +330,40 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
         const bool use_dg0_ms = !ctx.material_fields.Ms_element_field.empty();
         if ((use_dg0_a || use_dg0_ms) && runtime == nullptr) {
             error = "elementwise material coefficient requires initialized material runtime";
-            delete gf_ms;
-            delete gf_a;
-            delete gf_mx;
-            delete gf_my;
-            delete gf_mz;
-            delete fes;
-            delete fec;
-            mesh_owner.reset();
             return false;
         }
         if ((use_dg0_a && runtime->realization().a_location() != MaterialCoefficientLocation::element_dg0) ||
             (use_dg0_ms && runtime->realization().ms_location() != MaterialCoefficientLocation::element_dg0)) {
             error = "elementwise material payload does not match DG0 material realization";
-            delete gf_ms;
-            delete gf_a;
-            delete gf_mx;
-            delete gf_my;
-            delete gf_mz;
-            delete fes;
-            delete fec;
-            mesh_owner.reset();
             return false;
         }
 
-        mfem::Coefficient *a_coeff = use_dg0_a
-            ? static_cast<mfem::Coefficient *>(new AdapterBackedElementwiseCoefficient(
+        std::unique_ptr<mfem::Coefficient> a_coeff = use_dg0_a
+            ? std::unique_ptr<mfem::Coefficient>(new AdapterBackedElementwiseCoefficient(
                   *runtime, AdapterCoefficientKind::exchange_stiffness))
-            : static_cast<mfem::Coefficient *>(new mfem::GridFunctionCoefficient(gf_a));
-        mfem::Coefficient *ms_coeff = use_dg0_ms
-            ? static_cast<mfem::Coefficient *>(new AdapterBackedElementwiseCoefficient(
+            : std::unique_ptr<mfem::Coefficient>(new mfem::GridFunctionCoefficient(gf_a.get()));
+        std::unique_ptr<mfem::Coefficient> ms_coeff = use_dg0_ms
+            ? std::unique_ptr<mfem::Coefficient>(new AdapterBackedElementwiseCoefficient(
                   *runtime, AdapterCoefficientKind::saturation_magnetisation))
-            : static_cast<mfem::Coefficient *>(new mfem::GridFunctionCoefficient(gf_ms));
+            : std::unique_ptr<mfem::Coefficient>(new mfem::GridFunctionCoefficient(gf_ms.get()));
 
         if (!initialize_exchange_operator_mfem(
                 ctx, *mesh, *fes, *a_coeff, *ms_coeff, error)) {
-            delete ms_coeff;
-            delete a_coeff;
-            delete gf_ms;
-            delete gf_a;
-            delete gf_mx;
-            delete gf_my;
-            delete gf_mz;
-            delete fes;
-            delete fec;
-            mesh_owner.reset();
             return false;
         }
         debug_checkpoint("context_initialize_mfem:exchange_operator_ready");
         ctx.mfem_context.mesh = mesh_owner.release();
-        ctx.mfem_context.fec = fec;
-        ctx.mfem_context.fes = fes;
-        ctx.mfem_context.gf_mx = gf_mx;
-        ctx.mfem_context.gf_my = gf_my;
-        ctx.mfem_context.gf_mz = gf_mz;
-        ctx.mfem_context.gf_a = gf_a;
-        ctx.mfem_context.gf_ms = gf_ms;
-        ctx.mfem_context.a_coeff = a_coeff;
-        ctx.mfem_context.ms_coeff = ms_coeff;
+        ctx.mfem_context.fec = fec.release();
+        ctx.mfem_context.fes = fes.release();
+        ctx.mfem_context.gf_mx = gf_mx.release();
+        ctx.mfem_context.gf_my = gf_my.release();
+        ctx.mfem_context.gf_mz = gf_mz.release();
+        ctx.mfem_context.gf_a = gf_a.release();
+        ctx.mfem_context.gf_ms = gf_ms.release();
+        ctx.mfem_context.a_coeff = a_coeff.release();
+        ctx.mfem_context.ms_coeff = ms_coeff.release();
         ctx.mfem_context.ready = true;
+        rollback.commit();
         debug_checkpoint("context_initialize_mfem:done");
         return true;
     } catch (const std::exception &ex) {
@@ -368,7 +372,6 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
         error = "MFEM mesh/space initialization failed with an unknown error";
     }
 
-    context_destroy_mfem(ctx);
     return false;
 }
 
