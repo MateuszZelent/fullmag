@@ -706,6 +706,10 @@ pub struct SolverProfileOverheadDiagnostics {
     pub total_record_wall_time_ns: u64,
     pub last_persist_wall_time_ns: u64,
     pub total_persist_wall_time_ns: u64,
+    #[serde(default)]
+    pub persist_enqueued_count: u64,
+    #[serde(default)]
+    pub persist_completed_count: u64,
     pub last_publisher_replace_wall_time_ns: u64,
     pub total_publisher_replace_wall_time_ns: u64,
     pub heartbeat_seed_deep_clone_count: u64,
@@ -1117,6 +1121,18 @@ impl SolverProfileState {
             .overhead
             .total_publisher_replace_wall_time_ns
             .saturating_add(publisher_ns);
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    pub fn record_persist_enqueued(&mut self) {
+        self.overhead.persist_enqueued_count =
+            self.overhead.persist_enqueued_count.saturating_add(1);
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    pub fn record_persist_completed(&mut self) {
+        self.overhead.persist_completed_count =
+            self.overhead.persist_completed_count.saturating_add(1);
         self.revision = self.revision.wrapping_add(1);
     }
 

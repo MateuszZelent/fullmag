@@ -83,6 +83,12 @@ FULL_CACHE_TERMINAL_QUANTITIES = (
     "eden_ani",
     "eden_total",
 )
+PROFILE_PERSIST_OVERHEAD_FIELDS = (
+    "last_persist_wall_time_ns",
+    "total_persist_wall_time_ns",
+    "persist_enqueued_count",
+    "persist_completed_count",
+)
 
 
 def empty_energy_proof() -> dict[str, Any]:
@@ -558,11 +564,96 @@ def observe_preterminal_field_resources(
     )
 
 
-def callback_profile_proof(base: str, mode: str) -> dict[str, Any]:
+def solver_profile_persistence_contract_error(
+    *,
+    expected: bool,
+    configured: object,
+    artifact_refs: object,
+    persistence_failed: object,
+    overhead: object,
+) -> str | None:
+    if configured is not expected:
+        return f"config.persist_artifact={configured!r}, expected {expected}"
+    if not isinstance(persistence_failed, bool):
+        return f"persistence_failed must be a boolean, got {persistence_failed!r}"
+    if persistence_failed:
+        return "persistence_failed=true"
+    if not isinstance(artifact_refs, list):
+        return f"artifact_refs must be a list, got {artifact_refs!r}"
+    if not expected:
+        return None
+    if not artifact_refs or any(
+        not isinstance(artifact_ref, str) or not artifact_ref.strip()
+        for artifact_ref in artifact_refs
+    ):
+        return f"persist-on artifact_refs must contain nonempty strings, got {artifact_refs!r}"
+    if not isinstance(overhead, dict):
+        return f"persist-on overhead must be an object, got {overhead!r}"
+    for field in PROFILE_PERSIST_OVERHEAD_FIELDS:
+        value = overhead.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return f"persist-on overhead.{field} must be a non-negative integer, got {value!r}"
+    if overhead["total_persist_wall_time_ns"] < overhead["last_persist_wall_time_ns"]:
+        return "persist-on overhead total_persist_wall_time_ns is below last_persist_wall_time_ns"
+    enqueued = overhead["persist_enqueued_count"]
+    completed = overhead["persist_completed_count"]
+    if enqueued == 0:
+        return "persist-on overhead.persist_enqueued_count must be greater than zero"
+    if completed != enqueued:
+        return (
+            "persist-on overhead.persist_completed_count must acknowledge every enqueue: "
+            f"completed={completed} enqueued={enqueued}"
+        )
+    return None
+
+
+def callback_profile_proof(
+    base: str, mode: str, persistence_timeout_seconds: float = 0.0
+) -> dict[str, Any]:
     profile = get_json(base, "/v2/sessions/current/diagnostics/solver-profile")
     if mode == "disabled":
         if profile.get("preview_3d_disabled") is not True:
             raise RuntimeError("disabled row did not expose preview_3d_disabled=true")
+    config = profile.get("config")
+    if profile.get("state") != "active" or not isinstance(config, dict) or not config.get("enabled"):
+        raise RuntimeError(f"enabled row lacks an enabled production solver profile: {profile}")
+    persistence_deadline = time.monotonic() + persistence_timeout_seconds
+    while True:
+        config = profile.get("config")
+        persistence_error = solver_profile_persistence_contract_error(
+            expected=PROFILE_PERSIST_ARTIFACT,
+            configured=config.get("persist_artifact") if isinstance(config, dict) else None,
+            artifact_refs=profile.get("artifact_refs"),
+            persistence_failed=profile.get("persistence_failed"),
+            overhead=profile.get("overhead"),
+        )
+        overhead = profile.get("overhead")
+        persistence_pending = (
+            PROFILE_PERSIST_ARTIFACT
+            and isinstance(overhead, dict)
+            and isinstance(overhead.get("persist_enqueued_count"), int)
+            and not isinstance(overhead.get("persist_enqueued_count"), bool)
+            and isinstance(overhead.get("persist_completed_count"), int)
+            and not isinstance(overhead.get("persist_completed_count"), bool)
+            and overhead["persist_enqueued_count"] > overhead["persist_completed_count"] >= 0
+            and profile.get("persistence_failed") is False
+        )
+        if persistence_error is None or not persistence_pending or time.monotonic() >= persistence_deadline:
+            break
+        time.sleep(0.02)
+        profile = get_json(base, "/v2/sessions/current/diagnostics/solver-profile")
+    if persistence_error is not None:
+        raise RuntimeError(
+            "enabled row lacks terminal solver-profile persistence proof: "
+            f"{persistence_error}"
+        )
+    persistence_proof = {
+        "solver_profile_artifact_refs": profile.get("artifact_refs", []),
+        "solver_profile_overhead": profile.get("overhead"),
+        "solver_profile_persist_artifact": config.get("persist_artifact") is True,
+        "solver_profile_persistence_failed": profile.get("persistence_failed"),
+    }
+    if mode == "disabled":
         return {
             "callback_deadline_ns": PRODUCTION_CALLBACK_DEADLINE_NS,
             "callback_handoff_count": 0,
@@ -576,12 +667,10 @@ def callback_profile_proof(base: str, mode: str) -> dict[str, Any]:
             "callback_wall_outlier_count": 0,
             "callback_wall_outlier_max_ns": None,
             "callback_wall_outlier_details": [],
+            **persistence_proof,
             "worst_callback_detail": None,
             "worst_submit_detail": None,
         }
-    config = profile.get("config")
-    if profile.get("state") != "active" or not isinstance(config, dict) or not config.get("enabled"):
-        raise RuntimeError(f"enabled row lacks an enabled production solver profile: {profile}")
     samples = profile.get("latest_samples")
     if not isinstance(samples, list):
         raise RuntimeError("production solver profile latest_samples is not a list")
@@ -733,9 +822,7 @@ def callback_profile_proof(base: str, mode: str) -> dict[str, Any]:
             wall_outliers[0]["total_ns"] if wall_outliers else None
         ),
         "callback_wall_outlier_details": wall_outliers,
-        "solver_profile_artifact_refs": profile.get("artifact_refs", []),
-        "solver_profile_overhead": profile.get("overhead"),
-        "solver_profile_persist_artifact": config.get("persist_artifact") is True,
+        **persistence_proof,
         "worst_callback_detail": worst_callback_detail,
         "worst_submit_detail": worst_submit_detail,
     }
@@ -1462,7 +1549,7 @@ def run_row(
                         timeout_seconds,
                     )
                 field_proof = terminal_field_resource_proof(api_base, mode, timeout_seconds)
-                callback_proof = callback_profile_proof(api_base, mode)
+                callback_proof = callback_profile_proof(api_base, mode, timeout_seconds)
                 if browser is not None:
                     browser_proof = finish_browser_smoke(browser, browser_log_path, timeout_seconds)
                     browser = None
@@ -1619,6 +1706,7 @@ def run_row(
 
 
 def assert_equivalence(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    interactive_rows = [row for row in rows if row["surface"] != "headless"]
     enabled_interactive = [
         row for row in rows if row["mode"] != "disabled" and row["surface"] != "headless"
     ]
@@ -1636,6 +1724,30 @@ def assert_equivalence(rows: list[dict[str, Any]]) -> dict[str, Any]:
     ]
     if bad_callbacks:
         raise RuntimeError(f"production callback proof missing for rows: {bad_callbacks}")
+    bad_profile_persistence = []
+    for row in interactive_rows:
+        persistence_error = solver_profile_persistence_contract_error(
+            expected=PROFILE_PERSIST_ARTIFACT,
+            configured=row.get("solver_profile_persist_artifact"),
+            artifact_refs=row.get("solver_profile_artifact_refs"),
+            persistence_failed=row.get("solver_profile_persistence_failed"),
+            overhead=row.get("solver_profile_overhead"),
+        )
+        if persistence_error is not None:
+            bad_profile_persistence.append(
+                (
+                    row["mode"],
+                    row["cadence"],
+                    row["surface"],
+                    row["repeat"],
+                    persistence_error,
+                )
+            )
+    if bad_profile_persistence:
+        raise RuntimeError(
+            "terminal solver-profile persistence proof missing for rows: "
+            f"{bad_profile_persistence}"
+        )
     primary_live_rows = [
         row for row in enabled_interactive if requires_primary_live_proof(str(row["mode"]))
     ]

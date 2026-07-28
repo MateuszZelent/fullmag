@@ -18026,6 +18026,16 @@
             "minimum": 0,
             "type": "integer"
           },
+          "persist_completed_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "persist_enqueued_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "total_persist_wall_time_ns": {
             "format": "int64",
             "minimum": 0,
@@ -18143,6 +18153,9 @@
           },
           "overhead": {
             "$ref": "#/components/schemas/SolverProfileOverheadDiagnosticsResource"
+          },
+          "persistence_failed": {
+            "type": "boolean"
           },
           "preview_3d_disabled": {
             "type": "boolean"

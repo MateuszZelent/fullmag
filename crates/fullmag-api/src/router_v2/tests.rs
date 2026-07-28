@@ -19475,7 +19475,19 @@ async fn solver_profile_returns_404_without_session() {
 
 #[tokio::test]
 async fn solver_profile_returns_200_with_session() {
-    let app = test_router_with_session().await;
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        guard
+            .as_mut()
+            .expect("live session exists")
+            .solver_profile
+            .persistence_failed = true;
+        let profile = &mut guard.as_mut().expect("live session exists").solver_profile;
+        profile.overhead.persist_enqueued_count = 3;
+        profile.overhead.persist_completed_count = 2;
+    }
+    let app = build_v2_router().with_state(state);
     let response = app
         .oneshot(
             Request::builder()
@@ -19493,6 +19505,9 @@ async fn solver_profile_returns_200_with_session() {
     assert_eq!(json["state"], "disabled");
     assert!(json["latest_samples"].is_array());
     assert_eq!(json["aggregates"]["sample_count"], 0);
+    assert_eq!(json["persistence_failed"], true);
+    assert_eq!(json["overhead"]["persist_enqueued_count"], 3);
+    assert_eq!(json["overhead"]["persist_completed_count"], 2);
 }
 
 #[tokio::test]

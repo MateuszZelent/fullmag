@@ -20,6 +20,41 @@ MATRIX = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MATRIX)
 
 
+def callback_profile_payload(
+    *,
+    persist_artifact: bool,
+    artifact_refs: list[object] | None = None,
+    persistence_failed: bool = False,
+    overhead: object | None = None,
+) -> dict[str, object]:
+    return {
+        "state": "active",
+        "config": {
+            "enabled": True,
+            "persist_artifact": persist_artifact,
+        },
+        "latest_samples": [
+            {
+                "step": 1,
+                "phases": [
+                    {"id": "preview", "wall_time_ns": 100},
+                    {"id": "preview_callback_thread_cpu", "wall_time_ns": 80},
+                ],
+            }
+        ],
+        "artifact_refs": artifact_refs if artifact_refs is not None else [],
+        "persistence_failed": persistence_failed,
+        "overhead": overhead
+        if overhead is not None
+        else {
+            "last_persist_wall_time_ns": 10,
+            "total_persist_wall_time_ns": 20,
+            "persist_enqueued_count": 1,
+            "persist_completed_count": 1,
+        },
+    }
+
+
 class FemPreviewSurfaceMatrixContractTests(unittest.TestCase):
     def test_binary_request_preserves_http_error_body_and_url(self) -> None:
         error = urllib.error.HTTPError(
@@ -159,6 +194,203 @@ class FemPreviewSurfaceMatrixContractTests(unittest.TestCase):
         payload = post_json.call_args.args[2]
         self.assertTrue(payload["profile"]["persist_artifact"])
 
+    def test_persist_on_callback_profile_rejects_empty_artifact_refs(self) -> None:
+        profile = callback_profile_payload(persist_artifact=True, artifact_refs=[])
+        with (
+            mock.patch.object(MATRIX, "PROFILE_PERSIST_ARTIFACT", True),
+            mock.patch.object(MATRIX, "get_json", return_value=profile),
+            self.assertRaisesRegex(RuntimeError, "artifact_refs"),
+        ):
+            MATRIX.callback_profile_proof("http://127.0.0.1:1", "m")
+
+    def test_persist_on_callback_profile_rejects_persistence_failure(self) -> None:
+        profile = callback_profile_payload(
+            persist_artifact=True,
+            artifact_refs=["diagnostics/solver_profile.jsonl"],
+            persistence_failed=True,
+        )
+        with (
+            mock.patch.object(MATRIX, "PROFILE_PERSIST_ARTIFACT", True),
+            mock.patch.object(MATRIX, "get_json", return_value=profile),
+            self.assertRaisesRegex(RuntimeError, "persistence_failed"),
+        ):
+            MATRIX.callback_profile_proof("http://127.0.0.1:1", "m")
+
+    def test_persist_on_callback_profile_rejects_invalid_overhead_telemetry(self) -> None:
+        profile = callback_profile_payload(
+            persist_artifact=True,
+            artifact_refs=["diagnostics/solver_profile.jsonl"],
+            overhead={"last_persist_wall_time_ns": "10"},
+        )
+        with (
+            mock.patch.object(MATRIX, "PROFILE_PERSIST_ARTIFACT", True),
+            mock.patch.object(MATRIX, "get_json", return_value=profile),
+            self.assertRaisesRegex(RuntimeError, "overhead"),
+        ):
+            MATRIX.callback_profile_proof("http://127.0.0.1:1", "m", 0.0)
+
+    def test_persist_on_callback_profile_rejects_unacknowledged_write(self) -> None:
+        profile = callback_profile_payload(
+            persist_artifact=True,
+            artifact_refs=["diagnostics/solver_profile.jsonl"],
+            overhead={
+                "last_persist_wall_time_ns": 10,
+                "total_persist_wall_time_ns": 20,
+                "persist_enqueued_count": 1,
+                "persist_completed_count": 0,
+            },
+        )
+        with (
+            mock.patch.object(MATRIX, "PROFILE_PERSIST_ARTIFACT", True),
+            mock.patch.object(MATRIX, "get_json", return_value=profile),
+            self.assertRaisesRegex(RuntimeError, "persist_completed_count"),
+        ):
+            MATRIX.callback_profile_proof("http://127.0.0.1:1", "m", 0.0)
+
+    def test_persist_on_callback_profile_polls_until_write_is_acknowledged(self) -> None:
+        pending = callback_profile_payload(
+            persist_artifact=True,
+            artifact_refs=["diagnostics/solver_profile.jsonl"],
+            overhead={
+                "last_persist_wall_time_ns": 10,
+                "total_persist_wall_time_ns": 20,
+                "persist_enqueued_count": 1,
+                "persist_completed_count": 0,
+            },
+        )
+        complete = callback_profile_payload(
+            persist_artifact=True,
+            artifact_refs=["diagnostics/solver_profile.jsonl"],
+        )
+        with (
+            mock.patch.object(MATRIX, "PROFILE_PERSIST_ARTIFACT", True),
+            mock.patch.object(MATRIX, "get_json", side_effect=[pending, complete]) as get_json,
+            mock.patch.object(MATRIX.time, "sleep"),
+        ):
+            proof = MATRIX.callback_profile_proof("http://127.0.0.1:1", "m", 1.0)
+
+        self.assertEqual(get_json.call_count, 2)
+        self.assertEqual(proof["solver_profile_overhead"]["persist_completed_count"], 1)
+
+    def test_persist_on_disabled_profile_rejects_unacknowledged_write(self) -> None:
+        profile = callback_profile_payload(
+            persist_artifact=True,
+            artifact_refs=["diagnostics/solver_profile.jsonl"],
+            overhead={
+                "last_persist_wall_time_ns": 10,
+                "total_persist_wall_time_ns": 20,
+                "persist_enqueued_count": 1,
+                "persist_completed_count": 0,
+            },
+        )
+        profile["preview_3d_disabled"] = True
+        with (
+            mock.patch.object(MATRIX, "PROFILE_PERSIST_ARTIFACT", True),
+            mock.patch.object(MATRIX, "get_json", return_value=profile),
+            self.assertRaisesRegex(RuntimeError, "persist_completed_count"),
+        ):
+            MATRIX.callback_profile_proof("http://127.0.0.1:1", "disabled", 0.0)
+
+    def test_persist_on_disabled_profile_carries_acknowledged_proof(self) -> None:
+        profile = callback_profile_payload(
+            persist_artifact=True,
+            artifact_refs=["diagnostics/solver_profile.jsonl"],
+        )
+        profile["preview_3d_disabled"] = True
+        with (
+            mock.patch.object(MATRIX, "PROFILE_PERSIST_ARTIFACT", True),
+            mock.patch.object(MATRIX, "get_json", return_value=profile),
+        ):
+            proof = MATRIX.callback_profile_proof(
+                "http://127.0.0.1:1", "disabled", 0.0
+            )
+
+        self.assertEqual(proof["callback_handoff_count"], 0)
+        self.assertTrue(proof["solver_profile_persist_artifact"])
+        self.assertEqual(
+            proof["solver_profile_overhead"]["persist_completed_count"], 1
+        )
+
+    def test_assert_equivalence_rechecks_disabled_persistence(self) -> None:
+        row = {
+            "mode": "disabled",
+            "cadence": 10,
+            "surface": "interactive_no_browser",
+            "repeat": 1,
+            "solver_profile_persist_artifact": True,
+            "solver_profile_artifact_refs": ["diagnostics/solver_profile.jsonl"],
+            "solver_profile_persistence_failed": False,
+            "solver_profile_overhead": {
+                "last_persist_wall_time_ns": 10,
+                "total_persist_wall_time_ns": 20,
+                "persist_enqueued_count": 1,
+                "persist_completed_count": 0,
+            },
+        }
+
+        with (
+            mock.patch.object(MATRIX, "PROFILE_PERSIST_ARTIFACT", True),
+            self.assertRaisesRegex(
+                RuntimeError, "terminal solver-profile persistence proof"
+            ),
+        ):
+            MATRIX.assert_equivalence([row])
+
+    def test_persist_on_callback_profile_accepts_valid_persistence_proof(self) -> None:
+        profile = callback_profile_payload(
+            persist_artifact=True,
+            artifact_refs=["diagnostics/solver_profile.jsonl"],
+        )
+        with (
+            mock.patch.object(MATRIX, "PROFILE_PERSIST_ARTIFACT", True),
+            mock.patch.object(MATRIX, "get_json", return_value=profile),
+        ):
+            proof = MATRIX.callback_profile_proof("http://127.0.0.1:1", "m")
+
+        self.assertEqual(
+            proof["solver_profile_artifact_refs"],
+            ["diagnostics/solver_profile.jsonl"],
+        )
+        self.assertFalse(proof["solver_profile_persistence_failed"])
+
+    def test_persist_off_callback_profile_does_not_require_artifact_refs(self) -> None:
+        profile = callback_profile_payload(persist_artifact=False, artifact_refs=[])
+        with (
+            mock.patch.object(MATRIX, "PROFILE_PERSIST_ARTIFACT", False),
+            mock.patch.object(MATRIX, "get_json", return_value=profile),
+        ):
+            proof = MATRIX.callback_profile_proof("http://127.0.0.1:1", "m")
+
+        self.assertEqual(proof["solver_profile_artifact_refs"], [])
+
+    def test_assert_equivalence_rechecks_persist_on_artifact_refs(self) -> None:
+        row = {
+            "mode": "m",
+            "cadence": 10,
+            "surface": "interactive_no_browser",
+            "repeat": 1,
+            "callback_handoff_max_ns": 100,
+            "callback_handoff_p50_ns": 100,
+            "callback_thread_cpu_max_ns": 80,
+            "callback_wall_outlier_count": 0,
+            "callback_wall_outlier_details": [],
+            "solver_profile_persist_artifact": True,
+            "solver_profile_artifact_refs": [],
+            "solver_profile_persistence_failed": False,
+            "solver_profile_overhead": {
+                "last_persist_wall_time_ns": 10,
+                "total_persist_wall_time_ns": 20,
+            },
+        }
+
+        with (
+            mock.patch.object(MATRIX, "PROFILE_PERSIST_ARTIFACT", True),
+            self.assertRaisesRegex(
+                RuntimeError, "terminal solver-profile persistence proof"
+            ),
+        ):
+            MATRIX.assert_equivalence([row])
+
     def test_matrix_python_path_keeps_virtualenv_symlink_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             python_link = Path(temporary_dir) / "python"
@@ -188,7 +420,9 @@ class FemPreviewSurfaceMatrixContractTests(unittest.TestCase):
     ) -> None:
         profile = {
             "state": "active",
-            "config": {"enabled": True},
+            "config": {"enabled": True, "persist_artifact": False},
+            "artifact_refs": [],
+            "persistence_failed": False,
             "latest_samples": [
                 {
                     "step": 4,
@@ -236,7 +470,9 @@ class FemPreviewSurfaceMatrixContractTests(unittest.TestCase):
     def test_callback_policy_accepts_classified_scheduler_deschedule(self) -> None:
         profile = {
             "state": "active",
-            "config": {"enabled": True},
+            "config": {"enabled": True, "persist_artifact": False},
+            "artifact_refs": [],
+            "persistence_failed": False,
             "latest_samples": [
                 {
                     "step": step,
@@ -272,7 +508,9 @@ class FemPreviewSurfaceMatrixContractTests(unittest.TestCase):
     def test_callback_policy_rejects_code_induced_cpu_spike(self) -> None:
         profile = {
             "state": "active",
-            "config": {"enabled": True},
+            "config": {"enabled": True, "persist_artifact": False},
+            "artifact_refs": [],
+            "persistence_failed": False,
             "latest_samples": [
                 {
                     "step": step,
