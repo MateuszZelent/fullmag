@@ -15,6 +15,7 @@
 pub const MU0: f64 = 4.0 * std::f64::consts::PI * 1e-7;
 
 mod antenna_fields;
+pub mod autosave_storage;
 pub mod artifact_pipeline;
 mod artifacts;
 pub mod capabilities;
@@ -3777,6 +3778,7 @@ mod tests {
             solver_policy: None,
             sampling: fullmag_ir::SamplingIR {
                 table_autosave: None,
+                stage_autosave: None,
                 outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
                     observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
                 }],
@@ -5741,6 +5743,7 @@ mod tests {
             solver_policy: None,
             sampling: fullmag_ir::SamplingIR {
                 table_autosave: None,
+                stage_autosave: None,
                 outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
                     observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
                 }],
