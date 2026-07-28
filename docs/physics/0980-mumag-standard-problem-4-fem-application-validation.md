@@ -213,21 +213,27 @@ than a degraded physics result.
 
 ### 4.1 Python API surface
 
-No new Python API is introduced. Scenario scripts exercise only public calls,
-including:
+Scenario scripts exercise only public calls, including stage-local autosave:
 
 ```python
-study.tableautosave(
-    1e-12,
-    quantities=[
-        "step", "t", "dt", "mx", "my", "mz",
-        "e_ex", "e_demag", "e_ext", "e_total", "max_torque_T",
-    ],
-)
-study.stages.add_relax(...)
-study.stages.autosave("m", every=1e-12)
-study.stages.add_run(until=5e-9)
+study.stages.add_relax(...).autosave(fm.StageAutosave(
+    table=fm.TableAutosave(every_steps=10, quantities=["step", "mx", "my", "mz"]),
+))
+study.stages.add_run(until=5e-9).autosave(fm.StageAutosave(
+    table=fm.TableAutosave(t_sampl=1e-12, quantities=["step", "t", "mx", "my", "mz"]),
+    fields=[fm.FieldAutosave("m", every=1e-12)],
+))
 ```
+
+| Legacy persistent instruction | Canonical stage-local policy |
+|---|---|
+| `study.stages.tableautosave(...)` before Relax | `add_relax(...).autosave(StageAutosave(table=TableAutosave(every_steps=...)))` |
+| `study.stages.tableautosave(...)` before Run | `add_run(...).autosave(StageAutosave(table=TableAutosave(t_sampl=...)))` |
+| `study.stages.autosave("m", every=...)` before Run | `add_run(...).autosave(StageAutosave(fields=[FieldAutosave("m", every=...)]))` |
+
+Persistent instructions remain readable for compatibility, but new SP4
+scenarios bind storage to the owning Relax or Run stage so settings cannot leak
+into later stages. Zarr with a continuous logical index is the default.
 
 Every physical and numerical value is written directly in the scenario file.
 The scripts do not read solver, field, mesh, timestep, tolerance, or duration
@@ -244,7 +250,7 @@ scenarios contain neither `study.solver(...)` nor any time control.
 
 ### 4.2 ProblemIR representation
 
-No schema change is required. Tests inspect exported ProblemIR and ordered
+Tests inspect exported ProblemIR and ordered
 study stages to prove that relaxation has zero external field, the reversal
 stage has the correct field, table autosave uses the canonical quantity IDs,
 the requested integrator and timestep policy survive lowering, and execution
@@ -257,8 +263,8 @@ Existing planner rules apply. Fixed stepping is legal for `heun`, `rk23`,
 Production relaxation covers `llg_overdamped`, `projected_gradient_bb`, and
 `nonlinear_cg`. `tangent_plane_implicit` remains outside this strict suite.
 Capability status remains executable but not SP4-validated until the complete
-NIST and convergence matrix passes. No OpenAPI or ProblemIR change is introduced
-by these test scripts. The application launcher does enforce the ordinary
+NIST and convergence matrix passes. Stage-local autosave uses the canonical
+ProblemIR/OpenAPI storage policy; the application launcher also enforces the ordinary
 script-output convention described below.
 
 ## 5. Runtime, artifacts, and provenance

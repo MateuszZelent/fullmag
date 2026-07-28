@@ -48,23 +48,25 @@ study.fem_demag_solver(
 )
 study.build_domain_mesh()
 
-study.stages.tableautosave(
-    every_steps=10,
-    quantities=[
-        "step",
-        "mx",
-        "my",
-        "mz",
-        "e_ex",
-        "e_demag",
-        "e_total",
-        "max_torque_T",
-    ],
-)
-
 study.stages.add_relax(
     stage_id="relax",
     algorithm="projected_gradient_bb",
     max_steps=50_000,
     tol=7.957747154594767,
+).autosave(
+    fm.StageAutosave(
+        table=fm.TableAutosave(
+            every_steps=10,
+            quantities=[
+                "step",
+                "mx",
+                "my",
+                "mz",
+                "e_ex",
+                "e_demag",
+                "e_total",
+                "max_torque_T",
+            ],
+        ),
+    )
 )
