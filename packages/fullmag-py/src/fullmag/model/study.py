@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import math
+import re
 from typing import Mapping, Sequence
 
 from fullmag.model.dynamics import LLG
@@ -261,6 +262,10 @@ TABLE_AUTOSAVE_QUANTITY_ALIASES = {
     "max_torque_Apm": "max_torque",
 }
 
+SUPPORTED_AUTOSAVE_LAYOUTS = {"continuous", "separate"}
+SUPPORTED_AUTOSAVE_FORMATS = {"zarr", "hdf5", "txt"}
+_AUTOSAVE_TARGET_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
 
 @dataclass(frozen=True, slots=True)
 class TableAutosave:
@@ -314,6 +319,100 @@ class TableAutosave:
         else:
             payload["sample_period_s"] = self.t_sampl
         return payload
+
+
+@dataclass(frozen=True, slots=True)
+class FieldAutosave:
+    quantity: str
+    every: SamplingPeriod | None = None
+    every_steps: int | None = None
+
+    def __post_init__(self) -> None:
+        quantity = require_non_empty(self.quantity, "quantity")
+        SaveField(quantity, every=1.0)
+        has_time_cadence = self.every is not None
+        has_step_cadence = self.every_steps is not None
+        if has_time_cadence == has_step_cadence:
+            raise ValueError("exactly one of every or every_steps must be specified")
+        if has_time_cadence:
+            object.__setattr__(
+                self,
+                "every",
+                normalize_sampling_period(self.every, "every"),
+            )
+        else:
+            every_steps = self.every_steps
+            if (
+                isinstance(every_steps, bool)
+                or not isinstance(every_steps, int)
+                or every_steps <= 0
+            ):
+                raise ValueError("every_steps must be a positive integer")
+        object.__setattr__(self, "quantity", quantity)
+
+    def to_ir(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "kind": "field_autosave",
+            "quantity": self.quantity,
+        }
+        if self.every_steps is not None:
+            payload["every_steps"] = self.every_steps
+        elif self.every == "auto":
+            payload["sample_period_policy"] = auto_sinc_sampling_policy_ir()
+        else:
+            payload["every_seconds"] = self.every
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
+class StageAutosave:
+    target: str = "main"
+    layout: str = "continuous"
+    format: str = "zarr"
+    table: TableAutosave | None = None
+    fields: Sequence[FieldAutosave] = ()
+
+    def __post_init__(self) -> None:
+        target = require_non_empty(self.target, "target")
+        if _AUTOSAVE_TARGET_PATTERN.fullmatch(target) is None:
+            raise ValueError(
+                "target must start with an alphanumeric character and contain only "
+                "letters, digits, '.', '_', or '-'"
+            )
+        if self.layout not in SUPPORTED_AUTOSAVE_LAYOUTS:
+            supported = ", ".join(sorted(SUPPORTED_AUTOSAVE_LAYOUTS))
+            raise ValueError(f"layout must be one of: {supported}")
+        if self.format not in SUPPORTED_AUTOSAVE_FORMATS:
+            supported = ", ".join(sorted(SUPPORTED_AUTOSAVE_FORMATS))
+            raise ValueError(f"format must be one of: {supported}")
+        if self.table is not None and not isinstance(self.table, TableAutosave):
+            raise TypeError("table must be TableAutosave or None")
+        fields = tuple(self.fields)
+        if any(not isinstance(field, FieldAutosave) for field in fields):
+            raise TypeError("fields must contain only FieldAutosave values")
+        seen: set[str] = set()
+        for field_policy in fields:
+            if field_policy.quantity in seen:
+                raise ValueError(
+                    f"duplicate field autosave quantity {field_policy.quantity!r}"
+                )
+            seen.add(field_policy.quantity)
+        if self.table is None and not fields:
+            raise ValueError("stage autosave requires at least one table or field policy")
+        if self.format == "txt" and fields:
+            raise ValueError("txt supports scalar tables only")
+        object.__setattr__(self, "target", target)
+        object.__setattr__(self, "fields", fields)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "kind": "stage_autosave",
+            "target": self.target,
+            "layout": self.layout,
+            "format": self.format,
+            "table": self.table.to_ir() if self.table is not None else None,
+            "fields": [field_policy.to_ir() for field_policy in self.fields],
+        }
 
 
 @dataclass(frozen=True, slots=True)
