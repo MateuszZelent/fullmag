@@ -7730,6 +7730,21 @@ CPU_GPU_EFFECTIVE_DEMAG_POLICY_FIELDS = (
 def cpu_gpu_demag_policy_pairing_key(
     row: Mapping[str, object],
 ) -> tuple[object, ...]:
+    present_requested_fields = tuple(
+        field for field in CPU_GPU_REQUESTED_DEMAG_POLICY_FIELDS if field in row
+    )
+    if present_requested_fields and len(present_requested_fields) != len(
+        CPU_GPU_REQUESTED_DEMAG_POLICY_FIELDS
+    ):
+        missing_fields = tuple(
+            field
+            for field in CPU_GPU_REQUESTED_DEMAG_POLICY_FIELDS
+            if field not in row
+        )
+        raise ValueError(
+            "partially populated requested demag policy cannot be paired: "
+            f"present={present_requested_fields} missing={missing_fields}"
+        )
     requested = tuple(row.get(field) for field in CPU_GPU_REQUESTED_DEMAG_POLICY_FIELDS)
     if any(value not in {None, ""} for value in requested):
         return ("requested", *requested)
