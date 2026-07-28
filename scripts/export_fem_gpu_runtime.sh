@@ -93,13 +93,13 @@ clear_runtime_bundle_contents() {
   mkdir -p "$runtime_root/include"
   mkdir -p "$runtime_root/openmpi/bin"
 }
-echo "[export_fem_gpu_runtime] forcing fullmag-fem-sys native rebuild before copying runtime libraries"
+echo "[export_fem_gpu_runtime] clearing workspace release artifacts from the shared target cache"
 if [ "${FULLMAG_ENABLE_NVTX}" = "0" ] &&
    [[ "${RUSTFLAGS:-}" == *fullmag_enable_nvtx* ]]; then
   echo "[export_fem_gpu_runtime] inherited RUSTFLAGS contains fullmag_enable_nvtx while FULLMAG_ENABLE_NVTX=0" >&2
   exit 2
 fi
-cargo +nightly clean -p fullmag-fem-sys --release
+cargo +nightly clean --workspace --release
 mapfile -t stale_fem_native_artifacts < <(
   find target/release/build \
     -path "*fullmag-fem-sys*/out/native-build/backends/fem/libfullmag_fem.so.0" \
