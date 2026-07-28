@@ -153,7 +153,7 @@ verify-fem-mixed-p1-capability-contract:
 verify-fem-mixed-p1-native-contract:
     docker compose --profile fem-gpu run --rm \
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
-      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_mixed_p1_contract fem_mesh_contract fem_mfem_context_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_mixed_p1_contract && native/build/backends/fem/fem_mesh_contract && native/build/backends/fem/fem_mfem_context_contract'
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_mixed_p1_contract fem_mesh_contract fem_mfem_context_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_MIXED_P1_ROLLBACK_DEVICE=cpu native/build/backends/fem/fem_mixed_p1_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_MIXED_P1_ROLLBACK_DEVICE=cuda native/build/backends/fem/fem_mixed_p1_contract && native/build/backends/fem/fem_mesh_contract && native/build/backends/fem/fem_mfem_context_contract'
 
 # MESH-GATE-002: cross-backend PBC matrix contract. Managed runtime evidence
 # is deliberately supplied by the case artifacts, not inferred by this recipe.

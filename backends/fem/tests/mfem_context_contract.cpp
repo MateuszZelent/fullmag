@@ -50,6 +50,7 @@ std::filesystem::path fem_source_root() {
 
 void mfem_context_lifecycle_is_owned_by_runtime_module() {
     const std::filesystem::path root = fem_source_root();
+    const std::string justfile = read_text_file(root.parent_path().parent_path() / "justfile");
     const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
     const std::string context_header = read_text_file(root / "include" / "context.hpp");
     const std::string runtime =
@@ -127,6 +128,12 @@ void mfem_context_lifecycle_is_owned_by_runtime_module() {
         active_runtime.find("delete ctx.mfem_context.device") == std::string::npos &&
             active_runtime.find("ctx.mfem_context.device = nullptr") != std::string::npos,
         "MFEM context teardown must clear, but never delete, its non-owning global Device view");
+    check(
+        justfile.find("FULLMAG_MIXED_P1_ROLLBACK_DEVICE=cpu native/build/backends/fem/fem_mixed_p1_contract") !=
+                std::string::npos &&
+            justfile.find("FULLMAG_MIXED_P1_ROLLBACK_DEVICE=cuda native/build/backends/fem/fem_mixed_p1_contract") !=
+                std::string::npos,
+        "managed mixed-P1 recipe must run explicit CPU and CUDA rollback lanes in separate processes");
     check(
         runtime_header.find("std::vector<double> m_x") != std::string::npos &&
             runtime_header.find("std::vector<double> m_y") != std::string::npos &&

@@ -553,10 +553,21 @@ void repeated_post_device_fes_failure_rolls_back_runtime_state()
     const auto source = make_mesh(
         {0,0,0, 1,0,0, 0,1,0, 0,0,1},
         {FULLMAG_FEM_CELL_TET4}, {0,4}, {0,1,2,3}, {1});
-    bool use_cuda = false;
+    const char *requested_device = std::getenv("FULLMAG_MIXED_P1_ROLLBACK_DEVICE");
+    const std::string rollback_device = requested_device == nullptr || *requested_device == '\0'
+        ? "cpu" : requested_device;
+    check(rollback_device == "cpu" || rollback_device == "cuda",
+          "FULLMAG_MIXED_P1_ROLLBACK_DEVICE must be cpu or cuda");
+    const bool use_cuda = rollback_device == "cuda";
 #if FULLMAG_HAS_CUDA_RUNTIME
-    int device_count = 0;
-    use_cuda = cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0;
+    if (use_cuda) {
+        int device_count = 0;
+        check(cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0,
+              "explicit CUDA rollback lane requires an available CUDA device");
+    }
+#else
+    check(!use_cuda,
+          "explicit CUDA rollback lane requires a backend compiled with CUDA runtime support");
 #endif
 
     for (int attempt = 0; attempt < 16; ++attempt) {
