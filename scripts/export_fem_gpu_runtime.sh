@@ -2,6 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "${REPO_ROOT}/scripts/lib/managed_fem_image_identity.sh"
 RUNTIME_PARENT="${REPO_ROOT}/.fullmag/runtimes"
 RUNTIME_ROOT="${RUNTIME_PARENT}/fem-gpu-host"
 VARIANTS_ROOT="${RUNTIME_PARENT}/fem-gpu-variants"
@@ -45,7 +46,9 @@ FULLMAG_HOST_GID="$(id -g)"
 
 docker compose --profile fem-gpu build fem-gpu
 
-docker compose --profile fem-gpu run --rm -T \
+docker_image_id="$(capture_managed_fem_image_id fullmag/fem-gpu:local)"
+
+FULLMAG_FEM_GPU_IMAGE="${docker_image_id}" docker compose --profile fem-gpu run --rm -T \
   -e FULLMAG_FEM_RUNTIME_CARGO_JOBS="${FULLMAG_FEM_RUNTIME_CARGO_JOBS}" \
   -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES}" \
   -e FULLMAG_ENABLE_NVTX="${FULLMAG_ENABLE_NVTX}" \
@@ -546,6 +549,8 @@ chmod -R u+rwX,go+rX,go-w ${runtime_root}
 echo "[export_fem_gpu_runtime] container-side export complete"
 ' < /dev/null
 
+observed_docker_image_id="$(observe_managed_fem_image_tag fullmag/fem-gpu:local "${docker_image_id}")"
+
 cat > "${STAGING_ROOT}/bin/fullmag-fem-gpu" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -650,9 +655,9 @@ EOF
 
 chmod +x "${STAGING_ROOT}/bin/fullmag-fem-gpu"
 
-docker_image_id="$(docker image inspect fullmag/fem-gpu:local --format '{{.Id}}' 2>/dev/null || true)"
 created_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 export docker_image_id
+export observed_docker_image_id
 export created_at
 RUNTIME_ROOT="${STAGING_ROOT}" python3 - <<'PY'
 import json
@@ -668,6 +673,14 @@ manifest = {
     "runtime": "fem-gpu-host",
     "docker_image": "fullmag/fem-gpu:local",
     "docker_image_id": os.environ["docker_image_id"],
+    "docker_image_tag_observation": {
+        "ref": "fullmag/fem-gpu:local",
+        "built_image_id": os.environ["docker_image_id"],
+        "observed_image_id": os.environ["observed_docker_image_id"] or None,
+        "drift_observed": (
+            os.environ["observed_docker_image_id"] != os.environ["docker_image_id"]
+        ),
+    },
     "created_at": os.environ["created_at"],
     "binaries": {
         "launcher": "bin/fullmag-fem-gpu",
@@ -700,7 +713,7 @@ docker run --rm --network none \
   --user "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}" \
   -v "${REPO_ROOT}:/workspace" \
   -w /workspace \
-  fullmag/fem-gpu:local \
+  "${docker_image_id}" \
   python3 scripts/build_managed_fem_runtime_manifest.py \
     --runtime-root "/workspace/${STAGING_RELATIVE}" \
     --variant "${FULLMAG_FEM_RUNTIME_VARIANT}" \
@@ -708,6 +721,7 @@ docker run --rm --network none \
     --hypre-build-metadata "/opt/fullmag-deps/share/fullmag/hypre-build-metadata.json" \
     --runtime-diagnostics-json "/workspace/${STAGING_RELATIVE}/runtime-diagnostics.json" \
     --docker-image-id "${docker_image_id}" \
+    --observed-docker-image-id "${observed_docker_image_id}" \
     --created-at "${created_at}"
 
 RUNTIME_ROOT="${STAGING_ROOT}" python3 - <<'PY'

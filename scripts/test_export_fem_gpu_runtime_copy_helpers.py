@@ -13,6 +13,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HELPER = REPO_ROOT / "scripts" / "lib" / "runtime_bundle_copy.sh"
+IMAGE_IDENTITY_HELPER = REPO_ROOT / "scripts" / "lib" / "managed_fem_image_identity.sh"
 EXPORT_SCRIPT = REPO_ROOT / "scripts" / "export_fem_gpu_runtime.sh"
 VALIDATOR = REPO_ROOT / "scripts" / "validate_managed_fem_runtime_bundle.py"
 MANIFEST_BUILDER = REPO_ROOT / "scripts" / "build_managed_fem_runtime_manifest.py"
@@ -353,9 +354,9 @@ def test_export_script_recreates_unversioned_fullmag_native_library_links() -> N
 
 def test_export_script_forces_fem_sys_native_rebuild_before_copying_libraries() -> None:
     script = EXPORT_SCRIPT.read_text(encoding="utf-8")
-    clean_index = script.find("cargo clean -p fullmag-fem-sys")
+    clean_index = script.find("cargo +nightly clean -p fullmag-fem-sys")
     build_index = script.find("cargo +nightly build")
-    copy_index = script.find('FEM_LIB="$(latest_native_lib_dir')
+    copy_index = script.find('FEM_LIB="$(only_native_lib_dir')
 
     assert clean_index != -1
     assert build_index != -1
@@ -397,6 +398,88 @@ def test_export_script_serializes_runtime_bundle_mutation_with_flock() -> None:
     assert flock_index != -1
     assert compose_index != -1
     assert lock_index < flock_index < compose_index
+
+
+def test_export_script_pins_built_image_id_across_export_and_validation() -> None:
+    script = EXPORT_SCRIPT.read_text(encoding="utf-8")
+    compose = (REPO_ROOT / "compose.yaml").read_text(encoding="utf-8")
+    identity_helper = IMAGE_IDENTITY_HELPER.read_text(encoding="utf-8")
+    manifest_builder = MANIFEST_BUILDER.read_text(encoding="utf-8")
+
+    build_index = script.find("docker compose --profile fem-gpu build fem-gpu")
+    capture_index = script.find(
+        'docker_image_id="$(capture_managed_fem_image_id fullmag/fem-gpu:local)"'
+    )
+    export_index = script.find(
+        'FULLMAG_FEM_GPU_IMAGE="${docker_image_id}" docker compose --profile fem-gpu run'
+    )
+    validate_index = script.find('  "${docker_image_id}"')
+
+    assert 'image: ${FULLMAG_FEM_GPU_IMAGE:-fullmag/fem-gpu:local}' in compose
+    assert build_index != -1
+    assert capture_index != -1
+    assert export_index != -1
+    assert validate_index != -1
+    assert build_index < capture_index < export_index < validate_index
+    assert script.count('docker_image_id="$(capture_managed_fem_image_id') == 1
+    assert script.count("observe_managed_fem_image_tag") == 1
+    assert '--observed-docker-image-id "${observed_docker_image_id}"' in script
+    assert "managed FEM image tag drift detected" in identity_helper
+    assert 'current_image_id="$(docker image inspect "${image_ref}"' in identity_helper
+    assert '"drift_observed"' in manifest_builder
+
+
+def test_managed_fem_image_identity_warns_and_keeps_pinned_id_on_retag(
+    tmp_path: Path,
+) -> None:
+    fake_docker = tmp_path / "docker"
+    counter = tmp_path / "inspect-count"
+    fake_docker.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+count=0
+if [ -f \"${FAKE_DOCKER_COUNTER}\" ]; then
+  count=\"$(cat \"${FAKE_DOCKER_COUNTER}\")\"
+fi
+count=$((count + 1))
+printf '%s\\n' \"${count}\" > \"${FAKE_DOCKER_COUNTER}\"
+if [ \"${count}\" -eq 1 ]; then
+  printf 'sha256:%064d\\n' 1
+else
+  printf 'sha256:%064d\\n' 2
+fi
+""",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-euo",
+            "pipefail",
+            "-c",
+            f"""
+source \"{IMAGE_IDENTITY_HELPER}\"
+built_image_id=\"$(capture_managed_fem_image_id fullmag/fem-gpu:local)\"
+observe_managed_fem_image_tag fullmag/fem-gpu:local \"${{built_image_id}}\"
+""",
+        ],
+        cwd=REPO_ROOT,
+        env={
+            "PATH": f"{tmp_path}:/usr/bin:/bin",
+            "FAKE_DOCKER_COUNTER": str(counter),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == f"sha256:{2:064d}"
+    assert "managed FEM image tag drift detected" in result.stderr
+    assert f"built=sha256:{1:064d}" in result.stderr
+    assert f"current=sha256:{2:064d}" in result.stderr
 
 
 def test_export_script_publishes_only_a_validated_hash_addressed_bundle() -> None:

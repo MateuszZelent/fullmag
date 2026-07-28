@@ -164,12 +164,20 @@ def build_manifest(args: argparse.Namespace) -> Mapping[str, object]:
             "runtime diagnostics require device name, compute capability, and CUDA driver version"
         )
     created_at = args.created_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    built_image_id = args.docker_image_id or previous.get("docker_image_id", "")
+    observed_image_id = args.observed_docker_image_id or None
     manifest: dict[str, object] = {
         "schema": 2,
         "runtime": "fem-gpu-host",
         "variant": args.variant,
         "docker_image": "fullmag/fem-gpu:local",
-        "docker_image_id": args.docker_image_id or previous.get("docker_image_id", ""),
+        "docker_image_id": built_image_id,
+        "docker_image_tag_observation": {
+            "ref": "fullmag/fem-gpu:local",
+            "built_image_id": built_image_id,
+            "observed_image_id": observed_image_id,
+            "drift_observed": observed_image_id != built_image_id,
+        },
         "created_at": created_at,
         "source_manifest_sha256": previous_manifest_sha256,
         "binaries": {name: str(binaries[name]) for name in resolved_binaries},
@@ -215,6 +223,7 @@ def main() -> None:
     parser.add_argument("--driver-version")
     parser.add_argument("--runtime-diagnostics-json", type=Path)
     parser.add_argument("--docker-image-id")
+    parser.add_argument("--observed-docker-image-id")
     parser.add_argument("--created-at")
     parser.add_argument("--cuobjdump", default="cuobjdump")
     parser.add_argument("--ldd", default="ldd")
