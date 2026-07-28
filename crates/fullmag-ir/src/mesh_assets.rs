@@ -19,59 +19,184 @@ fn vec3_from_value(value: &Value) -> Option<[f64; 3]> {
 mod mesh_asset_validation_tests {
     use super::*;
 
-    fn mixed_certificate_asset_value() -> Value {
+    fn qualified_mixed_mesh() -> MeshIR {
         let nodes = vec![
-            [0.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 0.0, 1.0],
-            [1.0, 0.0, 1.0],
-            [0.0, 1.0, 1.0],
-            [3.0, -1.0, 0.0],
-            [5.0, -1.0, 0.0],
-            [5.0, 1.0, 0.0],
-            [3.0, 1.0, 0.0],
-            [4.0, 0.0, 1.0],
-            [7.0, 0.0, 0.0],
-            [8.0, 0.0, 0.0],
-            [7.0, 1.0, 0.0],
-            [7.0, 0.0, 1.0],
+            [-1.0, -1.0, -1.0],
+            [1.0, -1.0, -1.0],
+            [1.0, 1.0, -1.0],
+            [-1.0, 1.0, -1.0],
+            [-1.0, -1.0, 1.0],
+            [1.0, -1.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [-1.0, 1.0, 1.0],
+            [2.0, 0.0, 0.0],
+            [-2.0, 0.0, 0.0],
+            [0.0, 2.0, 0.0],
+            [0.0, -2.0, 0.0],
+            [0.0, 0.0, 2.0],
+            [0.0, 0.0, -2.0],
+            [2.0, 0.0, -2.0],
+            [-2.0, -2.0, -2.0],
+            [2.0, 2.0, -2.0],
+            [2.0, -2.0, 2.0],
+            [-2.0, 1.0, 1.0],
+            [-2.0, -2.0, -2.0],
+            [2.0, 2.0, -2.0],
+            [2.0, -2.0, 2.0],
+            [-2.0, 1.0, 1.0],
+            [-2.0, -2.0, -2.0],
+            [2.0, 2.0, -2.0],
+            [2.0, -2.0, 2.0],
+            [-2.0, 0.875, 0.875],
         ];
-        let cells = serde_json::from_value(serde_json::json!({
-            "types": ["prism6", "pyramid5", "tet4"],
-            "offsets": [0, 6, 11, 15],
-            "nodes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
-            "global_ordinals": [0, 1, 2],
-            "mesh_parts": ["magnetic", "transition_air", "far_air"]
-        }))
-        .unwrap();
-        let mesh = MeshIR {
+        let cells = vec![
+            (
+                crate::FemCellTypeIR::Prism6,
+                vec![0, 1, 2, 4, 5, 6],
+                crate::FemCellMeshPartIR::Magnetic,
+                1,
+            ),
+            (
+                crate::FemCellTypeIR::Prism6,
+                vec![0, 2, 3, 4, 6, 7],
+                crate::FemCellMeshPartIR::Magnetic,
+                1,
+            ),
+            (
+                crate::FemCellTypeIR::Pyramid5,
+                vec![1, 2, 6, 5, 8],
+                crate::FemCellMeshPartIR::TransitionAir,
+                0,
+            ),
+            (
+                crate::FemCellTypeIR::Pyramid5,
+                vec![0, 4, 7, 3, 9],
+                crate::FemCellMeshPartIR::TransitionAir,
+                0,
+            ),
+            (
+                crate::FemCellTypeIR::Pyramid5,
+                vec![2, 3, 7, 6, 10],
+                crate::FemCellMeshPartIR::TransitionAir,
+                0,
+            ),
+            (
+                crate::FemCellTypeIR::Pyramid5,
+                vec![0, 1, 5, 4, 11],
+                crate::FemCellMeshPartIR::TransitionAir,
+                0,
+            ),
+            (
+                crate::FemCellTypeIR::Tet4,
+                vec![4, 5, 6, 12],
+                crate::FemCellMeshPartIR::TransitionAir,
+                0,
+            ),
+            (
+                crate::FemCellTypeIR::Tet4,
+                vec![4, 6, 7, 12],
+                crate::FemCellMeshPartIR::TransitionAir,
+                0,
+            ),
+            (
+                crate::FemCellTypeIR::Tet4,
+                vec![0, 2, 1, 13],
+                crate::FemCellMeshPartIR::TransitionAir,
+                0,
+            ),
+            (
+                crate::FemCellTypeIR::Tet4,
+                vec![0, 3, 2, 13],
+                crate::FemCellMeshPartIR::TransitionAir,
+                0,
+            ),
+            (
+                crate::FemCellTypeIR::Tet4,
+                vec![1, 2, 8, 14],
+                crate::FemCellMeshPartIR::FarAir,
+                0,
+            ),
+            (
+                crate::FemCellTypeIR::Tet4,
+                vec![15, 17, 16, 18],
+                crate::FemCellMeshPartIR::FarAir,
+                0,
+            ),
+            (
+                crate::FemCellTypeIR::Tet4,
+                vec![19, 21, 20, 22],
+                crate::FemCellMeshPartIR::FarAir,
+                0,
+            ),
+            (
+                crate::FemCellTypeIR::Tet4,
+                vec![23, 25, 24, 26],
+                crate::FemCellMeshPartIR::FarAir,
+                0,
+            ),
+        ];
+        let mut cell_offsets = vec![0];
+        let mut cell_nodes = Vec::new();
+        for (_, nodes, _, _) in &cells {
+            cell_nodes.extend(nodes);
+            cell_offsets.push(cell_nodes.len() as u32);
+        }
+        let mut mesh = MeshIR {
             mesh_name: "mixed-certificate".to_string(),
             nodes,
-            cells,
-            element_markers: vec![1, 0, 0],
-            facets: crate::FemFacetConnectivityIR {
-                types: vec![
-                    crate::FemFacetTypeIR::Tri3,
-                    crate::FemFacetTypeIR::Quad4,
-                    crate::FemFacetTypeIR::Quad4,
-                    crate::FemFacetTypeIR::Tri3,
-                ],
-                roles: vec![
-                    crate::FemFacetRoleIR::MaterialInterface,
-                    crate::FemFacetRoleIR::Exterior,
-                    crate::FemFacetRoleIR::Exterior,
-                    crate::FemFacetRoleIR::Exterior,
-                ],
-                offsets: vec![0, 3, 7, 11, 14],
-                nodes: vec![0, 1, 2, 0, 1, 4, 3, 6, 7, 8, 9, 11, 12, 13],
-                global_ordinals: vec![0, 1, 2, 3],
+            cells: crate::FemConnectivityIR {
+                types: cells.iter().map(|(family, _, _, _)| *family).collect(),
+                offsets: cell_offsets,
+                nodes: cell_nodes,
+                global_ordinals: (0..cells.len() as u64).collect(),
+                mesh_parts: cells.iter().map(|(_, _, part, _)| *part).collect(),
             },
-            boundary_markers: vec![2, 3, 3, 3],
+            element_markers: cells.iter().map(|(_, _, _, marker)| *marker).collect(),
+            facets: crate::FemFacetConnectivityIR::empty(),
+            boundary_markers: Vec::new(),
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
             per_domain_quality: HashMap::new(),
         };
+        let adjacency = mixed_face_adjacency(&mesh).unwrap();
+        let mut facet_offsets = vec![0];
+        let mut facet_nodes = Vec::new();
+        let mut facet_types = Vec::new();
+        let mut facet_roles = Vec::new();
+        let mut boundary_markers = Vec::new();
+        for (face, owners) in adjacency {
+            let role = if owners.len() == 1 {
+                Some((crate::FemFacetRoleIR::Exterior, 3))
+            } else if owners.len() == 2 && owners[0].1 != owners[1].1 {
+                Some((crate::FemFacetRoleIR::MaterialInterface, 2))
+            } else {
+                None
+            };
+            if let Some((role, marker)) = role {
+                facet_types.push(if face.len() == 3 {
+                    crate::FemFacetTypeIR::Tri3
+                } else {
+                    crate::FemFacetTypeIR::Quad4
+                });
+                facet_roles.push(role);
+                facet_nodes.extend(face);
+                facet_offsets.push(facet_nodes.len() as u32);
+                boundary_markers.push(marker);
+            }
+        }
+        mesh.facets = crate::FemFacetConnectivityIR {
+            global_ordinals: (0..facet_types.len() as u64).collect(),
+            types: facet_types,
+            roles: facet_roles,
+            offsets: facet_offsets,
+            nodes: facet_nodes,
+        };
+        mesh.boundary_markers = boundary_markers;
+        mesh
+    }
+
+    fn mixed_certificate_asset_value() -> Value {
+        let mesh = qualified_mixed_mesh();
         let fingerprint = mesh.topology_fingerprint_v6();
         let mut certificate: Value = serde_json::from_str(
             r#"{
@@ -113,7 +238,92 @@ mod mesh_asset_validation_tests {
             }"#,
         )
         .unwrap();
+        let mut by_marker = BTreeMap::<String, BTreeMap<String, u64>>::new();
+        let mut by_part = BTreeMap::<String, BTreeMap<String, u64>>::new();
+        for ordinal in 0..mesh.cells.types.len() {
+            let family = match mesh.cells.types[ordinal] {
+                crate::FemCellTypeIR::Tet4 => "tet4",
+                crate::FemCellTypeIR::Prism6 => "prism6",
+                crate::FemCellTypeIR::Pyramid5 => "pyramid5",
+                crate::FemCellTypeIR::Hex8 => "hex8",
+            };
+            let part = match mesh.cells.mesh_parts[ordinal] {
+                crate::FemCellMeshPartIR::Magnetic => "magnetic",
+                crate::FemCellMeshPartIR::TransitionAir => "transition_air",
+                crate::FemCellMeshPartIR::FarAir => "far_air",
+            };
+            *by_marker
+                .entry(mesh.element_markers[ordinal].to_string())
+                .or_default()
+                .entry(family.to_string())
+                .or_default() += 1;
+            *by_part
+                .entry(part.to_string())
+                .or_default()
+                .entry(family.to_string())
+                .or_default() += 1;
+        }
+        let mut by_facet = BTreeMap::<String, BTreeMap<String, u64>>::new();
+        for ordinal in 0..mesh.facets.types.len() {
+            let family = match mesh.facets.types[ordinal] {
+                crate::FemFacetTypeIR::Tri3 => "tri3",
+                crate::FemFacetTypeIR::Quad4 => "quad4",
+            };
+            let role = match mesh.facets.roles[ordinal] {
+                crate::FemFacetRoleIR::Exterior => "exterior",
+                crate::FemFacetRoleIR::MaterialInterface => "material_interface",
+                crate::FemFacetRoleIR::PeriodicSeam => "periodic_seam",
+            };
+            *by_facet
+                .entry(format!("{role}:{}", mesh.boundary_markers[ordinal]))
+                .or_default()
+                .entry(family.to_string())
+                .or_default() += 1;
+        }
+        certificate["magnetic_bounds_min_m"] = serde_json::json!([-1.0, -1.0, -1.0]);
+        certificate["magnetic_bounds_max_m"] = serde_json::json!([1.0, 1.0, 1.0]);
+        certificate["airbox_bounds_min_m"] = serde_json::json!([-2.0, -2.0, -2.0]);
+        certificate["airbox_bounds_max_m"] = serde_json::json!([2.0, 2.0, 2.0]);
+        certificate["cell_family_counts_by_marker"] = serde_json::to_value(by_marker).unwrap();
+        certificate["cell_family_counts_by_part"] = serde_json::to_value(by_part).unwrap();
+        certificate["facet_family_counts_by_role_marker"] = serde_json::to_value(by_facet).unwrap();
         certificate["topology_fingerprint"] = serde_json::json!(fingerprint);
+        let template: MixedLayerTopologyCertificateV1IR =
+            serde_json::from_value(certificate.clone()).unwrap();
+        let evidence = recompute_mixed_certificate_evidence(&template, &mesh).unwrap();
+        certificate["magnetic_plane_coordinates_m"] = serde_json::json!(evidence.planes);
+        certificate["plane_tolerance_m"] = serde_json::json!(evidence.plane_tolerance);
+        certificate["transition_shell_thickness_m"] = serde_json::json!(evidence.shell_thickness);
+        certificate["transition_shell_interface_tri3_count"] =
+            serde_json::json!(evidence.shell_face_count);
+        certificate["jacobian_minima_m3_by_family"] = serde_json::json!(evidence.jacobian_minima);
+        certificate["scaled_jacobian_minima_by_family"] = serde_json::json!(evidence.scaled_minima);
+        certificate["scaled_jacobian_p05_by_family"] = serde_json::json!(evidence.scaled_p05);
+        certificate["magnetic_volume_m3"] = serde_json::json!(evidence.magnetic_volume);
+        certificate["expected_magnetic_volume_m3"] =
+            serde_json::json!(evidence.expected_magnetic_volume);
+        certificate["magnetic_relative_volume_error"] = serde_json::json!(((evidence
+            .magnetic_volume
+            - evidence.expected_magnetic_volume)
+            / evidence.expected_magnetic_volume)
+            .abs());
+        certificate["air_volume_m3"] = serde_json::json!(evidence.air_volume);
+        certificate["shared_domain_volume_m3"] = serde_json::json!(evidence.shared_volume);
+        certificate["expected_shared_domain_volume_m3"] =
+            serde_json::json!(evidence.expected_shared_volume);
+        certificate["shared_domain_relative_volume_error"] =
+            serde_json::json!(((evidence.shared_volume - evidence.expected_shared_volume)
+                / evidence.expected_shared_volume)
+                .abs());
+        certificate["magnetic_bounds_relative_error"] =
+            serde_json::json!(evidence.magnetic_bounds_error);
+        certificate["airbox_bounds_relative_error"] =
+            serde_json::json!(evidence.airbox_bounds_error);
+        certificate["nonconforming_face_count"] = serde_json::json!(evidence.nonconforming);
+        certificate["orphan_face_count"] = serde_json::json!(evidence.orphan);
+        certificate["nonmanifold_face_count"] = serde_json::json!(evidence.nonmanifold);
+        certificate["coincident_interface_face_count"] =
+            serde_json::json!(evidence.coincident_interface);
         let report = serde_json::json!({
                 "build_mode": "shared_domain",
                 "fallbacks_triggered": [],
@@ -141,6 +351,239 @@ mod mesh_asset_validation_tests {
             "build_report": report
             }
         )
+    }
+
+    fn frozen_python_mixed_golden() -> Value {
+        serde_json::from_str(include_str!(
+            "../tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+        ))
+        .unwrap()
+    }
+
+    fn frozen_python_mixed_mesh() -> MeshIR {
+        serde_json::from_value(frozen_python_mixed_golden()["mesh"].clone()).unwrap()
+    }
+
+    fn frozen_python_mixed_asset_value() -> Value {
+        let golden = frozen_python_mixed_golden();
+        serde_json::json!({
+            "mesh": golden["mesh"],
+            "region_markers": [],
+            "object_region_markers": [],
+            "build_report": {
+                "build_mode": "shared_domain",
+                "fallbacks_triggered": [],
+                "effective_airbox_hmax": null,
+                "effective_per_object_targets": {},
+                "region_markers": [],
+                "object_region_markers": [],
+                "used_size_field_kinds": [],
+                "size_fields_realized": [],
+                "operation_statuses": [],
+                "thin_film_diagnostics": [],
+                "magnetic_submesh_signatures": [],
+                "selector_resolution": [],
+                "orphan_entities": [],
+                "rejected_element_types": [],
+                "degraded": false,
+                "authored_regions_count": null,
+                "realized_regions_count": null,
+                "mixed_layer_topology_certificate": golden["certificate"]
+            }
+        })
+    }
+
+    #[test]
+    fn frozen_python_mixed_golden_pins_every_evidence_family() {
+        let golden = frozen_python_mixed_golden();
+        assert_eq!(
+            golden["generator"],
+            serde_json::json!(
+                "packages/fullmag-py fullmag.meshing._gmsh_types._recompute_mixed_certificate_evidence"
+            )
+        );
+        let evidence = &golden["expected_evidence"];
+        assert_eq!(
+            evidence["magnetic_plane_coordinates_m"],
+            serde_json::json!([-1, 1])
+        );
+        assert_eq!(evidence["plane_tolerance_m"], serde_json::json!(2.0e-8));
+        assert_eq!(
+            evidence["transition_shell_thickness_m"],
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            evidence["transition_shell_interface_tri3_count"],
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            evidence["cell_family_counts_by_marker"],
+            serde_json::json!({"0":{"pyramid5":4,"tet4":8},"1":{"prism6":2}})
+        );
+        assert_eq!(
+            evidence["cell_family_counts_by_part"],
+            serde_json::json!({
+                "far_air":{"tet4":4},
+                "magnetic":{"prism6":2},
+                "transition_air":{"pyramid5":4,"tet4":4}
+            })
+        );
+        assert_eq!(
+            evidence["facet_family_counts_by_role_marker"],
+            serde_json::json!({
+                "exterior:3":{"tri3":38},
+                "material_interface:2":{"quad4":4,"tri3":4}
+            })
+        );
+        assert_eq!(
+            evidence["jacobian_minima_m3_by_family"],
+            serde_json::json!({
+                "prism6":3.999999999999999,
+                "pyramid5":0.20779754131836622,
+                "tet4":4
+            })
+        );
+        assert_eq!(
+            evidence["scaled_jacobian_minima_by_family"],
+            serde_json::json!({
+                "prism6":0.4082482904638629,
+                "pyramid5":0.40824829046386296,
+                "tet4":0.40824829046386296
+            })
+        );
+        assert_eq!(
+            evidence["scaled_jacobian_p05_by_family"],
+            serde_json::json!({
+                "prism6":0.4311862178478971,
+                "pyramid5":0.40824829046386296,
+                "tet4":0.40824829046386296
+            })
+        );
+        assert_eq!(
+            evidence["magnetic_volume_m3"],
+            serde_json::json!(7.999999999999998)
+        );
+        assert_eq!(evidence["air_volume_m3"], serde_json::json!(56));
+        assert_eq!(evidence["shared_domain_volume_m3"], serde_json::json!(64));
+        assert_eq!(
+            evidence["expected_magnetic_volume_m3"],
+            serde_json::json!(8)
+        );
+        assert_eq!(
+            evidence["expected_shared_domain_volume_m3"],
+            serde_json::json!(64)
+        );
+        assert_eq!(
+            evidence["magnetic_relative_volume_error"],
+            serde_json::json!(2.220446049250313e-16)
+        );
+        assert_eq!(
+            evidence["shared_domain_relative_volume_error"],
+            serde_json::json!(0)
+        );
+        assert_eq!(
+            evidence["magnetic_bounds_relative_error"],
+            serde_json::json!(0)
+        );
+        assert_eq!(
+            evidence["airbox_bounds_relative_error"],
+            serde_json::json!(0)
+        );
+        assert_eq!(
+            evidence["marker_coverage_complete"],
+            serde_json::json!(true)
+        );
+        assert_eq!(evidence["nonconforming_face_count"], serde_json::json!(0));
+        assert_eq!(evidence["orphan_face_count"], serde_json::json!(0));
+        assert_eq!(evidence["nonmanifold_face_count"], serde_json::json!(0));
+        assert_eq!(
+            evidence["coincident_interface_face_count"],
+            serde_json::json!(0)
+        );
+
+        let asset: FemDomainMeshAssetIR =
+            serde_json::from_value(frozen_python_mixed_asset_value()).unwrap();
+        assert_eq!(asset.validate(), Ok(()));
+    }
+
+    #[test]
+    fn frozen_python_mixed_golden_detects_independent_conformity_mutations() {
+        let count = |mesh: &MeshIR| {
+            let adjacency = mixed_face_adjacency(mesh).unwrap();
+            mixed_conformity_counts(mesh, &adjacency, 2.0e-8, 2, 3).unwrap()
+        };
+
+        let mut orphan = frozen_python_mixed_mesh();
+        orphan.facets.types.push(crate::FemFacetTypeIR::Tri3);
+        orphan.facets.roles.push(crate::FemFacetRoleIR::Exterior);
+        orphan.facets.nodes.extend([0, 8, 10]);
+        orphan.facets.offsets.push(orphan.facets.nodes.len() as u32);
+        orphan
+            .facets
+            .global_ordinals
+            .push(orphan.facets.global_ordinals.len() as u64);
+        orphan.boundary_markers.push(3);
+        assert_eq!(count(&orphan).1, 1, "orphan mutation was not detected");
+
+        let mut nonmanifold = frozen_python_mixed_mesh();
+        let duplicate_nodes = nonmanifold.cells.item_nodes(10).unwrap().to_vec();
+        nonmanifold.cells.types.push(crate::FemCellTypeIR::Tet4);
+        nonmanifold.cells.nodes.extend(duplicate_nodes);
+        nonmanifold
+            .cells
+            .offsets
+            .push(nonmanifold.cells.nodes.len() as u32);
+        nonmanifold
+            .cells
+            .global_ordinals
+            .push(nonmanifold.cells.global_ordinals.len() as u64);
+        nonmanifold
+            .cells
+            .mesh_parts
+            .push(crate::FemCellMeshPartIR::FarAir);
+        nonmanifold.element_markers.push(0);
+        assert!(
+            count(&nonmanifold).2 > 0,
+            "nonmanifold mutation was not detected"
+        );
+
+        let mut coincident = frozen_python_mixed_mesh();
+        let interface = coincident
+            .facets
+            .roles
+            .iter()
+            .position(|role| *role == crate::FemFacetRoleIR::MaterialInterface)
+            .unwrap();
+        let duplicate_nodes = coincident.facets.item_nodes(interface).unwrap().to_vec();
+        coincident
+            .facets
+            .types
+            .push(coincident.facets.types[interface]);
+        coincident
+            .facets
+            .roles
+            .push(crate::FemFacetRoleIR::MaterialInterface);
+        coincident.facets.nodes.extend(duplicate_nodes);
+        coincident
+            .facets
+            .offsets
+            .push(coincident.facets.nodes.len() as u32);
+        coincident
+            .facets
+            .global_ordinals
+            .push(coincident.facets.global_ordinals.len() as u64);
+        coincident.boundary_markers.push(2);
+        assert!(
+            count(&coincident).3 > 0,
+            "coincident mutation was not detected"
+        );
+
+        let mut same_side = frozen_python_mixed_mesh();
+        same_side.nodes[14] = [2.0, 0.0, 2.0];
+        assert!(
+            count(&same_side).0 > 0,
+            "same-side mutation was not detected"
+        );
     }
 
     #[test]
@@ -222,6 +665,169 @@ mod mesh_asset_validation_tests {
         assert!(
             asset.validate().is_err(),
             "non-finite Jacobian must fail closed"
+        );
+    }
+
+    #[test]
+    fn mixed_certificate_rejects_semantically_tampered_recomputable_evidence() {
+        let cases = [
+            (
+                "magnetic planes",
+                "magnetic_plane_coordinates_m",
+                serde_json::json!([0.0, 0.5]),
+            ),
+            (
+                "plane tolerance",
+                "plane_tolerance_m",
+                serde_json::json!(1.0e-7),
+            ),
+            (
+                "magnetic bounds",
+                "magnetic_bounds_max_m",
+                serde_json::json!([2.0, 1.0, 1.0]),
+            ),
+            (
+                "airbox bounds",
+                "airbox_bounds_min_m",
+                serde_json::json!([-1.5, -2.0, -2.0]),
+            ),
+            (
+                "Jacobian minimum",
+                "jacobian_minima_m3_by_family",
+                serde_json::json!({"prism6":0.5,"pyramid5":0.5,"tet4":0.5}),
+            ),
+            (
+                "scaled Jacobian minimum",
+                "scaled_jacobian_minima_by_family",
+                serde_json::json!({"prism6":0.5,"pyramid5":1.0,"tet4":1.0}),
+            ),
+            (
+                "scaled Jacobian p05",
+                "scaled_jacobian_p05_by_family",
+                serde_json::json!({"prism6":0.5,"pyramid5":1.0,"tet4":1.0}),
+            ),
+        ];
+        for (name, field, value) in cases {
+            let mut payload = mixed_certificate_asset_value();
+            payload["build_report"]["mixed_layer_topology_certificate"][field] = value;
+            let asset: FemDomainMeshAssetIR = serde_json::from_value(payload).unwrap();
+            assert!(asset.validate().is_err(), "{name} must be recomputed");
+        }
+
+        let mut payload = mixed_certificate_asset_value();
+        let certificate = &mut payload["build_report"]["mixed_layer_topology_certificate"];
+        certificate["magnetic_volume_m3"] = serde_json::json!(7.2);
+        certificate["expected_magnetic_volume_m3"] = serde_json::json!(7.2);
+        certificate["air_volume_m3"] = serde_json::json!(56.8);
+        let asset: FemDomainMeshAssetIR = serde_json::from_value(payload).unwrap();
+        assert!(
+            asset.validate().is_err(),
+            "self-consistent false volume claims must be recomputed"
+        );
+
+        let mut payload = mixed_certificate_asset_value();
+        let certificate = &mut payload["build_report"]["mixed_layer_topology_certificate"];
+        certificate["cell_family_counts_by_marker"]["1"]["prism6"] = serde_json::json!(3);
+        certificate["cell_family_counts_by_part"]["magnetic"]["prism6"] = serde_json::json!(3);
+        let asset: FemDomainMeshAssetIR = serde_json::from_value(payload).unwrap();
+        assert!(
+            asset.validate().is_err(),
+            "internally consistent false cell counts must be recomputed"
+        );
+    }
+
+    fn resign_mesh_and_facet_counts(payload: &mut Value, mesh: &MeshIR) {
+        let certificate = &mut payload["build_report"]["mixed_layer_topology_certificate"];
+        certificate["topology_fingerprint"] = serde_json::json!(mesh.topology_fingerprint_v6());
+        let mut by_facet = BTreeMap::<String, BTreeMap<String, u64>>::new();
+        for ordinal in 0..mesh.facets.types.len() {
+            let family = match mesh.facets.types[ordinal] {
+                crate::FemFacetTypeIR::Tri3 => "tri3",
+                crate::FemFacetTypeIR::Quad4 => "quad4",
+            };
+            let role = match mesh.facets.roles[ordinal] {
+                crate::FemFacetRoleIR::Exterior => "exterior",
+                crate::FemFacetRoleIR::MaterialInterface => "material_interface",
+                crate::FemFacetRoleIR::PeriodicSeam => "periodic_seam",
+            };
+            *by_facet
+                .entry(format!("{role}:{}", mesh.boundary_markers[ordinal]))
+                .or_default()
+                .entry(family.to_string())
+                .or_default() += 1;
+        }
+        certificate["facet_family_counts_by_role_marker"] = serde_json::to_value(by_facet).unwrap();
+        payload["mesh"] = serde_json::to_value(mesh).unwrap();
+    }
+
+    #[test]
+    fn mixed_certificate_rejects_unbound_pyramid_base_and_nonconforming_facets() {
+        let mut payload = mixed_certificate_asset_value();
+        let mut mesh: MeshIR = serde_json::from_value(payload["mesh"].clone()).unwrap();
+        let mut first_pyramid_base = mesh.cells.item_nodes(2).unwrap()[0..4].to_vec();
+        first_pyramid_base.sort_unstable();
+        let base_facet = (0..mesh.facets.len())
+            .find(|ordinal| {
+                let mut nodes = mesh.facets.item_nodes(*ordinal).unwrap().to_vec();
+                nodes.sort_unstable();
+                nodes == first_pyramid_base
+            })
+            .unwrap();
+        mesh.facets.roles[base_facet] = crate::FemFacetRoleIR::Exterior;
+        mesh.boundary_markers[base_facet] = 3;
+        resign_mesh_and_facet_counts(&mut payload, &mesh);
+        let asset: FemDomainMeshAssetIR = serde_json::from_value(payload).unwrap();
+        assert!(
+            asset.validate().is_err(),
+            "a resigned topology with an unbound pyramid base must fail closed"
+        );
+
+        let mut payload = mixed_certificate_asset_value();
+        let mut mesh: MeshIR = serde_json::from_value(payload["mesh"].clone()).unwrap();
+        let exterior = mesh
+            .facets
+            .roles
+            .iter()
+            .position(|role| *role == crate::FemFacetRoleIR::Exterior)
+            .unwrap();
+        let duplicate_nodes = mesh.facets.item_nodes(exterior).unwrap().to_vec();
+        mesh.facets.types.push(mesh.facets.types[exterior]);
+        mesh.facets.roles.push(crate::FemFacetRoleIR::Exterior);
+        mesh.facets.nodes.extend(duplicate_nodes);
+        mesh.facets.offsets.push(mesh.facets.nodes.len() as u32);
+        mesh.facets
+            .global_ordinals
+            .push(mesh.facets.global_ordinals.len() as u64);
+        mesh.boundary_markers.push(3);
+        resign_mesh_and_facet_counts(&mut payload, &mesh);
+        let asset: FemDomainMeshAssetIR = serde_json::from_value(payload).unwrap();
+        assert!(
+            asset.validate().is_err(),
+            "a resigned topology with duplicate exterior evidence must fail conformity"
+        );
+    }
+
+    #[test]
+    fn mixed_interface_quantization_preserves_python_integer_identity_beyond_i64() {
+        let scale = 1.0;
+        assert_ne!(
+            mixed_coordinate_key([1.0e20, 0.0, 0.0], scale).unwrap(),
+            mixed_coordinate_key([2.0e20, 0.0, 0.0], scale).unwrap(),
+            "distinct Python rounded integers above i64::MAX must not saturate to one key"
+        );
+        assert_ne!(
+            mixed_coordinate_key([-1.0e20, 0.0, 0.0], scale).unwrap(),
+            mixed_coordinate_key([-2.0e20, 0.0, 0.0], scale).unwrap(),
+            "distinct Python rounded integers below i64::MIN must not saturate to one key"
+        );
+        assert_eq!(
+            mixed_coordinate_key([-0.0, 1.0, -1.0], scale).unwrap(),
+            mixed_coordinate_key([0.0, 1.0, -1.0], scale).unwrap(),
+            "Python integer zero has no signed-zero identity"
+        );
+        assert!(
+            mixed_coordinate_key([f64::MAX, 0.0, 0.0], f64::MIN_POSITIVE).is_err(),
+            "Python rejects rounding infinity, so overflow must fail closed"
         );
     }
 
@@ -901,12 +1507,10 @@ impl MixedLayerTopologyCertificateV1IR {
         }
         let interface_key = format!("material_interface:{}", self.interface_marker);
         let outer_key = format!("exterior:{}", self.outer_boundary_marker);
-        if self
+        if !self
             .facet_family_counts_by_role_marker
             .get(&interface_key)
-            .and_then(|counts| counts.get("tri3"))
-            .copied()
-            != Some(self.transition_shell_interface_tri3_count)
+            .is_some_and(|counts| !counts.is_empty())
             || !self
                 .facet_family_counts_by_role_marker
                 .get(&outer_key)
@@ -997,6 +1601,821 @@ fn mixed_certificate_counts_match_mesh(
     certificate.cell_family_counts_by_marker == by_marker
         && certificate.cell_family_counts_by_part == by_part
         && certificate.facet_family_counts_by_role_marker == by_facet
+}
+
+#[derive(Debug)]
+struct RecomputedMixedCertificateEvidence {
+    planes: Vec<f64>,
+    plane_tolerance: f64,
+    shell_thickness: f64,
+    shell_face_count: u64,
+    jacobian_minima: BTreeMap<String, f64>,
+    scaled_minima: BTreeMap<String, f64>,
+    scaled_p05: BTreeMap<String, f64>,
+    magnetic_volume: f64,
+    expected_magnetic_volume: f64,
+    air_volume: f64,
+    shared_volume: f64,
+    expected_shared_volume: f64,
+    magnetic_bounds_error: f64,
+    airbox_bounds_error: f64,
+    nonconforming: u64,
+    orphan: u64,
+    nonmanifold: u64,
+    coincident_interface: u64,
+}
+
+fn mixed_local_facets(cell_type: crate::FemCellTypeIR) -> &'static [&'static [usize]] {
+    match cell_type {
+        crate::FemCellTypeIR::Tet4 => &[&[0, 1, 2], &[0, 1, 3], &[0, 2, 3], &[1, 2, 3]],
+        crate::FemCellTypeIR::Prism6 => &[
+            &[0, 1, 2],
+            &[3, 5, 4],
+            &[0, 3, 4, 1],
+            &[1, 4, 5, 2],
+            &[2, 5, 3, 0],
+        ],
+        crate::FemCellTypeIR::Pyramid5 => &[
+            &[0, 3, 2, 1],
+            &[0, 1, 4],
+            &[1, 2, 4],
+            &[2, 3, 4],
+            &[3, 0, 4],
+        ],
+        crate::FemCellTypeIR::Hex8 => &[
+            &[0, 3, 2, 1],
+            &[4, 5, 6, 7],
+            &[0, 1, 5, 4],
+            &[1, 2, 6, 5],
+            &[2, 3, 7, 6],
+            &[3, 0, 4, 7],
+        ],
+    }
+}
+
+fn sub3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn norm3(value: [f64; 3]) -> f64 {
+    dot3(value, value).sqrt()
+}
+
+fn det3(columns: [[f64; 3]; 3]) -> f64 {
+    dot3(columns[0], cross3(columns[1], columns[2]))
+}
+
+fn tet_det(points: &[[f64; 3]], indices: [usize; 4]) -> f64 {
+    det3([
+        sub3(points[indices[1]], points[indices[0]]),
+        sub3(points[indices[2]], points[indices[0]]),
+        sub3(points[indices[3]], points[indices[0]]),
+    ])
+}
+
+fn mixed_tets(cell_type: crate::FemCellTypeIR) -> Result<&'static [[usize; 4]], String> {
+    match cell_type {
+        crate::FemCellTypeIR::Tet4 => Ok(&[[0, 1, 2, 3]]),
+        crate::FemCellTypeIR::Prism6 => Ok(&[[0, 1, 2, 3], [1, 2, 3, 4], [2, 3, 4, 5]]),
+        crate::FemCellTypeIR::Pyramid5 => Ok(&[[0, 1, 2, 4], [0, 2, 3, 4]]),
+        crate::FemCellTypeIR::Hex8 => {
+            Err("mixed certificate does not qualify hex8 cells".to_string())
+        }
+    }
+}
+
+fn mixed_cell_volume(cell_type: crate::FemCellTypeIR, points: &[[f64; 3]]) -> Result<f64, String> {
+    Ok(mixed_tets(cell_type)?
+        .iter()
+        .map(|indices| tet_det(points, *indices).abs() / 6.0)
+        .sum())
+}
+
+fn mixed_scaled_jacobians(
+    cell_type: crate::FemCellTypeIR,
+    points: &[[f64; 3]],
+) -> Result<Vec<f64>, String> {
+    Ok(mixed_tets(cell_type)?
+        .iter()
+        .map(|indices| {
+            let columns = [
+                sub3(points[indices[1]], points[indices[0]]),
+                sub3(points[indices[2]], points[indices[0]]),
+                sub3(points[indices[3]], points[indices[0]]),
+            ];
+            let denominator = columns.iter().copied().map(norm3).product::<f64>();
+            if denominator == 0.0 {
+                0.0
+            } else {
+                det3(columns).abs() / denominator
+            }
+        })
+        .collect())
+}
+
+fn percentile_05(values: &mut [f64]) -> Option<f64> {
+    values.sort_by(f64::total_cmp);
+    let position = values.len().checked_sub(1)? as f64 * 0.05;
+    let lower = position.floor() as usize;
+    let upper = position.ceil() as usize;
+    let weight = position - lower as f64;
+    Some(values[lower] * (1.0 - weight) + values[upper] * weight)
+}
+
+fn float_close(left: f64, right: f64, relative: f64, absolute: f64) -> bool {
+    (left - right).abs() <= absolute.max(relative * left.abs().max(right.abs()))
+}
+
+fn bounds_for_nodes(
+    mesh: &MeshIR,
+    node_ids: &BTreeSet<u32>,
+) -> Result<([f64; 3], [f64; 3]), String> {
+    let first = node_ids
+        .iter()
+        .next()
+        .and_then(|id| mesh.nodes.get(*id as usize))
+        .ok_or_else(|| "mixed certificate requires non-empty valid node sets".to_string())?;
+    let mut minimum = *first;
+    let mut maximum = *first;
+    for node_id in node_ids {
+        let point = mesh
+            .nodes
+            .get(*node_id as usize)
+            .ok_or_else(|| format!("mixed certificate references missing node {node_id}"))?;
+        for axis in 0..3 {
+            minimum[axis] = minimum[axis].min(point[axis]);
+            maximum[axis] = maximum[axis].max(point[axis]);
+        }
+    }
+    Ok((minimum, maximum))
+}
+
+fn bounds_relative_error(realized: ([f64; 3], [f64; 3]), authored: ([f64; 3], [f64; 3])) -> f64 {
+    let scale = (0..3)
+        .map(|axis| authored.1[axis] - authored.0[axis])
+        .fold(0.0, f64::max);
+    let residual = (0..3)
+        .flat_map(|axis| {
+            [
+                (realized.0[axis] - authored.0[axis]).abs(),
+                (realized.1[axis] - authored.1[axis]).abs(),
+            ]
+        })
+        .fold(0.0, f64::max);
+    residual / scale
+}
+
+fn mixed_face_adjacency(mesh: &MeshIR) -> Result<BTreeMap<Vec<u32>, Vec<(usize, u32)>>, String> {
+    let mut adjacency = BTreeMap::<Vec<u32>, Vec<(usize, u32)>>::new();
+    for (ordinal, cell_type) in mesh.cells.types.iter().copied().enumerate() {
+        let nodes = mesh
+            .cells
+            .item_nodes(ordinal)
+            .ok_or_else(|| format!("mixed certificate cell {ordinal} has invalid CSR"))?;
+        let marker = *mesh
+            .element_markers
+            .get(ordinal)
+            .ok_or_else(|| format!("mixed certificate cell {ordinal} is missing a marker"))?;
+        for local_face in mixed_local_facets(cell_type) {
+            let mut key = local_face
+                .iter()
+                .map(|index| nodes[*index])
+                .collect::<Vec<_>>();
+            key.sort_unstable();
+            adjacency.entry(key).or_default().push((ordinal, marker));
+        }
+    }
+    Ok(adjacency)
+}
+
+fn same_side_face_count(
+    mesh: &MeshIR,
+    adjacency: &BTreeMap<Vec<u32>, Vec<(usize, u32)>>,
+    tolerance: f64,
+) -> Result<u64, String> {
+    let mut count = 0;
+    for (face, owners) in adjacency.iter().filter(|(_, owners)| owners.len() == 2) {
+        let coordinates =
+            face.iter()
+                .map(|node| {
+                    mesh.nodes.get(*node as usize).copied().ok_or_else(|| {
+                        format!("mixed certificate face references missing node {node}")
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+        let mut normal = None;
+        'normal: for first in 1..coordinates.len() {
+            for second in first + 1..coordinates.len() {
+                let candidate = cross3(
+                    sub3(coordinates[first], coordinates[0]),
+                    sub3(coordinates[second], coordinates[0]),
+                );
+                let length = norm3(candidate);
+                if length > 0.0 {
+                    normal = Some([
+                        candidate[0] / length,
+                        candidate[1] / length,
+                        candidate[2] / length,
+                    ]);
+                    break 'normal;
+                }
+            }
+        }
+        let Some(normal) = normal else {
+            count += 1;
+            continue;
+        };
+        let mut face_scale: f64 = 0.0;
+        for left in 0..coordinates.len() {
+            for right in left + 1..coordinates.len() {
+                face_scale = face_scale.max(norm3(sub3(coordinates[right], coordinates[left])));
+            }
+        }
+        let side_tolerance = tolerance.max(f64::EPSILON * face_scale.max(1.0e-30) * 64.0);
+        let mut distances = Vec::with_capacity(2);
+        for (owner, _) in owners {
+            let owner_nodes = mesh
+                .cells
+                .item_nodes(*owner)
+                .ok_or_else(|| format!("mixed certificate cell {owner} has invalid CSR"))?;
+            let opposite = owner_nodes
+                .iter()
+                .filter(|node| !face.contains(node))
+                .filter_map(|node| mesh.nodes.get(*node as usize))
+                .collect::<Vec<_>>();
+            if opposite.is_empty() {
+                distances.push(0.0);
+                continue;
+            }
+            let mut interior = [0.0; 3];
+            for point in &opposite {
+                for axis in 0..3 {
+                    interior[axis] += point[axis];
+                }
+            }
+            for value in &mut interior {
+                *value /= opposite.len() as f64;
+            }
+            distances.push(dot3(sub3(interior, coordinates[0]), normal));
+        }
+        if distances[0].abs() > side_tolerance
+            && distances[1].abs() > side_tolerance
+            && distances[0] * distances[1] > 0.0
+        {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+fn mixed_conformity_counts(
+    mesh: &MeshIR,
+    adjacency: &BTreeMap<Vec<u32>, Vec<(usize, u32)>>,
+    tolerance: f64,
+    interface_marker: u32,
+    outer_marker: u32,
+) -> Result<(u64, u64, u64, u64), String> {
+    let mut explicit = BTreeMap::<Vec<u32>, Vec<usize>>::new();
+    let mut exterior = Vec::<Vec<u32>>::new();
+    let mut interfaces = Vec::<Vec<u32>>::new();
+    let mut orphan = 0u64;
+    let mut nonconforming = 0u64;
+    for ordinal in 0..mesh.facets.types.len() {
+        let mut key = mesh
+            .facets
+            .item_nodes(ordinal)
+            .ok_or_else(|| format!("mixed certificate facet {ordinal} has invalid CSR"))?
+            .to_vec();
+        key.sort_unstable();
+        explicit.entry(key.clone()).or_default().push(ordinal);
+        let owners = adjacency.get(&key).map(Vec::as_slice).unwrap_or_default();
+        if owners.is_empty() {
+            orphan += 1;
+            continue;
+        }
+        match mesh.facets.roles[ordinal] {
+            crate::FemFacetRoleIR::Exterior => {
+                exterior.push(key);
+                if owners.len() != 1 || mesh.boundary_markers[ordinal] != outer_marker {
+                    nonconforming += 1;
+                }
+            }
+            crate::FemFacetRoleIR::MaterialInterface => {
+                interfaces.push(key);
+                let markers = owners
+                    .iter()
+                    .map(|(_, marker)| *marker)
+                    .collect::<BTreeSet<_>>();
+                if owners.len() != 2
+                    || markers != BTreeSet::from([0, 1])
+                    || mesh.boundary_markers[ordinal] != interface_marker
+                {
+                    nonconforming += 1;
+                }
+            }
+            crate::FemFacetRoleIR::PeriodicSeam => {}
+        }
+    }
+    let nonmanifold = adjacency.values().filter(|owners| owners.len() > 2).count() as u64;
+    nonconforming += same_side_face_count(mesh, adjacency, tolerance)?;
+    for (key, owners) in adjacency {
+        let exterior_count = exterior.iter().filter(|face| *face == key).count();
+        let interface_count = interfaces.iter().filter(|face| *face == key).count();
+        if owners.len() == 1 && exterior_count != 1 {
+            nonconforming += 1;
+        }
+        if owners.len() == 2 && owners[0].1 != owners[1].1 && interface_count != 1 {
+            nonconforming += 1;
+        }
+        if exterior_count > 1 {
+            nonconforming += (exterior_count - 1) as u64;
+        }
+    }
+    let duplicate_faces = interfaces
+        .iter()
+        .collect::<BTreeSet<_>>()
+        .iter()
+        .map(|key| {
+            explicit
+                .get(*key)
+                .map_or(0, |faces| faces.len().saturating_sub(1))
+        })
+        .sum::<usize>() as u64;
+    let interface_nodes = interfaces
+        .iter()
+        .flat_map(|face| face.iter().copied())
+        .collect::<BTreeSet<_>>();
+    let scale = tolerance.max(f64::EPSILON);
+    let mut coordinate_keys = BTreeMap::<[u64; 3], u32>::new();
+    let mut duplicate_nodes = 0u64;
+    for node in interface_nodes {
+        let point = mesh.nodes[node as usize];
+        let key = mixed_coordinate_key(point, scale)?;
+        if coordinate_keys
+            .insert(key, node)
+            .is_some_and(|prior| prior != node)
+        {
+            duplicate_nodes += 1;
+        }
+    }
+    Ok((
+        nonconforming,
+        orphan,
+        nonmanifold,
+        duplicate_faces + duplicate_nodes,
+    ))
+}
+
+fn mixed_coordinate_key(point: [f64; 3], scale: f64) -> Result<[u64; 3], String> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(
+            "mixed certificate coordinate quantization requires a positive finite scale"
+                .to_string(),
+        );
+    }
+    let mut key = [0u64; 3];
+    for axis in 0..3 {
+        let quotient = point[axis] / scale;
+        if !quotient.is_finite() {
+            return Err(
+                "mixed certificate coordinate quantization overflowed Python round semantics"
+                    .to_string(),
+            );
+        }
+        let rounded = quotient.round_ties_even();
+        key[axis] = if rounded == 0.0 { 0.0 } else { rounded }.to_bits();
+    }
+    Ok(key)
+}
+
+fn recompute_mixed_certificate_evidence(
+    certificate: &MixedLayerTopologyCertificateV1IR,
+    mesh: &MeshIR,
+) -> Result<RecomputedMixedCertificateEvidence, String> {
+    validate_mesh_for_execution(mesh).map_err(|errors| {
+        format!(
+            "mixed certificate requires a valid executable mesh: {}",
+            errors.join("; ")
+        )
+    })?;
+    if mesh.cells.mesh_parts.len() != mesh.cells.types.len() {
+        return Err("mixed certificate requires one mesh part per cell".to_string());
+    }
+    let mut magnetic_nodes = BTreeSet::new();
+    let mut transition_nodes = BTreeSet::new();
+    let mut volumes = Vec::with_capacity(mesh.cells.types.len());
+    let mut jacobians = BTreeMap::<String, Vec<f64>>::new();
+    let mut scaled = BTreeMap::<String, Vec<f64>>::new();
+    for ordinal in 0..mesh.cells.types.len() {
+        let cell_type = mesh.cells.types[ordinal];
+        let part = mesh.cells.mesh_parts[ordinal];
+        let marker = *mesh
+            .element_markers
+            .get(ordinal)
+            .ok_or_else(|| format!("mixed certificate cell {ordinal} is missing a marker"))?;
+        let legal = matches!(
+            (part, cell_type, marker),
+            (
+                crate::FemCellMeshPartIR::Magnetic,
+                crate::FemCellTypeIR::Prism6,
+                1
+            ) | (
+                crate::FemCellMeshPartIR::TransitionAir,
+                crate::FemCellTypeIR::Pyramid5 | crate::FemCellTypeIR::Tet4,
+                0
+            ) | (
+                crate::FemCellMeshPartIR::FarAir,
+                crate::FemCellTypeIR::Tet4,
+                0
+            )
+        );
+        if !legal {
+            return Err(format!(
+                "mixed certificate cell {ordinal} has invalid mesh part/family/marker"
+            ));
+        }
+        let node_ids = mesh
+            .cells
+            .item_nodes(ordinal)
+            .ok_or_else(|| format!("mixed certificate cell {ordinal} has invalid CSR"))?;
+        match part {
+            crate::FemCellMeshPartIR::Magnetic => magnetic_nodes.extend(node_ids),
+            crate::FemCellMeshPartIR::TransitionAir => transition_nodes.extend(node_ids),
+            crate::FemCellMeshPartIR::FarAir => {}
+        }
+        let points = node_ids
+            .iter()
+            .map(|node| {
+                mesh.nodes.get(*node as usize).copied().ok_or_else(|| {
+                    format!("mixed certificate cell {ordinal} references missing node {node}")
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        volumes.push(mixed_cell_volume(cell_type, &points)?);
+        let family = match cell_type {
+            crate::FemCellTypeIR::Tet4 => "tet4",
+            crate::FemCellTypeIR::Prism6 => "prism6",
+            crate::FemCellTypeIR::Pyramid5 => "pyramid5",
+            crate::FemCellTypeIR::Hex8 => "hex8",
+        };
+        jacobians.entry(family.to_string()).or_default().extend(
+            crate::mesh_hints::cell_jacobian_determinants(cell_type, &points),
+        );
+        scaled
+            .entry(family.to_string())
+            .or_default()
+            .extend(mixed_scaled_jacobians(cell_type, &points)?);
+    }
+    if !mixed_certificate_counts_match_mesh(certificate, mesh) {
+        return Err("mixed certificate cell/facet counts disagree with the mesh".to_string());
+    }
+
+    let interface_quads = mesh
+        .facets
+        .types
+        .iter()
+        .zip(&mesh.facets.roles)
+        .enumerate()
+        .filter_map(|(ordinal, (family, role))| {
+            (*family == crate::FemFacetTypeIR::Quad4
+                && *role == crate::FemFacetRoleIR::MaterialInterface
+                && mesh.boundary_markers.get(ordinal) == Some(&certificate.interface_marker))
+            .then(|| {
+                let mut key = mesh.facets.item_nodes(ordinal).unwrap_or_default().to_vec();
+                key.sort_unstable();
+                key
+            })
+        })
+        .collect::<BTreeSet<_>>();
+    let pyramid_bases = mesh
+        .cells
+        .types
+        .iter()
+        .enumerate()
+        .filter_map(|(ordinal, family)| {
+            (*family == crate::FemCellTypeIR::Pyramid5).then(|| {
+                let nodes = mesh.cells.item_nodes(ordinal).unwrap_or_default();
+                let mut key = nodes.get(0..4).unwrap_or_default().to_vec();
+                key.sort_unstable();
+                key
+            })
+        })
+        .collect::<BTreeSet<_>>();
+    if pyramid_bases.is_empty() || !pyramid_bases.is_subset(&interface_quads) {
+        return Err(format!("mixed certificate pyramid bases must be exact quad4 material-interface facets with marker {}", certificate.interface_marker));
+    }
+
+    let magnetic_bounds = bounds_for_nodes(mesh, &magnetic_nodes)?;
+    let transition_bounds = bounds_for_nodes(mesh, &transition_nodes)?;
+    let outer_bounds = bounds_for_nodes(mesh, &(0..mesh.nodes.len() as u32).collect())?;
+    let magnetic_authored = (
+        certificate.magnetic_bounds_min_m,
+        certificate.magnetic_bounds_max_m,
+    );
+    let airbox_authored = (
+        certificate.airbox_bounds_min_m,
+        certificate.airbox_bounds_max_m,
+    );
+    let magnetic_bounds_error = bounds_relative_error(magnetic_bounds, magnetic_authored);
+    let airbox_bounds_error = bounds_relative_error(outer_bounds, airbox_authored);
+    if magnetic_bounds_error > 1.0e-8 || airbox_bounds_error > 1.0e-8 {
+        return Err(
+            "mixed certificate realized bounds do not match authored CAD bounds".to_string(),
+        );
+    }
+    let shell_offsets = [
+        magnetic_bounds.0[0] - transition_bounds.0[0],
+        magnetic_bounds.0[1] - transition_bounds.0[1],
+        magnetic_bounds.0[2] - transition_bounds.0[2],
+        transition_bounds.1[0] - magnetic_bounds.1[0],
+        transition_bounds.1[1] - magnetic_bounds.1[1],
+        transition_bounds.1[2] - magnetic_bounds.1[2],
+    ];
+    let shell_thickness = shell_offsets.iter().sum::<f64>() / shell_offsets.len() as f64;
+    if shell_offsets.iter().any(|value| {
+        *value <= 0.0
+            || (*value - shell_thickness).abs() > 1.0e-15 + 1.0e-10 * shell_thickness.abs()
+    }) {
+        return Err("mixed certificate transition shell thickness is not uniform".to_string());
+    }
+
+    let axis = match certificate.resolved_sweep_direction.as_str() {
+        "x" => 0,
+        "y" => 1,
+        "z" => 2,
+        _ => return Err("mixed certificate sweep direction is invalid".to_string()),
+    };
+    let mut coordinates = magnetic_nodes
+        .iter()
+        .map(|node| mesh.nodes[*node as usize][axis])
+        .collect::<Vec<_>>();
+    coordinates.sort_by(f64::total_cmp);
+    let thickness = coordinates.last().unwrap() - coordinates.first().unwrap();
+    let plane_tolerance = 1.0e-15_f64.max(1.0e-8 * thickness);
+    let mut planes = Vec::<f64>::new();
+    for value in coordinates {
+        if planes
+            .last()
+            .is_none_or(|prior| (value - prior).abs() > plane_tolerance)
+        {
+            planes.push(value);
+        }
+    }
+
+    let adjacency = mixed_face_adjacency(mesh)?;
+    let shell_faces = adjacency
+        .iter()
+        .filter(|(_face, owners)| {
+            owners.len() == 2
+                && owners
+                    .iter()
+                    .map(|(ordinal, _)| mesh.cells.mesh_parts[*ordinal])
+                    .collect::<BTreeSet<_>>()
+                    == BTreeSet::from([
+                        crate::FemCellMeshPartIR::TransitionAir,
+                        crate::FemCellMeshPartIR::FarAir,
+                    ])
+        })
+        .map(|(face, _)| face)
+        .collect::<Vec<_>>();
+    if shell_faces.is_empty() || shell_faces.iter().any(|face| face.len() != 3) {
+        return Err("mixed certificate transition shell interface is not tri3".to_string());
+    }
+    let shell_face_count = shell_faces.len() as u64;
+
+    let jacobian_minima = jacobians
+        .into_iter()
+        .map(|(family, values)| (family, values.into_iter().min_by(f64::total_cmp).unwrap()))
+        .collect();
+    let mut scaled_minima = BTreeMap::new();
+    let mut scaled_p05 = BTreeMap::new();
+    for (family, mut values) in scaled {
+        scaled_minima.insert(
+            family.clone(),
+            values.iter().copied().min_by(f64::total_cmp).unwrap(),
+        );
+        scaled_p05.insert(family, percentile_05(&mut values).unwrap());
+    }
+    let magnetic_volume = volumes
+        .iter()
+        .zip(&mesh.cells.mesh_parts)
+        .filter_map(|(volume, part)| {
+            (*part == crate::FemCellMeshPartIR::Magnetic).then_some(*volume)
+        })
+        .sum::<f64>();
+    let shared_volume = volumes.iter().sum::<f64>();
+    let expected_magnetic_volume = (0..3)
+        .map(|axis| magnetic_authored.1[axis] - magnetic_authored.0[axis])
+        .product::<f64>();
+    let expected_shared_volume = (0..3)
+        .map(|axis| airbox_authored.1[axis] - airbox_authored.0[axis])
+        .product::<f64>();
+    let (nonconforming, orphan, nonmanifold, coincident_interface) = mixed_conformity_counts(
+        mesh,
+        &adjacency,
+        plane_tolerance,
+        certificate.interface_marker,
+        certificate.outer_boundary_marker,
+    )?;
+    Ok(RecomputedMixedCertificateEvidence {
+        planes,
+        plane_tolerance,
+        shell_thickness,
+        shell_face_count,
+        jacobian_minima,
+        scaled_minima,
+        scaled_p05,
+        magnetic_volume,
+        expected_magnetic_volume,
+        air_volume: shared_volume - magnetic_volume,
+        shared_volume,
+        expected_shared_volume,
+        magnetic_bounds_error,
+        airbox_bounds_error,
+        nonconforming,
+        orphan,
+        nonmanifold,
+        coincident_interface,
+    })
+}
+
+fn float_map_close(claimed: &BTreeMap<String, f64>, actual: &BTreeMap<String, f64>) -> bool {
+    claimed.len() == actual.len()
+        && claimed.iter().all(|(key, value)| {
+            actual
+                .get(key)
+                .is_some_and(|actual| float_close(*value, *actual, 1.0e-12, 1.0e-30))
+        })
+}
+
+fn validate_mixed_certificate_against_mesh(
+    certificate: &MixedLayerTopologyCertificateV1IR,
+    mesh: &MeshIR,
+) -> Result<(), Vec<String>> {
+    let evidence =
+        recompute_mixed_certificate_evidence(certificate, mesh).map_err(|error| vec![error])?;
+    let mut stale = Vec::new();
+    let plane_tolerance = certificate.plane_tolerance_m.max(evidence.plane_tolerance);
+    if certificate.magnetic_plane_coordinates_m.len() != evidence.planes.len()
+        || !certificate
+            .magnetic_plane_coordinates_m
+            .iter()
+            .zip(&evidence.planes)
+            .all(|(claimed, actual)| (claimed - actual).abs() <= plane_tolerance)
+    {
+        stale.push("magnetic_plane_coordinates_m");
+    }
+    macro_rules! float_field {
+        ($claimed:expr, $actual:expr, $name:literal) => {
+            if !float_close($claimed, $actual, 1.0e-12, 1.0e-30) {
+                stale.push($name);
+            }
+        };
+    }
+    macro_rules! exact_field {
+        ($claimed:expr, $actual:expr, $name:literal) => {
+            if $claimed != $actual {
+                stale.push($name);
+            }
+        };
+    }
+    float_field!(
+        certificate.plane_tolerance_m,
+        evidence.plane_tolerance,
+        "plane_tolerance_m"
+    );
+    float_field!(
+        certificate.transition_shell_thickness_m,
+        evidence.shell_thickness,
+        "transition_shell_thickness_m"
+    );
+    exact_field!(
+        certificate.transition_shell_interface_tri3_count,
+        evidence.shell_face_count,
+        "transition_shell_interface_tri3_count"
+    );
+    if !float_map_close(
+        &certificate.jacobian_minima_m3_by_family,
+        &evidence.jacobian_minima,
+    ) {
+        stale.push("jacobian_minima_m3_by_family");
+    }
+    if !float_map_close(
+        &certificate.scaled_jacobian_minima_by_family,
+        &evidence.scaled_minima,
+    ) {
+        stale.push("scaled_jacobian_minima_by_family");
+    }
+    if !float_map_close(
+        &certificate.scaled_jacobian_p05_by_family,
+        &evidence.scaled_p05,
+    ) {
+        stale.push("scaled_jacobian_p05_by_family");
+    }
+    float_field!(
+        certificate.magnetic_volume_m3,
+        evidence.magnetic_volume,
+        "magnetic_volume_m3"
+    );
+    float_field!(
+        certificate.expected_magnetic_volume_m3,
+        evidence.expected_magnetic_volume,
+        "expected_magnetic_volume_m3"
+    );
+    let magnetic_relative_volume_error = ((evidence.magnetic_volume
+        - evidence.expected_magnetic_volume)
+        / evidence.expected_magnetic_volume)
+        .abs();
+    if !float_close(
+        certificate.magnetic_relative_volume_error,
+        magnetic_relative_volume_error,
+        1.0e-12,
+        1.0e-15,
+    ) {
+        stale.push("magnetic_relative_volume_error");
+    }
+    float_field!(
+        certificate.air_volume_m3,
+        evidence.air_volume,
+        "air_volume_m3"
+    );
+    float_field!(
+        certificate.shared_domain_volume_m3,
+        evidence.shared_volume,
+        "shared_domain_volume_m3"
+    );
+    float_field!(
+        certificate.expected_shared_domain_volume_m3,
+        evidence.expected_shared_volume,
+        "expected_shared_domain_volume_m3"
+    );
+    let shared_domain_relative_volume_error = ((evidence.shared_volume
+        - evidence.expected_shared_volume)
+        / evidence.expected_shared_volume)
+        .abs();
+    if !float_close(
+        certificate.shared_domain_relative_volume_error,
+        shared_domain_relative_volume_error,
+        1.0e-12,
+        1.0e-15,
+    ) {
+        stale.push("shared_domain_relative_volume_error");
+    }
+    float_field!(
+        certificate.magnetic_bounds_relative_error,
+        evidence.magnetic_bounds_error,
+        "magnetic_bounds_relative_error"
+    );
+    float_field!(
+        certificate.airbox_bounds_relative_error,
+        evidence.airbox_bounds_error,
+        "airbox_bounds_relative_error"
+    );
+    exact_field!(
+        certificate.marker_coverage_complete,
+        true,
+        "marker_coverage_complete"
+    );
+    exact_field!(
+        certificate.nonconforming_face_count,
+        evidence.nonconforming,
+        "nonconforming_face_count"
+    );
+    exact_field!(
+        certificate.orphan_face_count,
+        evidence.orphan,
+        "orphan_face_count"
+    );
+    exact_field!(
+        certificate.nonmanifold_face_count,
+        evidence.nonmanifold,
+        "nonmanifold_face_count"
+    );
+    exact_field!(
+        certificate.coincident_interface_face_count,
+        evidence.coincident_interface,
+        "coincident_interface_face_count"
+    );
+    if stale.is_empty() {
+        Ok(())
+    } else {
+        Err(vec![format!(
+            "mixed layer topology certificate recomputed evidence is stale: {}",
+            stale.join(", ")
+        )])
+    }
 }
 
 /// Build report for a shared-domain FEM mesh, propagated from the Python
@@ -1155,10 +2574,12 @@ impl FemDomainMeshAssetIR {
                 );
             }
             match &self.mesh {
-                Some(mesh)
-                    if certificate.topology_fingerprint == mesh.topology_fingerprint_v6()
-                        && mixed_certificate_counts_match_mesh(certificate, mesh) => {}
-                Some(_) => errors.push("fem_domain_mesh_asset mixed layer topology certificate fingerprint or topology evidence is stale".to_string()),
+                Some(mesh) if certificate.topology_fingerprint == mesh.topology_fingerprint_v6() => {
+                    if let Err(evidence_errors) = validate_mixed_certificate_against_mesh(certificate, mesh) {
+                        errors.extend(evidence_errors.into_iter().map(|error| format!("fem_domain_mesh_asset.build_report.{error}")));
+                    }
+                }
+                Some(_) => errors.push("fem_domain_mesh_asset mixed layer topology certificate fingerprint is stale".to_string()),
                 None => errors.push("fem_domain_mesh_asset mixed layer topology certificate requires an inline mesh for fingerprint binding".to_string()),
             }
         }

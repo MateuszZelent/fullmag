@@ -10936,6 +10936,317 @@ fn fem_minimal_test_ir() -> ProblemIR {
     ir
 }
 
+fn valid_mixed_certificate_asset() -> fullmag_ir::FemDomainMeshAssetIR {
+    use fullmag_ir::{
+        FemCellMeshPartIR, FemCellTypeIR, FemConnectivityIR, FemFacetConnectivityIR,
+        FemFacetRoleIR, FemFacetTypeIR, MeshIR,
+    };
+
+    let cells = vec![
+        (
+            FemCellTypeIR::Prism6,
+            vec![0, 1, 2, 4, 5, 6],
+            FemCellMeshPartIR::Magnetic,
+            1,
+        ),
+        (
+            FemCellTypeIR::Prism6,
+            vec![0, 2, 3, 4, 6, 7],
+            FemCellMeshPartIR::Magnetic,
+            1,
+        ),
+        (
+            FemCellTypeIR::Pyramid5,
+            vec![1, 2, 6, 5, 8],
+            FemCellMeshPartIR::TransitionAir,
+            0,
+        ),
+        (
+            FemCellTypeIR::Pyramid5,
+            vec![0, 4, 7, 3, 9],
+            FemCellMeshPartIR::TransitionAir,
+            0,
+        ),
+        (
+            FemCellTypeIR::Pyramid5,
+            vec![2, 3, 7, 6, 10],
+            FemCellMeshPartIR::TransitionAir,
+            0,
+        ),
+        (
+            FemCellTypeIR::Pyramid5,
+            vec![0, 1, 5, 4, 11],
+            FemCellMeshPartIR::TransitionAir,
+            0,
+        ),
+        (
+            FemCellTypeIR::Tet4,
+            vec![4, 5, 6, 12],
+            FemCellMeshPartIR::TransitionAir,
+            0,
+        ),
+        (
+            FemCellTypeIR::Tet4,
+            vec![4, 6, 7, 12],
+            FemCellMeshPartIR::TransitionAir,
+            0,
+        ),
+        (
+            FemCellTypeIR::Tet4,
+            vec![0, 2, 1, 13],
+            FemCellMeshPartIR::TransitionAir,
+            0,
+        ),
+        (
+            FemCellTypeIR::Tet4,
+            vec![0, 3, 2, 13],
+            FemCellMeshPartIR::TransitionAir,
+            0,
+        ),
+        (
+            FemCellTypeIR::Tet4,
+            vec![1, 2, 8, 14],
+            FemCellMeshPartIR::FarAir,
+            0,
+        ),
+        (
+            FemCellTypeIR::Tet4,
+            vec![15, 17, 16, 18],
+            FemCellMeshPartIR::FarAir,
+            0,
+        ),
+        (
+            FemCellTypeIR::Tet4,
+            vec![19, 21, 20, 22],
+            FemCellMeshPartIR::FarAir,
+            0,
+        ),
+        (
+            FemCellTypeIR::Tet4,
+            vec![23, 25, 24, 26],
+            FemCellMeshPartIR::FarAir,
+            0,
+        ),
+    ];
+    let mut cell_offsets = vec![0];
+    let mut cell_nodes = Vec::new();
+    for (_, nodes, _, _) in &cells {
+        cell_nodes.extend(nodes);
+        cell_offsets.push(cell_nodes.len() as u32);
+    }
+    let mut mesh = MeshIR {
+        mesh_name: "mixed-certified-reorder".to_string(),
+        nodes: vec![
+            [-1.0, -1.0, -1.0],
+            [1.0, -1.0, -1.0],
+            [1.0, 1.0, -1.0],
+            [-1.0, 1.0, -1.0],
+            [-1.0, -1.0, 1.0],
+            [1.0, -1.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [-1.0, 1.0, 1.0],
+            [2.0, 0.0, 0.0],
+            [-2.0, 0.0, 0.0],
+            [0.0, 2.0, 0.0],
+            [0.0, -2.0, 0.0],
+            [0.0, 0.0, 2.0],
+            [0.0, 0.0, -2.0],
+            [2.0, 0.0, -2.0],
+            [-2.0, -2.0, -2.0],
+            [2.0, 2.0, -2.0],
+            [2.0, -2.0, 2.0],
+            [-2.0, 1.0, 1.0],
+            [-2.0, -2.0, -2.0],
+            [2.0, 2.0, -2.0],
+            [2.0, -2.0, 2.0],
+            [-2.0, 1.0, 1.0],
+            [-2.0, -2.0, -2.0],
+            [2.0, 2.0, -2.0],
+            [2.0, -2.0, 2.0],
+            [-2.0, 0.875, 0.875],
+        ],
+        cells: FemConnectivityIR {
+            types: cells.iter().map(|cell| cell.0).collect(),
+            offsets: cell_offsets,
+            nodes: cell_nodes,
+            global_ordinals: (0..cells.len() as u64).collect(),
+            mesh_parts: cells.iter().map(|cell| cell.2).collect(),
+        },
+        element_markers: cells.iter().map(|cell| cell.3).collect(),
+        facets: FemFacetConnectivityIR::empty(),
+        boundary_markers: Vec::new(),
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    };
+    let local_faces: &[&[&[usize]]] = &[
+        &[&[0, 2, 1], &[0, 1, 3], &[1, 2, 3], &[2, 0, 3]],
+        &[
+            &[0, 2, 1],
+            &[3, 4, 5],
+            &[0, 1, 4, 3],
+            &[1, 2, 5, 4],
+            &[2, 0, 3, 5],
+        ],
+        &[
+            &[0, 3, 2, 1],
+            &[0, 1, 4],
+            &[1, 2, 4],
+            &[2, 3, 4],
+            &[3, 0, 4],
+        ],
+        &[
+            &[0, 3, 2, 1],
+            &[4, 5, 6, 7],
+            &[0, 1, 5, 4],
+            &[1, 2, 6, 5],
+            &[2, 3, 7, 6],
+            &[3, 0, 4, 7],
+        ],
+    ];
+    let mut adjacency = BTreeMap::<Vec<u32>, Vec<(usize, u32)>>::new();
+    for (ordinal, cell_type) in mesh.cells.types.iter().enumerate() {
+        let family = match cell_type {
+            FemCellTypeIR::Tet4 => local_faces[0],
+            FemCellTypeIR::Prism6 => local_faces[1],
+            FemCellTypeIR::Pyramid5 => local_faces[2],
+            FemCellTypeIR::Hex8 => local_faces[3],
+        };
+        let nodes = mesh.cells.item_nodes(ordinal).unwrap();
+        for face in family {
+            let mut key = face.iter().map(|index| nodes[*index]).collect::<Vec<_>>();
+            key.sort_unstable();
+            adjacency
+                .entry(key)
+                .or_default()
+                .push((ordinal, mesh.element_markers[ordinal]));
+        }
+    }
+    let mut offsets = vec![0];
+    for (face, owners) in adjacency {
+        let role_marker = if owners.len() == 1 {
+            Some((FemFacetRoleIR::Exterior, 3))
+        } else if owners.len() == 2 && owners[0].1 != owners[1].1 {
+            Some((FemFacetRoleIR::MaterialInterface, 2))
+        } else {
+            None
+        };
+        if let Some((role, marker)) = role_marker {
+            mesh.facets.types.push(if face.len() == 3 {
+                FemFacetTypeIR::Tri3
+            } else {
+                FemFacetTypeIR::Quad4
+            });
+            mesh.facets.roles.push(role);
+            mesh.facets.nodes.extend(face);
+            offsets.push(mesh.facets.nodes.len() as u32);
+            mesh.boundary_markers.push(marker);
+        }
+    }
+    mesh.facets.offsets = offsets;
+    mesh.facets.global_ordinals = (0..mesh.facets.types.len() as u64).collect();
+    let fingerprint = mesh.topology_fingerprint_v6();
+    let mut certificate: serde_json::Value = serde_json::from_str(
+        r#"{
+            "schema_version":"mixed_layer_topology_certificate.v1","certificate_status":"accepted",
+            "requested_sweep_direction":"z","resolved_sweep_direction":"z",
+            "requested_layer_count":1,"realized_layer_count":1,
+            "magnetic_plane_coordinates_m":[-1.0,1.0],"plane_tolerance_m":2.0e-8,
+            "transition_shell_thickness_m":1.0,"transition_shell_interface_tri3_count":1,
+            "interface_marker":2,"outer_boundary_marker":3,
+            "magnetic_bounds_min_m":[-1.0,-1.0,-1.0],"magnetic_bounds_max_m":[1.0,1.0,1.0],
+            "airbox_bounds_min_m":[-2.0,-2.0,-2.0],"airbox_bounds_max_m":[2.0,2.0,2.0],
+            "magnetic_bounds_relative_error":0.0,"airbox_bounds_relative_error":0.0,
+            "cell_family_counts_by_marker":{"0":{"pyramid5":4,"tet4":8},"1":{"prism6":2}},
+            "cell_family_counts_by_part":{"far_air":{"tet4":4},"magnetic":{"prism6":2},"transition_air":{"pyramid5":4,"tet4":4}},
+            "facet_family_counts_by_role_marker":{"exterior:3":{"tri3":38},"material_interface:2":{"quad4":4,"tri3":4}},
+            "jacobian_minima_m3_by_family":{"prism6":3.999999999999999,"pyramid5":0.20779754131836622,"tet4":4.0},
+            "quality_metric":"tetra_decomposition_scaled_jacobian.v1",
+            "scaled_jacobian_minima_by_family":{"prism6":0.4082482904638629,"pyramid5":0.40824829046386296,"tet4":0.40824829046386296},
+            "scaled_jacobian_p05_by_family":{"prism6":0.4311862178478971,"pyramid5":0.40824829046386296,"tet4":0.40824829046386296},
+            "magnetic_volume_m3":8.0,"expected_magnetic_volume_m3":8.0,
+            "magnetic_relative_volume_error":0.0,"air_volume_m3":56.0,
+            "shared_domain_volume_m3":64.0,"expected_shared_domain_volume_m3":64.0,
+            "shared_domain_relative_volume_error":0.0,"marker_coverage_complete":true,
+            "nonconforming_face_count":0,"orphan_face_count":0,"nonmanifold_face_count":0,
+            "coincident_interface_face_count":0,"topology_fingerprint_version":"v2",
+            "topology_fingerprint":"placeholder","gmsh_version":"4.15.2",
+            "strategy":"shared_geo_extrusion_partitioned_pyramid_tet.v2","effective_gmsh_thread_count":1,
+            "deterministic_inputs":{"algorithm_2d":6,"algorithm_3d":1,"element_order":1,"gmsh_version":"4.15.2","random_factor":0.0,"thread_count":1,"transition_partition":"cartesian_3x3x3_minus_magnetic_center","transition_volume_count":26,"pyramid_apex_optimizer":"bounded_per_apex_outward_scale_line_search","pyramid_apex_scale_step":0.001,"pyramid_apex_scale_max":1.25,"scaled_jacobian_p05_min":0.1},
+            "fallbacks_triggered":[]
+        }"#,
+    )
+    .unwrap();
+    certificate["topology_fingerprint"] = serde_json::json!(fingerprint);
+    let certificate = serde_json::from_value(certificate).unwrap();
+    let region_markers = vec![fullmag_ir::FemDomainRegionMarkerIR {
+        geometry_name: "strip".to_string(),
+        marker: 1,
+    }];
+    fullmag_ir::FemDomainMeshAssetIR {
+        mesh_source: None,
+        mesh: Some(mesh),
+        region_markers: region_markers.clone(),
+        object_region_markers: Vec::new(),
+        build_report: Some(fullmag_ir::FemSharedDomainBuildReportIR {
+            build_mode: "shared_domain".to_string(),
+            fallbacks_triggered: Vec::new(),
+            effective_airbox_target: None,
+            effective_airbox_hmax: None,
+            effective_per_object_targets: std::collections::HashMap::new(),
+            region_markers,
+            object_region_markers: Vec::new(),
+            used_size_field_kinds: Vec::new(),
+            size_fields_realized: Vec::new(),
+            operation_statuses: Vec::new(),
+            thin_film_diagnostics: Vec::new(),
+            magnetic_submesh_signatures: Vec::new(),
+            selector_resolution: Vec::new(),
+            orphan_entities: Vec::new(),
+            rejected_element_types: Vec::new(),
+            degraded: false,
+            authored_regions_count: Some(1),
+            realized_regions_count: Some(1),
+            mixed_layer_topology_certificate: Some(certificate),
+        }),
+    }
+}
+
+#[test]
+fn fem_planner_rejects_repacking_a_mesh_with_a_carried_mixed_certificate() {
+    let mut ir = fem_minimal_test_ir();
+    let asset = valid_mixed_certificate_asset();
+    asset
+        .validate()
+        .expect("mixed certificate fixture must be valid");
+    let source_mesh = asset
+        .mesh
+        .as_ref()
+        .expect("fixture must carry an inline mesh");
+    let analysis = crate::mesh::analyze_shared_domain_mesh(source_mesh, &asset.region_markers)
+        .expect("valid mixed fixture must be analyzable");
+    let (packed_mesh, _, _) = crate::mesh::pack_mesh_by_analysis(source_mesh, &analysis)
+        .expect("valid mixed fixture must be packable");
+    assert_ne!(
+        source_mesh.topology_fingerprint_v6(),
+        packed_mesh.topology_fingerprint_v6()
+    );
+    ir.geometry_assets.as_mut().unwrap().fem_domain_mesh_asset = Some(asset);
+    ir.validate()
+        .expect("problem with valid mixed certificate must pass IR validation");
+
+    let error = plan(&ir)
+        .expect_err("planner must not repack a certified mesh without recomputing its certificate");
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("cannot pack/reorder mixed-certified mesh")),
+        "{:?}",
+        error.reasons
+    );
+}
+
 #[test]
 fn fem_planner_elementwise_material_legality_distinguishes_a_from_ms() {
     let planned = plan(&fem_minimal_test_ir()).expect("baseline FEM plan must be legal");

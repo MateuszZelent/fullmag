@@ -1265,6 +1265,16 @@ pub(crate) fn resolve_fem_domain_mesh_asset(
     let region_entries = shared_domain_region_entries_for_problem(&mesh, problem, asset);
     let analysis = analyze_shared_domain_mesh_with_entries(&mesh, region_entries)?;
     validate_packing_constraints(&analysis, &mesh.mesh_name, solver_supports_conformal)?;
+    if let Some(certificate) = asset
+        .build_report
+        .as_ref()
+        .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
+    {
+        return Err(format!(
+            "shared-domain FEM mesh '{}' cannot pack/reorder mixed-certified mesh '{}' without canonical certificate recomputation",
+            mesh.mesh_name, certificate.topology_fingerprint
+        ));
+    }
     let (mesh, object_segments, mesh_parts) = pack_mesh_by_analysis(&mesh, &analysis)?;
     Ok(Some(ResolvedFemDomainMeshAsset {
         mesh,

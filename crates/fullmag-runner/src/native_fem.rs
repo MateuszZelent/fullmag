@@ -233,6 +233,7 @@ fn optional_slice_ptr<T>(slice: &[T]) -> *const T {
     }
 }
 
+#[cfg(feature = "fem-gpu")]
 struct PackedNativeMesh {
     nodes_xyz: Vec<f64>,
     cell_types: Vec<u32>,
@@ -242,6 +243,7 @@ struct PackedNativeMesh {
     periodic_boundary_pair_markers: Vec<u32>,
 }
 
+#[cfg(feature = "fem-gpu")]
 impl PackedNativeMesh {
     fn new(mesh: &fullmag_ir::MeshIR) -> Self {
         Self {

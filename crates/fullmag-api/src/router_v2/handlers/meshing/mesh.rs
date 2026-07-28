@@ -4252,6 +4252,17 @@ fn subset_part_payload(
     part: &FemMeshPartPayload,
     mesh_suffix: &str,
 ) -> Result<FemMeshPayload, String> {
+    let has_cell_mesh_parts = !mesh.cells.mesh_parts.is_empty();
+    if has_cell_mesh_parts && mesh.cells.mesh_parts.len() != mesh.cells.types.len() {
+        return Err(malformed_part_topology(
+            part,
+            format!(
+                "cell mesh parts length {} does not match cell count {}",
+                mesh.cells.mesh_parts.len(),
+                mesh.cells.types.len()
+            ),
+        ));
+    }
     let source_node_indices = collect_part_source_node_indices(mesh, part)?;
     let mut node_map = HashMap::with_capacity(source_node_indices.len());
     let mut nodes = Vec::with_capacity(source_node_indices.len());
@@ -4307,7 +4318,17 @@ fn subset_part_payload(
         cell_types.push(cell_type);
         cell_offsets.push(cell_nodes.len() as u32);
         cell_global_ordinals.push(global_ordinal);
-        if let Some(mesh_part) = mesh.cells.mesh_parts.get(source_element_index) {
+        if has_cell_mesh_parts {
+            let mesh_part = mesh
+                .cells
+                .mesh_parts
+                .get(source_element_index)
+                .ok_or_else(|| {
+                    malformed_part_topology(
+                        part,
+                        format!("missing cell mesh part at index {source_element_index}"),
+                    )
+                })?;
             cell_mesh_parts.push(*mesh_part);
         }
         if let Some(marker) = mesh.element_markers.get(source_element_index) {
@@ -4731,6 +4752,63 @@ mod tests {
             vec![[0, 1, 3]]
         );
         assert_eq!(part_mesh.mesh_parts[0].node_count, 4);
+    }
+
+    #[test]
+    fn subset_part_mesh_rejects_truncated_cell_mesh_parts() {
+        let mesh = FemMeshPayload {
+            mesh_name: "shared".to_string(),
+            mesh_id: "shared:1".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.0, 0.0, -1.0],
+            ],
+            cells: fullmag_ir::FemConnectivityIR {
+                types: vec![fullmag_ir::FemCellTypeIR::Tet4; 2],
+                offsets: vec![0, 4, 8],
+                nodes: vec![0, 1, 2, 3, 0, 1, 2, 4],
+                global_ordinals: vec![0, 1],
+                mesh_parts: vec![fullmag_ir::FemCellMeshPartIR::Magnetic],
+            },
+            element_markers: vec![1, 0],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 3], [0, 1, 4]]),
+            boundary_markers: vec![10, 99],
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            object_segments: Vec::new(),
+            mesh_parts: vec![FemMeshPartPayload {
+                id: "part:__air__".to_string(),
+                label: "Airbox".to_string(),
+                role: "air".to_string(),
+                object_id: None,
+                geometry_id: None,
+                material_id: None,
+                element_start: 1,
+                element_count: 1,
+                boundary_face_start: 1,
+                boundary_face_count: 1,
+                boundary_face_indices: Vec::new(),
+                node_start: 4,
+                node_count: 4,
+                node_indices: vec![0, 1, 2, 4],
+                facet_global_ordinals: Vec::new(),
+                bounds_min: None,
+                bounds_max: None,
+            }],
+            domain_mesh_mode: Some("shared_domain_mesh_with_air".to_string()),
+            domain_frame: None,
+            generation_id: None,
+            per_domain_quality: HashMap::new(),
+            build_report: None,
+        };
+
+        let error = subset_part_mesh(&mesh, "part:__air__")
+            .expect_err("truncated cell mesh parts must fail closed");
+
+        assert!(error.contains("cell mesh parts length 1 does not match cell count 2"));
     }
 
     #[test]

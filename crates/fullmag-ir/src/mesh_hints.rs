@@ -2327,7 +2327,10 @@ fn mapped_jacobian_determinant(coordinates: &[[f64; 3]], derivatives: &[[f64; 3]
     determinant3(jacobian)
 }
 
-fn cell_jacobian_determinants(cell_type: FemCellTypeIR, coordinates: &[[f64; 3]]) -> Vec<f64> {
+pub(crate) fn cell_jacobian_determinants(
+    cell_type: FemCellTypeIR,
+    coordinates: &[[f64; 3]],
+) -> Vec<f64> {
     let q = 1.0 / 3.0_f64.sqrt();
     match cell_type {
         FemCellTypeIR::Tet4 => vec![determinant3([

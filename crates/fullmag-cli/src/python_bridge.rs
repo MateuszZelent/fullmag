@@ -471,6 +471,39 @@ impl RemeshCliResponse {
                     artifact.path.display()
                 )
             })?;
+        let report_certificate = self
+            .shared_domain_build_report
+            .as_ref()
+            .and_then(|report| report.mixed_layer_topology_certificate.as_ref());
+        if let (Some(inline), Some(in_report)) = (
+            self.mixed_layer_topology_certificate.as_ref(),
+            report_certificate,
+        ) {
+            anyhow::ensure!(
+                inline == in_report,
+                "mixed layer topology certificate differs between inline topology and build report"
+            );
+        }
+        anyhow::ensure!(
+            topology.mixed_layer_topology_certificate.is_some()
+                || (self.mixed_layer_topology_certificate.is_none()
+                    && report_certificate.is_none()),
+            "topology artifact is missing a mixed layer topology certificate carried by inline topology or the shared-domain build report"
+        );
+        if let Some(in_artifact) = topology.mixed_layer_topology_certificate.as_ref() {
+            if let Some(inline) = self.mixed_layer_topology_certificate.as_ref() {
+                anyhow::ensure!(
+                    inline == in_artifact,
+                    "mixed layer topology certificate differs between inline topology and artifact"
+                );
+            }
+            if let Some(in_report) = report_certificate {
+                anyhow::ensure!(
+                    in_report == in_artifact,
+                    "mixed layer topology certificate differs between build report and artifact"
+                );
+            }
+        }
         let (cells, facets) = topology.topology.normalize().map_err(anyhow::Error::msg)?;
         self.nodes = topology.nodes;
         self.cells = cells;
@@ -1453,32 +1486,34 @@ mod tests {
     use crate::simulation_preparation::PreparationStageId;
 
     fn valid_mixed_remesh_payload() -> serde_json::Value {
-        let mut payload = serde_json::json!({
+        let mut payload: serde_json::Value = serde_json::from_str(r#"{
             "mesh_name": "qualified_mixed",
             "nodes": [
-                [0.0,0.0,0.0],[1.0,0.0,0.0],[0.0,1.0,0.0],
-                [0.0,0.0,1.0],[1.0,0.0,1.0],[0.0,1.0,1.0],
-                [3.0,-1.0,0.0],[5.0,-1.0,0.0],[5.0,1.0,0.0],
-                [3.0,1.0,0.0],[4.0,0.0,1.0],
-                [7.0,0.0,0.0],[8.0,0.0,0.0],[7.0,1.0,0.0],[7.0,0.0,1.0]
+                [-1.0,-1.0,-1.0],[1.0,-1.0,-1.0],[1.0,1.0,-1.0],[-1.0,1.0,-1.0],
+                [-1.0,-1.0,1.0],[1.0,-1.0,1.0],[1.0,1.0,1.0],[-1.0,1.0,1.0],
+                [2.0,0.0,0.0],[-2.0,0.0,0.0],[0.0,2.0,0.0],[0.0,-2.0,0.0],
+                [0.0,0.0,2.0],[0.0,0.0,-2.0],[2.0,0.0,-2.0],
+                [-2.0,-2.0,-2.0],[2.0,2.0,-2.0],[2.0,-2.0,2.0],[-2.0,1.0,1.0],
+                [-2.0,-2.0,-2.0],[2.0,2.0,-2.0],[2.0,-2.0,2.0],[-2.0,1.0,1.0],
+                [-2.0,-2.0,-2.0],[2.0,2.0,-2.0],[2.0,-2.0,2.0],[-2.0,0.875,0.875]
             ],
-            "cell_types": ["prism6","pyramid5","tet4"],
-            "cell_offsets": [0,6,11,15],
-            "cell_nodes": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14],
-            "cell_global_ordinals": [0,1,2],
-            "cell_mesh_parts": ["magnetic","transition_air","far_air"],
-            "element_markers": [1,0,0],
-            "facet_types": ["tri3","quad4","quad4","tri3"],
-            "facet_roles": ["material_interface","exterior","exterior","exterior"],
-            "facet_offsets": [0,3,7,11,14],
-            "facet_nodes": [0,1,2,0,1,4,3,6,7,8,9,11,12,13],
-            "facet_global_ordinals": [0,1,2,3],
-            "boundary_markers": [2,3,3,3],
+            "cell_types": ["prism6","prism6","pyramid5","pyramid5","pyramid5","pyramid5","tet4","tet4","tet4","tet4","tet4","tet4","tet4","tet4"],
+            "cell_offsets": [0,6,12,17,22,27,32,36,40,44,48,52,56,60,64],
+            "cell_nodes": [0,1,2,4,5,6,0,2,3,4,6,7,1,2,6,5,8,0,4,7,3,9,2,3,7,6,10,0,1,5,4,11,4,5,6,12,4,6,7,12,0,2,1,13,0,3,2,13,1,2,8,14,15,17,16,18,19,21,20,22,23,25,24,26],
+            "cell_global_ordinals": [0,1,2,3,4,5,6,7,8,9,10,11,12,13],
+            "cell_mesh_parts": ["magnetic","magnetic","transition_air","transition_air","transition_air","transition_air","transition_air","transition_air","transition_air","transition_air","far_air","far_air","far_air","far_air"],
+            "element_markers": [1,1,0,0,0,0,0,0,0,0,0,0,0,0],
+            "facet_types": ["tri3","quad4","tri3","tri3","tri3","quad4","tri3","tri3","tri3","tri3","quad4","tri3","tri3","tri3","tri3","tri3","quad4","tri3","tri3","tri3","tri3","tri3","tri3","tri3","tri3","tri3","tri3","tri3","tri3","tri3","tri3","tri3","tri3","tri3","tri3","tri3","tri3","tri3","tri3","tri3","tri3","tri3","tri3","tri3","tri3","tri3"],
+            "facet_roles": ["material_interface","material_interface","exterior","exterior","material_interface","material_interface","exterior","exterior","exterior","exterior","material_interface","exterior","exterior","exterior","exterior","exterior","material_interface","exterior","exterior","exterior","exterior","exterior","exterior","exterior","material_interface","exterior","exterior","material_interface","exterior","exterior","exterior","exterior","exterior","exterior","exterior","exterior","exterior","exterior","exterior","exterior","exterior","exterior","exterior","exterior","exterior","exterior"],
+            "facet_offsets": [0,3,7,10,13,16,20,23,26,29,32,36,39,42,45,48,51,55,58,61,64,67,70,73,76,79,82,85,88,91,94,97,100,103,106,109,112,115,118,121,124,127,130,133,136,139,142],
+            "facet_nodes": [0,1,2,0,1,4,5,0,1,11,0,1,13,0,2,3,0,3,4,7,0,3,9,0,3,13,0,4,9,0,4,11,1,2,5,6,1,2,13,1,2,14,1,5,8,1,5,11,1,8,14,2,3,6,7,2,3,10,2,3,13,2,6,8,2,6,10,2,8,14,3,7,9,3,7,10,4,5,6,4,5,11,4,5,12,4,6,7,4,7,9,4,7,12,5,6,8,5,6,12,6,7,10,6,7,12,15,16,17,15,16,18,15,17,18,16,17,18,19,20,21,19,20,22,19,21,22,20,21,22,23,24,25,23,24,26,23,25,26,24,25,26],
+            "facet_global_ordinals": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45],
+            "boundary_markers": [2,2,3,3,2,2,3,3,3,3,2,3,3,3,3,3,2,3,3,3,3,3,3,3,2,3,3,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],
             "periodic_boundary_pairs": [],
             "periodic_node_pairs": [],
             "periodic_mesh_certificate": null,
             "quality": null
-        });
+        }"#).unwrap();
         let mesh: fullmag_ir::MeshIR = serde_json::from_value(serde_json::json!({
             "mesh_name": payload["mesh_name"].clone(),
             "nodes": payload["nodes"].clone(),
@@ -1501,21 +1536,21 @@ mod tests {
             "schema_version":"mixed_layer_topology_certificate.v1","certificate_status":"accepted",
             "requested_sweep_direction":"z","resolved_sweep_direction":"z",
             "requested_layer_count":1,"realized_layer_count":1,
-            "magnetic_plane_coordinates_m":[0.0,1.0],"plane_tolerance_m":1e-12,
+            "magnetic_plane_coordinates_m":[-1.0,1.0],"plane_tolerance_m":2e-8,
             "transition_shell_thickness_m":1.0,"transition_shell_interface_tri3_count":1,
             "interface_marker":2,"outer_boundary_marker":3,
-            "magnetic_bounds_min_m":[0.0,0.0,0.0],"magnetic_bounds_max_m":[1.0,1.0,1.0],
-            "airbox_bounds_min_m":[-1.0,-1.0,-1.0],"airbox_bounds_max_m":[2.0,2.0,2.0],
+            "magnetic_bounds_min_m":[-1.0,-1.0,-1.0],"magnetic_bounds_max_m":[1.0,1.0,1.0],
+            "airbox_bounds_min_m":[-2.0,-2.0,-2.0],"airbox_bounds_max_m":[2.0,2.0,2.0],
             "magnetic_bounds_relative_error":0.0,"airbox_bounds_relative_error":0.0,
-            "cell_family_counts_by_marker":{"0":{"pyramid5":1,"tet4":1},"1":{"prism6":1}},
-            "cell_family_counts_by_part":{"magnetic":{"prism6":1},"transition_air":{"pyramid5":1},"far_air":{"tet4":1}},
-            "facet_family_counts_by_role_marker":{"exterior:3":{"quad4":2,"tri3":1},"material_interface:2":{"tri3":1}},
-            "jacobian_minima_m3_by_family":{"prism6":1.0,"pyramid5":1.0,"tet4":1.0},
+            "cell_family_counts_by_marker":{"0":{"pyramid5":4,"tet4":8},"1":{"prism6":2}},
+            "cell_family_counts_by_part":{"far_air":{"tet4":4},"magnetic":{"prism6":2},"transition_air":{"pyramid5":4,"tet4":4}},
+            "facet_family_counts_by_role_marker":{"exterior:3":{"tri3":38},"material_interface:2":{"quad4":4,"tri3":4}},
+            "jacobian_minima_m3_by_family":{"prism6":3.999999999999999,"pyramid5":0.20779754131836622,"tet4":4.0},
             "quality_metric":"tetra_decomposition_scaled_jacobian.v1",
-            "scaled_jacobian_minima_by_family":{"prism6":1.0,"pyramid5":1.0,"tet4":1.0},
-            "scaled_jacobian_p05_by_family":{"prism6":1.0,"pyramid5":1.0,"tet4":1.0},
-            "magnetic_volume_m3":1.0,"expected_magnetic_volume_m3":1.0,"magnetic_relative_volume_error":0.0,
-            "air_volume_m3":1.0,"shared_domain_volume_m3":2.0,"expected_shared_domain_volume_m3":2.0,
+            "scaled_jacobian_minima_by_family":{"prism6":0.4082482904638629,"pyramid5":0.40824829046386296,"tet4":0.40824829046386296},
+            "scaled_jacobian_p05_by_family":{"prism6":0.4311862178478971,"pyramid5":0.40824829046386296,"tet4":0.40824829046386296},
+            "magnetic_volume_m3":8.0,"expected_magnetic_volume_m3":8.0,"magnetic_relative_volume_error":0.0,
+            "air_volume_m3":56.0,"shared_domain_volume_m3":64.0,"expected_shared_domain_volume_m3":64.0,
             "shared_domain_relative_volume_error":0.0,"marker_coverage_complete":true,
             "nonconforming_face_count":0,"orphan_face_count":0,"nonmanifold_face_count":0,"coincident_interface_face_count":0,
             "topology_fingerprint_version":"v2","topology_fingerprint":"placeholder","gmsh_version":"4.15.2",
@@ -1948,7 +1983,7 @@ mod tests {
             .and_then(|value| value.get("shared_domain_build_report"))
             .and_then(|value| value.get("mixed_layer_topology_certificate"))
             .is_some());
-        assert_eq!(parsed.clone().into_mesh_ir().cells.mesh_parts.len(), 3);
+        assert_eq!(parsed.clone().into_mesh_ir().cells.mesh_parts.len(), 14);
 
         let mut top_level_only = payload;
         top_level_only
@@ -1991,7 +2026,7 @@ mod tests {
             "artifact mixed remesh output",
         )
         .unwrap();
-        assert_eq!(parsed.cells.mesh_parts.len(), 3);
+        assert_eq!(parsed.cells.mesh_parts.len(), 14);
         assert!(parsed
             .shared_domain_build_report
             .as_ref()
@@ -2004,6 +2039,83 @@ mod tests {
             .and_then(|value| value.get("mixed_layer_topology_certificate"))
             .is_some());
         let _ = std::fs::remove_file(artifact_path);
+    }
+
+    #[test]
+    fn mixed_wire_rejects_conflicting_inline_and_artifact_certificates() {
+        let payload = valid_mixed_remesh_payload();
+        let artifact_path = std::env::temp_dir().join(format!(
+            "fullmag-conflicting-mixed-topology-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut artifact = payload.clone();
+        artifact.as_object_mut().unwrap().remove("mesh_provenance");
+        artifact.as_object_mut().unwrap().remove("quality");
+        artifact["mixed_layer_topology_certificate"]["plane_tolerance_m"] =
+            serde_json::json!(2.0e-12);
+        std::fs::write(&artifact_path, artifact.to_string()).unwrap();
+        let stdout = serde_json::json!({
+            "mesh_name": "qualified_mixed",
+            "nodes": [], "elements": [], "element_markers": [],
+            "boundary_faces": [], "boundary_markers": [], "quality": null,
+            "mixed_layer_topology_certificate": payload["mixed_layer_topology_certificate"].clone(),
+            "mesh_provenance": {"shared_domain_build_report": {"build_mode": "shared_domain"}},
+            "topology_artifact": {"path": artifact_path}
+        });
+
+        let result = parse_remesh_cli_response(
+            stdout.to_string().as_bytes(),
+            "conflicting artifact mixed remesh output",
+        );
+        let _ = std::fs::remove_file(artifact_path);
+        let error = result.expect_err("conflicting inline and artifact certificates must fail");
+
+        assert!(format!("{error:#}").contains("differs"));
+    }
+
+    #[test]
+    fn mixed_wire_rejects_artifact_missing_inline_and_report_certificate() {
+        let payload = valid_mixed_remesh_payload();
+        let artifact_path = std::env::temp_dir().join(format!(
+            "fullmag-missing-mixed-certificate-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut artifact = payload.clone();
+        artifact.as_object_mut().unwrap().remove("mesh_provenance");
+        artifact.as_object_mut().unwrap().remove("quality");
+        artifact
+            .as_object_mut()
+            .unwrap()
+            .remove("mixed_layer_topology_certificate");
+        std::fs::write(&artifact_path, artifact.to_string()).unwrap();
+        let stdout = serde_json::json!({
+            "mesh_name": "qualified_mixed",
+            "nodes": [], "elements": [], "element_markers": [],
+            "boundary_faces": [], "boundary_markers": [], "quality": null,
+            "mixed_layer_topology_certificate": payload["mixed_layer_topology_certificate"].clone(),
+            "mesh_provenance": payload["mesh_provenance"].clone(),
+            "topology_artifact": {"path": artifact_path}
+        });
+
+        let result = parse_remesh_cli_response(
+            stdout.to_string().as_bytes(),
+            "missing artifact mixed certificate output",
+        );
+        let _ = std::fs::remove_file(artifact_path);
+        let error = result.expect_err(
+            "artifact must not omit a certificate carried by inline topology and build report",
+        );
+
+        assert!(format!("{error:#}")
+            .contains("topology artifact is missing a mixed layer topology certificate"));
     }
 
     #[test]
