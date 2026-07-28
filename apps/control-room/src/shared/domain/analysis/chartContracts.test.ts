@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { DATA_TABLE_ROWS_PATH } from "@/kernel/api/apiPaths";
+
 import {
   assertChartDescriptor,
   type ChartDescriptor,
@@ -16,7 +18,7 @@ function descriptor(): ChartDescriptor {
     kind: "history",
     title: "Scalar history",
     source: {
-      resourceKey: "/v2/sessions/current/data/tables/default/rows",
+      resourceKey: DATA_TABLE_ROWS_PATH,
       resourceRevision: 4,
       runId: "run-1",
       stageId: "stage-1",

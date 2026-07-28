@@ -1348,6 +1348,21 @@ export function buildExplorerTree(
             icon: "wave",
             status: "ready",
           },
+          ...(resources.pinnedQuickChart
+            ? [{
+                badge: `${resources.pinnedQuickChart.yAxisIds.length} series`,
+                chartId: resources.pinnedQuickChart.chartId,
+                icon: "wave" as const,
+                id: `results:quick-charts:${resources.pinnedQuickChart.chartId}`,
+                kind: "results.quick_chart" as const,
+                label: "Quick Chart",
+                parentId: "results:root",
+                status: "ready" as const,
+                tableId: resources.pinnedQuickChart.tableId,
+                xAxisId: resources.pinnedQuickChart.xAxisId,
+                yAxisIds: resources.pinnedQuickChart.yAxisIds,
+              }]
+            : []),
         ],
       },
     ];

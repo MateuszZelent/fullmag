@@ -3,7 +3,7 @@
 
 - Status: production-executable for LLG/PG-BB/NCG; TPI under development
 - Owners: Fullmag core
-- Last updated: 2026-07-24
+- Last updated: 2026-07-27
 - Related ADRs:
   - `docs/adr/0001-physics-first-python-api.md`
 - Related specs:
@@ -551,7 +551,12 @@ prevents cancellation of a physical `1e-39 J` decrement by unrelated endpoint
 totals of order `1e-17 J`.
 
 The Armijo inequality, `c1`, BB1/BB2, restart, fresh-zero demag, rollback, and
-torque/energy tolerances do not change. A resolved uphill interval is rejected.
+torque/energy tolerances do not change. PG-BB and NCG use the same
+term-complete direct-increment owner and the same representable-chord right-hand
+side for every initial, preconditioned-restart, and raw-gradient-restart trial.
+The NCG search direction and PR+ update remain NCG-owned; sharing the Armijo
+oracle does not substitute PG-BB or accept a failed NCG step as success. A
+resolved uphill interval is rejected.
 An interval overlapping the Armijo threshold is refined by a supported
 uncertain owner or fails as numerical stagnation/non-convergence after state
 restoration. No energy noise window or absolute raw-gradient threshold is
@@ -560,7 +565,7 @@ introduced. The authoritative design and qualification contract is
 
 #### 3.2.2 Accepted-step Armijo proof telemetry
 
-Every accepted CPU/MFEM or CUDA PG-BB line-search step must export
+Every accepted CPU/MFEM or CUDA PG-BB or NCG line-search step must export
 `accepted_energy_proof_available=true` and the exact decision quantities
 produced by its native direct-increment owner. For an accepted trial, let
 `accepted_energy_delta_j` be the computed direct
@@ -591,7 +596,7 @@ step, or a later snapshot. The unversioned
 `fullmag_fem_step_stats` layout is unchanged. The runner copies the queried
 values into the accepted `solver_steps.csv` row. Rejected trials never produce solver-step
 rows and their candidate proof quantities must not leak into a later accepted
-row. LLG, TPI, and the current NCG implementation export
+row. LLG and TPI export
 `accepted_energy_proof_available=false`; their four optional artifact columns
 are empty, never synthetic zero. The runner and artifact writer preserve the native values but do not
 recompute the inequality.
@@ -609,13 +614,25 @@ the native line-search decision for that accepted step. They do not by
 themselves qualify long-horizon convergence, torque reduction, or agreement of
 recomputed total-energy trajectories.
 
-Current NCG caveat: its CPU recovery path still owns endpoint-total and
-monotone-recovery decisions, and its GPU restart helpers do not yet return the
-accepted direct-increment proof object. Migrating every CPU/GPU NCG acceptance
-and recovery route to one exact direct oracle is deferred. Until that migration
-is implemented and qualified, NCG must remain explicitly unavailable for this
-per-step proof contract and Task 8 must not infer proof values from its endpoint
-energies.
+NCG acceptance is covered by the same per-step proof contract. Its CPU initial,
+preconditioned-restart, and raw-gradient-restart routes call the shared CPU
+direct-increment and refinement owner. Its CUDA initial and forced-restart
+routes call the shared device direct-increment batch after precomputing the
+representable chord against the accepted-state `H_eff`. Every accepted route
+validates and publishes the exact proof before committing solver metadata.
+Endpoint-total subtraction and a monotone-total fallback are not legal NCG
+acceptance criteria. Exhaustion, a non-finite chord, an unchanged trial, or an
+unresolved direct-increment interval restores magnetization, cached fields,
+direction history, and accepted-proof state and fails closed.
+
+This 2026-07-27 amendment is confined to the FEM direct-minimizer line-search
+subsystem. It changes no energy equation, SI unit, public Python control,
+ProblemIR field, planner capability, execution selection, OpenAPI resource,
+workspace surface, tolerance, or provenance vocabulary. Validation requires
+CPU/CUDA source and derivative contracts, consumable accepted-proof telemetry,
+the three previously failing NCG interaction groups, and the existing broader
+physics/parity gates. A passing focused group is not by itself production
+qualification.
 
 #### 3.2.3 Representability-stationary termination
 
@@ -920,6 +937,7 @@ lane with explicit provenance; forced GPU rejects with a clear diagnostic.
 - [x] FEM backend (`projected_gradient_bb` and `nonlinear_cg` native mass-weighted minimizers, including demag at `rtol<=1e-12`)
 - [x] FEM backend (`projected_gradient_bb` and `nonlinear_cg` exchange-plus-mass preconditioned minimizers with serial MFEM CG as the production default and explicit Hypre/AMG opt-in for qualification)
 - [x] FEM PG-BB with demag production-qualified by direct polarized Armijo CPU/GPU interaction-matrix evidence
+- [x] FEM NCG initial/restart routes share the term-complete direct-increment and representable-chord Armijo proof contract on CPU/GPU
 - [x] FEM backend (`tangent_plane_implicit` native CPU/MFEM tangent-plane solve with exchange, local anisotropy, Zeeman, DMI, and demag linear-response actions)
 - [x] FEM GPU backend (`projected_gradient_bb` native CUDA tangent-gradient, mass-metric reduction, normalized-retraction kernels, Armijo/BB step source, native preflight/step boundary, and runner availability)
 - [x] FEM GPU backend (`nonlinear_cg` native CUDA tangent-gradient, mass-metric dot products, normalized retraction, Armijo/PR+ step source, persistent direction state, native preflight/step boundary, and runner availability)

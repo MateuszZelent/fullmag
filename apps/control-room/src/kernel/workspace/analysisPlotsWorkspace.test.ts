@@ -94,6 +94,16 @@ describe("analysisPlotsWorkspaceStore", () => {
     expect(analysisPlotsWorkspaceStore.getSnapshot().range).toBe(null);
   });
 
+  it("publishes a new local fit request without storing chart data", () => {
+    const initial = analysisPlotsWorkspaceStore.getSnapshot().fitRequest;
+
+    analysisPlotsWorkspaceStore.requestFitView();
+
+    const next = analysisPlotsWorkspaceStore.getSnapshot();
+    expect(next.fitRequest).toBe(initial + 1);
+    expect(JSON.stringify(next)).not.toContain("points");
+  });
+
   it("stores the selected chart cursor point as bounded semantic state", () => {
     const point = {
       label: "mx",

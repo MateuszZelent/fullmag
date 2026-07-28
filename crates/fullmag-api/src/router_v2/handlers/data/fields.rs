@@ -759,6 +759,22 @@ fn preview_cache_is_fresher(snapshot: &SessionStateResponse, quantity_id: &str) 
     preview_cache_precedes_latest(snapshot, quantity_id)
 }
 
+fn resolved_current_field_grid(
+    snapshot: &SessionStateResponse,
+    grid: Option<[u32; 3]>,
+    point_count: usize,
+) -> [u32; 3] {
+    match grid {
+        Some(grid) if snapshot.fem_mesh.is_some() && grid.contains(&0) => {
+            // Unstructured FEM geometry is carried by FMVP v3 topology metadata,
+            // while its grid header is the canonical linear node-count carrier.
+            [point_count as u32, 1, 1]
+        }
+        Some(grid) => grid,
+        None => [point_count as u32, 1, 1],
+    }
+}
+
 fn resolved_current_field_values(
     snapshot: &SessionStateResponse,
     quantity_id: &str,
@@ -772,33 +788,45 @@ fn resolved_current_field_values(
             } else {
                 values.len()
             };
-            let grid = json_field_grid(raw).unwrap_or([element_count as u32, 1, 1]);
+            let grid = resolved_current_field_grid(snapshot, json_field_grid(raw), element_count);
             let freshness = latest_json_field_freshness(snapshot, raw, quantity_id);
             Some((values, grid, freshness))
         }
         ResolvedCurrentFieldSource::Preview(field) => {
             let freshness = preview_field_freshness(snapshot, field);
+            let point_count = if n_comp > 0 {
+                field.vector_field_values.len() / n_comp
+            } else {
+                field.vector_field_values.len()
+            };
             Some((
                 field.vector_field_values.clone(),
-                field.preview_grid,
+                resolved_current_field_grid(snapshot, Some(field.preview_grid), point_count),
                 freshness,
             ))
         }
-        ResolvedCurrentFieldSource::LegacyLiveMagnetization { values, grid } => Some((
-            values.to_vec(),
-            grid,
-            completed_field_freshness(
-                current_source_step(snapshot),
-                current_source_step(snapshot),
-                field_quantity_revision(snapshot, quantity_id),
-                snapshot
-                    .live_state
-                    .as_ref()
-                    .map(|state| state.updated_at_unix_ms.min(u64::MAX as u128) as u64)
-                    .unwrap_or(0),
-                0,
-            ),
-        )),
+        ResolvedCurrentFieldSource::LegacyLiveMagnetization { values, grid } => {
+            let point_count = if n_comp > 0 {
+                values.len() / n_comp
+            } else {
+                values.len()
+            };
+            Some((
+                values.to_vec(),
+                resolved_current_field_grid(snapshot, Some(grid), point_count),
+                completed_field_freshness(
+                    current_source_step(snapshot),
+                    current_source_step(snapshot),
+                    field_quantity_revision(snapshot, quantity_id),
+                    snapshot
+                        .live_state
+                        .as_ref()
+                        .map(|state| state.updated_at_unix_ms.min(u64::MAX as u128) as u64)
+                        .unwrap_or(0),
+                    0,
+                ),
+            ))
+        }
     }
 }
 

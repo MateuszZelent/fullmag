@@ -277,13 +277,14 @@ pub use solver_profile::{
 pub use types::{
     fem_eigen_mesh_generation_id, fem_frequency_response_mesh_generation_id,
     fem_mesh_topology_fingerprint, fem_plan_mesh_generation_id, live_preview_values_sha256,
-    ExecutionProvenance, FemEigenRunResult, FemMeshObjectSegment, FemMeshPartPayload,
-    FemMeshPayload, InitialTimestepReason, LegacyDtPolicy, LiveFieldMaterializationState,
-    LiveFieldMaterializationStatus, LivePreviewField, LivePreviewRequest, LiveVectorFieldSnapshot,
-    LlgTimestepCapabilityId, LlgTimestepQualificationId, RequestedTimestepPolicy, ResolvedFallback,
-    ResolvedTimestepPolicy, RunError, RunResult, RunStatus, RuntimeEngineInfo, SolverAttemptRecord,
-    StageFemMeshAsset, StageFemMeshIdentity, StepAction, StepStats, StepUpdate, TimestepBackend,
-    TimestepDevice, TimestepExecutionIdentity, TimestepPolicyProvenance, TimestepValidationState,
+    ExecutionProvenance, FemCrossoverDecision, FemEigenRunResult, FemMeshObjectSegment,
+    FemMeshPartPayload, FemMeshPayload, InitialTimestepReason, LegacyDtPolicy,
+    LiveFieldMaterializationState, LiveFieldMaterializationStatus, LivePreviewField,
+    LivePreviewRequest, LiveVectorFieldSnapshot, LlgTimestepCapabilityId,
+    LlgTimestepQualificationId, RequestedTimestepPolicy, ResolvedFallback, ResolvedTimestepPolicy,
+    RunError, RunResult, RunStatus, RuntimeEngineInfo, SolverAttemptRecord, StageFemMeshAsset,
+    StageFemMeshIdentity, StepAction, StepStats, StepUpdate, TimestepBackend, TimestepDevice,
+    TimestepExecutionIdentity, TimestepPolicyProvenance, TimestepValidationState,
 };
 
 use crate::capabilities::{
@@ -315,6 +316,7 @@ pub struct ResolvedSessionRuntime {
     pub resolved_engine_id: Option<String>,
     pub resolved_worker: Option<String>,
     pub resolved_fallback: Option<ResolvedFallback>,
+    pub fem_crossover_decision: Option<FemCrossoverDecision>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -1233,6 +1235,15 @@ pub(crate) fn attach_resolved_fallback_to_executed_run(
     }
 }
 
+pub(crate) fn attach_fem_crossover_decision_to_executed_run(
+    executed: &mut crate::types::ExecutedRun,
+    decision: Option<FemCrossoverDecision>,
+) {
+    if executed.provenance.fem_crossover_decision.is_none() {
+        executed.provenance.fem_crossover_decision = decision;
+    }
+}
+
 /// Copy the canonical planner resolution into the execution artifact contract.
 /// The runner's concrete engine remains authoritative for device and fallback
 /// facts; the plan remains authoritative for what the author requested before
@@ -1536,7 +1547,8 @@ pub fn run_planned_problem(
             Ok(executed)
         }
         BackendPlanIR::Fem(fem) => {
-            let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?;
+            let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem, false)?;
+            let crossover_decision = resolution.fem_crossover_decision.clone();
             let mut executed = if fem.relaxation.is_some() {
                 fem::relax::execute_fem_relax(
                     fem_engine_kind(resolution.engine),
@@ -1557,6 +1569,7 @@ pub fn run_planned_problem(
                 )
             }?;
             attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            attach_fem_crossover_decision_to_executed_run(&mut executed, crossover_decision);
             Ok(executed)
         }
         BackendPlanIR::FemEigen(fem) => {
@@ -1853,7 +1866,12 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
             Ok(executed)
         }
         BackendPlanIR::Fem(fem) => {
-            let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?;
+            let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(
+                problem,
+                fem,
+                field_every_n != u64::MAX,
+            )?;
+            let crossover_decision = resolution.fem_crossover_decision.clone();
             let live = Some(types::LiveStepConsumer {
                 grid: [0, 0, 0],
                 field_every_n,
@@ -1884,6 +1902,7 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
                 )
             }?;
             attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            attach_fem_crossover_decision_to_executed_run(&mut executed, crossover_decision);
             Ok(executed)
         }
         BackendPlanIR::FemEigen(fem) => {
@@ -2216,7 +2235,12 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             Ok(executed)
         }
         BackendPlanIR::Fem(fem) => {
-            let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?;
+            let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(
+                problem,
+                fem,
+                field_every_n != u64::MAX,
+            )?;
+            let crossover_decision = resolution.fem_crossover_decision.clone();
             eprintln!(
                 "[fullmag-runner] live FEM engine: resolved_engine_id={} fallback={:?}",
                 dispatch::fem_engine_label(resolution.engine),
@@ -2252,6 +2276,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                 )
             }?;
             attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            attach_fem_crossover_decision_to_executed_run(&mut executed, crossover_decision);
             Ok(executed)
         }
         BackendPlanIR::FemEigen(fem) => {
@@ -2733,6 +2758,23 @@ pub fn create_planned_interactive_runtime_with_stage_fem_mesh_asset(
     stage_fem_mesh_asset: Option<&StageFemMeshAsset>,
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> Result<InteractiveRuntime, RunError> {
+    create_planned_interactive_runtime_with_stage_fem_mesh_asset_and_preview_cadence(
+        problem,
+        plan,
+        stage_fem_mesh_asset,
+        u64::MAX,
+        continuation_magnetization,
+    )
+}
+
+/// Create a persistent runtime with the actual live-preview cadence known by the caller.
+pub fn create_planned_interactive_runtime_with_stage_fem_mesh_asset_and_preview_cadence(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    stage_fem_mesh_asset: Option<&StageFemMeshAsset>,
+    field_every_n: u64,
+    continuation_magnetization: Option<&[[f64; 3]]>,
+) -> Result<InteractiveRuntime, RunError> {
     let backend: Box<dyn InteractiveBackend> = match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => Box::new(InteractiveFdmPreviewRuntime::create_from_plan(
             problem, fdm,
@@ -2741,6 +2783,7 @@ pub fn create_planned_interactive_runtime_with_stage_fem_mesh_asset(
             problem,
             fem,
             stage_fem_mesh_asset,
+            field_every_n != u64::MAX,
         )?),
         _ => {
             return Err(RunError {
@@ -3084,7 +3127,7 @@ pub fn resolve_planned_runtime_capabilities(
             capabilities::FdmCapabilityProfile::SingleGrid,
         )),
         BackendPlanIR::Fem(fem) => Ok(capabilities_for_fem_engine(
-            dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?.engine,
+            dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem, false)?.engine,
         )),
         BackendPlanIR::FdmMultilayer(_) => Ok(capabilities_for_fdm_engine(
             dispatch::resolve_fdm_engine_with_trail(problem)?.engine,
@@ -3102,12 +3145,27 @@ pub fn resolve_planned_runtime_capabilities(
 }
 
 pub fn resolve_session_runtime(problem: &ProblemIR) -> Result<ResolvedSessionRuntime, RunError> {
-    resolve_session_runtime_with_registry(problem, None)
+    resolve_session_runtime_with_registry_and_preview(problem, None, false)
+}
+
+pub fn resolve_session_runtime_for_preview(
+    problem: &ProblemIR,
+    field_every_n: u64,
+) -> Result<ResolvedSessionRuntime, RunError> {
+    resolve_session_runtime_with_registry_and_preview(problem, None, field_every_n != u64::MAX)
 }
 
 pub fn resolve_session_runtime_with_registry(
     problem: &ProblemIR,
     registry: Option<&RuntimeRegistry>,
+) -> Result<ResolvedSessionRuntime, RunError> {
+    resolve_session_runtime_with_registry_and_preview(problem, registry, false)
+}
+
+pub fn resolve_session_runtime_with_registry_and_preview(
+    problem: &ProblemIR,
+    registry: Option<&RuntimeRegistry>,
+    preview_enabled: bool,
 ) -> Result<ResolvedSessionRuntime, RunError> {
     let plan = fullmag_plan::plan(problem)?;
     let resolved_cpu_threads = configured_cpu_threads(problem);
@@ -3121,6 +3179,7 @@ pub fn resolve_session_runtime_with_registry(
         problem,
         registry,
         explicit_selection_from_problem(problem),
+        preview_enabled,
     )?;
 
     match (&plan.backend_plan, dispatch_resolution.engine) {
@@ -3154,6 +3213,7 @@ pub fn resolve_session_runtime_with_registry(
                         .unwrap_or_else(|| default_worker.to_string()),
                 ),
                 resolved_fallback: dispatch_resolution.fallback,
+                fem_crossover_decision: None,
             })
         }
         (BackendPlanIR::FdmMultilayer(_), dispatch::DispatchEngine::Fdm(engine)) => {
@@ -3188,6 +3248,7 @@ pub fn resolve_session_runtime_with_registry(
                         .unwrap_or_else(|| default_worker.to_string()),
                 ),
                 resolved_fallback: dispatch_resolution.fallback,
+                fem_crossover_decision: None,
             })
         }
         (BackendPlanIR::Fem(_), dispatch::DispatchEngine::Fem(engine)) => {
@@ -3211,6 +3272,7 @@ pub fn resolve_session_runtime_with_registry(
                         .unwrap_or_else(|| default_worker.to_string()),
                 ),
                 resolved_fallback: dispatch_resolution.fallback,
+                fem_crossover_decision: dispatch_resolution.fem_crossover_decision,
             })
         }
         (BackendPlanIR::FemEigen(_), dispatch::DispatchEngine::Fem(engine)) => {
@@ -3235,6 +3297,7 @@ pub fn resolve_session_runtime_with_registry(
                         .unwrap_or_else(|| default_worker.to_string()),
                 ),
                 resolved_fallback: dispatch_resolution.fallback,
+                fem_crossover_decision: None,
             })
         }
         (BackendPlanIR::FemFrequencyResponse(_), dispatch::DispatchEngine::Fem(engine)) => {
@@ -3259,6 +3322,7 @@ pub fn resolve_session_runtime_with_registry(
                         .unwrap_or_else(|| default_worker.to_string()),
                 ),
                 resolved_fallback: dispatch_resolution.fallback,
+                fem_crossover_decision: None,
             })
         }
         _ => Err(RunError {
@@ -3453,6 +3517,7 @@ mod tests {
                 nyquist_guard_factor: fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR,
             }),
             resolved_sample_period_s: Some(sample_period_s),
+            every_steps: None,
             quantities: vec!["t".into(), "my".into()],
         });
         problem.study.sampling_mut().outputs = vec![OutputIR::FieldResolvedAuto {

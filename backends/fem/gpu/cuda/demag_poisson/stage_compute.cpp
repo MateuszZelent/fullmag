@@ -15,6 +15,7 @@
 #include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
 #include "gpu/cuda/runtime/gpu_state_runtime.hpp"
+#include "gpu/cuda/runtime/nvtx_ranges.hpp"
 
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include "gpu/cuda/demag_poisson/demag_kernels.hpp"
@@ -151,31 +152,34 @@ bool compute_device_demag_for_device_stage_impl(
             reason)) {
         return false;
     }
-    fullmag_cuda_demag_rhs_csr(
-        workspace->rhs.d_row_offsets,
-        workspace->rhs.d_col_indices,
-        workspace->rhs.d_values_x,
-        workspace->rhs.d_values_y,
-        workspace->rhs.d_values_z,
-        m.x,
-        m.y,
-        m.z,
-        gpu.demag_poisson.poisson_rhs,
-        static_cast<int>(workspace->rhs.rows),
-        stream);
-    if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag RHS CSR", reason)) {
-        return false;
-    }
-    fullmag_cuda_zero_indexed_values(
-        gpu.demag_poisson.poisson_rhs,
-        workspace->d_ess_tdofs,
-        static_cast<int>(workspace->ess_tdofs.size()),
-        stream);
-    if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag essential RHS zero", reason)) {
-        return false;
-    }
-    if (!assemble_timer.finish(reason)) {
-        return false;
+    {
+        FULLMAG_NVTX_RANGE("fem.demag.rhs");
+        fullmag_cuda_demag_rhs_csr(
+            workspace->rhs.d_row_offsets,
+            workspace->rhs.d_col_indices,
+            workspace->rhs.d_values_x,
+            workspace->rhs.d_values_y,
+            workspace->rhs.d_values_z,
+            m.x,
+            m.y,
+            m.z,
+            gpu.demag_poisson.poisson_rhs,
+            static_cast<int>(workspace->rhs.rows),
+            stream);
+        if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag RHS CSR", reason)) {
+            return false;
+        }
+        fullmag_cuda_zero_indexed_values(
+            gpu.demag_poisson.poisson_rhs,
+            workspace->d_ess_tdofs,
+            static_cast<int>(workspace->ess_tdofs.size()),
+            stream);
+        if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag essential RHS zero", reason)) {
+            return false;
+        }
+        if (!assemble_timer.finish(reason)) {
+            return false;
+        }
     }
 
     if (reset_initial_solution) {
@@ -209,23 +213,27 @@ bool compute_device_demag_for_device_stage_impl(
     if (reset_initial_solution) {
         ctx.poisson_demag.fresh_zero_guess_count_current_step += 1;
     }
-    if (!hypre_wait_for_fullmag(workspace->stream_interop, stream, reason)) {
-        return false;
+    uint64_t solver_apply_wall_time_ns = 0;
+    {
+        FULLMAG_NVTX_RANGE("fem.demag.hypre.apply");
+        if (!hypre_wait_for_fullmag(workspace->stream_interop, stream, reason)) {
+            return false;
+        }
+        ctx.poisson_demag.event_wait_count =
+            workspace->stream_interop.event_wait_count;
+        ctx.poisson_demag.event_wait_count_current_step += 1;
+        const auto solve_start = FemSteadyClock::now();
+        workspace->solver->Mult(*workspace->b_par, *workspace->x_par);
+        if (!fullmag_wait_for_hypre(workspace->stream_interop, stream, reason)) {
+            return false;
+        }
+        ctx.poisson_demag.event_wait_count =
+            workspace->stream_interop.event_wait_count;
+        ctx.poisson_demag.event_wait_count_current_step += 1;
+        ctx.poisson_demag.global_sync_count =
+            workspace->stream_interop.global_sync_count;
+        solver_apply_wall_time_ns = elapsed_ns(solve_start);
     }
-    ctx.poisson_demag.event_wait_count =
-        workspace->stream_interop.event_wait_count;
-    ctx.poisson_demag.event_wait_count_current_step += 1;
-    const auto solve_start = FemSteadyClock::now();
-    workspace->solver->Mult(*workspace->b_par, *workspace->x_par);
-    if (!fullmag_wait_for_hypre(workspace->stream_interop, stream, reason)) {
-        return false;
-    }
-    ctx.poisson_demag.event_wait_count =
-        workspace->stream_interop.event_wait_count;
-    ctx.poisson_demag.event_wait_count_current_step += 1;
-    ctx.poisson_demag.global_sync_count =
-        workspace->stream_interop.global_sync_count;
-    const uint64_t solver_apply_wall_time_ns = elapsed_ns(solve_start);
     ctx.poisson_demag.last_solver_apply_wall_time_ns = solver_apply_wall_time_ns;
     ctx.poisson_demag.step_solver_apply_wall_time_ns += solver_apply_wall_time_ns;
 
@@ -264,56 +272,59 @@ bool compute_device_demag_for_device_stage_impl(
             reason)) {
         return false;
     }
-    fullmag_cuda_zero_indexed_values(
-        gpu.demag_poisson.poisson_solution,
-        workspace->d_ess_tdofs,
-        static_cast<int>(workspace->ess_tdofs.size()),
-        stream);
-    fullmag_cuda_demag_recovery_csr(
-        workspace->recovery_x.d_row_offsets,
-        workspace->recovery_x.d_col_indices,
-        workspace->recovery_x.d_values,
-        gpu.demag_poisson.poisson_solution,
-        gpu.mesh_regions.magnetic_node_mask,
-        gpu.fields.h_demag.x,
-        static_cast<int>(workspace->recovery_x.rows),
-        stream);
-    fullmag_cuda_demag_recovery_csr(
-        workspace->recovery_y.d_row_offsets,
-        workspace->recovery_y.d_col_indices,
-        workspace->recovery_y.d_values,
-        gpu.demag_poisson.poisson_solution,
-        gpu.mesh_regions.magnetic_node_mask,
-        gpu.fields.h_demag.y,
-        static_cast<int>(workspace->recovery_y.rows),
-        stream);
-    fullmag_cuda_demag_recovery_csr(
-        workspace->recovery_z.d_row_offsets,
-        workspace->recovery_z.d_col_indices,
-        workspace->recovery_z.d_values,
-        gpu.demag_poisson.poisson_solution,
-        gpu.mesh_regions.magnetic_node_mask,
-        gpu.fields.h_demag.z,
-        static_cast<int>(workspace->recovery_z.rows),
-        stream);
-    if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag recovery CSR", reason)) {
-        return false;
-    }
     const int n = static_cast<int>(gpu.lifecycle.node_count);
-    if (gpu.mesh_regions.has_periodic_reduced_nodes) {
-        fullmag_cuda_relax_project_static_periodic_field(
-            gpu.fields.h_demag.x,
-            gpu.fields.h_demag.y,
-            gpu.fields.h_demag.z,
-            gpu.mesh_regions.periodic_representative_nodes,
-            n,
+    {
+        FULLMAG_NVTX_RANGE("fem.demag.recovery");
+        fullmag_cuda_zero_indexed_values(
+            gpu.demag_poisson.poisson_solution,
+            workspace->d_ess_tdofs,
+            static_cast<int>(workspace->ess_tdofs.size()),
             stream);
-        if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag periodic H_demag projection", reason)) {
+        fullmag_cuda_demag_recovery_csr(
+            workspace->recovery_x.d_row_offsets,
+            workspace->recovery_x.d_col_indices,
+            workspace->recovery_x.d_values,
+            gpu.demag_poisson.poisson_solution,
+            gpu.mesh_regions.magnetic_node_mask,
+            gpu.fields.h_demag.x,
+            static_cast<int>(workspace->recovery_x.rows),
+            stream);
+        fullmag_cuda_demag_recovery_csr(
+            workspace->recovery_y.d_row_offsets,
+            workspace->recovery_y.d_col_indices,
+            workspace->recovery_y.d_values,
+            gpu.demag_poisson.poisson_solution,
+            gpu.mesh_regions.magnetic_node_mask,
+            gpu.fields.h_demag.y,
+            static_cast<int>(workspace->recovery_y.rows),
+            stream);
+        fullmag_cuda_demag_recovery_csr(
+            workspace->recovery_z.d_row_offsets,
+            workspace->recovery_z.d_col_indices,
+            workspace->recovery_z.d_values,
+            gpu.demag_poisson.poisson_solution,
+            gpu.mesh_regions.magnetic_node_mask,
+            gpu.fields.h_demag.z,
+            static_cast<int>(workspace->recovery_z.rows),
+            stream);
+        if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag recovery CSR", reason)) {
             return false;
         }
-    }
-    if (!recover_timer.finish(reason)) {
-        return false;
+        if (gpu.mesh_regions.has_periodic_reduced_nodes) {
+            fullmag_cuda_relax_project_static_periodic_field(
+                gpu.fields.h_demag.x,
+                gpu.fields.h_demag.y,
+                gpu.fields.h_demag.z,
+                gpu.mesh_regions.periodic_representative_nodes,
+                n,
+                stream);
+            if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag periodic H_demag projection", reason)) {
+                return false;
+            }
+        }
+        if (!recover_timer.finish(reason)) {
+            return false;
+        }
     }
 
     const int blocks = (n + 255) / 256;

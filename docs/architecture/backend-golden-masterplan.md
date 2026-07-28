@@ -142,6 +142,9 @@ Po tej relokacji w dokumentach trzeba pisać:
 7. Wymuszony GPU ma jasno failować, gdy brakuje wymagań GPU. Cichy fallback na
    CPU jest dozwolony tylko w jawnych trybach auto/niewymuszonych i musi być
    zapisany w proweniencji.
+   Dla FEM performance crossover działa wyłącznie dla requested `auto`, na
+   podstawie kwalifikowanego profilu z ADR 0021; nie może zmienić explicit
+   `cpu` ani `gpu`.
 8. Publiczna semantyka żyje ponad natywnym rdzeniem. Natywne backendy wykonują
    semantykę, ale widoczne dla użytkownika wielkości, jednostki,
    requested/resolved strategy i status walidacji muszą być reprezentowane w

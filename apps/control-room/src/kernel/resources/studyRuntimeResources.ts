@@ -1985,6 +1985,7 @@ export function useTableRowsBinaryResource(
     cursor,
     decimation,
     enabled = true,
+    pauseLoad = false,
     fromRow,
     fromT,
     includeTail,
@@ -1992,7 +1993,7 @@ export function useTableRowsBinaryResource(
     targetPoints,
     toRow,
     toT,
-  }: TableRowsQuery & { enabled?: boolean } = {},
+  }: TableRowsQuery & { enabled?: boolean; pauseLoad?: boolean } = {},
 ) {
   const { api } = useKernel();
   const resourceKey = `${tableRowsResourceKey(tableId, {
@@ -2047,6 +2048,7 @@ export function useTableRowsBinaryResource(
     enabled,
     load,
     minRefetchIntervalMs: tableRowsMinRefetchIntervalMs(),
+    pauseLoad,
     resolveRevision: (data) =>
       data?.status === "ready" ? data.data.revision : null,
     resourceKey,

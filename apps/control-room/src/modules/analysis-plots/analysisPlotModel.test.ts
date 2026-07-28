@@ -8,6 +8,10 @@ import {
 } from "@/shared/domain/analysis/chartDataPlan";
 import type { AxisColumnDescriptor } from "@/shared/domain/analysis/TableColumnList";
 import { __analysisTableRowsAdapterTestUtils as utils } from "./tableRowsAdapter";
+import {
+  buildAnalysisPlotsTableQuery,
+  normalizeTableRangeModeForXAxis,
+} from "./analysisPlotsModel";
 
 const step: AxisColumnDescriptor = { column_id: "step", label: "step", unit: "1" };
 
@@ -44,6 +48,94 @@ function rowsOf(window: ChartTableWindow | null): number[][] | null {
 }
 
 describe("analysis plot scalar selection", () => {
+  it("maps range presets to bounded resource queries", () => {
+    expect(buildAnalysisPlotsTableQuery({
+      cursor: undefined,
+      range: null,
+      rangeMode: { mode: "tailRows", rows: 100 },
+      targetPoints: 800,
+      xAxisId: "step",
+    // The API's minimum target_points is 160; because the window has only
+    // 100 rows it still returns every selected row without decimation.
+    })).toMatchObject({ includeTail: true, limit: 100, targetPoints: 160 });
+    // A tail-window is a data-selection contract, not a display-budget hint.
+    // Asking for the last 160 points must therefore return those 160 rows
+    // without server-side decimation to an unrelated target budget.
+    expect(buildAnalysisPlotsTableQuery({
+      cursor: undefined,
+      range: null,
+      rangeMode: { mode: "tailRows", rows: 160 },
+      targetPoints: 1600,
+      xAxisId: "step",
+    })).toMatchObject({ includeTail: true, limit: 160, targetPoints: 160 });
+    expect(buildAnalysisPlotsTableQuery({
+      cursor: undefined,
+      latestX: 20e-9,
+      range: null,
+      rangeMode: { mode: "tailTime", durationS: 1e-9 },
+      targetPoints: 400,
+      xAxisId: "t",
+    })).toMatchObject({ fromT: 19e-9, toT: 20e-9, targetPoints: 400 });
+    expect(buildAnalysisPlotsTableQuery({
+      cursor: undefined,
+      range: null,
+      rangeMode: { mode: "fullDecimated" },
+      targetPoints: 3200,
+      xAxisId: "step",
+    })).toMatchObject({ includeTail: false, limit: 3200, targetPoints: 3200 });
+  });
+
+  it("does not turn a non-time X axis into an invalid simulation-time request", () => {
+    expect(buildAnalysisPlotsTableQuery({
+      cursor: 42,
+      latestX: 42,
+      range: null,
+      rangeMode: { mode: "tailTime", durationS: 1e-9 },
+      targetPoints: 400,
+      xAxisId: "step",
+    })).toMatchObject({
+      cursor: 42,
+      includeTail: true,
+      targetPoints: 400,
+    });
+    const query = buildAnalysisPlotsTableQuery({
+      cursor: 42,
+      latestX: 42,
+      range: null,
+      rangeMode: { mode: "tailTime", durationS: 1e-9 },
+      targetPoints: 400,
+      xAxisId: "step",
+    });
+    expect(query.fromT).toBeUndefined();
+    expect(query.toT).toBeUndefined();
+  });
+
+  it("repairs a persisted time-window mode when its X axis is not time", () => {
+    expect(
+      normalizeTableRangeModeForXAxis(
+        { mode: "tailTime", durationS: 1e-9 },
+        "step",
+      ),
+    ).toEqual({ mode: "follow" });
+    expect(
+      normalizeTableRangeModeForXAxis(
+        { mode: "tailTime", durationS: 1e-9 },
+        "t",
+      ),
+    ).toEqual({ mode: "tailTime", durationS: 1e-9 });
+  });
+
+  it("requests the quantities published by the table schema", () => {
+    const customColumns = ["step", "mx", "e_ex", "e_demag", "e_total", "max_torque_T"];
+    expect(buildAnalysisPlotsTableQuery({
+      columns: customColumns,
+      cursor: undefined,
+      range: null,
+      rangeMode: { mode: "follow" },
+      targetPoints: 1600,
+      xAxisId: "step",
+    }).columns).toEqual(customColumns);
+  });
   it("uses one stable scalar column query", () => {
     expect(utils.analysisScalarColumns).toEqual([
       "step", "t", "mx", "my", "mz", "e_total", "max_torque_Apm",

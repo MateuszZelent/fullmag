@@ -13,6 +13,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HELPER = REPO_ROOT / "scripts" / "lib" / "runtime_bundle_copy.sh"
+IMAGE_IDENTITY_HELPER = REPO_ROOT / "scripts" / "lib" / "managed_fem_image_identity.sh"
 EXPORT_SCRIPT = REPO_ROOT / "scripts" / "export_fem_gpu_runtime.sh"
 VALIDATOR = REPO_ROOT / "scripts" / "validate_managed_fem_runtime_bundle.py"
 MANIFEST_BUILDER = REPO_ROOT / "scripts" / "build_managed_fem_runtime_manifest.py"
@@ -56,6 +57,9 @@ def write_fake_schema_v2_bundle(
     *,
     fullmag_cubins: tuple[str, ...] = ("sm_89",),
     hypre_cubins: tuple[str, ...] = ("sm_89",),
+    hypre_memory_variant: str = "baseline",
+    hypre_configure_flags: tuple[str, ...] = ("--without-umpire",),
+    hypre_config_macros: dict[str, bool] | None = None,
 ) -> tuple[Path, Path, Path]:
     runtime = tmp_path / "runtime"
     bin_dir = runtime / "bin"
@@ -143,6 +147,13 @@ int fullmag_fem_get_mesh_abi_layout(mesh_layout *out) {
             "ptx": ["compute_90"],
         }
 
+    if hypre_config_macros is None:
+        hypre_config_macros = {
+            "HYPRE_USING_UMPIRE": False,
+            "HYPRE_USING_UMPIRE_DEVICE": False,
+            "HYPRE_USING_DEVICE_MALLOC_ASYNC": False,
+            "HYPRE_USING_THRUST_ASYNC": False,
+        }
     manifest = {
         "schema": 2,
         "runtime": "fem-gpu-host",
@@ -181,6 +192,11 @@ int fullmag_fem_get_mesh_abi_layout(mesh_layout *out) {
             "cuda_compiler": "nvcc 12.4",
             "requested_cuda_architectures": "80-real;89-real;90-real;90-virtual",
             "effective_cuda_architectures": ["sm_80", "sm_89", "sm_90", "compute_90"],
+            "hypre_gpu_architectures": "60 70 80 89 90",
+            "hypre_memory_variant": hypre_memory_variant,
+            "hypre_configure_flags": list(hypre_configure_flags),
+            "hypre_config_macros": hypre_config_macros,
+            "hypre_config_header_sha256": "f" * 64,
         },
         "runtime_diagnostics": {
             "device_name": "Synthetic RTX 4080",
@@ -408,9 +424,9 @@ def test_export_script_recreates_unversioned_fullmag_native_library_links() -> N
 
 def test_export_script_forces_fem_sys_native_rebuild_before_copying_libraries() -> None:
     script = EXPORT_SCRIPT.read_text(encoding="utf-8")
-    clean_index = script.find("cargo clean -p fullmag-fem-sys")
+    clean_index = script.find("cargo +nightly clean -p fullmag-fem-sys")
     build_index = script.find("cargo +nightly build")
-    copy_index = script.find('FEM_LIB="$(latest_native_lib_dir')
+    copy_index = script.find('FEM_LIB="$(only_native_lib_dir')
 
     assert clean_index != -1
     assert build_index != -1
@@ -446,12 +462,170 @@ def test_export_script_serializes_runtime_bundle_mutation_with_flock() -> None:
     script = EXPORT_SCRIPT.read_text(encoding="utf-8")
     lock_index = script.find('RUNTIME_LOCK="${RUNTIME_PARENT}/.fem-gpu-host.export.lock"')
     flock_index = script.find('flock 9')
-    compose_index = script.find("docker compose --profile fem-gpu build fem-gpu")
+    compose_index = script.find(
+        'build_managed_fem_image "${docker_build_ref}" "${docker_compatibility_ref}"'
+    )
 
     assert lock_index != -1
     assert flock_index != -1
     assert compose_index != -1
     assert lock_index < flock_index < compose_index
+
+
+def test_export_script_pins_built_image_id_across_export_and_validation() -> None:
+    script = EXPORT_SCRIPT.read_text(encoding="utf-8")
+    compose = (REPO_ROOT / "compose.yaml").read_text(encoding="utf-8")
+    identity_helper = IMAGE_IDENTITY_HELPER.read_text(encoding="utf-8")
+    manifest_builder = MANIFEST_BUILDER.read_text(encoding="utf-8")
+
+    build_index = script.find(
+        'build_managed_fem_image "${docker_build_ref}" "${docker_compatibility_ref}"'
+    )
+    capture_index = script.find('docker_image_id="${MANAGED_FEM_BUILT_IMAGE_ID}"')
+    export_index = script.find(
+        'FULLMAG_FEM_GPU_IMAGE="${docker_image_id}" docker compose --profile fem-gpu run'
+    )
+    validate_index = script.find('  "${docker_image_id}"')
+
+    assert 'image: ${FULLMAG_FEM_GPU_IMAGE:-fullmag/fem-gpu:local}' in compose
+    assert build_index != -1
+    assert capture_index != -1
+    assert export_index != -1
+    assert validate_index != -1
+    assert build_index < capture_index < export_index < validate_index
+    assert 'capture_managed_fem_image_id fullmag/fem-gpu:local' not in script
+    assert script.count("observe_managed_fem_image_tag") == 1
+    assert 'remove_managed_fem_build_ref "${docker_build_ref}"' in script
+    final_cleanup_index = script.rfind(
+        'remove_managed_fem_build_ref "${docker_build_ref}"'
+    )
+    trap_clear_index = script.rfind("trap - EXIT")
+    assert validate_index < final_cleanup_index < trap_clear_index
+    assert '--observed-docker-image-id "${observed_docker_image_id}"' in script
+    assert "managed FEM image tag drift detected" in identity_helper
+    assert 'FULLMAG_FEM_GPU_IMAGE="${build_image_ref}"' in identity_helper
+    assert 'capture_managed_fem_image_id "${build_image_ref}"' in identity_helper
+    assert 'docker image tag "${MANAGED_FEM_BUILT_IMAGE_ID}"' in identity_helper
+    assert 'docker image rm "${build_image_ref}"' in identity_helper
+    assert "docker image rm --force" not in identity_helper
+    assert 'current_image_id="$(docker image inspect "${image_ref}"' in identity_helper
+    assert '"drift_observed"' in manifest_builder
+
+
+def test_managed_fem_build_capture_ignores_compatibility_retag(
+    tmp_path: Path,
+) -> None:
+    fake_docker = tmp_path / "docker"
+    calls = tmp_path / "docker-calls"
+    fake_docker.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s|%s\n' "${FULLMAG_FEM_GPU_IMAGE:-<unset>}" "$*" >> "${FAKE_DOCKER_CALLS}"
+if [ "$1" = "compose" ]; then
+  exit 0
+fi
+if [ "$1 $2" = "image inspect" ]; then
+  case "$3" in
+    fullmag/fem-gpu:runtime-export-test) printf 'sha256:%064d\n' 1 ;;
+    fullmag/fem-gpu:local) printf 'sha256:%064d\n' 2 ;;
+    *) exit 1 ;;
+  esac
+  exit 0
+fi
+if [ "$1 $2" = "image tag" ]; then
+  exit 0
+fi
+exit 1
+""",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-euo",
+            "pipefail",
+            "-c",
+            f"""
+source "{IMAGE_IDENTITY_HELPER}"
+build_managed_fem_image \\
+  fullmag/fem-gpu:runtime-export-test \\
+  fullmag/fem-gpu:local
+printf '%s\n' "${{MANAGED_FEM_BUILT_IMAGE_ID}}"
+""",
+        ],
+        cwd=REPO_ROOT,
+        env={
+            "PATH": f"{tmp_path}:/usr/bin:/bin",
+            "FAKE_DOCKER_CALLS": str(calls),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == f"sha256:{1:064d}"
+    docker_calls = calls.read_text(encoding="utf-8").splitlines()
+    assert docker_calls == [
+        "fullmag/fem-gpu:runtime-export-test|compose --profile fem-gpu build fem-gpu",
+        "<unset>|image inspect fullmag/fem-gpu:runtime-export-test --format {{.Id}}",
+        f"<unset>|image tag sha256:{1:064d} fullmag/fem-gpu:local",
+    ]
+
+
+def test_managed_fem_image_identity_warns_and_keeps_pinned_id_on_retag(
+    tmp_path: Path,
+) -> None:
+    fake_docker = tmp_path / "docker"
+    counter = tmp_path / "inspect-count"
+    fake_docker.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+count=0
+if [ -f \"${FAKE_DOCKER_COUNTER}\" ]; then
+  count=\"$(cat \"${FAKE_DOCKER_COUNTER}\")\"
+fi
+count=$((count + 1))
+printf '%s\\n' \"${count}\" > \"${FAKE_DOCKER_COUNTER}\"
+if [ \"${count}\" -eq 1 ]; then
+  printf 'sha256:%064d\\n' 1
+else
+  printf 'sha256:%064d\\n' 2
+fi
+""",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-euo",
+            "pipefail",
+            "-c",
+            f"""
+source \"{IMAGE_IDENTITY_HELPER}\"
+built_image_id=\"$(capture_managed_fem_image_id fullmag/fem-gpu:local)\"
+observe_managed_fem_image_tag fullmag/fem-gpu:local \"${{built_image_id}}\"
+""",
+        ],
+        cwd=REPO_ROOT,
+        env={
+            "PATH": f"{tmp_path}:/usr/bin:/bin",
+            "FAKE_DOCKER_COUNTER": str(counter),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == f"sha256:{2:064d}"
+    assert "managed FEM image tag drift detected" in result.stderr
+    assert f"built=sha256:{1:064d}" in result.stderr
+    assert f"current=sha256:{2:064d}" in result.stderr
 
 
 def test_export_script_publishes_only_a_validated_hash_addressed_bundle() -> None:
@@ -503,6 +677,73 @@ def test_managed_runtime_validator_rejects_mismatched_mesh_abi(tmp_path: Path) -
 
     assert invalid.returncode != 0
     assert "mesh descriptor ABI mismatch" in invalid.stderr
+
+
+def test_validator_rejects_hypre_memory_variant_macro_mismatch(tmp_path: Path) -> None:
+    runtime, ldd, readelf = write_fake_schema_v2_bundle(
+        tmp_path,
+        hypre_memory_variant="cuda_async",
+        hypre_configure_flags=("--without-umpire", "--enable-device-malloc-async"),
+    )
+
+    invalid = validate_fake_bundle(runtime, ldd, readelf)
+
+    assert invalid.returncode != 0
+    assert "cuda_async requires HYPRE_USING_DEVICE_MALLOC_ASYNC=1" in invalid.stderr
+
+
+def test_validator_accepts_exact_cuda_async_hypre_memory_contract(tmp_path: Path) -> None:
+    runtime, ldd, readelf = write_fake_schema_v2_bundle(
+        tmp_path,
+        hypre_memory_variant="cuda_async",
+        hypre_configure_flags=("--without-umpire", "--enable-device-malloc-async"),
+        hypre_config_macros={
+            "HYPRE_USING_UMPIRE": False,
+            "HYPRE_USING_UMPIRE_DEVICE": False,
+            "HYPRE_USING_DEVICE_MALLOC_ASYNC": True,
+            "HYPRE_USING_THRUST_ASYNC": False,
+        },
+    )
+
+    valid = validate_fake_bundle(runtime, ldd, readelf)
+
+    assert valid.returncode == 0, valid.stderr
+
+
+def test_task10_build_path_declares_fail_closed_hypre_variants() -> None:
+    dockerfile = (REPO_ROOT / "docker/fem-gpu/Dockerfile").read_text(encoding="utf-8")
+    compose = (REPO_ROOT / "compose.yaml").read_text(encoding="utf-8")
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+    justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+
+    assert 'ARG FULLMAG_HYPRE_MEMORY_VARIANT="baseline"' in dockerfile
+    assert "ENV UMPIRE_REF=v2024.07.0" in dockerfile
+    assert 'FULLMAG_HYPRE_MEMORY_VARIANT' in compose
+    for variant in ("baseline", "umpire", "cuda_async", "thrust_async"):
+        assert variant in dockerfile
+    assert "./configure --help" in dockerfile
+    assert "required HYPRE configure flag is unavailable" in dockerfile
+    assert "hypre-build-metadata.json" in dockerfile
+    assert "q.write_text(json.dumps(out,indent=2,sort_keys=True)+chr(10))" in dockerfile
+    assert 're.search(r"^#define\\s+"' in dockerfile
+    assert '--hypre-build-metadata "/opt/fullmag-deps/share/fullmag/hypre-build-metadata.json"' in exporter
+    assert "build-fem-hypre-memory-variant variant:" in justfile
+    assert "build-all-fem-hypre-memory-variants:" in justfile
+    assert "FULLMAG_HYPRE_MEMORY_VARIANT" in justfile
+    assert "hypre-${FULLMAG_HYPRE_MEMORY_VARIANT}" in exporter
+
+    deps_stage, runtime_stage = dockerfile.split(
+        "FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS fem-gpu-dev", 1
+    )
+    assert deps_stage.index('ARG FULLMAG_HYPRE_MEMORY_VARIANT="baseline"') > deps_stage.index(
+        "make -C /tmp/build/libCEED"
+    )
+    assert deps_stage.index("ENV UMPIRE_REF=v2024.07.0") > deps_stage.index(
+        "make -C /tmp/build/libCEED"
+    )
+    assert runtime_stage.index(
+        'ARG FULLMAG_HYPRE_MEMORY_VARIANT="baseline"'
+    ) > runtime_stage.index("COPY --from=deps")
 
 
 def test_managed_runtime_validator_rejects_unaddressed_variant_by_default(
@@ -777,6 +1018,24 @@ def test_manifest_builder_records_actual_loaded_native_libraries(tmp_path: Path)
         encoding="utf-8",
     )
     nvcc.chmod(0o755)
+    hypre_build_metadata = tmp_path / "hypre-build-metadata.json"
+    hypre_build_metadata.write_text(
+        json.dumps(
+            {
+                "hypre_gpu_architectures": "60 70 80 89 90",
+                "hypre_memory_variant": "baseline",
+                "hypre_configure_flags": ["--without-umpire"],
+                "hypre_config_macros": {
+                    "HYPRE_USING_UMPIRE": False,
+                    "HYPRE_USING_UMPIRE_DEVICE": False,
+                    "HYPRE_USING_DEVICE_MALLOC_ASYNC": False,
+                    "HYPRE_USING_THRUST_ASYNC": False,
+                },
+                "hypre_config_header_sha256": "f" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
 
     result = subprocess.run(
         [
@@ -788,6 +1047,8 @@ def test_manifest_builder_records_actual_loaded_native_libraries(tmp_path: Path)
             "candidate-sm89",
             "--requested-cuda-architectures",
             "80-real;89-real;90-real;90-virtual",
+            "--hypre-build-metadata",
+            str(hypre_build_metadata),
             "--device-name",
             "Synthetic RTX 4080",
             "--compute-capability",
@@ -817,6 +1078,7 @@ def test_manifest_builder_records_actual_loaded_native_libraries(tmp_path: Path)
         "lib/libHYPRE-3.1.0.so"
     )
     assert manifest["build"]["cuda_toolkit"] == "12.4"
+    assert manifest["build"]["hypre_memory_variant"] == "baseline"
     assert manifest["runtime_diagnostics"]["compute_capability"] == "8.9"
     assert manifest["native_abi"] == {
         "mesh_desc_abi_version": 2,

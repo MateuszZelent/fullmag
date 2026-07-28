@@ -67,13 +67,19 @@ export interface ChartBinaryTableWindow {
 }
 
 export function buildSharedAnalysisTableQuery({
+  columns,
   cursor,
   fromT,
   toT,
-}: { cursor?: number; fromT?: number; toT?: number } = {}) {
+}: {
+  columns: readonly string[];
+  cursor?: number;
+  fromT?: number;
+  toT?: number;
+}) {
   const hasRange = fromT !== undefined || toT !== undefined;
   return {
-    columns: ANALYSIS_CHART_COLUMNS,
+    columns,
     cursor: hasRange ? undefined : cursor,
     decimation: "minmax_lttb" as const,
     fromT,

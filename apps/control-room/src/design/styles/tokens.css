@@ -42,6 +42,7 @@
   --fm-chart-height-sm: 96px;
   --fm-chart-height-md: 260px;
   --fm-chart-height-lg: 360px;
+  --fm-chart-height-analysis: 360px;
   --fm-ribbon-chevron-size: 19px;
   --fm-ribbon-tab-indicator-bottom: 25px;
   --fm-thread-progress-width: 54px;
@@ -87,6 +88,7 @@
   --fm-font-size-xs: 11px;
   --fm-font-size-sm: 12px;
   --fm-font-size-md: 13px;
+  --fm-font-size-base: var(--fm-font-size-md); /* semantic alias: base body text size */
   --fm-font-size-lg: 15px;
   --fm-font-size-xl: 18px;
   --fm-line-height-tight: 1.1;

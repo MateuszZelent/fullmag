@@ -264,17 +264,27 @@ TABLE_AUTOSAVE_QUANTITY_ALIASES = {
 
 @dataclass(frozen=True, slots=True)
 class TableAutosave:
-    t_sampl: SamplingPeriod
+    t_sampl: SamplingPeriod | None = None
+    every_steps: int | None = None
     quantities: Sequence[str] | None = None
     extra_quantities: Sequence[str] = ()
     table_id: str = "default"
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "t_sampl",
-            normalize_sampling_period(self.t_sampl, "t_sampl"),
-        )
+        has_time_cadence = self.t_sampl is not None
+        has_step_cadence = self.every_steps is not None
+        if has_time_cadence == has_step_cadence:
+            raise ValueError("exactly one of t_sampl or every_steps must be specified")
+        if has_time_cadence:
+            object.__setattr__(
+                self,
+                "t_sampl",
+                normalize_sampling_period(self.t_sampl, "t_sampl"),
+            )
+        else:
+            every_steps = self.every_steps
+            if isinstance(every_steps, bool) or not isinstance(every_steps, int) or every_steps <= 0:
+                raise ValueError("every_steps must be a positive integer")
         table_id = require_non_empty(self.table_id, "table_id")
         base_quantities = (
             DEFAULT_TABLE_AUTOSAVE_QUANTITIES
@@ -297,7 +307,9 @@ class TableAutosave:
             "table_id": self.table_id,
             "quantities": list(self.quantities or DEFAULT_TABLE_AUTOSAVE_QUANTITIES),
         }
-        if self.t_sampl == "auto":
+        if self.every_steps is not None:
+            payload["every_steps"] = self.every_steps
+        elif self.t_sampl == "auto":
             payload["sample_period_policy"] = auto_sinc_sampling_policy_ir()
         else:
             payload["sample_period_s"] = self.t_sampl
@@ -709,6 +721,27 @@ class Relaxation:
         if self.dynamics is not None:
             payload["dynamics"] = self.dynamics.to_ir()
         return payload
+
+    def table_autosave(
+        self,
+        *,
+        every_steps: int,
+        quantities: Sequence[str] | None = None,
+        extra_quantities: Sequence[str] = (),
+        table_id: str = "default",
+    ) -> "Relaxation":
+        return Relaxation(
+            algorithm=self.algorithm,
+            dynamics=self.dynamics,
+            outputs=self.outputs,
+            stop=self.stop,
+            table_autosave=TableAutosave(
+                every_steps=every_steps,
+                quantities=quantities,
+                extra_quantities=extra_quantities,
+                table_id=table_id,
+            ),
+        )
 
 
 def _resolve_relax_stop(

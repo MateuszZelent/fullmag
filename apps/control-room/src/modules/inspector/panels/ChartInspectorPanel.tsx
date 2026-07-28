@@ -1,7 +1,9 @@
 import { useCallback } from "react";
 
-
+import { useTableResource } from "@/kernel/resources/studyRuntimeResources";
+import { chartRangePreferenceFromWorkspace } from "@/kernel/workspace/analysisChartPreferences";
 import { analysisPlotsWorkspaceStore } from "@/kernel/workspace/analysisPlotsWorkspace";
+import { useAnalysisChartPreferencesHydration } from "@/kernel/workspace/useAnalysisChartPreferencesHydration";
 import { useAnalysisPlotsWorkspaceSelector } from "@/kernel/workspace/useAnalysisPlotsWorkspace";
 import {
   nextYAxisIdsForToggle,
@@ -9,7 +11,8 @@ import {
   TableColumnList,
 } from "@/shared/domain/analysis/TableColumnList";
 import { yAxisIdsAfterXAxisSelection } from "@/shared/domain/analysis/axisSelection";
-import { QuickChartResourceView } from "@/shared/analysis-charts/QuickChartResourceView";
+import { ChartControlBar } from "@/shared/analysis-charts/ChartControlBar";
+import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FieldRow } from "../primitives/FieldRow";
@@ -28,42 +31,52 @@ export function ChartInspectorPanel({ selection }: InspectorPanelProps) {
       : "default";
   const selectedPoint =
     selection.ref?.type === "analysis-chart-point" ? selection.ref : null;
+  const descriptorId = `analysis:data-table:${tableId}`;
+  const preferences = useAnalysisChartPreferencesHydration(descriptorId);
+  const table = useTableResource(tableId);
 
-  const { availableColumns, xAxisId, yAxisIds } =
+  const { availableColumns, liveMode, range, rangeMode, targetPoints, xAxisId, yAxisIds } =
     useAnalysisPlotsWorkspaceSelector((state) => state);
 
   const toggleYAxis = useCallback(
     (columnId: string, enabled: boolean) => {
       const current = analysisPlotsWorkspaceStore.getSnapshot();
-      analysisPlotsWorkspaceStore.setAxes(
-        current.xAxisId,
-        nextYAxisIdsForToggle(current.yAxisIds, columnId, enabled, {
+      const nextYAxisIds = nextYAxisIdsForToggle(
+        current.yAxisIds,
+        columnId,
+        enabled,
+        {
           columns: current.availableColumns,
           xAxisId: current.xAxisId,
-        }),
+        },
       );
+      analysisPlotsWorkspaceStore.setAxes(current.xAxisId, nextYAxisIds);
+      preferences.setDescriptorYAxisIds(descriptorId, nextYAxisIds);
     },
-    [],
+    [descriptorId, preferences],
   );
 
   const setXAxisId = useCallback((columnId: string) => {
     const current = analysisPlotsWorkspaceStore.getSnapshot();
-    analysisPlotsWorkspaceStore.setAxes(
+    const nextYAxisIds = sanitizeYAxisIdsForUnitLimit(
+      yAxisIdsAfterXAxisSelection(current.yAxisIds, columnId),
+      current.availableColumns,
       columnId,
-      sanitizeYAxisIdsForUnitLimit(
-        yAxisIdsAfterXAxisSelection(current.yAxisIds, columnId),
-        current.availableColumns,
-        columnId,
-      ),
     );
-  }, []);
+    analysisPlotsWorkspaceStore.setAxes(columnId, nextYAxisIds);
+    preferences.setDescriptorXAxisId(descriptorId, columnId);
+    preferences.setDescriptorYAxisIds(descriptorId, nextYAxisIds);
+  }, [descriptorId, preferences]);
 
   return (
     <div className="fm-inspector-panel">
       <InspectorGroup title="Table Autosave">
         <FieldRow label="Chart" value={chartId} />
         <FieldRow label="Table" value={tableId} />
-        <FieldRow label="Cadence" value="study.table_autosave(t_sampl)" />
+        <FieldRow
+          label="Rows"
+          value={table.data ? table.data.total_rows.toLocaleString() : "not available"}
+        />
       </InspectorGroup>
       {selectedPoint ? (
         <InspectorGroup title="Selected Point">
@@ -73,9 +86,6 @@ export function ChartInspectorPanel({ selection }: InspectorPanelProps) {
           <FieldRow label="Y" value={formatInspectorNumber(selectedPoint.y)} />
         </InspectorGroup>
       ) : null}
-      <InspectorGroup title="Quick Chart">
-        <QuickChartResourceView selection={selection} />
-      </InspectorGroup>
       <InspectorGroup title="Columns">
         <TableColumnList
           columns={availableColumns.length > 0 ? availableColumns : null}
@@ -86,13 +96,49 @@ export function ChartInspectorPanel({ selection }: InspectorPanelProps) {
           yAxisIds={yAxisIds}
         />
       </InspectorGroup>
-      <InspectorGroup title="Range">
-        <FieldRow label="Mode" value="follow table cursor" />
-        <FieldRow label="Visible cap" value="5000 rows" />
-        <FieldRow
-          label="Decimation"
-          value="server target_points + bounded client window"
+      <InspectorGroup title="Chart controls">
+        <ChartControlBar
+          fixedRangeAvailable={range !== null}
+          liveMode={liveMode}
+          onLiveModeToggle={() => {
+            const next = liveMode === "following" ? "paused" : "following";
+            analysisPlotsWorkspaceStore.setLiveMode(next);
+            preferences.setDescriptorLiveMode(descriptorId, next);
+          }}
+          onFitView={() => analysisPlotsWorkspaceStore.requestFitView()}
+          onRangeModeChange={(next) => {
+            analysisPlotsWorkspaceStore.setRangeMode(next);
+            preferences.setDescriptorRange(
+              descriptorId,
+              chartRangePreferenceFromWorkspace(
+                next,
+                analysisPlotsWorkspaceStore.getSnapshot().range,
+              ),
+            );
+          }}
+          onTargetPointsChange={(next) => {
+            analysisPlotsWorkspaceStore.setTargetPoints(next);
+            preferences.setDescriptorTargetPoints(descriptorId, next);
+          }}
+          rangeMode={range ? { mode: "fixed" } : rangeMode}
+          targetPoints={targetPoints}
+          timeRangeSupported={xAxisId === "t" || xAxisId === "time"}
         />
+        {range ? (
+          <Button
+            aria-label="Clear zoom and return to the selected chart range"
+            className="fm-analysis-plots__range-clear"
+            onClick={() => {
+              analysisPlotsWorkspaceStore.clearRange();
+              preferences.setDescriptorRange(descriptorId, { mode: "follow" });
+            }}
+            size="sm"
+            type="button"
+            variant="secondary"
+          >
+            Clear zoom
+          </Button>
+        ) : null}
       </InspectorGroup>
     </div>
   );

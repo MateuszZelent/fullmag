@@ -1,7 +1,8 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 
+import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import { DEFAULT_CAMERA_REGISTRY_STATE } from "@/kernel/visualization/CameraRegistryController";
 import {
@@ -9,6 +10,7 @@ import {
   type Viewport3DVisualProfileId,
 } from "./viewport3dVisualProfile";
 import { sameTuple3 } from "./viewport3dMath";
+import type { Viewport3DFieldScopeKind } from "./model/viewport3DFieldDataPlan";
 
 export interface Viewport3DCameraState {
   position: [number, number, number];
@@ -22,6 +24,7 @@ export interface Viewport3DCommandState {
   captureReturnProfileId: Viewport3DVisualProfileId | null;
   captureRevision: number;
   fitRevision: number;
+  renderedScalarRanges: Viewport3DRenderedScalarRange[];
   resetCameraRevision: number;
   visualProfileId: Viewport3DVisualProfileId;
   widgets: Viewport3DWidgetState;
@@ -41,6 +44,66 @@ interface Viewport3DScalarColorbarLegend {
   maxLabel: string;
   minLabel: string;
   paletteGradient: string;
+}
+
+export interface Viewport3DRenderedScalarRange {
+  component: string;
+  quantityId: string;
+  range: { max: number; min: number };
+  scopeId: string | null;
+  scopeKind: Viewport3DFieldScopeKind;
+}
+
+export interface Viewport3DRenderedScalarRangeQuery {
+  component: string | null | undefined;
+  quantityId: string;
+  scopeId: string | null | undefined;
+  scopeKind: Viewport3DFieldScopeKind | null | undefined;
+}
+
+/**
+ * A scalar buffer is built per physical mesh part, while an Inspector often
+ * addresses that same carrier through its owning scene object. Publish the
+ * exact render range under both identities so the Inspector never invents or
+ * waits for a second, visually divergent scale.
+ */
+export function buildViewport3DRenderedScalarRangeAliases({
+  component,
+  quantityId,
+  range,
+  renderedScope,
+  visualizationTarget,
+}: {
+  component: string;
+  quantityId: string;
+  range: { max: number; min: number };
+  renderedScope: Pick<Viewport3DRenderedScalarRange, "scopeId" | "scopeKind">;
+  visualizationTarget?: {
+    id: string;
+    kind: "object" | "part";
+  } | null;
+}): Viewport3DRenderedScalarRange[] {
+  const ranges: Viewport3DRenderedScalarRange[] = [
+    {
+      component,
+      quantityId,
+      range,
+      scopeId: renderedScope.scopeId,
+      scopeKind: renderedScope.scopeKind,
+    },
+  ];
+  if (visualizationTarget?.kind !== "object") return ranges;
+
+  const objectScopeId = visualizationTarget.id.replace(/^object:/, "").trim();
+  if (!objectScopeId) return ranges;
+  ranges.push({
+    component,
+    quantityId,
+    range,
+    scopeId: objectScopeId,
+    scopeKind: "object",
+  });
+  return ranges;
 }
 
 interface Viewport3DWidgetState {
@@ -79,6 +142,7 @@ const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
   captureReturnProfileId: null,
   captureRevision: 0,
   fitRevision: 0,
+  renderedScalarRanges: [],
   resetCameraRevision: 0,
   visualProfileId: DEFAULT_VIEWPORT_3D_VISUAL_PROFILE_ID,
   widgets: {
@@ -176,6 +240,28 @@ class Viewport3DStore {
     this.snapshot = {
       ...this.snapshot,
       activeScalarColorbarLegends: legends,
+    };
+    this.notify();
+  }
+
+  getRenderedScalarRange(
+    query: Viewport3DRenderedScalarRangeQuery,
+  ): Viewport3DRenderedScalarRange["range"] | null {
+    return resolveViewport3DRenderedScalarRange(
+      this.snapshot.renderedScalarRanges,
+      query,
+    );
+  }
+
+  setRenderedScalarRanges(
+    ranges: Viewport3DRenderedScalarRange[],
+  ): void {
+    if (sameViewport3DRenderedScalarRanges(this.snapshot.renderedScalarRanges, ranges)) {
+      return;
+    }
+    this.snapshot = {
+      ...this.snapshot,
+      renderedScalarRanges: ranges,
     };
     this.notify();
   }
@@ -479,6 +565,45 @@ export function useViewport3DCommandState(): Viewport3DCommandState {
   );
 }
 
+export function useViewport3DRenderedScalarRange(
+  query: Viewport3DRenderedScalarRangeQuery,
+): Viewport3DRenderedScalarRange["range"] | null {
+  const { component, quantityId, scopeId, scopeKind } = query;
+  const getSnapshot = useCallback(
+    () =>
+      viewport3dStore.getRenderedScalarRange({
+        component,
+        quantityId,
+        scopeId,
+        scopeKind,
+      }),
+    [component, quantityId, scopeId, scopeKind],
+  );
+  return useSyncExternalStore(
+    (onStoreChange) => viewport3dStore.subscribe(onStoreChange),
+    getSnapshot,
+    () => null,
+  );
+}
+
+export function resolveViewport3DRenderedScalarRange(
+  ranges: readonly Viewport3DRenderedScalarRange[],
+  query: Viewport3DRenderedScalarRangeQuery,
+): Viewport3DRenderedScalarRange["range"] | null {
+  if (!query.component) return null;
+  const quantityId = resolveCanonicalQuantityId(query.quantityId);
+  const scopeKind = query.scopeKind ?? "full";
+  const scopeId = scopeKind === "full" ? null : query.scopeId ?? null;
+  const match = ranges.find(
+    (range) =>
+      range.component === query.component &&
+      resolveCanonicalQuantityId(range.quantityId) === quantityId &&
+      range.scopeKind === scopeKind &&
+      range.scopeId === scopeId,
+  );
+  return match?.range ?? null;
+}
+
 function sameViewport3DScalarColorbarLegends(
   left: readonly Viewport3DScalarColorbarLegend[],
   right: readonly Viewport3DScalarColorbarLegend[],
@@ -493,6 +618,26 @@ function sameViewport3DScalarColorbarLegends(
       legend.maxLabel === other.maxLabel &&
       legend.minLabel === other.minLabel &&
       legend.paletteGradient === other.paletteGradient
+    );
+  });
+}
+
+function sameViewport3DRenderedScalarRanges(
+  left: readonly Viewport3DRenderedScalarRange[],
+  right: readonly Viewport3DRenderedScalarRange[],
+): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  return left.every((range, index) => {
+    const other = right[index];
+    return (
+      other !== undefined &&
+      range.component === other.component &&
+      range.quantityId === other.quantityId &&
+      range.range.min === other.range.min &&
+      range.range.max === other.range.max &&
+      range.scopeId === other.scopeId &&
+      range.scopeKind === other.scopeKind
     );
   });
 }

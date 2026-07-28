@@ -142,6 +142,7 @@ pub(crate) struct SessionManifest {
     pub resolved_worker: Option<String>,
     pub resolved_cpu_threads: Option<u32>,
     pub resolved_fallback: Option<fullmag_runner::ResolvedFallback>,
+    pub fem_crossover_decision: Option<fullmag_runner::FemCrossoverDecision>,
     pub artifact_dir: String,
     pub started_at_unix_ms: u128,
     pub finished_at_unix_ms: u128,
@@ -165,6 +166,7 @@ pub(crate) struct SessionRuntimeSelection {
     pub resolved_worker: Option<String>,
     pub resolved_cpu_threads: Option<u32>,
     pub resolved_fallback: Option<fullmag_runner::ResolvedFallback>,
+    pub fem_crossover_decision: Option<fullmag_runner::FemCrossoverDecision>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -401,6 +403,7 @@ pub(crate) struct RuntimeResolutionSummary {
     pub resolved_engine_id: Option<String>,
     pub resolved_worker: Option<String>,
     pub resolved_fallback: Option<fullmag_runner::ResolvedFallback>,
+    pub fem_crossover_decision: Option<fullmag_runner::FemCrossoverDecision>,
     pub local_engine_id: Option<String>,
     pub local_engine_label: Option<String>,
     pub requires_managed_runtime: bool,

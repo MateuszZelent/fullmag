@@ -83,6 +83,27 @@ describe("viewport3DColorbarPlan", () => {
     });
   });
 
+  it("plans a rendered range for Inspector even when the viewport colorbar is hidden", () => {
+    const target = objectPlan("object:film", {
+      viewportColorbarVisible: false,
+    });
+
+    expect(planViewport3DColorbars({ targets: [target] })).toEqual([]);
+    expect(
+      planViewport3DColorbars({
+        includeInspectorRanges: true,
+        targets: [target],
+      }),
+    ).toMatchObject([
+      {
+        colorMode: "x",
+        quantityId: "m",
+        scopeId: "object:film",
+        scopeKind: "object",
+      },
+    ]);
+  });
+
   it("keeps render identity stable across range-only updates", () => {
     const target = objectPlan("object:film");
     const groupKey = buildViewport3DColorbarGroupKey({

@@ -13,10 +13,34 @@ export type AnalysisWorkbenchSurface =
   | "convergence"
   | "frequency";
 
+/**
+ * `following` — chart updates on every relevant resource revision.
+ * `paused` — chart is frozen at a specific revision; updates are suppressed
+ *   until the user explicitly resumes. Resume executes exactly one fetch.
+ */
+export type ChartLiveMode = "following" | "paused";
+
+export type AnalysisChartRangeMode =
+  | { mode: "follow" }
+  | { mode: "tailRows"; rows: number }
+  | { mode: "tailTime"; durationS: number }
+  | { mode: "fixed" }
+  | { mode: "fullDecimated" };
+
 export interface AnalysisPlotsWorkspaceState {
   activeSurface: AnalysisWorkbenchSurface;
   availableColumns: AxisColumnDescriptor[];
+  /** Monotonic local command consumed by the mounted ECharts owner only. */
+  fitRequest: number;
+  /**
+   * Series IDs hidden from chart rendering. Local UI preference only;
+   * does NOT trigger a resource fetch.
+   */
+  hiddenSeriesIds: readonly string[];
+  liveMode: ChartLiveMode;
   range: AnalysisChartRange | null;
+  rangeMode: AnalysisChartRangeMode;
+  targetPoints: 160 | 400 | 800 | 1600 | 3200 | 5000;
   selectedPoint: AnalysisChartCursorPoint | null;
   xAxisId: string;
   yAxisIds: string[];
@@ -27,7 +51,12 @@ type AnalysisPlotsWorkspaceListener = () => void;
 const INITIAL_STATE: AnalysisPlotsWorkspaceState = {
   activeSurface: "overview",
   availableColumns: [],
+  fitRequest: 0,
+  hiddenSeriesIds: [],
+  liveMode: "following",
   range: null,
+  rangeMode: { mode: "follow" },
+  targetPoints: 1600,
   selectedPoint: null,
   xAxisId: "step",
   yAxisIds: ["mx", "my", "mz", "e_total"],
@@ -89,6 +118,7 @@ class AnalysisPlotsWorkspaceStore {
     this.setState({
       ...this.state,
       range,
+      rangeMode: { mode: "fixed" },
     });
   }
 
@@ -97,7 +127,69 @@ class AnalysisPlotsWorkspaceStore {
     this.setState({
       ...this.state,
       range: null,
+      rangeMode: { mode: "follow" },
     });
+  }
+
+  setRangeMode(rangeMode: AnalysisChartRangeMode): void {
+    if (rangeModeEqual(this.state.rangeMode, rangeMode) &&
+      (rangeMode.mode === "fixed" ? this.state.range !== null : this.state.range === null)) {
+      return;
+    }
+    this.setState({
+      ...this.state,
+      range: rangeMode.mode === "fixed" ? this.state.range : null,
+      rangeMode,
+    });
+  }
+
+  setTargetPoints(targetPoints: AnalysisPlotsWorkspaceState["targetPoints"]): void {
+    if (this.state.targetPoints === targetPoints) return;
+    this.setState({ ...this.state, targetPoints });
+  }
+
+  setLiveMode(liveMode: ChartLiveMode): void {
+    if (this.state.liveMode === liveMode) return;
+    this.setState({ ...this.state, liveMode });
+  }
+
+  requestFitView(): void {
+    const fitRequest =
+      this.state.fitRequest === Number.MAX_SAFE_INTEGER
+        ? 1
+        : this.state.fitRequest + 1;
+    this.setState({ ...this.state, fitRequest });
+  }
+
+  toggleSeriesVisibility(seriesId: string): void {
+    const hidden = this.state.hiddenSeriesIds;
+    const next = hidden.includes(seriesId)
+      ? hidden.filter((id) => id !== seriesId)
+      : [...hidden, seriesId];
+    if (next.length === hidden.length && next.every((id, i) => id === hidden[i])) return;
+    this.setState({ ...this.state, hiddenSeriesIds: next });
+  }
+
+  setHiddenSeriesIds(hiddenSeriesIds: readonly string[]): void {
+    const next = [...new Set(hiddenSeriesIds)];
+    if (stringArraysEqual(this.state.hiddenSeriesIds, next)) return;
+    this.setState({ ...this.state, hiddenSeriesIds: next });
+  }
+
+  setSoloSeries(seriesId: string | null, allSeriesIds?: readonly string[]): void {
+    if (seriesId === null) {
+      this.setState({ ...this.state, hiddenSeriesIds: [] });
+      return;
+    }
+    if (allSeriesIds && allSeriesIds.length > 0) {
+      const next = allSeriesIds.filter((id) => id !== seriesId);
+      this.setState({ ...this.state, hiddenSeriesIds: next });
+    }
+  }
+
+  clearHiddenSeries(): void {
+    if (this.state.hiddenSeriesIds.length === 0) return;
+    this.setState({ ...this.state, hiddenSeriesIds: [] });
   }
 
   setSelectedPoint(selectedPoint: AnalysisChartCursorPoint | null): void {
@@ -164,4 +256,18 @@ function chartCursorPointsEqual(
     left.point.x === right.point.x &&
     left.point.y === right.point.y
   );
+}
+
+function rangeModeEqual(
+  left: AnalysisChartRangeMode,
+  right: AnalysisChartRangeMode,
+): boolean {
+  if (left.mode !== right.mode) return false;
+  if (left.mode === "tailRows" && right.mode === "tailRows") {
+    return left.rows === right.rows;
+  }
+  if (left.mode === "tailTime" && right.mode === "tailTime") {
+    return left.durationS === right.durationS;
+  }
+  return true;
 }

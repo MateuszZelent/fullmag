@@ -16,6 +16,7 @@ export function TableColumnList({
   onToggleYAxis,
   xAxisId,
   xAxisRadioName,
+  showQuantityId = false,
   yAxisIds,
 }: {
   columns: readonly AxisColumnDescriptor[] | null;
@@ -23,6 +24,7 @@ export function TableColumnList({
   onToggleYAxis: (id: string, enabled: boolean) => void;
   xAxisId: string;
   xAxisRadioName: string;
+  showQuantityId?: boolean;
   yAxisIds: string[];
 }) {
   if (!columns) {
@@ -77,6 +79,9 @@ export function TableColumnList({
             />
             <span className="fm-analysis-plots__column-label">
               {column.label}
+              {showQuantityId ? (
+                <span className="fm-analysis-plots__column-id">{column.column_id}</span>
+              ) : null}
             </span>
             <span className="fm-analysis-plots__column-unit">{column.unit}</span>
           </label>

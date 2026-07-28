@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 
 const PROFILE_PERSIST_QUEUE_CAPACITY: usize = 16;
 type PersistFailureReporter = Arc<dyn Fn(String) + Send + Sync + 'static>;
+type PersistCompletionReporter = Arc<dyn Fn() + Send + Sync + 'static>;
 
 pub(crate) struct SolverProfilePersistJob {
     pub(crate) artifact_dir: PathBuf,
@@ -47,6 +48,7 @@ pub(crate) struct SolverProfilePersistWorker {
     failed: Arc<AtomicBool>,
     failure: Arc<Mutex<PersistFailureState>>,
     failure_reporter: Arc<Mutex<Option<PersistFailureReporter>>>,
+    completion_reporter: Arc<Mutex<Option<PersistCompletionReporter>>>,
 }
 
 impl SolverProfilePersistWorker {
@@ -62,19 +64,33 @@ impl SolverProfilePersistWorker {
         let failed = Arc::new(AtomicBool::new(false));
         let failure = Arc::new(Mutex::new(PersistFailureState::default()));
         let failure_reporter = Arc::new(Mutex::new(None));
+        let completion_reporter: Arc<Mutex<Option<PersistCompletionReporter>>> =
+            Arc::new(Mutex::new(None));
         let worker_failed = Arc::clone(&failed);
         let worker_failure = Arc::clone(&failure);
         let worker_failure_reporter = Arc::clone(&failure_reporter);
+        let worker_completion_reporter = Arc::clone(&completion_reporter);
         std::thread::Builder::new()
             .name("fullmag-solver-profile-persist".to_string())
             .spawn(move || {
                 while let Ok(job) = rx.recv() {
-                    if let Err(error) = sink(job) {
-                        let message = format!("solver profile persistence failed: {error:#}");
-                        if mark_failed(&worker_failed, &worker_failure, message.clone()) {
-                            report_failure(&worker_failure, &worker_failure_reporter, message);
+                    match sink(job) {
+                        Ok(()) => {
+                            let callback = worker_completion_reporter
+                                .lock()
+                                .ok()
+                                .and_then(|slot| slot.clone());
+                            if let Some(callback) = callback {
+                                callback();
+                            }
                         }
-                        break;
+                        Err(error) => {
+                            let message = format!("solver profile persistence failed: {error:#}");
+                            if mark_failed(&worker_failed, &worker_failure, message.clone()) {
+                                report_failure(&worker_failure, &worker_failure_reporter, message);
+                            }
+                            break;
+                        }
                     }
                 }
             })
@@ -84,6 +100,7 @@ impl SolverProfilePersistWorker {
             failed,
             failure,
             failure_reporter,
+            completion_reporter,
         }
     }
 
@@ -92,6 +109,15 @@ impl SolverProfilePersistWorker {
         Reporter: Fn(String) + Send + Sync + 'static,
     {
         if let Ok(mut slot) = self.failure_reporter.lock() {
+            *slot = Some(Arc::new(reporter));
+        }
+    }
+
+    pub(crate) fn bind_completion_reporter<Reporter>(&self, reporter: Reporter)
+    where
+        Reporter: Fn() + Send + Sync + 'static,
+    {
+        if let Ok(mut slot) = self.completion_reporter.lock() {
             *slot = Some(Arc::new(reporter));
         }
     }
@@ -192,6 +218,7 @@ fn write_profile_sample(job: SolverProfilePersistJob) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Condvar, Mutex};
     use std::time::{Duration, Instant};
 
@@ -228,5 +255,38 @@ mod tests {
         let (lock, ready) = &*gate;
         *lock.lock().unwrap() = true;
         ready.notify_all();
+    }
+
+    #[test]
+    fn completion_reporter_runs_only_after_the_sink_finishes() {
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let sink_gate = Arc::clone(&gate);
+        let worker = SolverProfilePersistWorker::spawn_with_sink(move |_| {
+            let (lock, ready) = &*sink_gate;
+            let mut released = lock.lock().unwrap();
+            while !*released {
+                released = ready.wait(released).unwrap();
+            }
+            Ok(())
+        });
+        let completed = Arc::new(AtomicU64::new(0));
+        let reporter_completed = Arc::clone(&completed);
+        worker.bind_completion_reporter(move || {
+            reporter_completed.fetch_add(1, Ordering::AcqRel);
+        });
+
+        worker
+            .try_enqueue(SolverProfilePersistJob::test_fixture(1))
+            .unwrap();
+        assert_eq!(completed.load(Ordering::Acquire), 0);
+
+        let (lock, ready) = &*gate;
+        *lock.lock().unwrap() = true;
+        ready.notify_all();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while completed.load(Ordering::Acquire) == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(completed.load(Ordering::Acquire), 1);
     }
 }

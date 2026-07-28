@@ -181,6 +181,18 @@ const analysisPlotsViewPath = path.join(
   appRoot,
   "src/modules/analysis-plots/AnalysisPlotsView.tsx",
 );
+const analysisTableDataHookPath = path.join(
+  appRoot,
+  "src/modules/analysis-plots/hooks/useAnalysisTableData.ts",
+);
+const analysisEnergyDataHookPath = path.join(
+  appRoot,
+  "src/modules/analysis-plots/hooks/useAnalysisEnergyData.ts",
+);
+const analysisFrequencyDataHookPath = path.join(
+  appRoot,
+  "src/modules/analysis-plots/hooks/useAnalysisFrequencyData.ts",
+);
 const analysisTableSurfacePath = path.join(
   appRoot,
   "src/modules/analysis-plots/components/AnalysisTableSurface.tsx",
@@ -1706,6 +1718,9 @@ function checkAnalysisPlotsStableResourceInputs() {
   const controllerSource = readFileSync(analysisPlotsControllerPath, "utf8");
   const modelSource = readFileSync(analysisPlotsModelPath, "utf8");
   const viewSource = readFileSync(analysisPlotsViewPath, "utf8");
+  const tableDataHookSource = readFileSync(analysisTableDataHookPath, "utf8");
+  const energyDataHookSource = readFileSync(analysisEnergyDataHookPath, "utf8");
+  const frequencyDataHookSource = readFileSync(analysisFrequencyDataHookPath, "utf8");
   const tableSurfaceSource = readFileSync(analysisTableSurfacePath, "utf8");
   const adapterSource = readFileSync(analysisTableRowsAdapterPath, "utf8");
   const chartTableSource = readFileSync(chartTableModelPath, "utf8");
@@ -1718,15 +1733,41 @@ function checkAnalysisPlotsStableResourceInputs() {
     "yAxisIds={controller.yAxisIds}",
   ]);
   requireTokens(controllerSource, "analysis plots stable resource inputs", [
+    "useAnalysisTableData",
+    "useAnalysisEnergyData",
+    "useAnalysisFrequencyData",
+  ]);
+  forbidTokens(
+    controllerSource,
+    "basic analysis excludes deferred dynamics resources",
+    [
+      "useSpinWaveGammaResource",
+      "useDynamicStructureFactorResource",
+    ],
+  );
+  requireTokens(tableDataHookSource, "analysis plots table resource owner", [
     "useTableColumnsResource",
     "useTableRowsBinaryResource",
     "tableRowsResourceFromBinary",
-    "buildAnalysisPlotsTableQuery({ cursor, range, xAxisId })",
-    "shouldFetchAnalysisTableRows({",
+    "buildAnalysisPlotsTableQuery({",
+    "shouldLoadPublishedTableRows(",
+    "shouldPausePublishedTableRows(",
+  ]);
+  requireTokens(energyDataHookSource, "analysis plots energy resource owner", [
+    "activeSurface === \"energy\"",
+    "useSolverEnergyHistoryResource",
+  ]);
+  requireTokens(frequencyDataHookSource, "analysis plots frequency resource owner", [
+    "activeSurface === \"frequency\"",
+    "useFrequencyDomainManifestResource",
   ]);
   requireTokens(modelSource, "analysis plots stable resource inputs", [
-    "columns: ANALYSIS_SCALAR_COLUMNS",
-    "targetPoints: 1_600",
+    "targetPoints = 1_600",
+  ]);
+  requireTokens(tableDataHookSource, "analysis plots runtime table schema", [
+    "tableColumnIdsForQuery(tableColumns.data)",
+    "hasPublishedTableSchema",
+    "targetPoints",
   ]);
   requireTokens(viewSource, "analysis plots stable resource inputs", [
     "const table = useMemo<TableRowsLike | null>(",
@@ -1735,7 +1776,10 @@ function checkAnalysisPlotsStableResourceInputs() {
     "onRangeChange={onRangeChange}",
   ]);
   requireTokens(tableSurfaceSource, "analysis plots stable resource inputs", [
-    "series={chartSeries}",
+    // allSeries={chartSeries} ensures the full series list is passed for stable axis labels
+    // series={visibleSeries} passes only visible series for rendering (hide/show support)
+    "allSeries={chartSeries}",
+    "series={visibleSeries}",
     "xAxisLabel={xAxisLabel}",
   ]);
   requireTokens(adapterSource, "analysis plots table rows adapter", [

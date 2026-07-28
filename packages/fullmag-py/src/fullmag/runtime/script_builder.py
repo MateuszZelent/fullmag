@@ -3424,7 +3424,11 @@ def _render_table_autosave(
     if table_autosave is None:
         return []
 
-    kwargs = [f"{_py_sampling_period(table_autosave.t_sampl)}"]
+    kwargs = (
+        [f"every_steps={table_autosave.every_steps}"]
+        if table_autosave.every_steps is not None
+        else [f"{_py_sampling_period(table_autosave.t_sampl)}"]
+    )
     quantities = tuple(table_autosave.quantities or DEFAULT_TABLE_AUTOSAVE_QUANTITIES)
     if quantities != DEFAULT_TABLE_AUTOSAVE_QUANTITIES:
         kwargs.append(f"quantities={_py_literal(list(quantities))}")
@@ -3439,12 +3443,16 @@ def _table_autosave_from_override(value: object) -> TableAutosave | None:
         return None
     if value.get("kind") not in {None, "table_autosave"}:
         return None
+    every_steps = value.get("every_steps")
+    if isinstance(every_steps, bool) or not isinstance(every_steps, int):
+        every_steps = None
     sample_period = _requested_sampling_period_from_ir(value, "sample_period_s")
-    if sample_period is None:
+    if sample_period is None and every_steps is None:
         return None
     quantities = value.get("quantities")
     return TableAutosave(
         t_sampl=sample_period,
+        every_steps=every_steps,
         quantities=quantities if isinstance(quantities, list) else None,
         table_id=str(value.get("table_id") or "default"),
     )

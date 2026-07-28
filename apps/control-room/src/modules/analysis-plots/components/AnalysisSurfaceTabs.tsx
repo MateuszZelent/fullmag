@@ -1,7 +1,5 @@
-import type { KeyboardEvent } from "react";
-
 import type { AnalysisWorkbenchSurface } from "@/kernel/workspace/analysisPlotsWorkspace";
-import { Button } from "@/shared/ui/Button";
+import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
 
 const SURFACES: readonly { id: AnalysisWorkbenchSurface; label: string }[] = [
   { id: "overview", label: "Overview" },
@@ -13,33 +11,23 @@ const SURFACES: readonly { id: AnalysisWorkbenchSurface; label: string }[] = [
 
 export function AnalysisSurfaceTabs({ active, onChange }: { active: AnalysisWorkbenchSurface; onChange: (surface: AnalysisWorkbenchSurface) => void }) {
   return (
-    <div aria-label="Analysis workbench surfaces" className="fm-analysis-plots__tabs" role="tablist">
+    <Tabs
+      aria-label="Analysis workbench surfaces"
+      className="fm-analysis-plots__tabs"
+      onValueChange={(value) => onChange(value as AnalysisWorkbenchSurface)}
+      value={active}
+    >
+      <TabsList aria-label="Analysis workbench surfaces" presentation="segmented">
       {SURFACES.map((surface) => (
-        <Button
-          aria-selected={active === surface.id}
+        <TabsTrigger
           className="fm-analysis-plots__tab"
           key={surface.id}
-          onClick={() => onChange(surface.id)}
-          onKeyDown={handleTabKeyDown}
-          role="tab"
-          size="sm"
-          tabIndex={active === surface.id ? 0 : -1}
-          type="button"
-          variant={active === surface.id ? "primary" : "secondary"}
+          value={surface.id}
         >
           {surface.label}
-        </Button>
+        </TabsTrigger>
       ))}
-    </div>
+      </TabsList>
+    </Tabs>
   );
-}
-
-function handleTabKeyDown(event: KeyboardEvent<HTMLButtonElement>): void {
-  const tabs = Array.from(event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? []);
-  const current = tabs.indexOf(event.currentTarget);
-  const target = event.key === "Home" ? tabs[0] : event.key === "End" ? tabs.at(-1) : event.key === "ArrowRight" ? tabs[(current + 1) % tabs.length] : event.key === "ArrowLeft" ? tabs[(current - 1 + tabs.length) % tabs.length] : null;
-  if (!target) return;
-  event.preventDefault();
-  target.focus();
-  target.click();
 }

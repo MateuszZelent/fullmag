@@ -1044,6 +1044,7 @@ pub(crate) fn default_current_live_state(req: &CurrentLiveSnapshotRequest) -> Se
             resolved_worker: None,
             resolved_cpu_threads: None,
             resolved_fallback: None,
+            fem_crossover_decision: None,
             artifact_dir,
             started_at_unix_ms: now,
             finished_at_unix_ms: now,

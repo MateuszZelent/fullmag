@@ -63,9 +63,13 @@ export interface KernelEventMap {
     objectId: string;
     source: ModuleId;
   };
+  "explorer:tab-requested": {
+    source: ModuleId;
+    tab: "diagnostics" | "jobs" | "model" | "resources" | "results";
+  };
   "footer:tab-requested": {
     reason?: string;
-    tab: "analysis" | "diagnostics" | "engine" | "logs" | "mesh" | "telemetry";
+    tab: "diagnostics" | "engine" | "logs" | "mesh" | "telemetry";
   };
   "diagnostics:recorder-open-requested": {
     source: string;

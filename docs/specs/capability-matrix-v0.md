@@ -74,6 +74,32 @@ Python DSL and ProblemIR validator in `strict`, `extended`, and `hybrid`
 modes. This is an explicit unavailable-path diagnostic, not CPU fallback and
 not a claim of multi-GPU capability.
 
+### FEM automatic device crossover
+
+FEM keeps the public `cpu | gpu | auto` device vocabulary. Explicit CPU and
+GPU requests are hard constraints: performance policy never changes them, and
+an unavailable explicit GPU request fails closed. Only `auto` may consume a
+qualified, versioned, hash- and identity-verified crossover profile described
+by ADR 0021. Without a matching profile, `auto` remains availability-first and
+prefers an executable GPU lane; this is not benchmark qualification.
+
+Current production activation is fail-closed because the runtime registry does
+not yet join the selected manifest, actually loaded library hashes, and
+detected GPU into one authoritative identity. Matching caller-controlled JSON
+files cannot qualify a profile. Schema v1 rejects non-null signatures because
+no algorithm, trusted key, or verifier is defined.
+`FULLMAG_FEM_CROSSOVER_RUNTIME_IDENTITY` is ignored and untrusted; it has no
+production or diagnostic consumer and cannot attest to runtime identity.
+
+The crossover feature vector includes node count, optional native assembled
+matrix nonzero count, demag state, relaxation algorithm, and preview state.
+Missing `matrix_nnz` stays missing rather than being estimated. Requested and
+resolved device, selection reason, calibration ID, and confidence are runtime
+provenance and resource-first v2 status fields.
+Preview state is derived from actual execution cadence, and the selected
+decision is pinned through engine, session, artifact, and persistent-runtime
+provenance without reloading mutable profile data.
+
 ### FEM dynamic-solver evidence overlay
 
 FEM modal and driven solvers also record independent evidence axes so a narrow

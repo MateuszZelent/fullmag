@@ -16,6 +16,7 @@ use crate::control_room::{
 };
 use crate::feature_flags::FeatureFlags;
 use crate::formatting::{push_engine_log, unix_time_millis};
+use crate::nvtx_range;
 use crate::python_bridge::{python_mesh_preparation_update, PythonMeshPreparationUpdate};
 use crate::simulation_preparation::{
     PreparationLogLevel, PreparationStageId, PreparationTransitionError, SimulationPreparationState,
@@ -226,6 +227,7 @@ impl LocalLiveWorkspace {
         let state = Arc::new(Mutex::new(initial));
         publisher.bind_state(Arc::clone(&state));
         let persistence_state = Arc::downgrade(&state);
+        let persistence_failure_publisher = publisher.clone();
         solver_profile_persistence.bind_failure_reporter(move |message| {
             let Some(state) = persistence_state.upgrade() else {
                 return;
@@ -234,6 +236,18 @@ impl LocalLiveWorkspace {
                 state.solver_profile.disable_artifact_persistence();
                 push_engine_log(&mut state.engine_log, "error", message);
             };
+            persistence_failure_publisher.request_publish();
+        });
+        let persistence_state = Arc::downgrade(&state);
+        let persistence_completion_publisher = publisher.clone();
+        solver_profile_persistence.bind_completion_reporter(move || {
+            let Some(state) = persistence_state.upgrade() else {
+                return;
+            };
+            if let Ok(mut state) = state.lock() {
+                state.solver_profile.record_persist_completed();
+            };
+            persistence_completion_publisher.request_publish();
         });
         Self {
             state,
@@ -471,7 +485,11 @@ impl LocalLiveWorkspace {
         let persist_start = Instant::now();
         let persisted = persist_job.is_some();
         if let Some(job) = persist_job {
-            let _ = self.solver_profile_persistence.try_enqueue(job);
+            if let Ok(mut state) = self.state.lock() {
+                if self.solver_profile_persistence.try_enqueue(job).is_ok() {
+                    state.solver_profile.record_persist_enqueued();
+                }
+            }
         }
         self.report_solver_profile_persistence_failure();
         let persist_wall_time_ns = persisted.then(|| elapsed_ns(persist_start)).unwrap_or(0);
@@ -506,6 +524,7 @@ impl LocalLiveWorkspace {
             state.solver_profile.disable_artifact_persistence();
             push_engine_log(&mut state.engine_log, "error", message);
         }
+        self.publisher.request_publish();
     }
 
     /// Switch to fast publish mode (200ms throttle) during bootstrap/materialization,
@@ -1366,9 +1385,9 @@ mod tests {
         fem_mesh_payload_clone_count, ingest_preview_fields_from_update,
         merge_detailed_mesh_workspace, merge_pending_publish_payload,
         replace_cached_preview_fields, reset_fem_mesh_payload_clone_count,
-        upsert_cached_preview_field, CurrentLivePublisher, CurrentLiveScalarRow,
-        CurrentLiveSnapshotPayload, LiveTelemetryPublishGate, LocalLiveWorkspace,
-        LocalLiveWorkspaceState,
+        table_autosave_sample_due, upsert_cached_preview_field, CurrentLivePublisher,
+        CurrentLiveScalarRow, CurrentLiveSnapshotPayload, LiveTelemetryPublishGate,
+        LocalLiveWorkspace, LocalLiveWorkspaceState,
     };
     use crate::simulation_preparation::{
         PreparationStageId, PreparationStageStatus, SimulationPreparationState,
@@ -1617,6 +1636,7 @@ mod tests {
                     resolved_worker: None,
                     resolved_cpu_threads: None,
                     resolved_fallback: None,
+                    fem_crossover_decision: None,
                     artifact_dir: String::new(),
                     started_at_unix_ms: 0,
                     finished_at_unix_ms: 0,
@@ -1863,6 +1883,126 @@ mod tests {
     }
 
     #[test]
+    fn final_profile_sink_completion_is_visible_without_another_producer_call() {
+        let gate = std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let sink_gate = std::sync::Arc::clone(&gate);
+        let persist_worker =
+            crate::solver_profile_persistence::SolverProfilePersistWorker::spawn_with_sink(
+                move |_| {
+                    let (lock, ready) = &*sink_gate;
+                    let mut released = lock.lock().unwrap();
+                    while !*released {
+                        released = ready.wait(released).unwrap();
+                    }
+                    Ok(())
+                },
+            );
+        let workspace = LocalLiveWorkspace::new_with_profile_persistence(
+            workspace_with_domain_mesh().snapshot(),
+            no_op_publisher(),
+            persist_worker,
+        );
+        workspace.set_solver_profile_config(fullmag_runner::SolverProfileConfig {
+            enabled: true,
+            sample_every: 1,
+            persist_artifact: true,
+            ..fullmag_runner::SolverProfileConfig::default()
+        });
+
+        workspace.force_record_solver_profile_step(&fullmag_runner::StepStats {
+            step: 1,
+            ..fullmag_runner::StepStats::default()
+        });
+        let before = workspace.snapshot().solver_profile.snapshot();
+        assert_eq!(before.overhead.persist_enqueued_count, 1);
+        assert_eq!(before.overhead.persist_completed_count, 0);
+
+        let (lock, ready) = &*gate;
+        *lock.lock().unwrap() = true;
+        ready.notify_all();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while workspace
+            .snapshot()
+            .solver_profile
+            .snapshot()
+            .overhead
+            .persist_completed_count
+            == 0
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let after = workspace.snapshot().solver_profile.snapshot();
+        assert_eq!(after.overhead.persist_enqueued_count, 1);
+        assert_eq!(after.overhead.persist_completed_count, 1);
+        assert!(!after.persistence_failed);
+    }
+
+    #[test]
+    fn fast_profile_sink_never_publishes_completion_before_enqueue_ownership() {
+        let observed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink_observed = std::sync::Arc::clone(&observed);
+        let publisher = CurrentLivePublisher::spawn_with_test_sink(
+            "fast-profile-persist-order-test",
+            move |_, payload| {
+                if let Some(profile) = &payload.solver_profile {
+                    sink_observed.lock().unwrap().push((
+                        profile.overhead.persist_enqueued_count,
+                        profile.overhead.persist_completed_count,
+                    ));
+                }
+                Ok(())
+            },
+        );
+        let persist_worker =
+            crate::solver_profile_persistence::SolverProfilePersistWorker::spawn_with_sink(|_| {
+                Ok(())
+            });
+        let workspace = LocalLiveWorkspace::new_with_profile_persistence(
+            workspace_with_domain_mesh().snapshot(),
+            publisher.clone(),
+            persist_worker,
+        );
+        workspace.set_solver_profile_config(fullmag_runner::SolverProfileConfig {
+            enabled: true,
+            sample_every: 1,
+            persist_artifact: true,
+            ..fullmag_runner::SolverProfileConfig::default()
+        });
+
+        workspace.force_record_solver_profile_step(&fullmag_runner::StepStats {
+            step: 1,
+            ..fullmag_runner::StepStats::default()
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while workspace
+            .snapshot()
+            .solver_profile
+            .snapshot()
+            .overhead
+            .persist_completed_count
+            < 1
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        workspace.publish_snapshot();
+        wait_for_publish_count(&publisher, 1);
+
+        let final_profile = workspace.snapshot().solver_profile.snapshot();
+        assert_eq!(final_profile.overhead.persist_enqueued_count, 1);
+        assert_eq!(final_profile.overhead.persist_completed_count, 1);
+        let observed = observed.lock().unwrap();
+        assert!(!observed.is_empty());
+        assert!(
+            observed
+                .iter()
+                .all(|(enqueued, completed)| completed <= enqueued),
+            "published completion must never exceed enqueue ownership: {observed:?}"
+        );
+    }
+
+    #[test]
     fn failed_publish_retry_retains_destructively_taken_mesh_and_preview() {
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let second_payload = std::sync::Arc::new(std::sync::Mutex::new(None));
@@ -1982,8 +2122,22 @@ mod tests {
             second_sampled,
             second_record_start,
         );
+        let persist_deadline = Instant::now() + std::time::Duration::from_secs(2);
+        while workspace
+            .snapshot()
+            .solver_profile
+            .snapshot()
+            .overhead
+            .persist_completed_count
+            < 2
+            && Instant::now() < persist_deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         let snapshot = workspace.snapshot().solver_profile.snapshot();
         assert_eq!(snapshot.latest_samples.len(), 2);
+        assert_eq!(snapshot.overhead.persist_enqueued_count, 2);
+        assert_eq!(snapshot.overhead.persist_completed_count, 2);
         assert!(snapshot.overhead.last_persist_wall_time_ns > 0);
         assert!(snapshot.overhead.last_publisher_replace_wall_time_ns > 0);
         assert!(snapshot.overhead.last_record_wall_time_ns > 0);
@@ -3038,6 +3192,28 @@ mod tests {
             Some(3)
         );
     }
+
+    #[test]
+    fn table_autosave_step_cadence_controls_live_scalar_publication() {
+        let metadata = serde_json::json!({
+            "table_autosave": { "every_steps": 10 }
+        });
+        let mut stats = fullmag_runner::StepStats::default();
+        for step in [0, 9, 10, 23] {
+            stats.step = step;
+            assert_eq!(
+                table_autosave_sample_due(Some(&metadata), None, &stats, false),
+                step == 0 || step == 10,
+            );
+        }
+        stats.step = 23;
+        assert!(table_autosave_sample_due(
+            Some(&metadata),
+            None,
+            &stats,
+            true
+        ));
+    }
 }
 
 fn current_live_publisher_loop(
@@ -3100,13 +3276,16 @@ fn current_live_publisher_loop(
             let mut full_sync = |session_id: &str, payload: &CurrentLiveSnapshotPayload| {
                 full_sink(session_id, payload)
             };
-            let publish_result = execute_publish_cycle(
-                &session_id,
-                &snapshot,
-                fallback_allowed,
-                &mut delta_sync,
-                &mut full_sync,
-            );
+            let publish_result = {
+                let _publish_nvtx = nvtx_range::Range::new(b"fem.host.publish\0");
+                execute_publish_cycle(
+                    &session_id,
+                    &snapshot,
+                    fallback_allowed,
+                    &mut delta_sync,
+                    &mut full_sync,
+                )
+            };
             let publish_wall_time_ns = elapsed_ns(cycle_start);
             let cycle_ms = publish_wall_time_ns / 1_000_000;
             record_live_publish_diagnostics(
@@ -3180,15 +3359,18 @@ fn current_live_publisher_loop(
         };
         let mut full_sync =
             |session_id: &str, payload: &CurrentLiveSnapshotPayload| full_sink(session_id, payload);
-        let publish_result = publish_final_snapshot_with_diagnostics(
-            &session_id,
-            &mut snapshot,
-            &diagnostics,
-            &mut successful_publish_window,
-            fallback_allowed,
-            &mut delta_sync,
-            &mut full_sync,
-        );
+        let publish_result = {
+            let _publish_nvtx = nvtx_range::Range::new(b"fem.host.publish\0");
+            publish_final_snapshot_with_diagnostics(
+                &session_id,
+                &mut snapshot,
+                &diagnostics,
+                &mut successful_publish_window,
+                fallback_allowed,
+                &mut delta_sync,
+                &mut full_sync,
+            )
+        };
         record_live_publish_diagnostics(
             &diagnostics,
             clone_wall_time_ns,
@@ -3376,10 +3558,14 @@ pub(crate) fn set_latest_scalar_row_if_due(
     if feature_flags().disable_charts {
         return;
     }
-    // Always record the scalar row for live streaming whenever the orchestrator decides
-    // to publish a workspace update.  The `scalar_row_due` flag is an artifact-recorder
-    // concern (zarr on disk); for live telemetry we want every throttled live-update to
-    // carry a new chart point so the Charts panel populates continuously.
+    if !table_autosave_sample_due(
+        state.metadata.as_ref(),
+        state.latest_scalar_row.as_ref(),
+        &update.stats,
+        update.finished,
+    ) {
+        return;
+    }
     let previous_runtime_s = state
         .latest_scalar_row
         .as_ref()
@@ -3390,6 +3576,42 @@ pub(crate) fn set_latest_scalar_row_if_due(
         &update.stats,
         active_runtime_s,
     ));
+}
+
+fn table_autosave_sample_due(
+    metadata: Option<&serde_json::Value>,
+    previous: Option<&CurrentLiveScalarRow>,
+    stats: &fullmag_runner::StepStats,
+    finished: bool,
+) -> bool {
+    let Some(autosave) = metadata
+        .and_then(|value| value.get("table_autosave"))
+        .filter(|value| !value.is_null())
+    else {
+        return true;
+    };
+
+    if finished {
+        return true;
+    }
+    if let Some(every_steps) = autosave
+        .get("every_steps")
+        .and_then(serde_json::Value::as_u64)
+    {
+        return every_steps > 0 && (stats.step == 0 || stats.step % every_steps == 0);
+    }
+    let Some(sample_period_s) = autosave
+        .get("sample_period_s")
+        .and_then(serde_json::Value::as_f64)
+        .filter(|period| period.is_finite() && *period > 0.0)
+    else {
+        return true;
+    };
+    let Some(previous) = previous else {
+        return true;
+    };
+    let epsilon = sample_period_s * 1e-9;
+    stats.time + epsilon >= previous.time + sample_period_s
 }
 
 pub(crate) fn clear_cached_preview_fields(state: &mut LocalLiveWorkspaceState) {

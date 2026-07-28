@@ -6,6 +6,7 @@
 option(FULLMAG_ENABLE_FEM_GPU "Build FEM GPU backend sources" ON)
 option(FULLMAG_USE_MFEM_STACK "Build FEM backend against MFEM/libCEED/hypre" OFF)
 option(FULLMAG_FEM_WITH_SLEPC "Build FEM frequency-domain dependency slice against PETSc/SLEPc" ON)
+option(FULLMAG_ENABLE_NVTX "Enable phase-level FEM GPU NVTX ranges" OFF)
 
 if(FULLMAG_ENABLE_CUDA AND FULLMAG_ENABLE_FEM_GPU AND NOT CMAKE_CUDA_ARCHITECTURES)
     message(FATAL_ERROR
@@ -24,6 +25,7 @@ set(FEM_SOURCES
     core/fem_field_buffers.cpp
     core/fem_context_builder.cpp
     core/demag_linear_solve_validation.cpp
+    core/demag_solver_policy.cpp
     core/fem_element_quadrature_material.cpp
     core/fem_material_fields.cpp
     core/fem_material_runtime.cpp
@@ -130,6 +132,7 @@ set(FEM_SOURCES
     cpu/mfem/integrators/rk4.cpp
     cpu/mfem/integrators/rk23.cpp
     cpu/mfem/integrators/rk45.cpp
+    cpu/mfem/relaxation/direct_energy_increment.cpp
     cpu/mfem/relaxation/nonlinear_cg.cpp
     cpu/mfem/relaxation/projected_gradient_bb.cpp
     cpu/mfem/relaxation/relaxation_math.cpp
@@ -291,6 +294,12 @@ if(FULLMAG_USE_MFEM_STACK)
 endif()
 
 add_library(fullmag_fem SHARED ${FEM_SOURCES})
+
+if(FULLMAG_ENABLE_NVTX)
+    target_compile_definitions(fullmag_fem PRIVATE FULLMAG_ENABLE_NVTX=1)
+else()
+    target_compile_definitions(fullmag_fem PRIVATE FULLMAG_ENABLE_NVTX=0)
+endif()
 
 function(fullmag_private_string_define target macro value)
     string(REPLACE "\\" "\\\\" escaped "${value}")
@@ -936,6 +945,15 @@ target_include_directories(fem_demag_poisson_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_demag_poisson_contract COMMAND fem_demag_poisson_contract)
+
+add_executable(
+    fem_demag_delta_potential_contract
+    tests/demag_delta_potential_contract.cpp
+)
+add_test(
+    NAME fem_demag_delta_potential_contract
+    COMMAND fem_demag_delta_potential_contract
+)
 
 add_executable(fem_demag_fem_bem_contract tests/demag_fem_bem_contract.cpp)
 target_link_libraries(fem_demag_fem_bem_contract PRIVATE fullmag_fem)

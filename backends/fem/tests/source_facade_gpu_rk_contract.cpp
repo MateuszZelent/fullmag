@@ -7,12 +7,25 @@
 
 #include "source_facade_contract_utils.hpp"
 
+#include <cctype>
+
 namespace {
 
 using fullmag::fem::tests::check;
 using fullmag::fem::tests::fem_source_root;
 using fullmag::fem::tests::read_text_file;
 using fullmag::fem::tests::repo_root;
+
+std::string without_whitespace(const std::string &source) {
+    std::string compact;
+    compact.reserve(source.size());
+    for (const char character : source) {
+        if (!std::isspace(static_cast<unsigned char>(character))) {
+            compact.push_back(character);
+        }
+    }
+    return compact;
+}
 
 void gpu_rk_workspace_is_owned_by_cuda_rk_module() {
     const std::filesystem::path root = fem_source_root();
@@ -1513,6 +1526,17 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "hypre_device_solver.cpp");
     const std::string stage_compute =
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "stage_compute.cpp");
+    const std::string compact_stage_compute = without_whitespace(stage_compute);
+    const auto has_masked_recovery_call = [&compact_stage_compute](const char axis) {
+        const std::string component(1, axis);
+        const std::string recovery = "workspace->recovery_" + component;
+        const std::string call =
+            "fullmag_cuda_demag_recovery_csr(" + recovery + ".d_row_offsets," +
+            recovery + ".d_col_indices," + recovery + ".d_values," +
+            "gpu.demag_poisson.poisson_solution," +
+            "gpu.mesh_regions.magnetic_node_mask,gpu.fields.h_demag." + component + ",";
+        return compact_stage_compute.find(call) != std::string::npos;
+    };
     const std::string hypre_stream_interop =
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "hypre_stream_interop.cpp");
     const std::string runtime_snapshot =
@@ -1745,26 +1769,14 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
                 std::string::npos &&
             stage_compute.find("poisson_solution_for_recovery") ==
                 std::string::npos &&
-            stage_compute.find(
-                "gpu.demag_poisson.poisson_solution,\n"
-                "        gpu.mesh_regions.magnetic_node_mask,\n"
-                "        gpu.fields.h_demag.x") != std::string::npos &&
-            stage_compute.find(
-                "gpu.demag_poisson.poisson_solution,\n"
-                "        gpu.mesh_regions.magnetic_node_mask,\n"
-                "        gpu.fields.h_demag.y") != std::string::npos &&
-            stage_compute.find(
-                "gpu.demag_poisson.poisson_solution,\n"
-                "        gpu.mesh_regions.magnetic_node_mask,\n"
-                "        gpu.fields.h_demag.z") != std::string::npos,
+            has_masked_recovery_call('x') &&
+            has_masked_recovery_call('y') &&
+            has_masked_recovery_call('z'),
         "GPU periodic reduced Poisson demag recovery CSR uses reduced scalar columns, so device recovery must read reduced true-DOF phi; nodal phi lift belongs only to export");
     check(
-        stage_compute.find("gpu.mesh_regions.magnetic_node_mask,\n        gpu.fields.h_demag.x") !=
-                std::string::npos &&
-            stage_compute.find("gpu.mesh_regions.magnetic_node_mask,\n        gpu.fields.h_demag.y") !=
-                std::string::npos &&
-            stage_compute.find("gpu.mesh_regions.magnetic_node_mask,\n        gpu.fields.h_demag.z") !=
-                std::string::npos &&
+        has_masked_recovery_call('x') &&
+            has_masked_recovery_call('y') &&
+            has_masked_recovery_call('z') &&
             stage_compute.find("Pass nullptr mask so recovery computes H_demag at all nodes") ==
                 std::string::npos,
         "GPU Poisson demag recovery must mask non-magnetic nodes before periodic projection to match CPU MFEM recovery");

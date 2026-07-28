@@ -152,6 +152,7 @@ type ExplorerNodeKind =
   | "results.frequency_domain.comparison"
   | "results.frequency_domain.exports"
   | "results.field_quantity"
+  | "results.quick_chart"
   | "resources.root"
   | "resources.analysis.frequency_domain"
   | "resources.analysis.frequency_domain.manifest"
@@ -257,6 +258,7 @@ export interface ExplorerNode {
   artifactPath?: string;
   branchId?: string;
   calculationMode?: FrequencyDomainCalculationMode;
+  chartId?: string;
   crossSectionDraftId?: "draft";
   crossSectionPlotId?: string;
   fieldId?: string;
@@ -285,6 +287,9 @@ export interface ExplorerNode {
   fieldDriveId?: string;
   regionId?: string;
   resourceRef?: string;
+  tableId?: string;
+  xAxisId?: string;
+  yAxisIds?: readonly string[];
   sampleIndex?: number;
   stageId?: string;
   stageIndex?: number;

@@ -15,8 +15,9 @@ from fullmag.runtime.script_builder import export_builder_draft
 from fullmag.runtime.script_builder import rewrite_loaded_problem_script
 
 
-def test_table_autosave_lowers_default_columns_to_sampling_ir() -> None:
-    study = fm.Relaxation(
+def test_time_evolution_table_autosave_lowers_default_columns_to_sampling_ir() -> None:
+    study = fm.TimeEvolution(
+        dynamics=fm.LLG(),
         outputs=[fm.SaveScalar("E_total", every=1e-12)],
         table_autosave=fm.TableAutosave(t_sampl=2e-12),
     )
@@ -41,6 +42,41 @@ def test_table_autosave_accepts_auto_sinc_policy() -> None:
         },
         "quantities": ["t", "mx"],
     }
+
+
+def test_relaxation_table_autosave_lowers_accepted_step_cadence() -> None:
+    table = fm.TableAutosave(
+        every_steps=10,
+        quantities=["step", "mx", "my", "mz", "e_total"],
+    )
+    assert table.to_ir() == {
+        "kind": "table_autosave",
+        "table_id": "default",
+        "every_steps": 10,
+        "quantities": ["step", "mx", "my", "mz", "e_total"],
+    }
+
+    study = fm.Relaxation(outputs=[]).table_autosave(
+        every_steps=10,
+        quantities=["step", "mx"],
+    )
+    assert study.to_ir()["sampling"]["table_autosave"] == {
+        "kind": "table_autosave",
+        "table_id": "default",
+        "every_steps": 10,
+        "quantities": ["step", "mx"],
+    }
+
+
+@pytest.mark.parametrize("every_steps", [0, -1, 1.5, True])
+def test_table_autosave_rejects_invalid_or_ambiguous_step_cadence(
+    every_steps: object,
+) -> None:
+    with pytest.raises(ValueError, match="every_steps must be a positive integer"):
+        fm.TableAutosave(every_steps=every_steps)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="exactly one of t_sampl or every_steps"):
+        fm.TableAutosave(t_sampl=1e-12, every_steps=10)
 
 
 @pytest.mark.parametrize(

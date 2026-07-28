@@ -711,13 +711,31 @@ pub struct TableAutosaveIR {
     pub sample_period_policy: Option<SamplingPeriodPolicyIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_sample_period_s: Option<f64>,
+    /// Positive count of accepted solver states between table rows. Mutually
+    /// exclusive with simulation-time cadence fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub every_steps: Option<u64>,
     pub quantities: Vec<String>,
 }
 
 impl TableAutosaveIR {
     pub fn explicit_sample_period_s(&self) -> Option<f64> {
-        if self.sample_period_policy.is_none() && self.resolved_sample_period_s.is_none() {
+        if self.sample_period_policy.is_none()
+            && self.resolved_sample_period_s.is_none()
+            && self.every_steps.is_none()
+        {
             self.sample_period_s
+        } else {
+            None
+        }
+    }
+
+    pub fn accepted_step_cadence(&self) -> Option<u64> {
+        if self.sample_period_s.is_none()
+            && self.sample_period_policy.is_none()
+            && self.resolved_sample_period_s.is_none()
+        {
+            self.every_steps
         } else {
             None
         }

@@ -13,6 +13,25 @@ export interface QuickChartDescriptor {
   yAxisIds: readonly string[];
 }
 
+/**
+ * The Quick Chart must make the same schema-first promise as the full
+ * Analysis workbench: never request a guessed, static quantity list.
+ */
+export function quickChartColumnIdsForQuery(
+  columns: readonly { column_id: string }[] | null | undefined,
+  descriptor: QuickChartDescriptor | null,
+): string[] {
+  if (!columns || !descriptor) return [];
+  const publishedIds = new Set(columns.map((column) => column.column_id));
+  if (!publishedIds.has(descriptor.xAxisId)) return [];
+  const yAxisIds = [...new Set(descriptor.yAxisIds)].filter((columnId) =>
+    columnId !== descriptor.xAxisId && publishedIds.has(columnId),
+  );
+  return yAxisIds.length > 0
+    ? [descriptor.xAxisId, ...yAxisIds]
+    : [];
+}
+
 export function quickChartDescriptorFromSelection({
   selection,
   xAxisId,
@@ -23,6 +42,15 @@ export function quickChartDescriptorFromSelection({
   yAxisIds: readonly string[];
 }): QuickChartDescriptor | null {
   const ref = selection.ref;
+  if (ref?.type === "quick-chart") {
+    return {
+      chartId: ref.chartId,
+      resourceKey: `data.table:${ref.tableId}`,
+      tableId: ref.tableId,
+      xAxisId: ref.xAxisId,
+      yAxisIds: [...ref.yAxisIds],
+    };
+  }
   if (ref?.type !== "analysis-chart" && ref?.type !== "analysis-chart-point") {
     return null;
   }
@@ -45,13 +73,14 @@ export function buildQuickChartRenderModel({
   window: ChartTableWindow | null;
 }): ChartRenderModel {
   const xIndex = window?.columns.findIndex((column) => column.column_id === descriptor.xAxisId) ?? -1;
-  const selected = descriptor.yAxisIds.flatMap((id) => {
+  const selected = [...new Set(descriptor.yAxisIds)].flatMap((id) => {
     const index = window?.columns.findIndex((column) => column.column_id === id) ?? -1;
     return index >= 0 ? [{ id, index, column: window!.columns[index]! }] : [];
   });
   const units = [...new Set(selected.map((entry) => entry.column.unit))].slice(0, 2);
   const renderStatus =
     status === "error" ? "error" :
+    status === "unsupported" ? "unsupported" :
     status === "loading" || status === "idle" ? "loading" :
     status === "stale" ? "stale" :
     !window || window.rowCount === 0 || xIndex < 0 || selected.length === 0 ? "empty" :
@@ -81,6 +110,7 @@ export function buildQuickChartRenderModel({
     statusMessage:
       renderStatus === "loading" ? "Loading Quick Chart" :
       renderStatus === "error" ? "Quick Chart data unavailable" :
+      renderStatus === "unsupported" ? "Selected quantities are not available in this table" :
       renderStatus === "empty" ? "No chartable samples for this selection" :
       renderStatus === "stale" ? "Quick Chart data is stale" :
       undefined,

@@ -88,6 +88,24 @@ function modeVisualizationTargetId(
 }
 
 function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
+  if (
+    node.kind === "results.quick_chart" &&
+    node.chartId &&
+    node.tableId &&
+    node.xAxisId &&
+    node.yAxisIds
+  ) {
+    return {
+      chartId: node.chartId,
+      kind: "results.quick_chart",
+      nodeId: node.id,
+      tableId: node.tableId,
+      type: "quick-chart",
+      xAxisId: node.xAxisId,
+      yAxisIds: node.yAxisIds,
+    };
+  }
+
   if (node.kind === "mesh.unassigned.part" && node.meshPartId) {
     return {
       carrierPartId: node.meshPartId,

@@ -52,13 +52,13 @@
   },
   "fixture": {
     "manifest_path": "examples/assets/fem_performance/box500_airbox_exchange_demag_v1.fixture.json",
-    "manifest_sha256": "2f646b5f0410a4cd12a39e57c6347a3b9ea27deeb37003b822fc77646ee6be88",
+    "manifest_sha256": "66b7134acf264ebfc1614ee8d4d62a69940489e1be876387d83a68c729236792",
     "solver_mesh_sha256": "9c410c3b02cc86d3a832b923f13b5f9b0ec18c4be2babda148697c6dbc9c105a",
-    "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
-    "problem_ir_sha256": "ec36a24123cfa8d1d84e6da0987628e5da537c63fc5de44d91d15e1bd1c8ac25"
+    "solver_mesh_signature": "20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431",
+    "problem_ir_sha256": "403afa1214681d3317e23b14f4095dfea6141197cea813655c07d24104fbcc08"
   },
   "artifacts": {
-    "benchmark_csv_sha256": "e08cb324d5fb6fbf732b46d3b51ffe86cd71a272de5e8c6ff29dfbfa9068fde2",
-    "summary_json_sha256": "a90d426e453a9883722086ad9cab73900a39c9a80ab8581f00cc92479fd52c9b"
+    "benchmark_csv_sha256": "5e639e2a1c682747e21e3ed4f3da7bd7bc8b261e5562594862c0c0cd93e04a2e",
+    "summary_json_sha256": "707fd408c121c633ccff2cccb621c053bbb6f6230bc5a2611d5a6bc51bd01b0f"
   }
 }

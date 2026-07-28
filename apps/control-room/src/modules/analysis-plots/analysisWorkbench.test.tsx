@@ -41,10 +41,17 @@ function render(surface: "overview" | "energy" | "dynamics" | "convergence" | "f
   return renderToStaticMarkup(
     <AnalysisPlotsView
       activeSurface={surface}
+      availableColumns={[
+        ...tableWindow.columns,
+        { column_id: "e_demag", label: "demag energy", unit: "J" },
+        { column_id: "max_torque_T", label: "max torque", unit: "T" },
+      ]}
       kernel={kernel}
       onClearRange={vi.fn()}
       onPointSelect={vi.fn()}
       onRangeChange={vi.fn()}
+      onSelectXAxis={vi.fn()}
+      onToggleYAxis={vi.fn()}
       onSeriesSelect={vi.fn()}
       range={null}
       selectedPoint={null}
@@ -61,10 +68,11 @@ function render(surface: "overview" | "energy" | "dynamics" | "convergence" | "f
 describe("Analysis workbench surfaces", () => {
   it("keeps the workbench view as a thin surface registry", () => {
     const source = readFileSync(new URL("./AnalysisPlotsView.tsx", import.meta.url), "utf8");
-    expect(source.split("\n").length).toBeLessThan(180);
+    expect(source.split("\n").length).toBeLessThan(185);
     for (const owner of ["AnalysisTableSurface", "AnalysisEnergySurface", "AnalysisFrequencySurface"]) {
       expect(source).toContain(owner);
     }
+    expect(source).not.toContain("availableColumns={availableColumns}");
     expect(source).not.toContain("buildFrequencyDomainWorkbenchSummary");
     expect(source).not.toContain("<EChartsSurface");
   });
@@ -76,37 +84,63 @@ describe("Analysis workbench surfaces", () => {
     }
     expect(html).toContain('role="tablist"');
     expect(html).toContain('aria-selected="true"');
-    expect(html).toContain('tabindex="0"');
-    expect(html).toContain('tabindex="-1"');
+    expect(html).toContain('data-state="active"');
+    expect(html).toContain('role="tab"');
   });
 
   it("mounts only the selected dedicated heavy surface", () => {
     const overviewHtml = render("overview");
-    expect(overviewHtml).toContain("Series mx");
-    expect(overviewHtml).not.toContain("Series E total unit J latest");
+    // ChartLegend aria-label: "mx, unit 1, latest ..."
+    expect(overviewHtml).toContain("mx, unit 1");
+    expect(overviewHtml).not.toContain("Available quantities");
+    expect(overviewHtml).toContain("Scientific trust: Unknown");
+    // Heavy energy/frequency surfaces are mounted only after selecting their tab.
+    expect(overviewHtml).not.toContain("Energy history");
 
     const energyHtml = render("energy");
     expect(energyHtml).toContain("Energy balance");
     expect(energyHtml).toContain("Energy history");
+    expect(energyHtml).toContain("Scientific trust: Unknown");
     expect(energyHtml).not.toContain('aria-label="Chart status"');
 
     const dynamicsHtml = render("dynamics");
     expect(dynamicsHtml).toContain("Magnetization dynamics");
-    expect(dynamicsHtml).toContain("Series mx");
+    expect(dynamicsHtml).toContain("mx, unit 1");
     expect(dynamicsHtml).not.toContain("Energy history");
 
     const convergenceHtml = render("convergence");
     expect(convergenceHtml).toContain("Solver convergence");
     expect(convergenceHtml).toContain("max torque");
-    expect(convergenceHtml).not.toContain("Series mx");
+    // mx series must NOT appear on convergence surface
+    expect(convergenceHtml).not.toContain("mx, unit 1");
   });
 
-  it("gates resource families by active surface in the controller", () => {
-    const source = readFileSync(new URL("./useAnalysisPlotsController.ts", import.meta.url), "utf8");
-    expect(source).toContain("const loadTableRows");
-    expect(source).toContain("const loadEnergy");
-    expect(source).toContain("const loadFrequency");
-    expect(source).toContain("enabled: loadEnergy");
-    expect(source).toContain("enabled: loadFrequency");
+  it("gates resource families by active surface in the controller and hooks", () => {
+    const controllerSource = readFileSync(new URL("./useAnalysisPlotsController.ts", import.meta.url), "utf8");
+    const tableSource = readFileSync(new URL("./hooks/useAnalysisTableData.ts", import.meta.url), "utf8");
+    const energySource = readFileSync(new URL("./hooks/useAnalysisEnergyData.ts", import.meta.url), "utf8");
+    const freqSource = readFileSync(new URL("./hooks/useAnalysisFrequencyData.ts", import.meta.url), "utf8");
+
+    expect(controllerSource).toContain("useAnalysisTableData");
+    expect(controllerSource).toContain("useAnalysisEnergyData");
+    expect(controllerSource).toContain("useAnalysisFrequencyData");
+    // The basic tableautosave workbench must not request optional dynamics
+    // resources while an ordinary simulation is running.
+    expect(controllerSource).not.toContain("useSpinWaveGammaResource");
+    expect(controllerSource).not.toContain("useDynamicStructureFactorResource");
+    expect(controllerSource).toContain("analysisChartDescriptorId(activeSurface)");
+    expect(controllerSource).toContain("preferences.isHydrated");
+    const moduleSource = readFileSync(new URL("./AnalysisPlotsModule.tsx", import.meta.url), "utf8");
+    expect(moduleSource).not.toContain("dynamicStructureFactorStatus");
+    expect(tableSource).toContain("loadTableRows");
+    expect(energySource).toContain("loadEnergy");
+    expect(freqSource).toContain("loadFrequency");
+  });
+
+  it("uses cached primitive workspace snapshots for table axes", () => {
+    const tableSource = readFileSync(new URL("./hooks/useAnalysisTableData.ts", import.meta.url), "utf8");
+    expect(tableSource).toContain("useAnalysisPlotsWorkspaceSelector((state) => state.xAxisId)");
+    expect(tableSource).toContain("useAnalysisPlotsWorkspaceSelector((state) => state.yAxisIds)");
+    expect(tableSource).not.toContain("(state) => ({ xAxisId: state.xAxisId, yAxisIds: state.yAxisIds })");
   });
 });

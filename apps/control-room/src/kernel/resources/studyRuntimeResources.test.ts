@@ -348,7 +348,10 @@ describe("study runtime command resource bundles", () => {
     const previous = statusWith({
       resources: { commands_revision: 2, scene_revision: 8 },
       run: {
+        requested_device: "auto",
+        resolved_device: "gpu",
         run_id: "run-old",
+        selection_reason: "availability_first_gpu_no_qualified_profile",
         solver_steps: 0,
         solver_time: 0,
         stage_count: 1,
@@ -360,7 +363,10 @@ describe("study runtime command resource bundles", () => {
     const next = statusWith({
       resources: { commands_revision: 2, scene_revision: 8 },
       run: {
+        requested_device: "auto",
+        resolved_device: "gpu",
         run_id: "run-new",
+        selection_reason: "availability_first_gpu_no_qualified_profile",
         solver_steps: 0,
         solver_time: 0,
         stage_count: 1,
@@ -1104,7 +1110,10 @@ describe("study runtime command resource bundles", () => {
         true,
         statusWith({
           run: {
+            requested_device: "auto",
+            resolved_device: "gpu",
             run_id: "run-1",
+            selection_reason: "availability_first_gpu_no_qualified_profile",
             solver_steps: 0,
             solver_time: 0,
             stage_count: 1,
@@ -1151,6 +1160,8 @@ describe("study runtime command resource bundles", () => {
     expect(rowsHook).toContain(".rows(");
     expect(binaryRowsHook).toContain(".rowsBinary(");
     expect(binaryRowsHook).toContain("}#binary`");
+    expect(binaryRowsHook).toContain("pauseLoad = false");
+    expect(binaryRowsHook).toContain("pauseLoad,");
     expect(rowsHook).toContain("tableRowsResourceKey");
     expect(binaryRowsHook).toContain("tableRowsResourceKey");
     expect(rowsHook).toContain("minRefetchIntervalMs");

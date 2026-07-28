@@ -67,8 +67,9 @@ export function buildSeriesLegend(chartSeries: readonly ChartSeries[]) {
 }
 
 export function formatXAxisLabel(chartSeries: readonly ChartSeries[], xAxisId: string): string {
-  const unit = chartSeries.find((series) => series.xUnit)?.xUnit;
-  return unit ? `${xAxisId} [${unit}]` : xAxisId;
+  // The renderer owns unit formatting and SI scaling. Keeping this semantic
+  // label unit-free prevents a stale `[s]`/`[Hz]` suffix after auto-scaling.
+  return xAxisId || chartSeries.find((series) => series.xUnit)?.xUnit || "x";
 }
 
 export function formatFrequencyDomainEmptyState(status: string): string {
@@ -88,15 +89,26 @@ export function buildFrequencyDomainWorkflowSummary(chartTitle: string) {
 export function buildFrequencyDomainWorkbenchSummary(series: readonly ChartSeries[], chartTitle: string, status: string) {
   const first = series.find((entry) => entry.points.length > 0) ?? series[0];
   const tableId = first?.source.tableId ?? "frequency-domain";
-  const points = series.flatMap((entry) => entry.points);
-  const finiteX = points.flatMap((point) => Number.isFinite(point.x) ? [point.x] : []);
-  const finiteY = points.flatMap((point) => Number.isFinite(point.y) ? [point.y] : []);
-  const frequencyValues = tableId === "frequency-domain:response-sweep" ? finiteX : tableId === "frequency-domain:eigen-spectrum" || tableId === "frequency-domain:eigen-dispersion" ? finiteY : [];
+  const frequencyFromX = tableId === "frequency-domain:response-sweep";
+  const frequencyFromY = tableId === "frequency-domain:eigen-spectrum" || tableId === "frequency-domain:eigen-dispersion";
+  let pointCount = 0;
+  let frequencyMin = Number.POSITIVE_INFINITY;
+  let frequencyMax = Number.NEGATIVE_INFINITY;
+  for (const entry of series) {
+    for (const point of entry.points) {
+      pointCount += 1;
+      const frequency = frequencyFromX ? point.x : frequencyFromY ? point.y : null;
+      if (frequency !== null && Number.isFinite(frequency)) {
+        frequencyMin = Math.min(frequencyMin, frequency);
+        frequencyMax = Math.max(frequencyMax, frequency);
+      }
+    }
+  }
   return {
     chartKind: frequencyDomainChartKind(tableId, chartTitle),
     fieldHandoff: frequencyDomainFieldHandoff(tableId, chartTitle),
-    frequencyRange: formatFrequencyDomainWorkbenchRange(frequencyValues, first),
-    pointCount: `${points.length} point${points.length === 1 ? "" : "s"}`,
+    frequencyRange: formatFrequencyDomainWorkbenchRange(frequencyMin, frequencyMax, first),
+    pointCount: `${pointCount} point${pointCount === 1 ? "" : "s"}`,
     status,
   };
 }
@@ -112,6 +124,7 @@ export function buildFrequencyDomainCursorSummary(point: AnalysisChartCursorPoin
 }
 
 export function resourceStatusFromString(status: string): ResourceStatus {
+  if (status === "paused") return "ready";
   return ["idle", "loading", "ready", "stale", "error"].includes(status) ? status as ResourceStatus : "idle";
 }
 
@@ -129,10 +142,8 @@ function frequencyDomainFieldHandoff(tableId: string, chartTitle: string): strin
   return "select point -> inspector";
 }
 
-function formatFrequencyDomainWorkbenchRange(values: readonly number[], firstSeries: ChartSeries | undefined): string {
-  if (!values.length) return "not available";
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+function formatFrequencyDomainWorkbenchRange(min: number, max: number, firstSeries: ChartSeries | undefined): string {
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return "not available";
   const unit = firstSeries?.source.tableId === "frequency-domain:response-sweep" ? firstSeries.xUnit : firstSeries?.unit;
   return min === max ? formatPointValue(min, unit) : `${formatPointValue(min, unit)}-${formatPointValue(max, unit)}`;
 }
@@ -142,7 +153,7 @@ function formatPointValue(value: number, unit: string | undefined): string {
   return unit ? `${formatted} ${unit}` : formatted;
 }
 
-function formatLatestValue(value: number | undefined): string {
+export function formatLatestValue(value: number | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "-";
   if (Math.abs(value) >= 1e4 || (value !== 0 && Math.abs(value) < 1e-3)) return value.toExponential(3);
   const precise = value.toPrecision(5);

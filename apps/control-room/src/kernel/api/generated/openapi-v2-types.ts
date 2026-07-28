@@ -6895,7 +6895,13 @@ export interface components {
          */
         RestoreClass: "exact_resume" | "logical_resume" | "initial_condition_import" | "config_only";
         RunSummary: {
+            calibration_id?: string | null;
+            requested_device: string;
+            resolved_device: string;
             run_id: string;
+            /** Format: double */
+            selection_confidence?: number | null;
+            selection_reason: string;
             /** Format: int64 */
             solver_steps: number;
             /** Format: double */
@@ -7634,6 +7640,10 @@ export interface components {
             /** Format: int64 */
             last_record_wall_time_ns: number;
             /** Format: int64 */
+            persist_completed_count?: number;
+            /** Format: int64 */
+            persist_enqueued_count?: number;
+            /** Format: int64 */
             total_persist_wall_time_ns: number;
             /** Format: int64 */
             total_publisher_replace_wall_time_ns: number;
@@ -7665,6 +7675,7 @@ export interface components {
             latest_samples: components["schemas"]["SolverProfileStepSampleResource"][];
             live_publisher?: null | components["schemas"]["LivePublisherDiagnosticsResource"];
             overhead?: components["schemas"]["SolverProfileOverheadDiagnosticsResource"];
+            persistence_failed?: boolean;
             preview_3d_disabled?: boolean;
             rates?: components["schemas"]["SolverRateDiagnosticsResource"];
             /** Format: int64 */

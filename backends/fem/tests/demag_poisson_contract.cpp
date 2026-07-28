@@ -8,6 +8,7 @@
 
 #include "context.hpp"
 #include "core/demag_linear_solve_validation.hpp"
+#include "core/demag_solver_policy.hpp"
 #include "core/fem_material_runtime.hpp"
 #include "cpu/mfem/interactions/demag_poisson.hpp"
 #include "cpu/mfem/interactions/demag_poisson_energy.hpp"
@@ -51,6 +52,70 @@ void check(bool condition, const char *msg) {
         std::fprintf(stderr, "FAIL: %s\n", msg);
         std::exit(1);
     }
+}
+
+void demag_amg_policy_resolves_defaults_overrides_and_invalid_values() {
+    constexpr const char *names[] = {
+        "FULLMAG_FEM_DEMAG_AMG_RELAX_TYPE",
+        "FULLMAG_FEM_DEMAG_AMG_COARSENING",
+        "FULLMAG_FEM_DEMAG_AMG_INTERPOLATION",
+        "FULLMAG_FEM_DEMAG_AMG_AGGRESSIVE_COARSENING",
+        "FULLMAG_FEM_DEMAG_AMG_STRENGTH_THRESHOLD",
+        "FULLMAG_FEM_DEMAG_AMG_MAX_LEVELS",
+    };
+    for (const char *name : names) unsetenv(name);
+
+    auto policy = fullmag::fem::resolve_demag_amg_policy_from_environment();
+    check(policy.relax_type == 18, "central AMG relax default");
+    check(policy.coarsening == 8, "central AMG coarsening default");
+    check(policy.interpolation == 6, "central AMG interpolation default");
+    check(policy.aggressive_coarsening == 1, "central AMG aggressive coarsening default");
+    check(policy.strength_threshold == 0.0, "central AMG strength sentinel");
+    check(!policy.strength_threshold_is_set, "central AMG strength default is unset");
+    check(policy.max_levels == 0, "central AMG max-levels sentinel");
+    check(!policy.max_levels_is_set, "central AMG max-levels default is unset");
+
+    setenv(names[0], "6", 1);
+    setenv(names[1], "10", 1);
+    setenv(names[2], "7", 1);
+    setenv(names[3], "2", 1);
+    setenv(names[4], "0.25", 1);
+    setenv(names[5], "42", 1);
+    policy = fullmag::fem::resolve_demag_amg_policy_from_environment();
+    check(policy.relax_type == 6, "central AMG relax override");
+    check(policy.coarsening == 10, "central AMG coarsening override");
+    check(policy.interpolation == 7, "central AMG interpolation override");
+    check(policy.aggressive_coarsening == 2, "central AMG aggressive override");
+    check(policy.strength_threshold == 0.25, "central AMG strength override");
+    check(policy.strength_threshold_is_set, "central AMG strength override presence");
+    check(policy.max_levels == 42, "central AMG max-levels override");
+    check(policy.max_levels_is_set, "central AMG max-levels override presence");
+
+    setenv(names[4], "0", 1);
+    setenv(names[5], "0", 1);
+    policy = fullmag::fem::resolve_demag_amg_policy_from_environment();
+    check(policy.strength_threshold == 0.0, "explicit zero AMG strength override");
+    check(policy.strength_threshold_is_set, "explicit zero AMG strength presence");
+    check(policy.max_levels == 0, "explicit zero AMG max-levels override");
+    check(policy.max_levels_is_set, "explicit zero AMG max-levels presence");
+
+    setenv(names[0], "-1", 1);
+    setenv(names[1], "invalid", 1);
+    setenv(names[2], "2147483648", 1);
+    setenv(names[3], "-2", 1);
+    setenv(names[4], "nan", 1);
+    setenv(names[5], "-1", 1);
+    policy = fullmag::fem::resolve_demag_amg_policy_from_environment();
+    check(policy.relax_type == 18, "invalid AMG relax falls back centrally");
+    check(policy.coarsening == 8, "invalid AMG coarsening falls back centrally");
+    check(policy.interpolation == 6, "overflow AMG interpolation falls back centrally");
+    check(policy.aggressive_coarsening == 1, "invalid AMG aggressive falls back centrally");
+    check(policy.strength_threshold == 0.0, "non-finite AMG strength falls back centrally");
+    check(!policy.strength_threshold_is_set, "invalid AMG strength is unset");
+    check(policy.max_levels == 0, "invalid AMG max-levels falls back centrally");
+    check(!policy.max_levels_is_set, "invalid AMG max-levels is unset");
+
+    for (const char *name : names) unsetenv(name);
 }
 
 void demag_linear_solve_validation_rejects_invalid_results() {
@@ -1733,6 +1798,7 @@ void demag_recovered_field_finalize_projects_periodic_and_syncs_visual() {
 } // namespace
 
 int main() {
+    demag_amg_policy_resolves_defaults_overrides_and_invalid_values();
     demag_linear_solve_validation_rejects_invalid_results();
     poisson_runtime_wrappers_are_owned_by_separate_modules();
     poisson_aggregate_header_documents_submodule_boundaries();

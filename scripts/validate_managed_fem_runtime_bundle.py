@@ -23,8 +23,52 @@ REQUIRED_BUILD_METADATA = (
     "cuda_compiler",
     "requested_cuda_architectures",
     "effective_cuda_architectures",
+    "hypre_gpu_architectures",
+    "hypre_memory_variant",
+    "hypre_configure_flags",
+    "hypre_config_macros",
+    "hypre_config_header_sha256",
 )
 MESH_ABI_QUERY = Path(__file__).with_name("query_fem_mesh_abi.py")
+
+HYPRE_MEMORY_VARIANT_CONTRACTS = {
+    "baseline": {
+        "required_flags": {"--without-umpire"},
+        "macros": {
+            "HYPRE_USING_UMPIRE": False,
+            "HYPRE_USING_UMPIRE_DEVICE": False,
+            "HYPRE_USING_DEVICE_MALLOC_ASYNC": False,
+            "HYPRE_USING_THRUST_ASYNC": False,
+        },
+    },
+    "umpire": {
+        "required_flags": {"--with-umpire", "--with-umpire-device"},
+        "macros": {
+            "HYPRE_USING_UMPIRE": True,
+            "HYPRE_USING_UMPIRE_DEVICE": True,
+            "HYPRE_USING_DEVICE_MALLOC_ASYNC": False,
+            "HYPRE_USING_THRUST_ASYNC": False,
+        },
+    },
+    "cuda_async": {
+        "required_flags": {"--without-umpire", "--enable-device-malloc-async"},
+        "macros": {
+            "HYPRE_USING_UMPIRE": False,
+            "HYPRE_USING_UMPIRE_DEVICE": False,
+            "HYPRE_USING_DEVICE_MALLOC_ASYNC": True,
+            "HYPRE_USING_THRUST_ASYNC": False,
+        },
+    },
+    "thrust_async": {
+        "required_flags": {"--without-umpire", "--enable-thrust-async"},
+        "macros": {
+            "HYPRE_USING_UMPIRE": False,
+            "HYPRE_USING_UMPIRE_DEVICE": False,
+            "HYPRE_USING_DEVICE_MALLOC_ASYNC": False,
+            "HYPRE_USING_THRUST_ASYNC": True,
+        },
+    },
+}
 
 
 def sha256(path: Path) -> str:
@@ -98,6 +142,40 @@ def query_mesh_abi(library: Path, runtime_root: Path) -> Mapping[str, object]:
     except json.JSONDecodeError as exc:
         raise ValueError("managed FEM mesh ABI query returned invalid JSON") from exc
     return require_mapping(value, "queried native_abi")
+
+
+def validate_hypre_memory_build_contract(build: Mapping[str, object]) -> None:
+    variant = build.get("hypre_memory_variant")
+    contract = HYPRE_MEMORY_VARIANT_CONTRACTS.get(variant)
+    if contract is None:
+        raise ValueError(f"unsupported HYPRE memory variant: {variant!r}")
+    flags_value = build.get("hypre_configure_flags")
+    if not isinstance(flags_value, list) or not all(
+        isinstance(flag, str) and flag for flag in flags_value
+    ):
+        raise ValueError("managed FEM HYPRE configure flags are invalid")
+    flags = set(flags_value)
+    missing_flags = contract["required_flags"].difference(flags)
+    if missing_flags:
+        raise ValueError(
+            f"{variant} is missing required HYPRE configure flags: "
+            + ", ".join(sorted(missing_flags))
+        )
+    macros = require_mapping(build.get("hypre_config_macros"), "HYPRE config macros")
+    for macro, expected in contract["macros"].items():
+        actual = macros.get(macro)
+        if actual is not expected:
+            expected_value = 1 if expected else 0
+            raise ValueError(
+                f"{variant} requires {macro}={expected_value}; got {actual!r}"
+            )
+    config_header_sha256 = build.get("hypre_config_header_sha256")
+    if (
+        not isinstance(config_header_sha256, str)
+        or len(config_header_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in config_header_sha256)
+    ):
+        raise ValueError("managed FEM HYPRE config-header SHA-256 is invalid")
 
 
 def resolve_bundle_path(runtime_root: Path, relative: object, label: str) -> Path:
@@ -434,6 +512,7 @@ def validate_bundle(
     for key in REQUIRED_BUILD_METADATA:
         if key not in build or build[key] in (None, "", []):
             raise ValueError(f"managed FEM build metadata is missing {key}")
+    validate_hypre_memory_build_contract(build)
     diagnostics = require_mapping(
         manifest.get("runtime_diagnostics"), "runtime_diagnostics"
     )

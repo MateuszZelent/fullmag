@@ -11,6 +11,7 @@
 #include "gpu/cuda/relaxation/pgbb.hpp"
 
 #include "context.hpp"
+#include "gpu/cuda/runtime/nvtx_ranges.hpp"
 
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
@@ -595,68 +596,70 @@ int gpu_relax_projected_gradient_bb_step(
     double last_direct_interfacial_dmi_component = 0.0;
     double last_direct_bulk_dmi_component = 0.0;
     bool every_permitted_trial_unchanged = true;
-    while (true) {
-        fullmag_cuda_relax_retract_field(
-            gpu.rk.m_backup.x,
-            gpu.rk.m_backup.y,
-            gpu.rk.m_backup.z,
-            gpu.rk.k[0].x,
-            gpu.rk.k[0].y,
-            gpu.rk.k[0].z,
-            gpu.mesh_regions.magnetic_node_mask,
-            -trial_step,
-            gpu.rk.m_stage.x,
-            gpu.rk.m_stage.y,
-            gpu.rk.m_stage.z,
-            n,
-            stream);
-        if (gpu.mesh_regions.has_periodic_reduced_nodes) {
-            fullmag_cuda_relax_project_static_periodic_field(
+    {
+        FULLMAG_NVTX_RANGE("fem.relax.armijo");
+        while (true) {
+            fullmag_cuda_relax_retract_field(
+                gpu.rk.m_backup.x,
+                gpu.rk.m_backup.y,
+                gpu.rk.m_backup.z,
+                gpu.rk.k[0].x,
+                gpu.rk.k[0].y,
+                gpu.rk.k[0].z,
+                gpu.mesh_regions.magnetic_node_mask,
+                -trial_step,
                 gpu.rk.m_stage.x,
                 gpu.rk.m_stage.y,
                 gpu.rk.m_stage.z,
-                gpu.mesh_regions.periodic_representative_nodes,
                 n,
                 stream);
-        }
-        if (!cuda_launch_ok("launch GPU projected-gradient BB trial retraction", reason)) {
-            return gpu_relax_restore_previous_magnetization_after_failure(
-                ctx,
-                stream,
-                "trial retraction failure",
-                reason,
-                error);
-        }
-        if (!gpu_pgbb_precompute_representable_chord_increment(
-                ctx,
-                stream,
-                n,
-                blocks,
-                gpu.rk.m_backup,
-                gpu.rk.m_stage,
-                gpu.relaxation.projected_gradient_accepted_h_eff,
-                reason)) {
-            return gpu_relax_restore_previous_magnetization_after_failure(
-                ctx,
-                stream,
-                "trial representable-chord reduction failure",
-                reason,
-                error);
-        }
-        bool armijo = false;
-        if (!gpu_rk_copy_component_device(
-                gpu.rk.m_stage,
-                gpu.magnetization.m,
-                gpu.lifecycle.node_count,
-                stream,
-                "cudaMemcpyAsync GPU projected-gradient BB trial m",
-                reason) ||
-            !gpu_relax_compute_effective_field_and_energy_terms(
-                ctx,
-                stream,
-                n,
-                blocks,
-                reason)) {
+            if (gpu.mesh_regions.has_periodic_reduced_nodes) {
+                fullmag_cuda_relax_project_static_periodic_field(
+                    gpu.rk.m_stage.x,
+                    gpu.rk.m_stage.y,
+                    gpu.rk.m_stage.z,
+                    gpu.mesh_regions.periodic_representative_nodes,
+                    n,
+                    stream);
+            }
+            if (!cuda_launch_ok("launch GPU projected-gradient BB trial retraction", reason)) {
+                return gpu_relax_restore_previous_magnetization_after_failure(
+                    ctx,
+                    stream,
+                    "trial retraction failure",
+                    reason,
+                    error);
+            }
+            if (!gpu_direct_minimizer_precompute_representable_chord_increment(
+                    ctx,
+                    stream,
+                    n,
+                    blocks,
+                    gpu.rk.m_backup,
+                    gpu.rk.m_stage,
+                    gpu.relaxation.projected_gradient_accepted_h_eff,
+                    reason)) {
+                return gpu_relax_restore_previous_magnetization_after_failure(
+                    ctx,
+                    stream,
+                    "trial representable-chord reduction failure",
+                    reason,
+                    error);
+            }
+            bool armijo = false;
+            if (!gpu_rk_copy_component_device(
+                    gpu.rk.m_stage,
+                    gpu.magnetization.m,
+                    gpu.lifecycle.node_count,
+                    stream,
+                    "cudaMemcpyAsync GPU projected-gradient BB trial m",
+                    reason) ||
+                !gpu_relax_compute_effective_field_and_energy_terms(
+                    ctx,
+                    stream,
+                    n,
+                    blocks,
+                    reason)) {
                 return gpu_relax_restore_previous_magnetization_after_failure(
                     ctx,
                     stream,
@@ -664,13 +667,13 @@ int gpu_relax_projected_gradient_bb_step(
                     reason,
                     error);
             }
-        logical_rhs_evaluations += 1u;
+            logical_rhs_evaluations += 1u;
 
-        GpuDirectArmijoResult armijo_result{};
-        if (!gpu_direct_pgbb_armijo_evaluate(
-                ctx, stream, n, blocks, gpu.rk.m_backup, gpu.rk.error,
-                current_snapshot, kArmijoCoefficient, true, armijo_result,
-                reason)) {
+            GpuDirectArmijoResult armijo_result{};
+            if (!gpu_direct_minimizer_armijo_evaluate(
+                    ctx, stream, n, blocks, gpu.rk.m_backup, gpu.rk.error,
+                    current_snapshot, kArmijoCoefficient, true, armijo_result,
+                    reason)) {
                 return gpu_relax_restore_previous_magnetization_after_failure(
                     ctx, stream, "trial direct-energy evaluation failure", reason, error);
             }
@@ -692,16 +695,16 @@ int gpu_relax_projected_gradient_bb_step(
             last_refinement_accepted = false;
             if (last_refinement_attempted &&
                 !gpu_direct_armijo_refine(
-                ctx,
-                stream,
-                n,
-                blocks,
-                gpu.rk.m_backup,
-                gpu.rk.m_stage,
-                gpu.rk.error,
-                armijo_rhs,
-                armijo_result,
-                reason)) {
+                    ctx,
+                    stream,
+                    n,
+                    blocks,
+                    gpu.rk.m_backup,
+                    gpu.rk.m_stage,
+                    gpu.rk.error,
+                    armijo_rhs,
+                    armijo_result,
+                    reason)) {
                 return gpu_relax_restore_previous_magnetization_after_failure(
                     ctx, stream, "trial direct-energy refinement failure", reason, error);
             }
@@ -728,15 +731,16 @@ int gpu_relax_projected_gradient_bb_step(
                 last_direct_difference = armijo_result.difference;
                 accepted_armijo_increment_rhs_j = armijo_rhs;
             }
-        if (armijo) {
-            line_search_accepted = true;
-            break;
+            if (armijo) {
+                line_search_accepted = true;
+                break;
+            }
+            if (backtracks >= kMaxBacktracks) {
+                break;
+            }
+            trial_step *= 0.5;
+            backtracks += 1;
         }
-        if (backtracks >= kMaxBacktracks) {
-            break;
-        }
-        trial_step *= 0.5;
-        backtracks += 1;
     }
     if (!line_search_accepted) {
         if (every_permitted_trial_unchanged) {

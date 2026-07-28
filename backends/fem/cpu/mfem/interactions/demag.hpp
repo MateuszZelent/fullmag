@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/demag_solver_policy.hpp"
 #include "fullmag_fem.h"
 
 #include <cstdint>
@@ -29,6 +30,7 @@ struct DemagRuntimeState {
     std::vector<double> cached_xyz;
     std::vector<double> cached_visual_xyz;
     fullmag_fem_solver_config solver{};
+    ResolvedDemagAmgPolicy amg_policy{};
     fullmag_fem_field_refresh_policy field_refresh{};
     int realization = FULLMAG_FEM_DEMAG_AIRBOX_ROBIN;
     bool cache_valid = false;

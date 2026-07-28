@@ -34,6 +34,157 @@ fn production_source_before_cfg(path: &Path, cfg_marker: &str) -> String {
 }
 
 #[test]
+fn task15_fem_crossover_resolution_is_pinned_instead_of_reloaded_for_provenance() {
+    let root = crate_root();
+    let dispatch = production_source(&root.join("src/dispatch.rs"));
+    let retained_engine = production_source(&root.join("src/solver_runtime/engine.rs"));
+    let retained_registry = production_source(&root.join("src/solver_runtime/registry.rs"));
+    let runner = source(&root.join("src/lib.rs"));
+
+    assert!(
+        dispatch.contains("fem_crossover_decision: Option<crate::types::FemCrossoverDecision>"),
+        "the engine resolution must own the exact crossover decision used for selection"
+    );
+    for source in [&retained_engine, &retained_registry] {
+        assert!(
+            source.contains("fem_crossover_decision"),
+            "retained engine and registry resolutions must own the pinned decision"
+        );
+    }
+    for source in [&dispatch, &runner] {
+        assert!(
+            !source.contains("reconciled_fem_crossover_decision_for_plan"),
+            "selection/provenance must not reload a mutable crossover profile"
+        );
+    }
+}
+
+#[test]
+fn task15_persistent_fem_runtime_attaches_the_pinned_crossover_decision() {
+    let interactive = source(&crate_root().join("src/interactive_runtime.rs"));
+    assert!(
+        interactive.contains(
+            "attach_fem_crossover_decision_to_provenance(&mut provenance, crossover_decision);"
+        ),
+        "active persistent FEM runtime provenance must retain requested/resolved/reason/calibration/confidence"
+    );
+
+    let dormant_interactive = source(&crate_root().join("src/interactive_runtime/fem/mod.rs"));
+    assert!(
+        !dormant_interactive.contains("fem_crossover_decision")
+            && !dormant_interactive.contains("crossover_decision"),
+        "Task 15 must not claim or wire the uncompiled duplicate persistent FEM facade"
+    );
+}
+
+#[test]
+fn task15_fem_preview_crossover_uses_real_cadence_across_active_and_retained_resolvers() {
+    let root = crate_root();
+    let dispatch = production_source(&root.join("src/dispatch.rs"));
+    let runner = source(&root.join("src/lib.rs"));
+    let compact_runner = runner.split_whitespace().collect::<String>();
+    let retained_selection = production_source(&root.join("src/solver_runtime/fem_selection.rs"));
+    let retained_registry = production_source(&root.join("src/solver_runtime/registry.rs"));
+
+    assert!(
+        !dispatch.contains("selection.get(\"preview_enabled\")"),
+        "crossover selection must not read invented runtime metadata"
+    );
+    assert!(
+        dispatch.contains("preview_enabled: bool"),
+        "active FEM selection must accept an explicit preview input"
+    );
+    assert!(
+        runner.contains("resolve_fem_engine_for_plan_with_trail(problem, fem, false)?"),
+        "batch FEM selection must explicitly select the no-preview stratum"
+    );
+    assert!(
+        runner.contains("field_every_n != u64::MAX"),
+        "live FEM selection must derive preview state from the real cadence"
+    );
+    assert!(
+        compact_runner.contains(
+            "resolve_with_registry(problem,registry,explicit_selection_from_problem(problem),preview_enabled,)"
+        ),
+        "registry FEM selection must receive the same explicit preview state"
+    );
+    assert!(
+        runner.contains(
+            "create_planned_interactive_runtime_with_stage_fem_mesh_asset_and_preview_cadence"
+        ),
+        "persistent FEM selection must receive the actual preview cadence"
+    );
+    for source in [&retained_selection, &retained_registry] {
+        assert!(
+            !source.contains("resolve_auto_fem_plan_device(plan, false)"),
+            "compiled retained selection paths must not hard-code preview=false"
+        );
+    }
+}
+
+#[test]
+fn task15_crossover_capability_json_and_adr_match_the_ignored_identity_input_boundary() {
+    let root = repo_root();
+    let matrix: serde_json::Value =
+        serde_json::from_str(&source(&root.join("docs/specs/capability-matrix-v0.json")))
+            .expect("capability matrix JSON");
+    let notes = matrix["features"]
+        .as_array()
+        .expect("capability features")
+        .iter()
+        .find(|feature| feature["id"] == "fem_auto_device_crossover")
+        .and_then(|feature| feature["notes"].as_str())
+        .expect("FEM crossover capability notes");
+    assert!(
+        notes.contains("FULLMAG_FEM_CROSSOVER_RUNTIME_IDENTITY is ignored")
+            && notes.contains("untrusted")
+            && notes.contains("no production or diagnostic consumer"),
+        "machine-readable capability notes must expose the same fail-closed identity boundary as Markdown"
+    );
+
+    let adr = source(&root.join("docs/adr/0021-fem-runtime-crossover-policy.md"));
+    assert!(
+        adr.contains("`FULLMAG_FEM_CROSSOVER_RUNTIME_IDENTITY` is ignored and untrusted")
+            && adr.contains("no production or diagnostic consumer"),
+        "ADR must not describe an ignored environment value as diagnostic input"
+    );
+    assert!(
+        !production_source(&crate_root().join("src/solver_runtime/fem_crossover.rs"))
+            .contains("FULLMAG_FEM_CROSSOVER_RUNTIME_IDENTITY"),
+        "production crossover code must not consume caller-provided runtime identity"
+    );
+}
+
+#[test]
+fn task15_fem_request_precedence_has_one_canonical_owner() {
+    let root = crate_root();
+    let selection = production_source(&root.join("src/solver_runtime/selection.rs"));
+    let dispatch = production_source(&root.join("src/dispatch.rs"));
+    let retained_selection = production_source(&root.join("src/solver_runtime/fem_selection.rs"));
+
+    assert!(
+        selection.contains("struct FemSelectionEnvSnapshot")
+            && selection.contains("fn capture() -> Self")
+            && selection.matches("FULLMAG_FEM_EXECUTION").count() == 1
+            && selection.matches("FULLMAG_FEM_ALL_IN_GPU").count() == 1,
+        "selection.rs must capture each FEM selection environment input exactly once"
+    );
+    assert!(
+        !dispatch.contains("std::env::var_os(\"FULLMAG_FEM_EXECUTION\")")
+            && !dispatch.contains("fn all_in_gpu_fem_env_requested("),
+        "active dispatch must consume canonical FEM selection results without rereading selection environment"
+    );
+    assert!(
+        retained_selection.contains("effective_fem_device_request(problem)")
+            && !retained_selection.contains("std::env")
+            && !retained_selection.contains("FULLMAG_FEM_EXECUTION")
+            && !retained_selection.contains("FULLMAG_FEM_ALL_IN_GPU")
+            && !retained_selection.contains("effective_fem_device_request_from_sources"),
+        "retained FEM selection must consume only the canonical effective request"
+    );
+}
+
+#[test]
 fn task5_native_fem_stage_begins_once_before_llg_or_direct_minimizer_execution() {
     let source = source(&crate_root().join("src/dispatch.rs"));
     let execute_start = source
@@ -50,7 +201,9 @@ fn task5_native_fem_stage_begins_once_before_llg_or_direct_minimizer_execution()
         1,
         "headless native FEM must begin each physical stage exactly once"
     );
-    let begin_index = execute.find(begin_stage).expect("native FEM stage begin call");
+    let begin_index = execute
+        .find(begin_stage)
+        .expect("native FEM stage begin call");
     let algorithm_index = execute
         .find("if let Some(native_step_control) = native_relaxation_step {")
         .expect("LLG/direct-minimizer algorithm dispatch");
@@ -59,8 +212,7 @@ fn task5_native_fem_stage_begins_once_before_llg_or_direct_minimizer_execution()
         "native FEM stage initialization must precede both the direct-minimizer and LLG paths"
     );
     assert!(
-        execute[algorithm_index..]
-            .contains("direct_minimizer::execute_direct_minimizer("),
+        execute[algorithm_index..].contains("direct_minimizer::execute_direct_minimizer("),
         "native FEM stage dispatch must retain the direct-minimizer path"
     );
     assert!(
@@ -85,10 +237,7 @@ fn task5_interactive_native_fem_execution_begins_each_stage_exactly_once() {
             "fn execute_with_live_preview(\n",
             "fn execute_with_live_preview_streaming(\n",
         ),
-        (
-            "fn execute_with_live_preview_streaming(\n",
-            "\n}\n",
-        ),
+        ("fn execute_with_live_preview_streaming(\n", "\n}\n"),
     ] {
         let start = gpu_runtime
             .find(signature)
@@ -99,7 +248,9 @@ fn task5_interactive_native_fem_execution_begins_each_stage_exactly_once() {
             .unwrap_or_else(|| panic!("missing boundary after {signature:?}"));
         let method = &remaining[..end];
         assert_eq!(
-            method.matches("self.backend.begin_stage(base_time)?;").count(),
+            method
+                .matches("self.backend.begin_stage(base_time)?;")
+                .count(),
             1,
             "interactive FEM method {signature:?} must begin each stage exactly once"
         );

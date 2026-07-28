@@ -187,6 +187,10 @@ pub struct SolverProfileOverheadDiagnosticsResource {
     pub total_record_wall_time_ns: u64,
     pub last_persist_wall_time_ns: u64,
     pub total_persist_wall_time_ns: u64,
+    #[serde(default)]
+    pub persist_enqueued_count: u64,
+    #[serde(default)]
+    pub persist_completed_count: u64,
     pub last_publisher_replace_wall_time_ns: u64,
     pub total_publisher_replace_wall_time_ns: u64,
     #[serde(default)]
@@ -269,6 +273,8 @@ pub struct SolverProfileResource {
     #[serde(default)]
     pub overhead: SolverProfileOverheadDiagnosticsResource,
     pub artifact_refs: Vec<String>,
+    #[serde(default)]
+    pub persistence_failed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_publisher: Option<LivePublisherDiagnosticsResource>,
 }
@@ -286,6 +292,7 @@ impl Default for SolverProfileResource {
             rates: SolverRateDiagnosticsResource::default(),
             overhead: SolverProfileOverheadDiagnosticsResource::default(),
             artifact_refs: Vec::new(),
+            persistence_failed: false,
             live_publisher: None,
         }
     }
@@ -293,7 +300,27 @@ impl Default for SolverProfileResource {
 
 #[cfg(test)]
 mod compatibility_tests {
-    use super::SolverProfileStepSampleResource;
+    use super::{SolverProfileResource, SolverProfileStepSampleResource};
+
+    #[test]
+    fn solver_profile_resource_serializes_persistence_failure_state() {
+        let value = serde_json::to_value(SolverProfileResource::default()).unwrap();
+
+        assert_eq!(value["persistence_failed"], false);
+        assert_eq!(value["overhead"]["persist_enqueued_count"], 0);
+        assert_eq!(value["overhead"]["persist_completed_count"], 0);
+    }
+
+    #[test]
+    fn solver_profile_resource_round_trips_persistence_failure_state() {
+        let mut value = serde_json::to_value(SolverProfileResource::default()).unwrap();
+        value["persistence_failed"] = serde_json::Value::Bool(true);
+
+        let decoded: SolverProfileResource = serde_json::from_value(value).unwrap();
+        let encoded = serde_json::to_value(decoded).unwrap();
+
+        assert_eq!(encoded["persistence_failed"], true);
+    }
 
     #[test]
     fn older_cli_sample_defaults_additive_interval_and_clone_fields() {

@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import ast
+import hashlib
+import inspect
 import json
 import os
 import importlib.util
 import subprocess
 import sys
 import tempfile
+import struct
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -117,6 +120,818 @@ def test_benchmark_summary_reports_distribution() -> None:
         "p95": 30.0,
         "stddev": pytest.approx(7.5789181286),
     }
+
+
+def task11_expected_qualification_identity() -> dict[str, object]:
+    return {
+        "schema": "fullmag.fem_gpu.relaxation_preconditioner_qualification_identity.v1",
+        "fixture_suite_sha256": "f" * 64,
+        "environment_sha256": "e" * 64,
+        "runtime_identity": {
+            "runtime_manifest_sha256": "runtime-identity",
+            "source_manifest_sha256": "source-identity",
+            "libfullmag_fem_sha256": "library-identity",
+        },
+        "gpu_identity": {
+            "device_uuid": "GPU-task11-test",
+            "device_name": "NVIDIA GeForce RTX 4080 SUPER",
+            "compute_capability": "8.9",
+        },
+        "workload": {
+            "scenario": "box500_airbox_exchange_demag",
+            "integrator": "heun",
+            "timestep_policy": "fixed",
+            "dt_s": 1e-13,
+            "steps": 64,
+            "relaxation_algorithm": "nonlinear_cg",
+            "precision": "double",
+            "torque_tolerance_apm": 8000.0,
+            "demag_solver": "CG",
+            "demag_preconditioner": "AMG",
+            "demag_relative_tolerance": 1e-12,
+            "demag_amg_relax_type": 6,
+        },
+        "fixtures": [
+            {
+                "resolution": mesh_size,
+                "solver_mesh_sha256": f"mesh-sha256-{mesh_size}",
+                "solver_mesh_signature": f"solver-mesh-{mesh_size}",
+                "executed_problem_ir_sha256": f"problem-ir-{mesh_size}",
+                "node_count": 2,
+                "element_count": 1,
+            }
+            for mesh_size in ("coarse", "medium", "fine")
+        ],
+    }
+
+
+def task11_test_final_magnetization_sha256(
+    values: list[list[float]],
+    *,
+    step: int = 16,
+) -> str:
+    digest = hashlib.sha256()
+    digest.update(b"fullmag.task11.final_magnetization.v1\0")
+    for text in ("m", "1"):
+        encoded = text.encode("utf-8")
+        digest.update(struct.pack(">I", len(encoded)))
+        digest.update(encoded)
+    digest.update(struct.pack(">Q", step))
+    digest.update(struct.pack(">Q", len(values)))
+    for vector in values:
+        digest.update(struct.pack(">ddd", *vector))
+    return digest.hexdigest()
+
+
+def task11_preconditioner_qualification_rows(
+    *,
+    candidate_p95_regression: bool = False,
+) -> list[dict[str, object]]:
+    strategies = (
+        "none",
+        "diagonal_mass",
+        "lumped_exchange_mass_cg4",
+        "lumped_exchange_mass_cg8",
+        "stagnation_triggered_cg8",
+    )
+    mesh_times = {
+        "coarse": 100.0,
+        "medium": 200.0,
+        "fine": 400.0,
+    }
+    candidate_factors = {
+        "coarse": 0.88,
+        "medium": 0.89,
+        "fine": 0.98,
+    }
+    rows: list[dict[str, object]] = []
+    for strategy in strategies:
+        for mesh_size, baseline_ms in mesh_times.items():
+            for repeat_index in range(5):
+                factor = 1.0
+                if strategy == "lumped_exchange_mass_cg8":
+                    factor = candidate_factors[mesh_size]
+                    if candidate_p95_regression and repeat_index == 4:
+                        factor = 1.10
+                row = {
+                    "backend": "fem_gpu",
+                    "status": "ok",
+                    "scenario": "box500_airbox_exchange_demag",
+                    "reported_scenario": "box500_airbox_exchange_demag",
+                    "integrator": "heun",
+                    "reported_integrator": "heun",
+                    "timestep_policy": "fixed",
+                    "reported_timestep_policy": "fixed",
+                    "dt_s": 1e-13,
+                    "steps": 64,
+                    "requested_relax_torque_tolerance_apm": 8000.0,
+                    "reported_relaxation_algorithm": "nonlinear_cg",
+                    "reported_precision": "double",
+                    "requested_fem_execution": "gpu",
+                    "requested_demag_solver": "CG",
+                    "requested_demag_preconditioner": "AMG",
+                    "requested_demag_relative_tolerance": "1e-12",
+                    "requested_demag_amg_relax_type": "6",
+                    "requested_demag_max_iterations": "500",
+                    "demag_linear_solver": "CG",
+                    "demag_preconditioner": "AMG",
+                    "demag_relative_tolerance": 1e-12,
+                    "demag_amg_relax_type": 6,
+                    "demag_actual_iterations": 9,
+                    "demag_final_residual_norm": 1e-13,
+                    "execution_engine": "fem_native_gpu",
+                    "fem_assembly_mode": "legacy_sparse",
+                    "fem_execution_mode": "all_in_gpu_legacy_sparse",
+                    "fem_data_residency": "device_source_of_truth",
+                    "uses_cuda_kernels": True,
+                    "uses_gpu_poisson": True,
+                    "hypre_execution_policy": "device",
+                    "demag_residency": "device",
+                    "fem_demag_operator_mode": "device_hypre_poisson",
+                    "mfem_device": "ceed-cuda:/gpu/cuda/shared",
+                    "fem_gpu_qualification_status": "production_executable",
+                    "fem_gpu_state_allocated": True,
+                    "step_profiler_enabled": True,
+                    "phase2_compute_assertion_enabled": True,
+                    "phase2_compute_hot_loop_sync_clean": True,
+                    "runtime_manifest_sha256": "runtime-identity",
+                    "source_manifest_sha256": "source-identity",
+                    "libfullmag_fem_sha256": "library-identity",
+                    "device_uuid": "GPU-task11-test",
+                    "device_name": "NVIDIA GeForce RTX 4080 SUPER",
+                    "compute_capability": "8.9",
+                    "solver_mesh_sha256": f"mesh-sha256-{mesh_size}",
+                    "solver_mesh_signature": f"solver-mesh-{mesh_size}",
+                    "executed_problem_ir_sha256": f"problem-ir-{mesh_size}",
+                    "node_count": 2,
+                    "element_count": 1,
+                    "mesh_size": mesh_size,
+                    "repeat_index": repeat_index,
+                    "requested_relaxation_preconditioner_strategy": strategy,
+                    "relaxation_preconditioner_strategy": strategy,
+                    "relaxation_preconditioner_iterations": (
+                        4
+                        if strategy == "lumped_exchange_mass_cg4"
+                        else 8
+                        if strategy
+                        in {
+                            "lumped_exchange_mass_cg8",
+                            "stagnation_triggered_cg8",
+                        }
+                        else 0
+                    ),
+                    "relaxation_preconditioner_lambda_m_per_a": (
+                        1e-3 if "exchange_mass" in strategy or "triggered" in strategy else 0.0
+                    ),
+                    "relaxation_preconditioner_wall_time_ms": 1.0,
+                    "accepted_steps": 16,
+                    "cumulative_armijo_trials": 16,
+                    "cumulative_demag_solves": 32,
+                    "cumulative_preconditioner_wall_time_ms": (
+                        0.0 if strategy == "none" else 16.0
+                    ),
+                    "cumulative_hypre_wall_time_ms": 32.0,
+                    "relaxation_preconditioner_apply_count": (
+                        0
+                        if strategy == "none"
+                        else 1
+                        if strategy == "stagnation_triggered_cg8"
+                        else 16
+                    ),
+                    "relaxation_preconditioner_cache_hits": 4,
+                    "relaxation_preconditioner_cache_misses": 1,
+                    "wall_time_ms": baseline_ms * factor,
+                    "executed_steps": 16,
+                    "rhs_evals": 2,
+                    "total_rhs_evals": 32,
+                    "demag_solves": 32,
+                    "converged": True,
+                    "stop_reason": "torque",
+                    "energy_monotonicity_satisfied": True,
+                    "norm_defect": 1e-12,
+                    "final_e_total_j": 1e-20,
+                    "final_torque_apm": 1e-7,
+                    "hot_loop_compute_host_sync_count": 0,
+                    "hot_loop_exchange_host_sync_count": 0,
+                    "hot_loop_compute_h2d_bytes": 0,
+                    "hot_loop_compute_d2h_bytes": 0,
+                    "hot_loop_exchange_h2d_bytes": 0,
+                    "hot_loop_exchange_d2h_bytes": 0,
+                    "hot_loop_control_scalar_host_sync_count": 51,
+                }
+                rows.append(row)
+    return rows
+
+
+def task11_preconditioner_cpu_gpu_parity_rows() -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for mesh_size in ("coarse", "medium", "fine"):
+        for backend in ("fem_cpu", "fem_gpu"):
+            final_values = [
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0 if backend == "fem_cpu" else 1e-12],
+            ]
+            rows.append(
+                {
+                    "backend": backend,
+                    "status": "ok",
+                    "scenario": "box500_airbox_exchange_demag",
+                    "reported_scenario": "box500_airbox_exchange_demag",
+                    "integrator": "heun",
+                    "reported_integrator": "heun",
+                    "timestep_policy": "fixed",
+                    "reported_timestep_policy": "fixed",
+                    "dt_s": 1e-13,
+                    "steps": 64,
+                    "reported_relaxation_algorithm": "nonlinear_cg",
+                    "reported_precision": "double",
+                    "requested_relaxation_preconditioner_strategy": "none",
+                    "relaxation_preconditioner_strategy": "none",
+                    "requested_fem_execution": "cpu" if backend == "fem_cpu" else "gpu",
+                    "requested_relax_torque_tolerance_apm": 8000.0,
+                    "requested_demag_solver": "CG",
+                    "requested_demag_preconditioner": "AMG",
+                    "requested_demag_relative_tolerance": "1e-12",
+                    "requested_demag_amg_relax_type": "6",
+                    "requested_demag_max_iterations": "500",
+                    "demag_linear_solver": "CG",
+                    "demag_preconditioner": "AMG",
+                    "demag_relative_tolerance": 1e-12,
+                    "demag_amg_relax_type": 6,
+                    "demag_actual_iterations": 9,
+                    "demag_final_residual_norm": 1e-13,
+                    "execution_engine": (
+                        "fem_cpu_native" if backend == "fem_cpu" else "fem_native_gpu"
+                    ),
+                    "fem_assembly_mode": "legacy_sparse",
+                    "fem_execution_mode": "all_in_gpu_legacy_sparse",
+                    "fem_data_residency": "device_source_of_truth",
+                    "uses_cuda_kernels": True,
+                    "uses_gpu_poisson": True,
+                    "hypre_execution_policy": "device",
+                    "demag_residency": "device",
+                    "fem_demag_operator_mode": "device_hypre_poisson",
+                    "fem_gpu_qualification_status": "production_executable",
+                    "fem_gpu_state_allocated": True,
+                    "phase2_compute_assertion_enabled": True,
+                    "phase2_compute_hot_loop_sync_clean": True,
+                    "hot_loop_compute_host_sync_count": 0,
+                    "hot_loop_exchange_host_sync_count": 0,
+                    "hot_loop_compute_h2d_bytes": 0,
+                    "hot_loop_compute_d2h_bytes": 0,
+                    "hot_loop_exchange_h2d_bytes": 0,
+                    "hot_loop_exchange_d2h_bytes": 0,
+                    "hot_loop_control_scalar_host_sync_count": 51,
+                    "total_rhs_evals": 32,
+                    "runtime_manifest_sha256": "runtime-identity",
+                    "source_manifest_sha256": "source-identity",
+                    "libfullmag_fem_sha256": "library-identity",
+                    "device_uuid": (
+                        "GPU-task11-test" if backend == "fem_gpu" else None
+                    ),
+                    "device_name": (
+                        "NVIDIA GeForce RTX 4080 SUPER"
+                        if backend == "fem_gpu"
+                        else None
+                    ),
+                    "compute_capability": "8.9" if backend == "fem_gpu" else None,
+                    "solver_mesh_sha256": f"mesh-sha256-{mesh_size}",
+                    "solver_mesh_signature": f"solver-mesh-{mesh_size}",
+                    "executed_problem_ir_sha256": f"problem-ir-{mesh_size}",
+                    "node_count": 2,
+                    "element_count": 1,
+                    "mesh_size": mesh_size,
+                    "executed_steps": 16,
+                    "converged": True,
+                    "stop_reason": "torque",
+                    "final_torque_apm": 1e-7,
+                    "final_e_total_j": 1e-20,
+                    "norm_defect": 1e-12,
+                    "final_magnetization_observable": "m",
+                    "final_magnetization_unit": "1",
+                    "final_magnetization_step": 16,
+                    "final_magnetization_node_count": 2,
+                    "final_magnetization_sha256": task11_test_final_magnetization_sha256(
+                        final_values
+                    ),
+                    "final_magnetization_values_json": json.dumps(final_values),
+                }
+            )
+    return rows
+
+
+def test_task11_preconditioner_qualification_promotes_only_complete_physical_matrix() -> None:
+    benchmark = load_benchmark_module()
+
+    summary = benchmark.relaxation_preconditioner_qualification_summary(
+        task11_preconditioner_qualification_rows(),
+        cpu_gpu_parity_rows=task11_preconditioner_cpu_gpu_parity_rows(),
+        qualification_identity=task11_expected_qualification_identity(),
+    )
+
+    assert summary["status"] == "pass"
+    assert summary["row_count"] == 75
+    assert summary["promoted_strategy"] == "lumped_exchange_mass_cg8"
+    candidate = next(
+        item
+        for item in summary["strategies"]
+        if item["strategy"] == "lumped_exchange_mass_cg8"
+    )
+    assert candidate["qualifies"] is True
+    assert candidate["p50_improved_size_count"] == 2
+
+
+def test_task11_preconditioner_qualification_requires_immutable_identity() -> None:
+    benchmark = load_benchmark_module()
+
+    summary = benchmark.relaxation_preconditioner_qualification_summary(
+        task11_preconditioner_qualification_rows(),
+        cpu_gpu_parity_rows=task11_preconditioner_cpu_gpu_parity_rows(),
+    )
+
+    assert summary["status"] == "invalid"
+    assert summary["promoted_strategy"] is None
+    assert any(
+        "immutable Task 11 qualification identity is missing" in failure
+        for failure in summary["matrix_failures"]
+    )
+
+
+@pytest.mark.parametrize("tamper", ["fixture_suite", "environment"])
+def test_task11_identity_loader_rejects_modified_source_artifact(
+    tamper: str,
+    tmp_path: Path,
+) -> None:
+    benchmark = load_benchmark_module()
+    fixture_suite = (
+        REPO_ROOT
+        / "examples/assets/fem_performance/amg_qualification_suite_v1.json"
+    )
+    environment = (
+        REPO_ROOT
+        / "benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json"
+    )
+    tampered_path = tmp_path / f"{tamper}.json"
+    source = fixture_suite if tamper == "fixture_suite" else environment
+    tampered_path.write_bytes(source.read_bytes() + b"\n")
+
+    with pytest.raises(ValueError, match="SHA-256 differs"):
+        benchmark.load_task11_qualification_identity(
+            fixture_suite_path=(
+                tampered_path if tamper == "fixture_suite" else fixture_suite
+            ),
+            environment_path=(
+                tampered_path if tamper == "environment" else environment
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("collection", "field", "value", "failure_fragment"),
+    [
+        ("matrix", "reported_scenario", "invented", "reported_scenario"),
+        ("matrix", "device_uuid", "GPU-invented", "device_uuid"),
+        ("matrix", "solver_mesh_sha256", "invented", "solver_mesh_sha256"),
+        (
+            "matrix",
+            "executed_problem_ir_sha256",
+            "invented",
+            "executed_problem_ir_sha256",
+        ),
+        ("parity", "node_count", 3, "node_count"),
+    ],
+)
+def test_task11_preconditioner_qualification_rejects_unpinned_identity(
+    collection: str,
+    field: str,
+    value: object,
+    failure_fragment: str,
+) -> None:
+    benchmark = load_benchmark_module()
+    matrix_rows = task11_preconditioner_qualification_rows()
+    parity_rows = task11_preconditioner_cpu_gpu_parity_rows()
+    (matrix_rows if collection == "matrix" else parity_rows)[0][field] = value
+
+    summary = benchmark.relaxation_preconditioner_qualification_summary(
+        matrix_rows,
+        cpu_gpu_parity_rows=parity_rows,
+        qualification_identity=task11_expected_qualification_identity(),
+    )
+
+    assert summary["status"] == "invalid"
+    assert any(
+        failure_fragment in failure for failure in summary["matrix_failures"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "failure_fragment"),
+    [
+        ("final_magnetization_step", 15, "magnetization step"),
+        ("final_magnetization_node_count", 1, "magnetization node count"),
+        ("final_magnetization_sha256", "invalid", "magnetization SHA-256"),
+        ("final_torque_apm", 8000.1, "final_torque_apm"),
+    ],
+)
+def test_task11_preconditioner_qualification_rejects_incomplete_final_state(
+    field: str,
+    value: object,
+    failure_fragment: str,
+) -> None:
+    benchmark = load_benchmark_module()
+    parity_rows = task11_preconditioner_cpu_gpu_parity_rows()
+    parity_rows[0][field] = value
+
+    summary = benchmark.relaxation_preconditioner_qualification_summary(
+        task11_preconditioner_qualification_rows(),
+        cpu_gpu_parity_rows=parity_rows,
+        qualification_identity=task11_expected_qualification_identity(),
+    )
+
+    assert summary["status"] == "invalid"
+    assert any(
+        failure_fragment in failure for failure in summary["matrix_failures"]
+    )
+
+
+def test_task11_preconditioner_qualification_rejects_p95_regression() -> None:
+    benchmark = load_benchmark_module()
+
+    summary = benchmark.relaxation_preconditioner_qualification_summary(
+        task11_preconditioner_qualification_rows(candidate_p95_regression=True),
+        cpu_gpu_parity_rows=task11_preconditioner_cpu_gpu_parity_rows(),
+    )
+
+    candidate = next(
+        item
+        for item in summary["strategies"]
+        if item["strategy"] == "lumped_exchange_mass_cg8"
+    )
+    assert candidate["qualifies"] is False
+    assert any("p95 regression" in failure for failure in candidate["failures"])
+
+
+def test_task11_preconditioner_qualification_rejects_invalid_none_timing_reference() -> None:
+    benchmark = load_benchmark_module()
+    rows = task11_preconditioner_qualification_rows()
+    for row in rows:
+        if row["requested_relaxation_preconditioner_strategy"] == "none":
+            row["converged"] = False
+            row["stop_reason"] = "max_steps"
+
+    summary = benchmark.relaxation_preconditioner_qualification_summary(
+        rows,
+        cpu_gpu_parity_rows=task11_preconditioner_cpu_gpu_parity_rows(),
+    )
+
+    assert summary["status"] == "invalid"
+    assert summary["promoted_strategy"] is None
+    assert summary["baseline_eligible"] is False
+    candidate = next(
+        item
+        for item in summary["strategies"]
+        if item["strategy"] == "lumped_exchange_mass_cg8"
+    )
+    assert candidate["qualifies"] is False
+    assert any(
+        "none baseline failed physical row gates" in failure
+        for failure in summary["matrix_failures"]
+    )
+
+
+def test_task11_preconditioner_qualification_rejects_incomplete_none_baseline() -> None:
+    benchmark = load_benchmark_module()
+    rows = task11_preconditioner_qualification_rows()
+    rows.pop(0)
+
+    summary = benchmark.relaxation_preconditioner_qualification_summary(
+        rows,
+        cpu_gpu_parity_rows=task11_preconditioner_cpu_gpu_parity_rows(),
+        qualification_identity=task11_expected_qualification_identity(),
+    )
+
+    assert summary["status"] == "invalid"
+    assert summary["baseline_eligible"] is False
+    assert summary["promoted_strategy"] is None
+
+
+@pytest.mark.parametrize(
+    ("field", "tampered_value", "failure_fragment"),
+    [
+        ("execution_engine", "fem_cpu_native", "execution_engine must be fem_native_gpu"),
+        ("scenario", "exchange_only_box500_airbox1um", "scenario must be box500_airbox_exchange_demag"),
+        (
+            "hot_loop_control_scalar_host_sync_count",
+            999,
+            "control-readback budget exceeded",
+        ),
+        (
+            "demag_final_residual_norm",
+            1e-3,
+            "demag_final_residual_norm exceeds",
+        ),
+    ],
+)
+def test_task11_preconditioner_qualification_rejects_wrong_workload_or_host_identity(
+    field: str,
+    tampered_value: object,
+    failure_fragment: str,
+) -> None:
+    benchmark = load_benchmark_module()
+    rows = task11_preconditioner_qualification_rows()
+    rows[0][field] = tampered_value
+
+    summary = benchmark.relaxation_preconditioner_qualification_summary(
+        rows,
+        cpu_gpu_parity_rows=task11_preconditioner_cpu_gpu_parity_rows(),
+    )
+
+    assert summary["status"] == "invalid"
+    assert summary["promoted_strategy"] is None
+    assert summary["baseline_eligible"] is False
+    assert any(
+        failure_fragment in failure for failure in summary["matrix_failures"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "tampered_value", "failure_fragment"),
+    [
+        ("runtime_manifest_sha256", "other-runtime", "runtime identity"),
+        ("solver_mesh_signature", "other-mesh", "solver mesh identity"),
+    ],
+)
+def test_task11_preconditioner_qualification_rejects_mixed_runtime_or_mesh_identity(
+    field: str,
+    tampered_value: object,
+    failure_fragment: str,
+) -> None:
+    benchmark = load_benchmark_module()
+    rows = task11_preconditioner_qualification_rows()
+    rows[0][field] = tampered_value
+
+    summary = benchmark.relaxation_preconditioner_qualification_summary(
+        rows,
+        cpu_gpu_parity_rows=task11_preconditioner_cpu_gpu_parity_rows(),
+    )
+
+    assert summary["status"] == "invalid"
+    assert any(
+        failure_fragment in failure for failure in summary["matrix_failures"]
+    )
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    [
+        "accepted_steps",
+        "cumulative_armijo_trials",
+        "cumulative_demag_solves",
+        "cumulative_preconditioner_wall_time_ms",
+        "cumulative_hypre_wall_time_ms",
+    ],
+)
+def test_task11_preconditioner_qualification_rejects_missing_cumulative_telemetry(
+    missing_field: str,
+) -> None:
+    benchmark = load_benchmark_module()
+    rows = task11_preconditioner_qualification_rows()
+    rows[0].pop(missing_field)
+
+    summary = benchmark.relaxation_preconditioner_qualification_summary(
+        rows,
+        cpu_gpu_parity_rows=task11_preconditioner_cpu_gpu_parity_rows(),
+    )
+
+    assert summary["status"] == "invalid"
+    assert any(
+        missing_field in failure for failure in summary["matrix_failures"]
+    )
+
+
+def test_task11_stagnation_triggered_strategy_requires_a_real_apply() -> None:
+    benchmark = load_benchmark_module()
+    rows = task11_preconditioner_qualification_rows()
+    for row in rows:
+        if (
+            row["requested_relaxation_preconditioner_strategy"]
+            == "stagnation_triggered_cg8"
+        ):
+            row["relaxation_preconditioner_apply_count"] = 0
+            row["relaxation_preconditioner_iterations"] = 0
+
+    summary = benchmark.relaxation_preconditioner_qualification_summary(
+        rows,
+        cpu_gpu_parity_rows=task11_preconditioner_cpu_gpu_parity_rows(),
+    )
+
+    candidate = next(
+        item
+        for item in summary["strategies"]
+        if item["strategy"] == "stagnation_triggered_cg8"
+    )
+    assert candidate["qualifies"] is False
+    assert any(
+        "stagnation-triggered strategy never applied CG8" in failure
+        for failure in candidate["failures"]
+    )
+
+
+def test_task11_candidate_requires_positive_cumulative_preconditioner_time() -> None:
+    benchmark = load_benchmark_module()
+    rows = task11_preconditioner_qualification_rows()
+    for row in rows:
+        if row["requested_relaxation_preconditioner_strategy"] == "diagonal_mass":
+            row["cumulative_preconditioner_wall_time_ms"] = 0.0
+
+    summary = benchmark.relaxation_preconditioner_qualification_summary(
+        rows,
+        cpu_gpu_parity_rows=task11_preconditioner_cpu_gpu_parity_rows(),
+    )
+
+    assert summary["status"] == "invalid"
+    assert any(
+        "cumulative_preconditioner_wall_time_ms must be positive for diagonal_mass"
+        in failure
+        for failure in summary["matrix_failures"]
+    )
+
+
+def test_task11_preconditioner_qualification_requires_separate_cpu_gpu_parity() -> None:
+    benchmark = load_benchmark_module()
+
+    summary = benchmark.relaxation_preconditioner_qualification_summary(
+        task11_preconditioner_qualification_rows()
+    )
+
+    assert summary["status"] == "invalid"
+    assert summary["promoted_strategy"] is None
+    assert any(
+        "CPU/GPU parity evidence is missing" in failure
+        for failure in summary["matrix_failures"]
+    )
+
+
+def test_task11_preconditioner_qualification_rejects_magnetization_parity_failure() -> None:
+    benchmark = load_benchmark_module()
+    parity_rows = task11_preconditioner_cpu_gpu_parity_rows()
+    gpu_row = next(
+        row
+        for row in parity_rows
+        if row["backend"] == "fem_gpu" and row["mesh_size"] == "fine"
+    )
+    gpu_row["final_magnetization_values_json"] = json.dumps(
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 1e-3]]
+    )
+
+    summary = benchmark.relaxation_preconditioner_qualification_summary(
+        task11_preconditioner_qualification_rows(),
+        cpu_gpu_parity_rows=parity_rows,
+        qualification_identity=task11_expected_qualification_identity(),
+    )
+
+    assert summary["status"] == "invalid"
+    assert any(
+        "magnetization max-component difference" in failure
+        for failure in summary["matrix_failures"]
+    )
+
+
+def test_task11_preconditioner_qualification_rejects_values_with_stale_content_hash(
+) -> None:
+    benchmark = load_benchmark_module()
+    parity_rows = task11_preconditioner_cpu_gpu_parity_rows()
+    fabricated_values = json.dumps(
+        [[0.0, 0.0, 1.0], [0.0, 1.0, 0.0]],
+        separators=(",", ":"),
+    )
+    for row in parity_rows:
+        row["final_magnetization_values_json"] = fabricated_values
+
+    summary = benchmark.relaxation_preconditioner_qualification_summary(
+        task11_preconditioner_qualification_rows(),
+        cpu_gpu_parity_rows=parity_rows,
+        qualification_identity=task11_expected_qualification_identity(),
+    )
+
+    assert summary["status"] == "invalid"
+    assert summary["promoted_strategy"] is None
+    assert any(
+        "final magnetization content SHA-256 mismatch" in failure
+        for failure in summary["matrix_failures"]
+    )
+
+
+def test_task11_preconditioner_qualification_rejects_parity_runtime_drift() -> None:
+    benchmark = load_benchmark_module()
+    parity_rows = task11_preconditioner_cpu_gpu_parity_rows()
+    parity_rows[0]["runtime_manifest_sha256"] = "other-runtime"
+
+    summary = benchmark.relaxation_preconditioner_qualification_summary(
+        task11_preconditioner_qualification_rows(),
+        cpu_gpu_parity_rows=parity_rows,
+    )
+
+    assert summary["status"] == "invalid"
+    assert any(
+        "parity runtime identity" in failure
+        for failure in summary["matrix_failures"]
+    )
+
+
+def test_task11_preconditioner_qualification_rejects_wrong_parity_demag_policy() -> None:
+    benchmark = load_benchmark_module()
+    parity_rows = task11_preconditioner_cpu_gpu_parity_rows()
+    parity_rows[0]["demag_preconditioner"] = "JACOBI"
+
+    summary = benchmark.relaxation_preconditioner_qualification_summary(
+        task11_preconditioner_qualification_rows(),
+        cpu_gpu_parity_rows=parity_rows,
+    )
+
+    assert summary["status"] == "invalid"
+    assert any(
+        "demag_preconditioner must be 'AMG'" in failure
+        for failure in summary["matrix_failures"]
+    )
+
+
+def test_task11_final_magnetization_evidence_is_captured_before_tempdir_cleanup(
+    tmp_path: Path,
+) -> None:
+    benchmark = load_benchmark_module()
+    artifact = tmp_path / "m_final.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "observable": "m",
+                "unit": "1",
+                "step": 16,
+                "values": [[1.0, 0.0, 0.0], [0.0, 1.0, 1e-12]],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    evidence = benchmark.load_final_magnetization_evidence(tmp_path)
+
+    assert evidence["final_magnetization_node_count"] == 2
+    assert evidence["final_magnetization_step"] == 16
+    assert json.loads(evidence["final_magnetization_values_json"])[1][2] == 1e-12
+    assert evidence["final_magnetization_sha256"] == (
+        task11_test_final_magnetization_sha256(
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 1e-12]]
+        )
+    )
+    assert evidence["final_magnetization_artifact_sha256"] == (
+        benchmark.hashlib.sha256(artifact.read_bytes()).hexdigest()
+    )
+
+
+def test_task11_cumulative_runtime_payload_is_materialized_in_csv_units() -> None:
+    benchmark = load_benchmark_module()
+
+    evidence = benchmark.task11_cumulative_relaxation_evidence(
+        {
+            "accepted_steps": 12,
+            "cumulative_armijo_trials": 17,
+            "cumulative_demag_solves": 29,
+            "cumulative_preconditioner_wall_time_ns": 2_500_000,
+            "cumulative_hypre_wall_time_ns": 7_500_000,
+            "relaxation_preconditioner_apply_count": 9,
+        }
+    )
+
+    assert evidence == {
+        "accepted_steps": 12,
+        "cumulative_armijo_trials": 17,
+        "cumulative_demag_solves": 29,
+        "cumulative_preconditioner_wall_time_ms": 2.5,
+        "cumulative_hypre_wall_time_ms": 7.5,
+        "relaxation_preconditioner_apply_count": 9,
+    }
+
+
+def test_task11_qualification_writer_loads_separate_cpu_gpu_parity_csv(
+    tmp_path: Path,
+) -> None:
+    benchmark = load_benchmark_module()
+    matrix_path = tmp_path / "matrix.csv"
+    parity_path = tmp_path / "parity.csv"
+    output_path = tmp_path / "qualification.json"
+    benchmark.write_csv(task11_preconditioner_qualification_rows(), str(matrix_path))
+    benchmark.write_csv(task11_preconditioner_cpu_gpu_parity_rows(), str(parity_path))
+
+    summary = benchmark.write_relaxation_preconditioner_qualification(
+        matrix_path,
+        output_path,
+        cpu_gpu_parity_input_path=parity_path,
+        qualification_identity=task11_expected_qualification_identity(),
+    )
+
+    assert summary["status"] == "pass"
+    assert summary["cpu_gpu_parity"]["status"] == "pass"
+    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "pass"
 
 
 def test_benchmark_csv_uses_repository_line_endings(tmp_path) -> None:
@@ -403,15 +1218,17 @@ def test_run_json_artifacts_supply_authoritative_benchmark_payload(tmp_path) -> 
         "max_h_eff": "7",
         "max_h_demag": "8",
         "max_torque_Apm": "9",
-        "max_torque_T": "10",
-        "rhs_evals": 3,
-        "total_rhs_evals": 5,
-        "demag_solves": 7,
-        "rejected_attempts": 1,
-    }
+            "max_torque_T": "10",
+            "accepted_steps": 2,
+            "rhs_evals": 3,
+            "total_rhs_evals": 5,
+            "demag_solves": 7,
+            "cumulative_demag_solves": 7,
+            "rejected_attempts": 1,
+        }
 
 
-def test_native_pgbb_accepted_armijo_proof_is_plumbed_to_solver_steps() -> None:
+def test_native_direct_minimizer_accepted_armijo_proof_is_plumbed_to_solver_steps() -> None:
     header = (REPO_ROOT / "native" / "include" / "fullmag_fem.h").read_text(
         encoding="utf-8"
     )
@@ -445,6 +1262,24 @@ def test_native_pgbb_accepted_armijo_proof_is_plumbed_to_solver_steps() -> None:
         / "relaxation"
         / "pgbb.cpp"
     ).read_text(encoding="utf-8")
+    cpu_ncg = (
+        REPO_ROOT
+        / "backends"
+        / "fem"
+        / "cpu"
+        / "mfem"
+        / "relaxation"
+        / "nonlinear_cg.cpp"
+    ).read_text(encoding="utf-8")
+    gpu_ncg = (
+        REPO_ROOT
+        / "backends"
+        / "fem"
+        / "gpu"
+        / "cuda"
+        / "relaxation"
+        / "nonlinear_cg.cpp"
+    ).read_text(encoding="utf-8")
 
     fields = [
         "accepted_energy_proof_available",
@@ -469,7 +1304,7 @@ def test_native_pgbb_accepted_armijo_proof_is_plumbed_to_solver_steps() -> None:
         assert field in runner_types
         assert field in native_fem
         assert field in artifacts
-    for source in (cpu_pgbb, gpu_pgbb):
+    for source in (cpu_pgbb, gpu_pgbb, cpu_ncg, gpu_ncg):
         assert "accepted_energy_proof.available = true" in source
         assert "accepted_energy_proof.delta_j" in source
         assert "accepted_energy_proof.roundoff_bound_j" in source
@@ -479,8 +1314,12 @@ def test_native_pgbb_accepted_armijo_proof_is_plumbed_to_solver_steps() -> None:
 
     assert "accepted_energy_delta_upper_j <= armijo_increment_rhs_j" in cpu_pgbb
     assert "accepted_energy_delta_upper_j <= armijo_increment_rhs_j" in gpu_pgbb
+    assert "accepted_energy_delta_upper_j <= armijo_increment_rhs_j" in cpu_ncg
+    assert "accepted_energy_delta_upper_j <= armijo_increment_rhs_j" in gpu_ncg
     assert "accepted_energy_proof.available = true" in cpu_pgbb
     assert "accepted_energy_proof.available = true" in gpu_pgbb
+    assert "accepted_energy_proof.available = true" in cpu_ncg
+    assert "accepted_energy_proof.available = true" in gpu_ncg
 
 
 def test_authoritative_payload_uses_requested_precision_only_as_fallback(
@@ -765,6 +1604,40 @@ def test_fem_gpu_performance_regression_recipe_is_fail_closed() -> None:
         "--fixture-environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json",
         "FULLMAG_BENCH_DOMAIN_HMAX=50e-9",
         "FULLMAG_BENCH_AIRBOX_HMAX=100e-9",
+    ]:
+        assert required in recipe
+
+
+def test_task11_preconditioner_qualification_recipe_is_literal_and_fail_closed() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+    recipe = just_recipe_source(
+        justfile,
+        "verify-fem-gpu-relaxation-preconditioner-qualification",
+    )
+
+    for required in [
+        "--meshes coarse,medium,fine",
+        "--backends cpu,gpu",
+        "--backends gpu",
+        "--scenarios box500_airbox_exchange_demag",
+        "--relax-algorithms nonlinear_cg",
+        "--relaxation-preconditioner-strategies none,diagonal_mass,lumped_exchange_mass_cg4,lumped_exchange_mass_cg8,stagnation_triggered_cg8",
+        "--demag-rtols 1e-12",
+        "--demag-amg-relax-types 6",
+        "--steps 64",
+        "--dt 1e-13",
+        "--relax-torque-tolerance-apm 8000",
+        "--repeat 5",
+        "--capture-final-magnetization",
+        "--task11-relaxation-preconditioner-cpu-gpu-parity-sweep",
+        "--task11-qualification-fixture-suite examples/assets/fem_performance/amg_qualification_suite_v1.json",
+        "--task11-qualification-environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json",
+        "--require-gpu-strict-residency",
+        "--require-gpu-control-readback-budget",
+        "--require-demag-converged",
+        "--relaxation-preconditioner-cpu-gpu-parity-input",
+        "--relaxation-preconditioner-qualification-input",
+        "--relaxation-preconditioner-qualification-output",
     ]:
         assert required in recipe
 
@@ -1840,34 +2713,37 @@ def test_runtime_gate_and_physics_note_promote_cpu_tpi_without_gpu_claim() -> No
         assert env_name in demag_performance_recipe
         assert cli_flag in production_recipe
         assert cli_flag in demag_performance_recipe
-        assert env_name in amg_profile_sweep_recipe
-        assert cli_flag in amg_profile_sweep_recipe
+        if env_name == "FULLMAG_BENCH_DEMAG_AMG_RELAX_TYPES":
+            assert env_name in amg_profile_sweep_recipe
+            assert cli_flag in amg_profile_sweep_recipe
     assert "docker compose --profile fem-gpu run --rm" in amg_profile_sweep_recipe
     assert "python3 scripts/analysis/fem_gpu_benchmark.py" in amg_profile_sweep_recipe
     assert "FULLMAG_BENCH_DEMAG_AMG_RELAX_TYPES:-18,6" in amg_profile_sweep_recipe
     assert "--emit-best-demag-policy" in amg_profile_sweep_recipe
     assert "--best-demag-policy-metric" in amg_profile_sweep_recipe
     assert "--human-report-output" in amg_profile_sweep_recipe
-    assert "--require-best-demag-policy" not in amg_profile_sweep_recipe
-    assert "--require-demag-converged" not in amg_profile_sweep_recipe
-    assert "--require-demag-setup-reused" not in amg_profile_sweep_recipe
-    assert "--require-cpu-gpu-consistency" not in amg_profile_sweep_recipe
+    assert "--require-best-demag-policy" in amg_profile_sweep_recipe
+    assert "--require-demag-converged" in amg_profile_sweep_recipe
+    assert "--require-cpu-gpu-consistency" in amg_profile_sweep_recipe
     assert "--max-demag-solver-apply-ms" not in amg_profile_sweep_recipe
+    assert "amg_qualification_suite_v1.json" in amg_profile_sweep_recipe
+    assert "for profiler in off on" in amg_profile_sweep_recipe
+    assert "--backends fem_cpu,fem_gpu" in amg_profile_sweep_recipe
+    assert "--demag-rtols 1e-12" in amg_profile_sweep_recipe
+    assert "--relax-torque-tolerance-t 1e-4" in amg_profile_sweep_recipe
+    assert "--repeat 1" in amg_profile_sweep_recipe
+    assert 'FULLMAG_BENCH_REPEAT:-5' in amg_profile_sweep_recipe
+    assert "--amg-relax-qualification-output" in amg_profile_sweep_recipe
     assert "FULLMAG_BENCH_DEMAG_RTOLS" in demag_performance_recipe
     assert "--demag-rtols" in demag_performance_recipe
     assert "FULLMAG_BENCH_MESHES" in demag_performance_recipe
-    assert "FULLMAG_BENCH_MESHES" in amg_profile_sweep_recipe
     assert '--meshes "$FULLMAG_BENCH_MESHES"' in demag_performance_recipe
-    assert '--meshes "$FULLMAG_BENCH_MESHES"' in amg_profile_sweep_recipe
     assert "--reuse-generated-domain-mesh" in production_recipe
     assert "--reuse-generated-domain-mesh" in demag_performance_recipe
-    assert "--reuse-generated-domain-mesh" in amg_profile_sweep_recipe
     assert "FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR" in production_recipe
     assert "FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR" in demag_performance_recipe
-    assert "FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR" in amg_profile_sweep_recipe
     assert "--generated-domain-mesh-cache-dir" in production_recipe
     assert "--generated-domain-mesh-cache-dir" in demag_performance_recipe
-    assert "--generated-domain-mesh-cache-dir" in amg_profile_sweep_recipe
     assert (
         'FULLMAG_BENCH_RELAX_ALGORITHMS:-llg_overdamped,projected_gradient_bb,nonlinear_cg'
         in demag_performance_recipe
@@ -3252,9 +4128,13 @@ def test_task8_identity_capture_uses_materialized_policy_when_requested_print_le
     benchmark = load_benchmark_module()
     monkeypatch.syspath_prepend(str(REPO_ROOT / "packages" / "fullmag-py" / "src"))
     args = benchmark.parse_args(["--demag-print-level", "0"])
+    domain_mesh_path = (
+        REPO_ROOT
+        / "examples/assets/fem_performance/box500_airbox_exchange_demag_amg_coarse_v1.mesh.json"
+    )
     problem_ir = benchmark.canonical_problem_ir(
         mesh_path=tmp_path / "input.mesh.json",
-        domain_mesh_path=tmp_path / "domain.mesh.json",
+        domain_mesh_path=domain_mesh_path,
         scenario="box500_airbox_exchange_demag",
         integrator="heun",
         relaxation_algorithm="projected_gradient_bb",
@@ -3351,6 +4231,7 @@ def test_task8_identity_capture_manifest_expected_device_rejects_observed_drift(
     benchmark.attach_observed_gpu_identity(
         gpu_row,
         {
+            "device_uuid": "GPU-test-4090",
             "device_name": "NVIDIA GeForce RTX 4090",
             "compute_capability": "8.9",
             "gpu_index": 0,
@@ -3578,7 +4459,10 @@ def test_task8_qualification_row_identity_integration_is_computed_from_runtime_a
         "relaxation_algorithm": "projected_gradient_bb",
         "steps": 2,
         "dt": 1e-13,
-        "extra_env": {"FULLMAG_BENCH_DOMAIN_MESH": str(solver_mesh)},
+        "extra_env": {
+            "FULLMAG_BENCH_DOMAIN_MESH": str(solver_mesh),
+            "FULLMAG_FEM_STEP_PROFILE": "1",
+        },
         "problem_ir": problem_ir,
         "qualification_case_manifest": case_manifest,
     }
@@ -3587,12 +4471,15 @@ def test_task8_qualification_row_identity_integration_is_computed_from_runtime_a
     gpu_row = benchmark.run_backend(
         backend_label="fem_gpu",
         observed_gpu_identity={
+            "device_uuid": "GPU-test-4090",
             "device_name": "NVIDIA GeForce RTX 4090",
             "compute_capability": "8.9",
             "gpu_index": 0,
         },
         **common,
     )
+    assert cpu_row["step_profiler_enabled"] is True
+    assert gpu_row["step_profiler_enabled"] is True
 
     canonical = lambda value: json.dumps(
         value, sort_keys=True, separators=(",", ":")
@@ -3636,8 +4523,10 @@ def test_task8_qualification_row_identity_integration_is_computed_from_runtime_a
         assert cpu_row[field] == expected
         assert gpu_row[field] == expected
     assert "device_name" not in cpu_row
+    assert "device_uuid" not in cpu_row
     assert "compute_capability" not in cpu_row
     assert gpu_row["device_name"] == "NVIDIA GeForce RTX 4090"
+    assert gpu_row["device_uuid"] == "GPU-test-4090"
     assert gpu_row["compute_capability"] == "8.9"
     assert gpu_row["observed_gpu_index"] == 0
     assert cpu_row["solver_mesh_signature"] == gpu_row["solver_mesh_signature"]
@@ -3669,8 +4558,8 @@ def test_task8_current_device_identity_selects_configured_multi_gpu_index(
             command,
             0,
             stdout=(
-                "NVIDIA GeForce RTX 3090, 8.6\n"
-                "NVIDIA GeForce RTX 4080 SUPER, 8.9\n"
+                "GPU-test-3090, NVIDIA GeForce RTX 3090, 8.6\n"
+                "GPU-test-4080, NVIDIA GeForce RTX 4080 SUPER, 8.9\n"
             ),
             stderr="",
         )
@@ -3678,6 +4567,7 @@ def test_task8_current_device_identity_selects_configured_multi_gpu_index(
     monkeypatch.setattr(benchmark.subprocess, "run", completed)
 
     assert benchmark.observe_current_gpu_identity(gpu_index=1) == {
+        "device_uuid": "GPU-test-4080",
         "device_name": "NVIDIA GeForce RTX 4080 SUPER",
         "compute_capability": "8.9",
         "gpu_index": 1,
@@ -3685,7 +4575,7 @@ def test_task8_current_device_identity_selects_configured_multi_gpu_index(
     assert len(calls) == 1
     assert calls[0][0] == [
         "nvidia-smi",
-        "--query-gpu=name,compute_cap",
+        "--query-gpu=uuid,name,compute_cap",
         "--format=csv,noheader",
     ]
 
@@ -3696,7 +4586,8 @@ def test_task8_current_device_identity_selects_configured_multi_gpu_index(
         "",
         "NVIDIA GeForce RTX 4080 SUPER\n",
         "NVIDIA GeForce RTX 4080 SUPER, unknown\n",
-        "NVIDIA GeForce RTX 4080 SUPER, 8.9, extra\n",
+        "GPU-test, NVIDIA GeForce RTX 4080 SUPER, unknown\n",
+        "GPU-test, NVIDIA GeForce RTX 4080 SUPER, 8.9, extra\n",
     ],
 )
 def test_task8_current_device_identity_rejects_missing_or_malformed_observation(
@@ -3727,6 +4618,7 @@ def test_task8_current_device_identity_mismatch_is_authored_on_gpu_row_and_rejec
     runtime_identity, case_identities = task8_expected_qualification_identity()
     rows = task8_complete_qualification_rows(runtime_identity, case_identities[0])
     observed = {
+        "device_uuid": "GPU-test-4090",
         "device_name": "NVIDIA GeForce RTX 4090",
         "compute_capability": "8.9",
         "gpu_index": 0,
@@ -3877,12 +4769,28 @@ def test_demag_amg_profile_sweep_parser_and_policy_identity() -> None:
         "requested_demag_amg_aggressive_coarsening": "1",
         "requested_demag_amg_strength_threshold": "",
         "requested_demag_amg_max_levels": "",
+        "demag_linear_solver": "CG",
+        "demag_preconditioner": "AMG",
+        "demag_amg_relax_type": 18,
+        "demag_amg_coarsening": 8,
+        "demag_amg_interpolation": 6,
+        "demag_amg_aggressive_coarsening": 1,
+        "demag_amg_strength_threshold": None,
+        "demag_amg_max_levels": None,
     }
-    second = {**first, "requested_demag_amg_relax_type": "6"}
-    third = {**first, "requested_demag_amg_strength_threshold": "0.25"}
+    requested_only_drift = {**first, "requested_demag_amg_relax_type": "6"}
+    effective_relax_change = {**first, "demag_amg_relax_type": 6}
+    effective_strength_change = {**first, "demag_amg_strength_threshold": 0.25}
 
-    assert benchmark.demag_policy_identity(first) != benchmark.demag_policy_identity(second)
-    assert benchmark.demag_policy_identity(first) != benchmark.demag_policy_identity(third)
+    assert benchmark.demag_policy_identity(first) == benchmark.demag_policy_identity(
+        requested_only_drift
+    )
+    assert benchmark.demag_policy_identity(first) != benchmark.demag_policy_identity(
+        effective_relax_change
+    )
+    assert benchmark.demag_policy_identity(first) != benchmark.demag_policy_identity(
+        effective_strength_change
+    )
 
 
 def test_optional_demag_amg_profile_parser_preserves_defaults_and_overrides() -> None:
@@ -3895,6 +4803,471 @@ def test_optional_demag_amg_profile_parser_preserves_defaults_and_overrides() ->
     ]
     assert benchmark.resolve_optional_nonnegative_ints(None) == [None]
     assert benchmark.resolve_optional_nonnegative_ints("none,25") == [None, 25]
+
+
+def amg_relax_qualification_rows(
+    algorithm: str = "nonlinear_cg",
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for relax_type, timing_ms in [(18, 100.0), (6, 94.0)]:
+        for repeat_index in range(5):
+            rows.append(
+                {
+                    "backend": "fem_gpu",
+                    "solver_mesh_signature": "mesh-fine",
+                    "scenario": "box500_airbox_exchange_demag",
+                    "relaxation_algorithm": algorithm,
+                    "step_profiler_enabled": True,
+                    "repeat_index": repeat_index,
+                    "status": "ok",
+                    "executed_problem_ir_sha256": "b" * 64,
+                    "qualification_fixture_problem_ir_sha256": "a" * 64,
+                    "demag_linear_solver": "CG",
+                    "demag_preconditioner": "AMG",
+                    "demag_amg_relax_type": relax_type,
+                    "demag_amg_coarsening": 8,
+                    "demag_amg_interpolation": 6,
+                    "demag_amg_aggressive_coarsening": 1,
+                    "demag_amg_strength_threshold": None,
+                    "demag_amg_max_levels": None,
+                    "demag_solver_apply_wall_time_ms": timing_ms,
+                    "wall_time_ms": timing_ms,
+                    "demag_final_residual_norm": 1.0e-13,
+                    "demag_relative_tolerance": 1.0e-12,
+                    "energy_monotonicity_satisfied": True,
+                    "executed_steps": 3,
+                    "steps": 3,
+                    "stop_reason": "max_steps",
+                    "requested_relax_torque_tolerance_apm": 100.0,
+                    "norm_defect": 2.0e-16,
+                    "final_e_total_j": -1.0e-17,
+                    "final_e_ex_j": 1.0e-20,
+                    "final_e_demag_j": 2.0e-18,
+                    "final_e_ext_j": -1.201e-17,
+                    "final_torque_apm": 64.0,
+                    "final_torque_t": 8.042477193189871e-5,
+                }
+            )
+    return rows
+
+
+def amg_relax_qualification_summary(benchmark, rows):
+    return benchmark.amg_relax_policy_qualification_summary(
+        rows,
+        cpu_gpu_parity_gate_passed=True,
+        pcg_symmetry_contract_passed=True,
+        expected_problem_ir_by_solver_mesh_signature={
+            "mesh-fine": "a" * 64
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "failure_fragment"),
+    [
+        ("demag_linear_solver", "GMRES", "demag_linear_solver"),
+        ("demag_preconditioner", "JACOBI", "demag_preconditioner"),
+        ("demag_amg_coarsening", 10, "demag_amg_coarsening"),
+        ("demag_amg_interpolation", 8, "demag_amg_interpolation"),
+        ("demag_amg_aggressive_coarsening", 0, "demag_amg_aggressive_coarsening"),
+        ("demag_amg_strength_threshold", 0.25, "demag_amg_strength_threshold"),
+        ("demag_amg_max_levels", 25, "demag_amg_max_levels"),
+        ("demag_relative_tolerance", 1.0e-8, "demag_relative_tolerance"),
+        (
+            "qualification_fixture_problem_ir_sha256",
+            "c" * 64,
+            "qualification_fixture_problem_ir_sha256",
+        ),
+        ("executed_problem_ir_sha256", "drifted-ir", "executed_problem_ir_sha256"),
+    ],
+)
+def test_amg_relax_qualification_rejects_exact_matrix_identity_drift(
+    field: str,
+    value: object,
+    failure_fragment: str,
+) -> None:
+    benchmark = load_benchmark_module()
+    rows = amg_relax_qualification_rows()
+    rows[0][field] = value
+
+    summary = amg_relax_qualification_summary(benchmark, rows)
+
+    assert summary["promotion_eligible"] is False
+    assert summary["exact_matrix_identity_gate_passed"] is False
+    assert any(failure_fragment in failure for failure in summary["failures"])
+
+
+def test_amg_relax_qualification_rejects_problem_ir_pair_drift() -> None:
+    benchmark = load_benchmark_module()
+    rows = amg_relax_qualification_rows()
+    candidate = next(
+        row
+        for row in rows
+        if row["demag_amg_relax_type"] == 6 and row["repeat_index"] == 0
+    )
+    candidate["executed_problem_ir_sha256"] = "c" * 64
+
+    summary = amg_relax_qualification_summary(benchmark, rows)
+
+    assert summary["promotion_eligible"] is False
+    assert summary["physics_equivalence_gate_passed"] is False
+    assert any(
+        "executed_problem_ir_sha256 mismatch" in failure
+        for failure in summary["failures"]
+    )
+
+
+def test_amg_relax_qualification_rejects_problem_ir_drift_across_matrix_cases() -> None:
+    benchmark = load_benchmark_module()
+    rows = amg_relax_qualification_rows()
+    cpu_profiler_off_rows = []
+    for row in rows:
+        cpu_profiler_off_rows.append(
+            {
+                **row,
+                "backend": "fem_cpu",
+                "step_profiler_enabled": False,
+                "executed_problem_ir_sha256": "c" * 64,
+            }
+        )
+    rows.extend(cpu_profiler_off_rows)
+
+    summary = amg_relax_qualification_summary(benchmark, rows)
+
+    assert summary["promotion_eligible"] is False
+    assert summary["exact_matrix_identity_gate_passed"] is False
+    assert any(
+        "executed_problem_ir_sha256 differs across matrix cases" in failure
+        for failure in summary["failures"]
+    )
+
+
+def test_amg_relax_qualification_normalizes_empty_optional_csv_fields() -> None:
+    benchmark = load_benchmark_module()
+    rows = amg_relax_qualification_rows()
+    for row in rows:
+        row["demag_amg_strength_threshold"] = ""
+        row["demag_amg_max_levels"] = ""
+
+    summary = amg_relax_qualification_summary(benchmark, rows)
+
+    assert summary["exact_matrix_identity_gate_passed"] is True
+    assert summary["promotion_eligible"] is True
+
+
+def test_amg_relax_qualification_summary_enforces_p50_p95_and_geomean_gates() -> None:
+    benchmark = load_benchmark_module()
+
+    rows = amg_relax_qualification_rows()
+
+    summary = benchmark.amg_relax_policy_qualification_summary(
+        rows,
+        cpu_gpu_parity_gate_passed=True,
+        pcg_symmetry_contract_passed=True,
+        expected_problem_ir_by_solver_mesh_signature={"mesh-fine": "a" * 64},
+    )
+    assert summary["promotion_eligible"] is True
+    assert summary["geometric_mean_end_to_end_improvement_percent"] == pytest.approx(6.0)
+
+    regressed = [dict(row) for row in rows]
+    for row in regressed:
+        if row["demag_amg_relax_type"] == 6:
+            row["wall_time_ms"] = 106.0
+    summary = benchmark.amg_relax_policy_qualification_summary(
+        regressed,
+        cpu_gpu_parity_gate_passed=True,
+        pcg_symmetry_contract_passed=True,
+        expected_problem_ir_by_solver_mesh_signature={"mesh-fine": "a" * 64},
+    )
+    assert summary["promotion_eligible"] is False
+    assert summary["p50_end_to_end_no_regression"] is False
+    assert summary["p95_end_to_end_no_regression"] is False
+
+
+def test_amg_relax_qualification_uses_native_armijo_proof_for_pgbb() -> None:
+    benchmark = load_benchmark_module()
+
+    rows = amg_relax_qualification_rows("projected_gradient_bb")
+    for row in rows:
+        repeat_index = int(row["repeat_index"])
+        row.update(
+            {
+                "energy_monotonicity_satisfied": False,
+                "accepted_energy_proof_available": True,
+                "accepted_energy_proof_count": 3,
+                "accepted_energy_proof_invalid_count": 0,
+                "accepted_energy_proof_invalid_details": (
+                    "[]" if repeat_index % 2 else []
+                ),
+            }
+        )
+
+    summary = benchmark.amg_relax_policy_qualification_summary(
+        rows,
+        cpu_gpu_parity_gate_passed=True,
+        pcg_symmetry_contract_passed=True,
+        expected_problem_ir_by_solver_mesh_signature={"mesh-fine": "a" * 64},
+    )
+
+    assert summary["trajectory_gate_passed"] is True
+    assert summary["promotion_eligible"] is True
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("accepted_energy_proof_available", False),
+        ("accepted_energy_proof_count", 2),
+        ("accepted_energy_proof_invalid_count", 1),
+        ("accepted_energy_proof_invalid_details", ["step=2: invalid"]),
+    ],
+)
+def test_amg_relax_qualification_fails_closed_on_invalid_pgbb_proof(
+    field: str,
+    value: object,
+) -> None:
+    benchmark = load_benchmark_module()
+    rows = amg_relax_qualification_rows("projected_gradient_bb")
+    for row in rows:
+        row.update(
+            {
+                "energy_monotonicity_satisfied": False,
+                "accepted_energy_proof_available": True,
+                "accepted_energy_proof_count": 3,
+                "accepted_energy_proof_invalid_count": 0,
+                "accepted_energy_proof_invalid_details": [],
+            }
+        )
+    rows[0][field] = value
+
+    summary = benchmark.amg_relax_policy_qualification_summary(
+        rows,
+        cpu_gpu_parity_gate_passed=True,
+        pcg_symmetry_contract_passed=True,
+        expected_problem_ir_by_solver_mesh_signature={"mesh-fine": "a" * 64},
+    )
+
+    assert summary["trajectory_gate_passed"] is False
+    assert summary["promotion_eligible"] is False
+    assert any("accepted Armijo proof" in failure for failure in summary["failures"])
+
+
+def test_amg_relax_qualification_accepts_paired_physics_with_canonical_tolerances() -> None:
+    benchmark = load_benchmark_module()
+    rows = amg_relax_qualification_rows()
+    candidate = next(
+        row
+        for row in rows
+        if row["demag_amg_relax_type"] == 6 and row["repeat_index"] == 0
+    )
+    candidate["norm_defect"] = 9.0e-10
+    candidate["final_e_total_j"] = -1.0000005e-17
+    candidate["final_torque_apm"] = 64.000032
+
+    summary = benchmark.amg_relax_policy_qualification_summary(
+        rows,
+        cpu_gpu_parity_gate_passed=True,
+        pcg_symmetry_contract_passed=True,
+        expected_problem_ir_by_solver_mesh_signature={"mesh-fine": "a" * 64},
+    )
+
+    assert summary["physics_equivalence_gate_passed"] is True
+    assert summary["promotion_eligible"] is True
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "failure_fragment"),
+    [
+        ("stop_reason", "torque", "stop_reason mismatch"),
+        ("executed_steps", 2, "executed_steps mismatch"),
+        ("steps", 4, "configured steps mismatch"),
+        (
+            "requested_relax_torque_tolerance_apm",
+            101.0,
+            "requested torque target mismatch",
+        ),
+        ("norm_defect", 1.1e-9, "norm_defect exceeds"),
+        ("final_e_total_j", -1.01e-17, "final_e_total_j mismatch"),
+        ("final_e_demag_j", None, "missing numeric final_e_demag_j"),
+        ("final_torque_apm", 65.0, "final_torque_apm mismatch"),
+        ("final_torque_t", 9.0e-5, "final_torque_t mismatch"),
+    ],
+)
+def test_amg_relax_qualification_fails_closed_on_paired_physics_drift(
+    field: str,
+    value: object,
+    failure_fragment: str,
+) -> None:
+    benchmark = load_benchmark_module()
+    rows = amg_relax_qualification_rows()
+    candidate = next(
+        row
+        for row in rows
+        if row["demag_amg_relax_type"] == 6 and row["repeat_index"] == 0
+    )
+    candidate[field] = value
+
+    summary = benchmark.amg_relax_policy_qualification_summary(
+        rows,
+        cpu_gpu_parity_gate_passed=True,
+        pcg_symmetry_contract_passed=True,
+        expected_problem_ir_by_solver_mesh_signature={"mesh-fine": "a" * 64},
+    )
+
+    assert summary["physics_equivalence_gate_passed"] is False
+    assert summary["promotion_eligible"] is False
+    assert any(failure_fragment in failure for failure in summary["failures"])
+
+
+def test_amg_relax_qualification_fails_closed_on_duplicate_repeat_pairing() -> None:
+    benchmark = load_benchmark_module()
+    rows = amg_relax_qualification_rows()
+    candidate_rows = [row for row in rows if row["demag_amg_relax_type"] == 6]
+    candidate_rows[-1]["repeat_index"] = 3
+
+    summary = benchmark.amg_relax_policy_qualification_summary(
+        rows,
+        cpu_gpu_parity_gate_passed=True,
+        pcg_symmetry_contract_passed=True,
+        expected_problem_ir_by_solver_mesh_signature={"mesh-fine": "a" * 64},
+    )
+
+    assert summary["physics_equivalence_gate_passed"] is False
+    assert summary["promotion_eligible"] is False
+    assert any("repeat_index=3 has 2 rows" in failure for failure in summary["failures"])
+
+
+def test_amg_relax_qualification_fails_closed_on_unknown_completion_semantics() -> None:
+    benchmark = load_benchmark_module()
+    rows = amg_relax_qualification_rows()
+    for row in rows:
+        if row["repeat_index"] == 0:
+            row["stop_reason"] = "unknown"
+
+    summary = benchmark.amg_relax_policy_qualification_summary(
+        rows,
+        cpu_gpu_parity_gate_passed=True,
+        pcg_symmetry_contract_passed=True,
+        expected_problem_ir_by_solver_mesh_signature={"mesh-fine": "a" * 64},
+    )
+
+    assert summary["physics_equivalence_gate_passed"] is False
+    assert summary["promotion_eligible"] is False
+    assert any(
+        "unsupported qualification stop_reason" in failure
+        for failure in summary["failures"]
+    )
+
+
+def test_demag_amg_qualification_suite_rejects_malformed_runtime_signature(
+    tmp_path: Path,
+) -> None:
+    benchmark = load_benchmark_module()
+    source_path = (
+        REPO_ROOT / "examples/assets/fem_performance/amg_qualification_suite_v1.json"
+    )
+    payload = json.loads(source_path.read_text(encoding="utf-8"))
+    for fixture in payload["fixtures"]:
+        fixture["solver_mesh_path"] = str(
+            source_path.parent / fixture["solver_mesh_path"]
+        )
+    payload["fixtures"][0]["solver_mesh_signature"] = "not-a-runtime-signature"
+    corrupted_path = tmp_path / "corrupted-suite.json"
+    corrupted_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="64 lowercase hexadecimal characters"):
+        benchmark.load_amg_qualification_fixture_suite(corrupted_path)
+
+
+def test_canonical_problem_ir_inlines_explicit_shared_domain_mesh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(FULLMAG_PYTHON_SRC))
+    benchmark = load_benchmark_module()
+    mesh_path = REPO_ROOT / "examples/assets/box_40x20x10_coarse.mesh.json"
+    domain_mesh_path = (
+        REPO_ROOT
+        / "examples/assets/fem_performance/box500_airbox_exchange_demag_amg_coarse_v1.mesh.json"
+    )
+
+    problem_ir = benchmark.canonical_problem_ir(
+        mesh_path=mesh_path,
+        domain_mesh_path=domain_mesh_path,
+        scenario="box500_airbox_exchange_demag",
+        integrator="heun",
+        relaxation_algorithm="projected_gradient_bb",
+        steps=64,
+        dt=1.0e-13,
+        timestep_policy="fixed",
+        extra_env={},
+    )
+
+    domain_asset = problem_ir["geometry_assets"]["fem_domain_mesh_asset"]
+    expected_mesh = json.loads(domain_mesh_path.read_text(encoding="utf-8"))
+    assert domain_asset["mesh"] == expected_mesh
+
+
+def test_single_backend_case_label_preserves_explicit_zero_amg_values() -> None:
+    benchmark = load_benchmark_module()
+
+    label = benchmark.single_backend_case_label(
+        {
+            "scenario": "box500_airbox_exchange_demag",
+            "relaxation_algorithm": "nonlinear_cg",
+            "backend": "fem_gpu",
+            "demag_linear_solver": "CG",
+            "demag_preconditioner": "AMG",
+            "demag_amg_relax_type": 0,
+            "demag_amg_coarsening": 0,
+            "demag_amg_interpolation": 0,
+            "demag_amg_aggressive_coarsening": 0,
+            "demag_amg_strength_threshold": 0.0,
+            "demag_amg_max_levels": 0,
+        }
+    )
+
+    assert "amg=0/0/0/0/0.0/0" in label
+
+
+def test_demag_amg_qualification_suite_and_recipe_cover_the_exact_matrix() -> None:
+    benchmark = load_benchmark_module()
+    fixtures = benchmark.load_amg_qualification_fixture_suite(
+        REPO_ROOT / "examples/assets/fem_performance/amg_qualification_suite_v1.json"
+    )
+    assert [fixture["resolution"] for fixture in fixtures] == [
+        "coarse",
+        "medium",
+        "fine",
+    ]
+    assert all(
+        len(str(fixture["solver_mesh_signature"])) == 64
+        and set(str(fixture["solver_mesh_signature"])) <= set("0123456789abcdef")
+        for fixture in fixtures
+    )
+    recipe = just_recipe_source(
+        JUSTFILE.read_text(encoding="utf-8"),
+        "bench-fem-gpu-demag-amg-profile-sweep",
+    )
+    for required in (
+        "for profiler in off on",
+        "--backends fem_cpu,fem_gpu",
+        "--relax-algorithms \"$FULLMAG_BENCH_RELAX_ALGORITHMS\"",
+        "--demag-rtols 1e-12",
+        "--steps 64",
+        "--relax-torque-tolerance-t 1e-4",
+        "--repeat 1",
+        'FULLMAG_BENCH_REPEAT:-5',
+        "--require-demag-converged",
+        "--require-cpu-gpu-consistency",
+        "--require-stable-solver-mesh",
+        "--expected-solver-mesh-signature",
+        "--qualification-fixture-problem-ir-sha256",
+        "--amg-relax-qualification-output",
+        "--amg-relax-qualification-fixture-suite",
+        "--amg-relax-pcg-symmetry-passed",
+    ):
+        assert required in recipe
+    assert 'problem_ir_sha256' in recipe
 
 
 def test_demag_convergence_gate_uses_row_requested_rtol_by_default() -> None:
@@ -3954,6 +5327,320 @@ def test_task8_capture_interaction_preset_preserves_explicit_thread_count() -> N
     assert args.thread_counts == "1"
 
 
+def test_gpu_host_thread_contract_requires_effective_request_and_device_hypre() -> None:
+    benchmark = load_benchmark_module()
+    row = {
+        "backend": "fem_gpu",
+        "requested_fem_omp_threads": 4,
+        "effective_fem_omp_threads": 1,
+        "fem_cpu_thread_cap_reason": "gpu-bypass",
+        "fem_demag_operator_mode": "device_hypre_poisson",
+        "hypre_execution_policy": "device",
+    }
+
+    failures = benchmark.gpu_host_thread_contract_failures(row, expected_threads=4)
+
+    assert failures == [
+        "effective_fem_omp_threads must equal requested value 4, got 1",
+        "fem_cpu_thread_cap_reason must not resolve to gpu-bypass",
+    ]
+
+
+def _gpu_host_thread_qualification_rows() -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    candidate_wall_ms = {1: 100.0, 2: 98.0, 4: 90.0, 8: 97.0}
+    for threads in (1, 2, 4, 8):
+        for profiler_enabled in (False, True):
+            for ui_surface in ("headless", "interactive"):
+                for repeat_index in range(5):
+                    rows.append(
+                        {
+                            "backend": "fem_gpu",
+                            "status": "ok",
+                            "runtime_manifest_sha256": "1" * 64,
+                            "source_manifest_sha256": "2" * 64,
+                            "libfullmag_fem_sha256": "3" * 64,
+                            "device_uuid": "GPU-task12",
+                            "device_name": "NVIDIA Task 12",
+                            "compute_capability": "8.9",
+                            "solver_mesh_signature": "4" * 64,
+                            "scenario": "box500_airbox_exchange_demag",
+                            "reported_scenario": "box500_airbox_exchange_demag",
+                            "integrator": "heun",
+                            "reported_integrator": "heun",
+                            "timestep_policy": "fixed",
+                            "reported_timestep_policy": "fixed",
+                            "dt_s": 1e-13,
+                            "executed_problem_ir_sha256": "5" * 64,
+                            "steps": 32,
+                            "executed_steps": 32,
+                            "relaxation_algorithm": "projected_gradient_bb",
+                            "reported_relaxation_algorithm": "projected_gradient_bb",
+                            "reported_precision": "double",
+                            "requested_fem_execution": "gpu",
+                            "requested_relaxation_preconditioner_strategy": "none",
+                            "requested_demag_solver": "CG",
+                            "requested_demag_preconditioner": "AMG",
+                            "demag_linear_solver": "CG",
+                            "demag_preconditioner": "AMG",
+                            "requested_demag_relative_tolerance": 1e-12,
+                            "demag_relative_tolerance": 1e-12,
+                            "requested_demag_amg_relax_type": 6,
+                            "demag_amg_relax_type": 6,
+                            "requested_cpu_thread_spec": str(threads),
+                            "requested_fem_omp_threads": threads,
+                            "effective_fem_omp_threads": threads,
+                            "execution_engine": "fem_native_gpu",
+                            "fem_assembly_mode": "legacy_sparse",
+                            "fem_execution_mode": "all_in_gpu_legacy_sparse",
+                            "fem_data_residency": "device_source_of_truth",
+                            "fem_demag_operator_mode": "device_hypre_poisson",
+                            "hypre_execution_policy": "device",
+                            "demag_residency": "device",
+                            "fem_gpu_qualification_status": "production_executable",
+                            "mfem_device": "ceed-cuda:/gpu/cuda/shared",
+                            "step_profiler_enabled": profiler_enabled,
+                            "ui_surface": ui_surface,
+                            "repeat_index": repeat_index,
+                            "wall_time_ms": candidate_wall_ms[threads] + repeat_index,
+                            "backend_create_wall_time_ms": 10.0 + repeat_index,
+                            "cumulative_step_interval_wall_time_ms": (
+                                candidate_wall_ms[threads] - 15.0 + repeat_index
+                            ),
+                            "cumulative_native_solver_wall_time_ms": (
+                                candidate_wall_ms[threads] - 20.0 + repeat_index
+                            ),
+                            "cumulative_publisher_replace_wall_time_ms": 1.0,
+                            "cumulative_publish_lag_wall_time_ms": 2.0,
+                            "cumulative_artifact_enqueue_block_wall_time_ms": 0.5,
+                            "artifact_queue_depth_max": 1,
+                            "host_cpu_time_ms": candidate_wall_ms[threads] * 1.5,
+                            "host_cpu_average_core_count": 1.5,
+                            "host_cpu_capacity": 16,
+                            "host_cpu_oversubscribed": False,
+                        }
+                    )
+    return rows
+
+
+def test_gpu_host_thread_qualification_promotes_only_strict_winner() -> None:
+    benchmark = load_benchmark_module()
+
+    summary = benchmark.gpu_host_thread_policy_qualification_summary(
+        _gpu_host_thread_qualification_rows()
+    )
+
+    assert summary["status"] == "pass"
+    assert summary["resolved_default_threads"] == 4
+    assert summary["decision"] == "promote-qualified-default"
+    assert summary["expected_measured_row_count"] == 80
+    assert summary["observed_measured_row_count"] == 80
+
+
+def test_gpu_host_thread_qualification_retains_deliberate_default_one() -> None:
+    benchmark = load_benchmark_module()
+    rows = _gpu_host_thread_qualification_rows()
+    for row in rows:
+        if row["requested_cpu_thread_spec"] != "1":
+            row["wall_time_ms"] = 99.0 + int(row["repeat_index"])
+
+    summary = benchmark.gpu_host_thread_policy_qualification_summary(rows)
+
+    assert summary["status"] == "pass"
+    assert summary["resolved_default_threads"] == 1
+    assert summary["decision"] == "retain-deliberate-default-one"
+
+
+@pytest.mark.parametrize(
+    "field,replacement",
+    [
+        ("runtime_manifest_sha256", "9" * 64),
+        ("device_uuid", "GPU-mixed"),
+        ("solver_mesh_signature", "8" * 64),
+        ("reported_scenario", "box500_airbox_exchange_only"),
+        ("executed_steps", 31),
+        ("reported_relaxation_algorithm", "nonlinear_cg"),
+        ("reported_precision", "single"),
+        ("demag_relative_tolerance", 1e-10),
+        ("hypre_execution_policy", "host"),
+    ],
+)
+def test_gpu_host_thread_qualification_rejects_mixed_identity_or_workload(
+    field: str,
+    replacement: object,
+) -> None:
+    benchmark = load_benchmark_module()
+    rows = _gpu_host_thread_qualification_rows()
+    rows[-1][field] = replacement
+
+    summary = benchmark.gpu_host_thread_policy_qualification_summary(rows)
+
+    assert summary["status"] == "invalid"
+    assert summary["resolved_default_threads"] == 1
+    assert not any(candidate["qualifies"] for candidate in summary["candidates"])
+    assert any(field in failure for failure in summary["failures"])
+
+
+@pytest.mark.parametrize(
+    "field,replacement",
+    [
+        ("integrator", "rk45"),
+        ("reported_integrator", "rk45"),
+        ("timestep_policy", "adaptive"),
+        ("reported_timestep_policy", "adaptive"),
+        ("dt_s", 9e-9),
+        ("executed_problem_ir_sha256", "6" * 64),
+    ],
+)
+def test_gpu_host_thread_qualification_rejects_task12_workload_mutation(
+    field: str,
+    replacement: object,
+) -> None:
+    benchmark = load_benchmark_module()
+    rows = _gpu_host_thread_qualification_rows()
+    rows[-1][field] = replacement
+
+    summary = benchmark.gpu_host_thread_policy_qualification_summary(rows)
+
+    assert summary["status"] == "invalid"
+    assert summary["resolved_default_threads"] == 1
+    assert summary["decision"] == (
+        "qualification-invalid-retain-deliberate-default-one"
+    )
+    assert not any(candidate["qualifies"] for candidate in summary["candidates"])
+    assert any(field in failure for failure in summary["failures"])
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "integrator",
+        "reported_integrator",
+        "timestep_policy",
+        "reported_timestep_policy",
+        "dt_s",
+        "executed_problem_ir_sha256",
+    ],
+)
+def test_gpu_host_thread_qualification_rejects_missing_task12_workload_identity(
+    field: str,
+) -> None:
+    benchmark = load_benchmark_module()
+    rows = _gpu_host_thread_qualification_rows()
+    rows[-1].pop(field)
+
+    summary = benchmark.gpu_host_thread_policy_qualification_summary(rows)
+
+    assert summary["status"] == "invalid"
+    assert summary["resolved_default_threads"] == 1
+    assert summary["decision"] == (
+        "qualification-invalid-retain-deliberate-default-one"
+    )
+    assert not any(candidate["qualifies"] for candidate in summary["candidates"])
+    assert any(field in failure for failure in summary["failures"])
+
+
+def test_gpu_host_thread_qualification_rejects_raw_cpu_use_increase() -> None:
+    benchmark = load_benchmark_module()
+    rows = _gpu_host_thread_qualification_rows()
+    for row in rows:
+        if row["requested_cpu_thread_spec"] == "4":
+            row["host_cpu_time_ms"] = 250.0
+            row["host_cpu_average_core_count"] = 2.5
+            row["host_cpu_oversubscribed"] = False
+
+    summary = benchmark.gpu_host_thread_policy_qualification_summary(rows)
+
+    candidate = next(
+        item for item in summary["candidates"] if item["threads"] == 4
+    )
+    assert candidate["qualifies"] is False
+    assert any("host_cpu_time_ms p50" in failure for failure in candidate["failures"])
+    assert any(
+        "host_cpu_average_core_count p95" in failure
+        for failure in candidate["failures"]
+    )
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "cumulative_step_interval_wall_time_ms",
+        "cumulative_native_solver_wall_time_ms",
+        "cumulative_publisher_replace_wall_time_ms",
+        "cumulative_publish_lag_wall_time_ms",
+        "cumulative_artifact_enqueue_block_wall_time_ms",
+        "artifact_queue_depth_max",
+    ],
+)
+def test_gpu_host_thread_qualification_requires_exact_cumulative_telemetry(
+    field: str,
+) -> None:
+    benchmark = load_benchmark_module()
+    rows = _gpu_host_thread_qualification_rows()
+    rows[0].pop(field)
+
+    summary = benchmark.gpu_host_thread_policy_qualification_summary(rows)
+
+    assert summary["status"] == "invalid"
+    assert summary["resolved_default_threads"] == 1
+    assert any(field in failure for failure in summary["failures"])
+
+
+def test_gpu_host_thread_rows_do_not_fabricate_callback_gap_or_use_writer_proxy() -> None:
+    benchmark = load_benchmark_module()
+    source = inspect.getsource(benchmark.run_backend)
+
+    assert "callback_gap_estimate_ms" not in source
+    assert "artifact_writer_job_wall_time_ms" not in (
+        benchmark.GPU_HOST_THREAD_QUALIFICATION_METRICS
+    )
+
+
+def test_gpu_host_thread_rows_convert_only_exact_cumulative_runtime_signals() -> None:
+    benchmark = load_benchmark_module()
+
+    evidence = benchmark.task12_exact_runtime_evidence(
+        {
+            "cumulative_step_interval_wall_time_ns": 11_000_000,
+            "cumulative_native_solver_wall_time_ns": 7_000_000,
+            "cumulative_publisher_replace_wall_time_ns": 300_000,
+            "cumulative_publish_lag_wall_time_ns": 400_000,
+            "cumulative_artifact_enqueue_block_wall_time_ns": 500_000,
+            "artifact_queue_depth_max": 3,
+        }
+    )
+
+    assert evidence == {
+        "cumulative_step_interval_wall_time_ms": 11.0,
+        "cumulative_native_solver_wall_time_ms": 7.0,
+        "cumulative_publisher_replace_wall_time_ms": 0.3,
+        "cumulative_publish_lag_wall_time_ms": 0.4,
+        "cumulative_artifact_enqueue_block_wall_time_ms": 0.5,
+        "artifact_queue_depth_max": 3,
+    }
+
+
+def test_gpu_host_thread_qualification_recipe_is_exact_managed_matrix() -> None:
+    recipe = just_recipe_source(
+        JUSTFILE.read_text(encoding="utf-8"),
+        "verify-fem-gpu-host-thread-policy-qualification",
+    )
+
+    assert "just ensure-managed-fem-runtime" in recipe
+    assert 'FULLMAG_BENCH_THREAD_COUNTS="1,2,4,8"' in recipe
+    assert 'FULLMAG_BENCH_REPEAT="5"' in recipe
+    assert recipe.count("--gpu-warmup") == 4
+    assert recipe.count("--repeat \"$FULLMAG_BENCH_REPEAT\"") == 4
+    assert recipe.count("--ui-surface headless") == 2
+    assert recipe.count("--ui-surface interactive") == 2
+    assert recipe.count("FULLMAG_FEM_STEP_PROFILE=0") == 2
+    assert recipe.count("FULLMAG_FEM_STEP_PROFILE=1") == 2
+    assert recipe.count("--gpu-host-thread-qualification-run") == 4
+    assert "--gpu-host-thread-qualification-inputs" in recipe
+    assert "--gpu-host-thread-qualification-output" in recipe
+
+
 def test_best_demag_policy_uses_row_requested_rtol_by_default() -> None:
     benchmark = load_benchmark_module()
     base_row = {
@@ -3976,16 +5663,20 @@ def test_best_demag_policy_uses_row_requested_rtol_by_default() -> None:
     }
     rows = [
         {
-            **base_row,
-            "requested_demag_solver": "CG",
-            "requested_demag_preconditioner": "AMG",
-            "demag_wall_time_ms": 20.0,
+                **base_row,
+                "requested_demag_solver": "CG",
+                "requested_demag_preconditioner": "AMG",
+                "demag_linear_solver": "CG",
+                "demag_preconditioner": "AMG",
+                "demag_wall_time_ms": 20.0,
         },
         {
-            **base_row,
-            "requested_demag_solver": "CG",
-            "requested_demag_preconditioner": "JACOBI",
-            "demag_wall_time_ms": 10.0,
+                **base_row,
+                "requested_demag_solver": "CG",
+                "requested_demag_preconditioner": "JACOBI",
+                "demag_linear_solver": "CG",
+                "demag_preconditioner": "JACOBI",
+                "demag_wall_time_ms": 10.0,
         },
     ]
 
@@ -4022,17 +5713,21 @@ def test_best_demag_policy_can_select_by_solver_apply_time() -> None:
     }
     rows = [
         {
-            **base_row,
-            "requested_demag_solver": "CG",
-            "requested_demag_preconditioner": "AMG",
-            "demag_wall_time_ms": 100.0,
+                **base_row,
+                "requested_demag_solver": "CG",
+                "requested_demag_preconditioner": "AMG",
+                "demag_linear_solver": "CG",
+                "demag_preconditioner": "AMG",
+                "demag_wall_time_ms": 100.0,
             "demag_solver_apply_wall_time_ms": 20.0,
         },
         {
-            **base_row,
-            "requested_demag_solver": "CG",
-            "requested_demag_preconditioner": "JACOBI",
-            "demag_wall_time_ms": 50.0,
+                **base_row,
+                "requested_demag_solver": "CG",
+                "requested_demag_preconditioner": "JACOBI",
+                "demag_linear_solver": "CG",
+                "demag_preconditioner": "JACOBI",
+                "demag_wall_time_ms": 50.0,
             "demag_solver_apply_wall_time_ms": 30.0,
         },
     ]
@@ -4189,6 +5884,35 @@ def test_generated_domain_mesh_env_reuses_persistent_cache(
     assert len(calls) == 1
 
 
+def test_generated_domain_mesh_env_preserves_explicit_domain_mesh(monkeypatch) -> None:
+    benchmark = load_benchmark_module()
+
+    def unexpected_export(**_kwargs):
+        raise AssertionError("explicit domain mesh must not be regenerated")
+
+    monkeypatch.setattr(
+        benchmark,
+        "export_generated_domain_mesh",
+        unexpected_export,
+    )
+
+    result = benchmark.generated_domain_mesh_env(
+        cache={},
+        cache_dir=None,
+        mesh_path=Path("input.mesh.json"),
+        scenario="box500_airbox_exchange_demag",
+        integrator="heun",
+        steps=64,
+        dt=1e-13,
+        timestep_policy="fixed",
+        thread_spec=benchmark.ThreadCountSpec(label="auto", env_value="auto"),
+        extra_env={"FULLMAG_BENCH_DOMAIN_MESH": "qualified-domain.mesh.json"},
+        timeout_s=10.0,
+    )
+
+    assert result == {"FULLMAG_BENCH_DOMAIN_MESH": "qualified-domain.mesh.json"}
+
+
 def test_generated_domain_mesh_env_materializes_box500_airbox_alias(
     monkeypatch,
     tmp_path: Path,
@@ -4226,6 +5950,7 @@ def test_benchmark_mesh_env_forwards_requested_generated_mesh_sizes(monkeypatch)
     benchmark = load_benchmark_module()
     monkeypatch.setenv("FULLMAG_BENCH_DOMAIN_HMAX", "20e-9")
     monkeypatch.setenv("FULLMAG_BENCH_AIRBOX_HMAX", "100e-9")
+    monkeypatch.setenv("FULLMAG_BENCH_DOMAIN_MESH", "/workspace/exact.mesh.json")
 
     env = benchmark.benchmark_mesh_env(
         SimpleNamespace(
@@ -4237,6 +5962,7 @@ def test_benchmark_mesh_env_forwards_requested_generated_mesh_sizes(monkeypatch)
 
     assert env["FULLMAG_BENCH_DOMAIN_HMAX"] == "20e-9"
     assert env["FULLMAG_BENCH_AIRBOX_HMAX"] == "100e-9"
+    assert env["FULLMAG_BENCH_DOMAIN_MESH"] == "/workspace/exact.mesh.json"
     assert env["FULLMAG_GMSH_THREADS"] == "1"
 
 
@@ -4324,6 +6050,41 @@ def test_performance_regression_case_key_normalizes_csv_values() -> None:
         [current_row],
         [baseline_row],
     ) == 1
+
+
+def test_performance_regression_case_key_treats_legacy_blank_preconditioner_as_none() -> None:
+    benchmark = load_benchmark_module()
+    legacy_row = {
+        "solver_mesh_signature": "mesh-a",
+        "backend": "fem_gpu",
+        "mesh_path": "mesh.json",
+        "scenario": "box500_airbox_exchange_demag",
+        "integrator": "heun",
+        "relaxation_algorithm": "nonlinear_cg",
+        "requested_relaxation_preconditioner_strategy": "",
+        "timestep_policy": "fixed",
+        "requested_cpu_thread_spec": "auto",
+        "requested_demag_solver": "CG",
+        "requested_demag_preconditioner": "AMG",
+        "requested_demag_relative_tolerance": "1e-08",
+        "requested_demag_absolute_tolerance": "",
+        "requested_demag_max_iterations": "500",
+        "requested_demag_print_level": "0",
+        "requested_demag_amg_relax_type": "18",
+        "requested_demag_amg_coarsening": "8",
+        "requested_demag_amg_interpolation": "6",
+        "requested_demag_amg_aggressive_coarsening": "1",
+        "requested_demag_amg_strength_threshold": "",
+        "requested_demag_amg_max_levels": "",
+    }
+    current_row = {
+        **legacy_row,
+        "requested_relaxation_preconditioner_strategy": "none",
+    }
+
+    assert benchmark.performance_regression_case_key(current_row) == (
+        benchmark.performance_regression_case_key(legacy_row)
+    )
 
 
 def test_pass_fail_summary_uses_row_requested_rtol_by_default() -> None:

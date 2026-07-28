@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
+  buildViewport3DRenderedScalarRangeAliases,
   resolveHslReferenceVisible,
+  resolveViewport3DRenderedScalarRange,
   resolveViewport3DCameraOrthographicScale,
   resolveViewport3DCameraProjection,
   resolveViewport3DCameraState,
@@ -10,6 +12,77 @@ import {
 } from "./viewport3dStore";
 
 describe("viewport3dStore", () => {
+  it("publishes the rendered mesh-part range under its owning object scope", () => {
+    expect(
+      buildViewport3DRenderedScalarRangeAliases({
+        component: "x",
+        quantityId: "m",
+        range: { max: 0.9957, min: 0.9943 },
+        renderedScope: { scopeId: "part:film_geom", scopeKind: "part" },
+        visualizationTarget: { id: "object:film", kind: "object" },
+      }),
+    ).toEqual([
+      {
+        component: "x",
+        quantityId: "m",
+        range: { max: 0.9957, min: 0.9943 },
+        scopeId: "part:film_geom",
+        scopeKind: "part",
+      },
+      {
+        component: "x",
+        quantityId: "m",
+        range: { max: 0.9957, min: 0.9943 },
+        scopeId: "film",
+        scopeKind: "object",
+      },
+    ]);
+  });
+
+  it("resolves the current rendered range for the matching scoped field", () => {
+    const range = resolveViewport3DRenderedScalarRange(
+      [
+        {
+          component: "x",
+          quantityId: "m",
+          range: { max: 0.9957, min: 0.9943 },
+          scopeId: "film_geom",
+          scopeKind: "part",
+        },
+      ],
+      {
+        component: "x",
+        quantityId: "m",
+        scopeId: "film_geom",
+        scopeKind: "part",
+      },
+    );
+
+    expect(range).toEqual({ max: 0.9957, min: 0.9943 });
+  });
+
+  it("does not reuse a rendered range for another field scope", () => {
+    const range = resolveViewport3DRenderedScalarRange(
+      [
+        {
+          component: "x",
+          quantityId: "m",
+          range: { max: 0.9957, min: 0.9943 },
+          scopeId: "film_geom",
+          scopeKind: "part",
+        },
+      ],
+      {
+        component: "x",
+        quantityId: "m",
+        scopeId: "other_part",
+        scopeKind: "part",
+      },
+    );
+
+    expect(range).toBeNull();
+  });
+
   it("stores active scalar colorbar legends with concrete range labels", () => {
     viewport3dStore.resetForTest();
 

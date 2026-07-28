@@ -210,6 +210,7 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
 {
     try {
         debug_checkpoint("context_initialize_mfem:enter");
+        configure_fem_host_runtime_threads(ctx);
 #if FULLMAG_HAS_CUDA_RUNTIME
         const char *device_config = configured_mfem_device_string(ctx);
         const bool use_gpu_device = is_gpu_device_string(device_config);
@@ -261,12 +262,10 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
                 cudaEventCreateWithFlags(&ev, cudaEventDisableTiming);
                 ctx.gpu_state.cuda.compute_event = reinterpret_cast<void *>(ev);
             } else {
-                configure_cpu_openmp_runtime(ctx);
                 ctx.mfem_context.selected_device_index = -1;
                 log_cpu_runtime_selection(ctx);
             }
         } else {
-            configure_cpu_openmp_runtime(ctx);
             const char *host_device = (device_config != nullptr && *device_config != '\0')
                 ? device_config : "cpu";
             if (mfem::Device::IsConfigured()) {
@@ -281,7 +280,6 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
         }
 #else
         const bool use_gpu_device = false;
-        configure_cpu_openmp_runtime(ctx);
         if (mfem::Device::IsConfigured()) {
             ctx.mfem_context.device = nullptr;
         } else {

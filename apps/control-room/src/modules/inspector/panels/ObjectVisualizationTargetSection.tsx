@@ -31,9 +31,11 @@ import {
   type VisualizationTargetSettings,
   visualizationTargetCapabilities,
 } from "@/kernel/visualization/ObjectVisualizationController";
+import type { Viewport3DRenderedScalarRangeQuery } from "@/modules/viewport-3d/public";
 import {
   useFieldMetaResource,
 } from "@/kernel/resources/studyRuntimeResources";
+import { useViewport3DRenderedScalarRange } from "@/modules/viewport-3d/public";
 import {
   buildVisualizationPanelSections,
   displayPassTogglePatch,
@@ -401,6 +403,12 @@ export function VisualizationSurfaceColoringSection({
     fieldMetaScopeQuery.scope_kind ?? "full",
     fieldMetaScopeQuery.scope_id ?? "full",
   ].join(":");
+  const renderedRange = useViewport3DRenderedScalarRange({
+    component: colorbarComponent,
+    quantityId: settings.activeQuantityId,
+    scopeId: fieldMetaScopeQuery.scope_id,
+    scopeKind: viewportRenderedRangeScopeKind(fieldMetaScopeQuery.scope_kind),
+  });
   const fieldMeta = useFieldMetaResource({
     component: colorbarComponent ?? null,
     enabled: showColorbar && !regionFieldMetaUnavailable,
@@ -469,7 +477,9 @@ export function VisualizationSurfaceColoringSection({
           fieldMeta={fieldMeta}
           palette={settings.scalarColorPalette}
           patch={patch}
+          quantityId={settings.activeQuantityId}
           rangeIdentity={colorbarRangeIdentity}
+          renderedRange={renderedRange}
         />
       ) : null}
       {showColorbar && !regionFieldMetaUnavailable ? (
@@ -520,13 +530,17 @@ export function ScalarColorbarControl({
   fieldMeta,
   palette,
   patch,
+  quantityId,
   rangeIdentity,
+  renderedRange,
 }: {
   disabled: boolean;
   fieldMeta: ReturnType<typeof useFieldMetaResource>;
   palette: string;
   patch: PatchVisualizationTarget;
+  quantityId: string;
   rangeIdentity: string;
+  renderedRange: { max: number; min: number } | null;
 }) {
   const [displayUnit, setDisplayUnit] =
     useState<ScalarColorbarDisplayUnit>("");
@@ -541,10 +555,10 @@ export function ScalarColorbarControl({
     }
   }, [fieldMeta.data, rangeIdentity]);
   const visibleMeta = fieldMeta.data ?? cachedRange;
-  const stats = visibleMeta?.stats;
+  const stats = renderedRange ?? visibleMeta?.stats;
   const unit =
     visibleMeta?.unit?.trim() ||
-    (visibleMeta?.quantity_id ? quantityUnitForColorbar(visibleMeta.quantity_id) : "");
+    quantityUnitForColorbar(visibleMeta?.quantity_id ?? quantityId);
   const supportsDisplayUnitToggle =
     scalarColorbarSupportsDisplayUnits(unit);
   const displayUnitItems = scalarColorbarDisplayUnitItems(unit);
@@ -610,7 +624,7 @@ export function ScalarColorbarControl({
         className="fm-inspector-colorbar"
         aria-label={
           minLabel && maxLabel
-            ? `Scalar color range: ${visibleMeta?.quantity_id ?? "field"}, ${minLabel} to ${maxLabel}`
+            ? `Scalar color range: ${visibleMeta?.quantity_id ?? quantityId}, ${minLabel} to ${maxLabel}`
             : "Scalar color map preview waiting for field range"
         }
       >
@@ -668,6 +682,21 @@ function useScalarColorbarRangeCache(
     () => scalarColorbarRangeCache.get(identity) ?? null,
     () => null,
   );
+}
+
+function viewportRenderedRangeScopeKind(
+  scopeKind: string | null | undefined,
+): Viewport3DRenderedScalarRangeQuery["scopeKind"] {
+  switch (scopeKind) {
+    case "airbox":
+    case "full":
+    case "object":
+    case "part":
+    case "selection":
+      return scopeKind;
+    default:
+      return null;
+  }
 }
 
 export function VisualizationQuantitySection({
@@ -837,6 +866,12 @@ export function VisualizationVectorsSection({
     fieldMetaScopeQuery.scope_kind ?? "full",
     fieldMetaScopeQuery.scope_id ?? "full",
   ].join(":");
+  const renderedRange = useViewport3DRenderedScalarRange({
+    component: colorbarComponent,
+    quantityId: settings.activeQuantityId,
+    scopeId: fieldMetaScopeQuery.scope_id,
+    scopeKind: viewportRenderedRangeScopeKind(fieldMetaScopeQuery.scope_kind),
+  });
   const vectorBudgetValue = Math.max(
     vectorBudgetRange.min,
     Math.min(vectorBudgetRange.max, settings.vectorBudget),
@@ -879,7 +914,9 @@ export function VisualizationVectorsSection({
           fieldMeta={fieldMeta}
           palette={settings.scalarColorPalette}
           patch={patch}
+          quantityId={settings.activeQuantityId}
           rangeIdentity={colorbarRangeIdentity}
+          renderedRange={renderedRange}
         />
       ) : null}
       {showColorbar && !regionFieldMetaUnavailable ? (

@@ -157,6 +157,10 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("src/modules/analysis-plots/chartTableModel.ts");
     expect(auditScript).toContain("src/modules/analysis-plots/analysisPlotsModel.ts");
     expect(auditScript).toContain("src/modules/analysis-plots/useAnalysisPlotsController.ts");
+    expect(auditScript).toContain("shouldLoadPublishedTableRows(");
+    expect(auditScript).toContain("shouldPausePublishedTableRows(");
+    expect(auditScript).toContain("tableColumnIdsForQuery(tableColumns.data)");
+    expect(auditScript).toContain("hasPublishedTableSchema");
     expect(auditScript).toContain("ANALYSIS_SCALAR_COLUMNS");
     expect(auditScript).toContain('decimation: "minmax_lttb"');
     expect(auditScript).toContain("targetPoints: clampInteger(");

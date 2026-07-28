@@ -233,6 +233,15 @@ export type SelectionRef =
       fieldRevision?: string | number | null;
     }
   | {
+      chartId: string;
+      kind: "results.quick_chart";
+      nodeId: string;
+      tableId: string;
+      type: "quick-chart";
+      xAxisId: string;
+      yAxisIds: readonly string[];
+    }
+  | {
       kind: "study.execution" | "study.recovery" | "study.root" | "study.stages";
       nodeId: string;
       type: "study";
@@ -512,6 +521,17 @@ export function selectionRefEquals(
         nullableStringEquals(left.fieldOrientation, right.fieldOrientation) &&
         nullableStringEquals(left.measurementAxis, right.measurementAxis) &&
         (left.fieldRevision ?? null) === (right.fieldRevision ?? null)
+      );
+    case "quick-chart":
+      return (
+        right.type === "quick-chart" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.chartId === right.chartId &&
+        left.tableId === right.tableId &&
+        left.xAxisId === right.xAxisId &&
+        left.yAxisIds.length === right.yAxisIds.length &&
+        left.yAxisIds.every((id, index) => id === right.yAxisIds[index])
       );
     case "study":
       return (

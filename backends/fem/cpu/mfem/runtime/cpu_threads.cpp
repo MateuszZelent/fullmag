@@ -83,7 +83,10 @@ CpuThreadRequest requested_cpu_threads()
 
 int auto_cpu_thread_cap_for_context(const Context &ctx, int requested_threads)
 {
-    if (requested_threads <= 1 || mfem_device_requests_gpu(ctx)) {
+    if (mfem_device_requests_gpu(ctx)) {
+        return 1;
+    }
+    if (requested_threads <= 1) {
         return std::max(1, requested_threads);
     }
     if (ctx.demag.enabled) {
@@ -102,11 +105,11 @@ int auto_cpu_thread_cap_for_context(const Context &ctx, int requested_threads)
 
 int auto_cpu_thread_cap_reason_for_context(const Context &ctx, int requested_threads)
 {
+    if (mfem_device_requests_gpu(ctx)) {
+        return FULLMAG_FEM_CPU_THREAD_CAP_GPU_DEFAULT_ONE;
+    }
     if (requested_threads <= 1) {
         return FULLMAG_FEM_CPU_THREAD_CAP_AUTO_UNCAPPED;
-    }
-    if (mfem_device_requests_gpu(ctx)) {
-        return FULLMAG_FEM_CPU_THREAD_CAP_GPU_BYPASS;
     }
     if (ctx.demag.enabled) {
         return FULLMAG_FEM_CPU_THREAD_CAP_AUTO_UNCAPPED;
@@ -126,7 +129,7 @@ int auto_cpu_thread_cap_reason_for_context(const Context &ctx, int requested_thr
     return FULLMAG_FEM_CPU_THREAD_CAP_AUTO_UNCAPPED;
 }
 
-void configure_cpu_openmp_runtime(Context &ctx)
+void configure_fem_host_runtime_threads(Context &ctx)
 {
     const CpuThreadRequest request = requested_cpu_threads();
     ctx.cpu_threads.auto_requested = request.auto_requested;
@@ -134,10 +137,13 @@ void configure_cpu_openmp_runtime(Context &ctx)
     ctx.cpu_threads.effective_omp_threads = request.requested_threads;
     ctx.cpu_threads.cap_reason = FULLMAG_FEM_CPU_THREAD_CAP_NONE;
     if (request.auto_requested) {
-        ctx.cpu_threads.effective_omp_threads = request.auto_resolved_threads > 0
+        const bool gpu_host_runtime = mfem_device_requests_gpu(ctx);
+        ctx.cpu_threads.effective_omp_threads =
+            !gpu_host_runtime && request.auto_resolved_threads > 0
             ? std::min(request.requested_threads, request.auto_resolved_threads)
             : auto_cpu_thread_cap_for_context(ctx, request.requested_threads);
-        ctx.cpu_threads.cap_reason = request.auto_resolved_threads > 0
+        ctx.cpu_threads.cap_reason =
+            !gpu_host_runtime && request.auto_resolved_threads > 0
             ? FULLMAG_FEM_CPU_THREAD_CAP_EXTERNAL_AUTO_RESOLVED
             : auto_cpu_thread_cap_reason_for_context(ctx, request.requested_threads);
     }

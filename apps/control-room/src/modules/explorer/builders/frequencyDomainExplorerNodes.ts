@@ -34,6 +34,7 @@ import {
   formatFrequencyRangeBoundsHz,
 } from "@/shared/domain/analysis/frequencyUnits";
 import type { AnalysisFieldOverlayState } from "@/kernel/visualization/AnalysisFieldOverlayController";
+import type { PinnedQuickChart } from "@/kernel/workspace/quickChartWorkspace";
 
 import type { ExplorerNode, ExplorerNodeStatus } from "../explorerTypes";
 
@@ -68,6 +69,7 @@ export interface ExplorerTreeResources {
   frequencyDomainResponseSweep?: FrequencyDomainJsonArtifactResource | null;
   frequencyDomainSpectrum?: FrequencyDomainJsonArtifactResource | null;
   activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null;
+  pinnedQuickChart?: PinnedQuickChart | null;
 }
 
 export function buildFrequencyDomainResultNode(

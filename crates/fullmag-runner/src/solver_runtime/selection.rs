@@ -1,6 +1,6 @@
 //! Runtime selection helpers for user/env policy, registry lookup, and device hints.
 
-use fullmag_ir::{FemPlanIR, ProblemIR};
+use fullmag_ir::ProblemIR;
 use serde_json::Value;
 
 use crate::fdm::gpu::cuda::native as native_fdm;
@@ -44,16 +44,62 @@ pub(crate) fn requested_registry_device_for_fdm(problem: &ProblemIR) -> String {
     }
 }
 
-pub(crate) fn requested_registry_device_for_fem(problem: &ProblemIR) -> String {
-    if all_in_gpu_fem_env_requested() {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FemSelectionEnvSnapshot {
+    execution: Option<String>,
+    all_in_gpu: Option<String>,
+}
+
+impl FemSelectionEnvSnapshot {
+    fn capture() -> Self {
+        Self {
+            execution: std::env::var("FULLMAG_FEM_EXECUTION").ok(),
+            all_in_gpu: std::env::var("FULLMAG_FEM_ALL_IN_GPU").ok(),
+        }
+    }
+
+    fn from_sources(execution: Option<&str>, all_in_gpu: Option<&str>) -> Self {
+        Self {
+            execution: execution.map(str::to_string),
+            all_in_gpu: all_in_gpu.map(str::to_string),
+        }
+    }
+
+    fn all_in_gpu_requested(&self) -> bool {
+        matches!(self.execution.as_deref(), Some("all_in_gpu"))
+            || env_flag_enabled(self.all_in_gpu.as_deref())
+    }
+}
+
+pub(crate) fn effective_fem_device_request(problem: &ProblemIR) -> String {
+    let snapshot = FemSelectionEnvSnapshot::capture();
+    effective_fem_device_request_from_snapshot(runtime_device(problem), &snapshot)
+}
+
+fn effective_fem_device_request_from_snapshot(
+    script_device: Option<&str>,
+    snapshot: &FemSelectionEnvSnapshot,
+) -> String {
+    effective_fem_device_request_from_sources(
+        script_device,
+        snapshot.execution.as_deref(),
+        snapshot.all_in_gpu_requested(),
+    )
+}
+
+pub(super) fn effective_fem_device_request_from_sources(
+    script_device: Option<&str>,
+    execution_env: Option<&str>,
+    all_in_gpu_requested: bool,
+) -> String {
+    if all_in_gpu_requested {
         return "gpu".to_string();
     }
-    match std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref() {
+    match execution_env {
         Some("cpu") => "cpu".to_string(),
         Some("gpu") | Some("cuda") | Some("all_in_gpu") => "gpu".to_string(),
-        Some("auto") | None => runtime_device(problem)
-            .unwrap_or("auto")
-            .replace("cuda", "gpu"),
+        Some("auto") => "auto".to_string(),
+        None => script_device.unwrap_or("auto").replace("cuda", "gpu"),
         Some(other) => other.replace("cuda", "gpu"),
     }
 }
@@ -243,28 +289,22 @@ pub(crate) fn runtime_fem_order(problem: &ProblemIR) -> u32 {
 }
 
 pub(crate) fn fem_gpu_execution_forced() -> bool {
+    let snapshot = FemSelectionEnvSnapshot::capture();
     matches!(
-        std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
+        snapshot.execution.as_deref(),
         Some("gpu") | Some("all_in_gpu")
     )
 }
 
-fn env_flag_enabled(value: Option<String>) -> bool {
+fn env_flag_enabled(value: Option<&str>) -> bool {
     matches!(
-        value
-            .as_deref()
-            .map(str::trim)
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
+        value.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
         Some("1" | "true" | "on" | "yes")
     )
 }
 
 pub(crate) fn all_in_gpu_fem_env_requested() -> bool {
-    matches!(
-        std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
-        Some("all_in_gpu")
-    ) || env_flag_enabled(std::env::var("FULLMAG_FEM_ALL_IN_GPU").ok())
+    FemSelectionEnvSnapshot::capture().all_in_gpu_requested()
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -274,26 +314,6 @@ pub(crate) fn all_in_gpu_fem_required() -> bool {
 
 pub(crate) fn fem_policy_requires_gpu(policy: &str) -> bool {
     matches!(policy, "gpu" | "all_in_gpu")
-}
-
-fn fem_gpu_min_nodes_threshold() -> Option<usize> {
-    match std::env::var("FULLMAG_FEM_GPU_MIN_NODES") {
-        Ok(raw) => match raw.trim().parse::<usize>() {
-            Ok(0) => None,
-            Ok(value) => Some(value),
-            Err(_) => None,
-        },
-        Err(_) => None,
-    }
-}
-
-pub(crate) fn should_fallback_to_cpu_for_small_fem_gpu(plan: &FemPlanIR) -> Option<usize> {
-    if fem_gpu_execution_forced() {
-        return None;
-    }
-    let min_nodes = fem_gpu_min_nodes_threshold()?;
-    let node_count = plan.mesh.nodes.len();
-    (node_count < min_nodes).then_some(min_nodes)
 }
 
 pub(crate) fn apply_runtime_gpu_index(problem: &ProblemIR, backend: &str) {
@@ -315,12 +335,56 @@ pub(crate) fn apply_runtime_gpu_index(problem: &ProblemIR, backend: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_fdm_engine_with_trail;
+    use super::{
+        effective_fem_device_request_from_snapshot, effective_fem_device_request_from_sources,
+        resolve_fdm_engine_with_trail, FemSelectionEnvSnapshot,
+    };
     use fullmag_ir::ProblemIR;
     use serde_json::Value;
     use std::sync::{LazyLock, Mutex};
 
     static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    #[test]
+    fn fem_effective_request_collision_matrix_is_deterministic() {
+        for script in ["cpu", "auto", "gpu"] {
+            assert_eq!(
+                effective_fem_device_request_from_sources(Some(script), None, false),
+                script
+            );
+            for execution_env in ["cpu", "auto", "gpu"] {
+                assert_eq!(
+                    effective_fem_device_request_from_sources(
+                        Some(script),
+                        Some(execution_env),
+                        false,
+                    ),
+                    execution_env,
+                    "FULLMAG_FEM_EXECUTION must override script device"
+                );
+                assert_eq!(
+                    effective_fem_device_request_from_sources(
+                        Some(script),
+                        Some(execution_env),
+                        true,
+                    ),
+                    "gpu",
+                    "FULLMAG_FEM_ALL_IN_GPU must override both script and execution env"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fem_effective_request_is_derived_from_one_immutable_environment_snapshot() {
+        let snapshot = FemSelectionEnvSnapshot::from_sources(Some("cpu"), Some("true"));
+        assert_eq!(
+            effective_fem_device_request_from_snapshot(Some("auto"), &snapshot),
+            "gpu"
+        );
+        assert_eq!(snapshot.execution.as_deref(), Some("cpu"));
+        assert_eq!(snapshot.all_in_gpu.as_deref(), Some("true"));
+    }
 
     #[test]
     fn script_forced_gpu_fails_closed_when_cuda_is_unavailable() {

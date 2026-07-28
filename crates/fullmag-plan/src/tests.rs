@@ -21,6 +21,7 @@ fn auto_sampling_problem(cutoffs_hz: &[f64], active_stage_id: Option<&str>) -> P
             nyquist_guard_factor: AUTO_SINC_NYQUIST_GUARD_FACTOR,
         }),
         resolved_sample_period_s: None,
+        every_steps: None,
         quantities: vec!["t".into(), "my".into()],
     });
     problem.study.sampling_mut().outputs = vec![

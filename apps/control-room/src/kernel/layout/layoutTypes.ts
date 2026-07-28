@@ -20,7 +20,6 @@ export type RibbonTabId =
 export type PanelPosition = "left" | "right" | "bottom";
 
 export type BottomPanelTabId =
-  | "analysis"
   | "diagnostics"
   | "engine"
   | "logs"

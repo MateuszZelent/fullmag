@@ -175,7 +175,14 @@ type FooterTelemetryStatus = {
   >;
   run: Pick<
     NonNullable<LiveStatusResource["run"]>,
-    "run_id" | "solver_steps" | "solver_time"
+    | "calibration_id"
+    | "requested_device"
+    | "resolved_device"
+    | "run_id"
+    | "selection_confidence"
+    | "selection_reason"
+    | "solver_steps"
+    | "solver_time"
   > | null;
   sessionId: string;
   solver: Pick<
@@ -207,7 +214,12 @@ export function selectFooterTelemetryStatus(
     },
     run: data.run
       ? {
+          calibration_id: data.run.calibration_id ?? null,
+          requested_device: data.run.requested_device,
+          resolved_device: data.run.resolved_device,
           run_id: data.run.run_id,
+          selection_confidence: data.run.selection_confidence ?? null,
+          selection_reason: data.run.selection_reason,
           solver_steps: data.run.solver_steps,
           solver_time: data.run.solver_time,
         }
@@ -234,6 +246,26 @@ export function footerTelemetryStatusEquals(
     Object.is(previous.metrics.total_steps, next.metrics.total_steps) &&
     Object.is(previous.sessionId, next.sessionId) &&
     Object.is(previous.run?.run_id ?? null, next.run?.run_id ?? null) &&
+    Object.is(
+      previous.run?.requested_device ?? null,
+      next.run?.requested_device ?? null,
+    ) &&
+    Object.is(
+      previous.run?.resolved_device ?? null,
+      next.run?.resolved_device ?? null,
+    ) &&
+    Object.is(
+      previous.run?.selection_reason ?? null,
+      next.run?.selection_reason ?? null,
+    ) &&
+    Object.is(
+      previous.run?.calibration_id ?? null,
+      next.run?.calibration_id ?? null,
+    ) &&
+    Object.is(
+      previous.run?.selection_confidence ?? null,
+      next.run?.selection_confidence ?? null,
+    ) &&
     Object.is(
       previous.run?.solver_steps ?? null,
       next.run?.solver_steps ?? null,
@@ -411,6 +443,20 @@ export function buildFooterTelemetryModel(
         subdetail: `${formatInteger(totalSteps)} steps`,
         value: formatFixed(stepsPerSecond, 1, "0.0"),
       },
+      ...(status?.run
+        ? [
+            {
+              detail: status.run.selection_reason,
+              icon: <Gauge size={13} aria-hidden="true" />,
+              id: "fem-device-selection",
+              label: "Device",
+              subdetail: status.run.calibration_id
+                ? `${status.run.calibration_id} · confidence ${formatFixed(status.run.selection_confidence, 2, "n/a")}`
+                : "Availability-first / uncalibrated",
+              value: `${status.run.requested_device} → ${status.run.resolved_device}`,
+            },
+          ]
+        : []),
       {
         detail: "Latest step",
         icon: <Hash size={13} aria-hidden="true" />,

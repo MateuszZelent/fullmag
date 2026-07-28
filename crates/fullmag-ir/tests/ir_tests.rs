@@ -204,6 +204,62 @@ fn sampling_policy_round_trips_legacy_explicit_and_auto_sinc() {
 }
 
 #[test]
+fn table_autosave_step_cadence_round_trips_and_rejects_time_ambiguity() {
+    let step_cadence: TableAutosaveIR = serde_json::from_value(serde_json::json!({
+        "kind": "table_autosave",
+        "table_id": "default",
+        "every_steps": 10,
+        "quantities": ["step", "mx"]
+    }))
+    .unwrap();
+    let mut ir = ProblemIR::bootstrap_example();
+    let sampling = ir.study.sampling().clone();
+    ir.study = StudyIR::Relaxation {
+        algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+        dynamics: None,
+        stop: RelaxStopIR {
+            torque_tolerance_apm: None,
+            energy_tolerance_j: None,
+            max_steps: Some(100),
+            max_relaxation_time_s: None,
+        },
+        sampling,
+    };
+    ir.study.sampling_mut().table_autosave = Some(step_cadence.clone());
+    ir.validate()
+        .expect("accepted-step table cadence must be valid authoring intent");
+    assert_eq!(
+        serde_json::to_value(&step_cadence).unwrap()["every_steps"],
+        serde_json::json!(10)
+    );
+
+    let ambiguous: TableAutosaveIR = serde_json::from_value(serde_json::json!({
+        "kind": "table_autosave",
+        "table_id": "default",
+        "sample_period_s": 1e-12,
+        "every_steps": 10,
+        "quantities": ["step", "mx"]
+    }))
+    .unwrap();
+    ir.study.sampling_mut().table_autosave = Some(ambiguous);
+    let errors = ir
+        .validate()
+        .expect_err("time and accepted-step table cadence are mutually exclusive");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("cadence state is ambiguous")));
+
+    let mut time_evolution = ProblemIR::bootstrap_example();
+    time_evolution.study.sampling_mut().table_autosave = Some(step_cadence);
+    let errors = time_evolution
+        .validate()
+        .expect_err("accepted-step cadence must not be accepted by time evolution");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("only valid for relaxation studies")));
+}
+
+#[test]
 fn sampling_policy_round_trips_automatic_field_and_scalar_outputs() {
     for (kind, expected_name) in [("field_auto", "m"), ("scalar_auto", "mx")] {
         let output: OutputIR = serde_json::from_value(serde_json::json!({
@@ -237,6 +293,7 @@ fn sampling_policy_validation_accepts_unresolved_and_resolved_auto_intent() {
             nyquist_guard_factor: AUTO_SINC_NYQUIST_GUARD_FACTOR,
         }),
         resolved_sample_period_s: None,
+        every_steps: None,
         quantities: vec!["t".into(), "mx".into()],
     };
     ir.study.sampling_mut().table_autosave = Some(table);
@@ -286,6 +343,7 @@ fn sampling_policy_validation_rejects_invalid_explicit_table_periods() {
             sample_period_s: Some(period),
             sample_period_policy: None,
             resolved_sample_period_s: None,
+            every_steps: None,
             quantities: vec!["t".into()],
         });
         let errors = ir
@@ -361,6 +419,7 @@ fn sampling_policy_validation_rejects_missing_mode_and_noncanonical_values() {
         sample_period_s: None,
         sample_period_policy: None,
         resolved_sample_period_s: None,
+        every_steps: None,
         quantities: vec!["t".into()],
     });
     let errors = ir

@@ -1,21 +1,62 @@
+"use client";
+
 import type { KernelApi } from "@/kernel/types";
+import type { ChartLiveMode } from "@/kernel/workspace/analysisPlotsWorkspace";
+import { useAnalysisPlotsWorkspaceSelector } from "@/kernel/workspace/useAnalysisPlotsWorkspace";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import type { ChartTableWindow } from "@/shared/domain/analysis/chartDataPlan";
-import { Button } from "@/shared/ui/Button";
+import { ChartLegend, chartColorNameForIndex } from "@/shared/analysis-charts/ChartLegend";
+import { ChartSection } from "@/shared/analysis-charts/ChartSection";
 
-import type { ChartSeries, ChartValueRange } from "../chartTableModel";
-import { formatCursorPoint, formatRange, formatRangeValue, formatSeriesCount, tableWindowCursorEnd, tableWindowRowCount, tableWindowTotalRows } from "../analysisWorkbenchModel";
-import { AnalysisSeriesLegend } from "./AnalysisSeriesLegend";
-import { AnalysisStatusPill } from "./AnalysisStatusPill";
+import { type ChartSeries, type ChartValueRange } from "../chartTableModel";
+import {
+  formatLatestValue,
+  formatRange,
+  tableWindowRowCount,
+  tableWindowTotalRows,
+} from "../analysisWorkbenchModel";
 import { EChartsSurface } from "./EChartsSurface";
 
-export function AnalysisTableSurface({ chartSeries, kernel, onClearRange, onPointSelect, onRangeChange, onSeriesSelect, range, selectedPoint, status, table, xAxisId, xAxisLabel }: {
+function statusPrimary(status: string, liveMode: ChartLiveMode): string {
+  if (status === "error") return "Error";
+  if (status === "unsupported") return "Unavailable";
+  if (status === "empty" || status === "idle") return "No table data";
+  if (status === "degraded") return "Degraded";
+  if (status === "loading" || status === "stale") {
+    return liveMode === "paused" ? "Paused" : "Loading…";
+  }
+  return liveMode === "paused" ? "Paused" : "Live";
+}
+
+/**
+ * Center surface for an Analysis chart.
+ *
+ * Configuration intentionally belongs to ChartInspectorPanel. Keeping this
+ * component display-only avoids a second, divergent set of controls beside
+ * the dedicated inspector.
+ */
+export function AnalysisTableSurface({
+  chartSeries,
+  hiddenSeriesIds = [],
+  kernel,
+  liveMode = "following",
+  onPointSelect,
+  onRangeChange,
+  onToggleVisibility,
+  range,
+  selectedPoint,
+  status,
+  table,
+  xAxisId,
+  xAxisLabel,
+}: {
   chartSeries: readonly ChartSeries[];
+  hiddenSeriesIds?: readonly string[];
   kernel: KernelApi;
-  onClearRange: () => void;
+  liveMode?: ChartLiveMode;
   onPointSelect: (point: AnalysisChartCursorPoint) => void;
   onRangeChange: (range: ChartValueRange) => void;
-  onSeriesSelect: (series: ChartSeries) => void;
+  onToggleVisibility?: (seriesId: string) => void;
   range: ChartValueRange | null;
   selectedPoint: AnalysisChartCursorPoint | null;
   status: string;
@@ -23,23 +64,70 @@ export function AnalysisTableSurface({ chartSeries, kernel, onClearRange, onPoin
   xAxisId: string;
   xAxisLabel: string;
 }) {
+  const fitRequest = useAnalysisPlotsWorkspaceSelector((state) => state.fitRequest);
+  const allIds = chartSeries.map((series) => series.id);
+  const hidden = hiddenSeriesIds.filter((id) => allIds.includes(id));
+  const visibleSeries = hidden.length === 0
+    ? chartSeries
+    : chartSeries.filter((series) => !hidden.includes(series.id));
+  const legendItems = chartSeries.map((series, index) => ({
+    colorIndex: index,
+    colorName: chartColorNameForIndex(index),
+    hidden: hidden.includes(series.id),
+    id: series.id,
+    label: series.label || series.quantity,
+    latestValue: formatLatestValue(series.points.at(-1)?.y),
+    soloed: false,
+    unit: series.unit,
+  }));
+  const rowCount = tableWindowRowCount(table);
+  const totalRows = table ? tableWindowTotalRows(table) : 0;
+  const cursorText = selectedPoint
+    ? `cursor ${selectedPoint.label}: ${selectedPoint.point.y}`
+    : "cursor —";
+
   return (
-    <>
-      <div className="fm-analysis-plots__status" aria-label="Chart status">
-        <AnalysisStatusPill label="X" value={xAxisId} />
-        <AnalysisStatusPill label="Y" value={formatSeriesCount(chartSeries.length)} />
-        <AnalysisStatusPill label="Visible" value={String(tableWindowRowCount(table))} />
-        <AnalysisStatusPill label="Total" value={table ? String(tableWindowTotalRows(table)) : "-"} />
-        <AnalysisStatusPill label="Zoom" value={range ? formatRange(range) : "off"} />
-        <AnalysisStatusPill label="Cursor" value={selectedPoint ? formatCursorPoint(selectedPoint) : "-"} />
-      </div>
-      <AnalysisSeriesLegend ariaLabel="Series legend" onSelect={onSeriesSelect} series={chartSeries} />
-      <EChartsSurface bus={kernel.bus} dataStatus={status} onPointSelect={onPointSelect} onRangeChange={onRangeChange} series={chartSeries} xAxisLabel={xAxisLabel} />
-      <footer className="fm-analysis-plots__range">
-        <span>{range ? `zoom ${formatRangeValue(range.fromValue)}-${formatRangeValue(range.toValue)}` : table ? `cursor ${tableWindowCursorEnd(table)}` : "cursor -"}</span>
-        <span>{`${tableWindowRowCount(table)} visible`}</span>
-        {range ? <Button className="fm-analysis-plots__range-clear" size="sm" type="button" variant="secondary" onClick={onClearRange}>Clear zoom</Button> : null}
-      </footer>
-    </>
+    <ChartSection
+      footer={
+        <div className="fm-chart-section__footer-row">
+          <span className="fm-analysis-plots__range-cursor">{cursorText}</span>
+          {range ? (
+            <span className="fm-analysis-plots__range-zoom">
+              zoom {formatRange(range)}
+            </span>
+          ) : null}
+        </div>
+      }
+      legend={
+        legendItems.length > 0 ? (
+          <ChartLegend
+            ariaLabel="Chart series"
+            items={legendItems}
+            onToggleVisibility={onToggleVisibility}
+          />
+        ) : null
+      }
+      status={{
+        isAlert: status === "error",
+        pointSummary: rowCount > 0
+          ? `${rowCount.toLocaleString()}${totalRows > rowCount ? ` / ${totalRows.toLocaleString()}` : ""} rows`
+          : undefined,
+        primary: statusPrimary(status, liveMode),
+        revision: table?.revision ?? null,
+        trust: "unknown",
+      }}
+      title={xAxisId}
+    >
+      <EChartsSurface
+        allSeries={chartSeries}
+        bus={kernel.bus}
+        dataStatus={status}
+        fitRequest={fitRequest}
+        onPointSelect={onPointSelect}
+        onRangeChange={onRangeChange}
+        series={visibleSeries}
+        xAxisLabel={xAxisLabel}
+      />
+    </ChartSection>
   );
 }

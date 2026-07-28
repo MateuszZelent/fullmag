@@ -151,10 +151,10 @@ Każdy etap poniżej ma własny RED/GREEN, browser proof, performance/memory gat
 ### Etap 8: Dock/aux ownership
 
 **Files:** `manifest.ts`, kernel slot/layout typings/host, slot adapters, tests/spec catalog if semantics change.
-**Interfaces:** `analysis-plots` contributes `viewport-main` + `panel-bottom`; slot-specific config only.
+**Interfaces:** `analysis-plots` contributes `viewport-main` only; the transport footer is the sole `panel-bottom` owner and mounts its slot-aware Quick Chart variant.
 
 - **RED:** duplicate payload fetch and duplicate cache entry test.
-- **GREEN:** panel-bottom dock keeps 3D mounted; viewport-aux remains unused/deferred.
+- **GREEN:** panel-bottom dock keeps 3D mounted; viewport-aux remains unused/deferred, and disabling Analysis cannot remove the footer or its other tabs.
 - **Browser:** open/close/pin/unpin and focus/resize.
 - **Perf/memory:** no 3D dirty frame/context/resource growth.
 - **Acceptance:** one cache identity across consumers.

@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { createChartRendererOwner, type ChartRendererEngine, type ChartRenderModel } from "./chartRenderer";
+import { chartRenderModelToEChartsOption, createChartRendererOwner, type ChartRendererEngine, type ChartRenderModel } from "./chartRenderer";
 
 const model: ChartRenderModel = {
   ariaLabel: "Magnetization dynamics",
@@ -12,12 +13,13 @@ const model: ChartRenderModel = {
 
 describe("chart renderer owner", () => {
   it("owns exactly one lifecycle and is inert after dispose", () => {
-    const chart = { dispose: vi.fn(), getDataURL: vi.fn(() => "data:image/png;base64,proof"), resize: vi.fn(), setOption: vi.fn() };
+    const chart = { dispatchAction: vi.fn(), dispose: vi.fn(), getDataURL: vi.fn(() => "data:image/png;base64,proof"), resize: vi.fn(), setOption: vi.fn() };
     const engine: ChartRendererEngine = { init: vi.fn(() => chart) };
     const owner = createChartRendererOwner(engine);
     owner.mount({} as HTMLElement);
     owner.update(model);
     owner.resize();
+    owner.fitView();
     expect(owner.exportPng()).toContain("image/png");
     owner.dispose();
     owner.update({ ...model, key: "later" });
@@ -25,6 +27,7 @@ describe("chart renderer owner", () => {
     expect(engine.init).toHaveBeenCalledTimes(1);
     expect(chart.setOption).toHaveBeenCalledTimes(1);
     expect(chart.resize).toHaveBeenCalledTimes(1);
+    expect(chart.dispatchAction).toHaveBeenCalledWith({ type: "dataZoom", start: 0, end: 100 });
     expect(chart.dispose).toHaveBeenCalledTimes(1);
   });
 
@@ -35,6 +38,21 @@ describe("chart renderer owner", () => {
     owner.update(model);
     expect(chart.setOption).toHaveBeenCalledWith(expect.objectContaining({
       series: [expect.objectContaining({ data: [[1, 0.25, 7]] })],
-    }), true);
+    }), false);
+  });
+
+  it("keeps axes semantic, enables ECharts aria and removes the bottom slider", () => {
+    const option = chartRenderModelToEChartsOption(model);
+    expect(option.aria).toMatchObject({ enabled: true });
+    expect(option.dataZoom).toEqual([{ filterMode: "none", type: "inside", zoomOnMouseWheel: "ctrl" }]);
+    expect(option.xAxis).toMatchObject({ name: "time [s]" });
+    expect(option.yAxis).toEqual(expect.arrayContaining([expect.objectContaining({ name: "magnetization [m1]" })]));
+    expect(JSON.stringify(option)).not.toContain("var(--fm-");
+  });
+
+  it("computes axis scales without flattening every chart point into temporary arrays", () => {
+    const source = readFileSync(new URL("./chartRenderer.ts", import.meta.url), "utf8");
+    expect(source).not.toContain("model.series.flatMap");
+    expect(source).not.toContain("Math.max(1, ...model.series.map");
   });
 });

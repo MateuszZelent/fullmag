@@ -77,19 +77,21 @@ void cpu_thread_runtime_is_owned_by_runtime_module() {
         read_text_file(root / "cpu" / "mfem" / "runtime" / "cpu_threads.hpp");
     const std::string runtime =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "cpu_threads.cpp");
+    const std::string mfem_context =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "mfem_context.cpp");
 
     check(
         bridge.find("struct CpuThreadRequest") == std::string::npos,
         "CPU thread request type must not be defined in mfem_bridge.cpp");
     check(
-        bridge.find("void configure_cpu_openmp_runtime(") == std::string::npos,
-        "CPU OpenMP runtime configuration must not be defined in mfem_bridge.cpp");
+        bridge.find("void configure_fem_host_runtime_threads(") == std::string::npos,
+        "FEM host runtime thread configuration must not be defined in mfem_bridge.cpp");
     check(
         runtime.find("CpuThreadRequest requested_cpu_threads(") != std::string::npos,
         "CPU thread request parsing must be defined in cpu_threads.cpp");
     check(
-        runtime.find("void configure_cpu_openmp_runtime(") != std::string::npos,
-        "CPU OpenMP runtime configuration must be defined in cpu_threads.cpp");
+        runtime.find("void configure_fem_host_runtime_threads(") != std::string::npos,
+        "FEM host runtime thread configuration must be defined in cpu_threads.cpp");
     check(
         runtime_header.find("struct CpuThreadRuntimeState") != std::string::npos,
         "CPU thread telemetry state must be defined by cpu_threads.hpp");
@@ -102,6 +104,22 @@ void cpu_thread_runtime_is_owned_by_runtime_module() {
     check(
         context_header.find("int effective_omp_threads") == std::string::npos,
         "Context must not expose flat effective OMP telemetry");
+
+    const size_t host_threads =
+        mfem_context.find("configure_fem_host_runtime_threads(ctx);");
+    const size_t device_branch =
+        mfem_context.find("#if FULLMAG_HAS_CUDA_RUNTIME", host_threads);
+    const size_t gpu_branch = mfem_context.find("if (use_gpu_device)", device_branch);
+    const size_t compute_stream =
+        mfem_context.find("cudaStreamCreateWithPriority(&cs", gpu_branch);
+    const size_t gpu_branch_end = mfem_context.find("} else {", gpu_branch);
+    check(host_threads != std::string::npos, "host thread policy must be configured");
+    check(
+        host_threads < device_branch,
+        "host thread policy must be configured before the CPU/GPU branch");
+    check(
+        gpu_branch < compute_stream && compute_stream < gpu_branch_end,
+        "CUDA stream creation must remain scoped to the GPU branch");
 }
 
 void manual_env_precedence_matches_runtime_contract() {
@@ -183,7 +201,7 @@ void auto_thread_cap_scales_by_context_size() {
         "FEM demag contexts report uncapped auto CPU threads");
 }
 
-void configure_cpu_runtime_writes_context_fields() {
+void configure_host_runtime_writes_cpu_context_fields() {
     ScopedEnv fullmag("FULLMAG_CPU_THREADS");
     ScopedEnv resolved("FULLMAG_CPU_THREADS_AUTO_RESOLVED");
     ScopedEnv omp("OMP_NUM_THREADS");
@@ -192,7 +210,7 @@ void configure_cpu_runtime_writes_context_fields() {
     fullmag.set("3");
 
     fullmag::fem::Context ctx;
-    fullmag::fem::configure_cpu_openmp_runtime(ctx);
+    fullmag::fem::configure_fem_host_runtime_threads(ctx);
 
     check(!ctx.cpu_threads.auto_requested, "manual CPU runtime does not mark auto mode");
     check(ctx.cpu_threads.requested_omp_threads == 3, "manual CPU runtime stores requested threads");
@@ -202,6 +220,60 @@ void configure_cpu_runtime_writes_context_fields() {
         "manual CPU runtime reports no auto cap reason");
 }
 
+void configure_host_runtime_writes_gpu_context_fields() {
+    ScopedEnv fullmag("FULLMAG_CPU_THREADS");
+    ScopedEnv resolved("FULLMAG_CPU_THREADS_AUTO_RESOLVED");
+    ScopedEnv omp("OMP_NUM_THREADS");
+    resolved.unset();
+    omp.unset();
+    fullmag.set("4");
+
+    fullmag::fem::Context ctx;
+    ctx.mfem_device.device_string_override = "cuda";
+    fullmag::fem::configure_fem_host_runtime_threads(ctx);
+
+    check(!ctx.cpu_threads.auto_requested, "manual GPU host runtime does not mark auto mode");
+    check(ctx.cpu_threads.requested_omp_threads == 4, "GPU host runtime stores requested threads");
+    check(ctx.cpu_threads.effective_omp_threads == 4, "GPU host runtime keeps requested threads effective");
+    check(
+        ctx.cpu_threads.cap_reason == fullmag::fem::FULLMAG_FEM_HOST_THREAD_POLICY_NONE,
+        "manual GPU host runtime reports no resolved policy override");
+}
+
+void automatic_gpu_host_policy_is_deliberately_one_thread() {
+    fullmag::fem::Context ctx;
+    ctx.mfem_device.device_string_override = "cuda";
+
+    check(
+        fullmag::fem::auto_cpu_thread_cap_for_context(ctx, 32) == 1,
+        "automatic GPU host policy defaults deliberately to one thread");
+    check(
+        fullmag::fem::auto_cpu_thread_cap_reason_for_context(ctx, 32) ==
+            fullmag::fem::FULLMAG_FEM_HOST_THREAD_POLICY_GPU_DEFAULT_ONE,
+        "automatic GPU host policy reports the deliberate one-thread decision");
+}
+
+void automatic_gpu_host_policy_overrides_external_cpu_auto_resolution() {
+    ScopedEnv fullmag("FULLMAG_CPU_THREADS");
+    ScopedEnv resolved("FULLMAG_CPU_THREADS_AUTO_RESOLVED");
+    ScopedEnv omp("OMP_NUM_THREADS");
+    fullmag.set("auto");
+    resolved.set("8");
+    omp.set("8");
+
+    fullmag::fem::Context ctx;
+    ctx.mfem_device.device_string_override = "cuda";
+    fullmag::fem::configure_fem_host_runtime_threads(ctx);
+
+    check(ctx.cpu_threads.auto_requested, "GPU host runtime preserves automatic thread intent");
+    check(
+        ctx.cpu_threads.effective_omp_threads == 1,
+        "qualified GPU host policy overrides external CPU auto resolution");
+    check(
+        ctx.cpu_threads.cap_reason == fullmag::fem::FULLMAG_FEM_HOST_THREAD_POLICY_GPU_DEFAULT_ONE,
+        "qualified GPU host policy reports deliberate one-thread resolution");
+}
+
 } // namespace
 
 int main() {
@@ -209,6 +281,9 @@ int main() {
     manual_env_precedence_matches_runtime_contract();
     fullmag_auto_mode_overrides_manual_omp();
     auto_thread_cap_scales_by_context_size();
-    configure_cpu_runtime_writes_context_fields();
+    configure_host_runtime_writes_cpu_context_fields();
+    configure_host_runtime_writes_gpu_context_fields();
+    automatic_gpu_host_policy_is_deliberately_one_thread();
+    automatic_gpu_host_policy_overrides_external_cpu_auto_resolution();
     return 0;
 }
