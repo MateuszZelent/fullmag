@@ -61,6 +61,7 @@ from fullmag.meshing._mesh_targets import (
 )
 from fullmag.meshing._gmsh_types import _infer_axis_aligned_periodic_pairs
 from fullmag.meshing._gmsh_extraction import (
+    _derive_facet_roles,
     _extract_gmsh_typed_connectivity,
     _orient_periodic_boundary_faces,
 )
@@ -4620,6 +4621,47 @@ class MeshScaffoldTests(unittest.TestCase):
         )
         np.testing.assert_array_equal(tet4, np.asarray([[0, 1, 2, 3]], dtype=np.int32))
         np.testing.assert_array_equal(tri3, np.asarray([[0, 1, 2]], dtype=np.int32))
+
+    def test_derive_facet_roles_allows_only_declared_provisional_same_region_interface(self) -> None:
+        topology = {
+            "cell_types": ["tet4", "tet4"],
+            "cell_offsets": [0, 4, 8],
+            "cell_nodes": [0, 1, 2, 3, 0, 2, 1, 4],
+            "element_markers": [0, 0],
+            "facet_offsets": [0, 3],
+            "facet_nodes": [0, 1, 2],
+            "boundary_markers": [10],
+        }
+
+        with self.assertRaisesRegex(ValueError, r"adjacency \[0, 0\]"):
+            _derive_facet_roles(**topology)
+
+        self.assertEqual(
+            _derive_facet_roles(
+                **topology,
+                provisional_interface_markers={10},
+            ),
+            ["material_interface"],
+        )
+
+        with self.assertRaisesRegex(ValueError, r"adjacency \[0, 0\]"):
+            _derive_facet_roles(
+                **topology,
+                provisional_interface_markers={11},
+            )
+
+    def test_derive_facet_roles_rejects_declared_provisional_quad_between_prisms(self) -> None:
+        with self.assertRaisesRegex(ValueError, r"adjacency \[0, 0\]"):
+            _derive_facet_roles(
+                cell_types=["prism6", "prism6"],
+                cell_offsets=[0, 6, 12],
+                cell_nodes=[0, 1, 2, 3, 4, 5, 0, 1, 6, 3, 4, 7],
+                element_markers=[0, 0],
+                facet_offsets=[0, 4],
+                facet_nodes=[0, 3, 4, 1],
+                boundary_markers=[10],
+                provisional_interface_markers={10},
+            )
 
     def test_certify_extracted_periodic_mesh_rejects_missing_mirrored_face(self) -> None:
         nodes = np.asarray(

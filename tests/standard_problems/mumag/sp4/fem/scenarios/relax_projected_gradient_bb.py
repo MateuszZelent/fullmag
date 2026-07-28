@@ -37,7 +37,21 @@ film.Ms = 8.0e5
 film.Aex = 1.3e-11
 film.alpha = 0.02
 film.m = fm.init.UniformMagnetization((1.0, 0.1, 0.0))
-film.mesh.thin_film(maximum_element_size=3e-9, layers=1, order=1)
+film.mesh.thin_film(
+    minimum_element_size=1e-9,
+    maximum_element_size=3e-9,
+    layers=1,
+    topology="prismatic",
+    exact_layers=True,
+    transition="pyramid_to_tetrahedra",
+    edge_maximum_element_size=1.5e-9,
+    edge_thickness=12e-9,
+    edge_transition_distance=24e-9,
+    corner_maximum_element_size=1e-9,
+    corner_extent=6e-9,
+    corner_transition_distance=12e-9,
+    order=1,
+)
 
 study.demag(realization="poisson_robin")
 study.fem_demag_solver(
@@ -48,7 +62,12 @@ study.fem_demag_solver(
 )
 study.build_domain_mesh()
 
-study.stages.tableautosave(
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="projected_gradient_bb",
+    max_steps=50_000,
+    tol=7.957747154594767,
+).tableautosave(
     every_steps=10,
     quantities=[
         "step",
@@ -60,11 +79,4 @@ study.stages.tableautosave(
         "e_total",
         "max_torque_T",
     ],
-)
-
-study.stages.add_relax(
-    stage_id="relax",
-    algorithm="projected_gradient_bb",
-    max_steps=50_000,
-    tol=7.957747154594767,
 )

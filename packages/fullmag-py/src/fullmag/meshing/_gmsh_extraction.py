@@ -307,6 +307,69 @@ _CELL_LOCAL_FACETS: dict[str, tuple[tuple[int, ...], ...]] = {
 }
 
 
+def _drop_unattached_provisional_facets(
+    cell_types: object,
+    cell_offsets: object,
+    cell_nodes: object,
+    facet_types: list[str],
+    facet_offsets: NDArray[np.int64],
+    facet_nodes: NDArray[np.int32],
+    boundary_markers: NDArray[np.int32],
+    provisional_interface_markers: set[int],
+) -> tuple[list[str], NDArray[np.int64], NDArray[np.int32], NDArray[np.int32]]:
+    """Drop only declared provisional facets absent from volume topology.
+
+    Gmsh can retain triangles from the embedded STL constraint which are not
+    faces of any generated tetrahedron.  They are useful during generation but
+    are not valid ``MeshData`` facets and are recreated from the frozen mesh
+    after the air cells are clipped.
+    """
+    types = np.asarray(cell_types, dtype=np.str_)
+    offsets = np.asarray(cell_offsets, dtype=np.int64)
+    nodes = np.asarray(cell_nodes, dtype=np.int32)
+    volume_facets: set[tuple[int, ...]] = set()
+    for ordinal, cell_type in enumerate(types.tolist()):
+        item = nodes[offsets[ordinal] : offsets[ordinal + 1]]
+        for local_facet in _CELL_LOCAL_FACETS[cell_type]:
+            volume_facets.add(
+                tuple(sorted(int(item[index]) for index in local_facet))
+            )
+
+    kept_types: list[str] = []
+    kept_offsets = [0]
+    kept_nodes: list[int] = []
+    kept_markers: list[int] = []
+    for ordinal, facet_type in enumerate(facet_types):
+        item = facet_nodes[facet_offsets[ordinal] : facet_offsets[ordinal + 1]]
+        marker = int(boundary_markers[ordinal])
+        key = tuple(sorted(int(node) for node in item))
+        if marker in provisional_interface_markers and key not in volume_facets:
+            continue
+        kept_types.append(facet_type)
+        kept_nodes.extend(int(node) for node in item)
+        kept_offsets.append(len(kept_nodes))
+        kept_markers.append(marker)
+    return (
+        kept_types,
+        np.asarray(kept_offsets, dtype=np.int64),
+        np.asarray(kept_nodes, dtype=np.int32),
+        np.asarray(kept_markers, dtype=np.int32),
+    )
+
+
+def _is_single_region_tet4_air_topology(
+    cell_types: object,
+    element_markers: object,
+) -> bool:
+    types = np.asarray(cell_types, dtype=np.str_)
+    markers = np.asarray(element_markers, dtype=np.int32)
+    return bool(
+        len(types) > 0
+        and np.all(types == "tet4")
+        and set(int(marker) for marker in markers.tolist()) == {0}
+    )
+
+
 def _derive_facet_roles(
     cell_types: object,
     cell_offsets: object,
@@ -317,6 +380,7 @@ def _derive_facet_roles(
     boundary_markers: object,
     *,
     periodic_markers: set[int] | None = None,
+    provisional_interface_markers: set[int] | None = None,
 ) -> list[str]:
     types = np.asarray(cell_types, dtype=np.str_)
     offsets = np.asarray(cell_offsets, dtype=np.int64)
@@ -333,6 +397,11 @@ def _derive_facet_roles(
     face_nodes = np.asarray(facet_nodes, dtype=np.int32)
     face_markers = np.asarray(boundary_markers, dtype=np.int32)
     seams = periodic_markers or set()
+    provisional_interfaces = provisional_interface_markers or set()
+    provisional_interface_allowed = _is_single_region_tet4_air_topology(
+        types,
+        markers,
+    )
     roles: list[str] = []
     for ordinal in range(len(face_offsets) - 1):
         if int(face_markers[ordinal]) in seams:
@@ -343,6 +412,17 @@ def _derive_facet_roles(
         if len(adjacent) == 1:
             roles.append("exterior")
         elif len(adjacent) == 2 and adjacent[0] != adjacent[1]:
+            roles.append("material_interface")
+        elif (
+            len(adjacent) == 2
+            and int(face_markers[ordinal]) in provisional_interfaces
+            and provisional_interface_allowed
+        ):
+            # Frozen-submesh air generation temporarily meshes both sides of
+            # its embedded marker-10 surface as air.  The inside cells are
+            # clipped immediately after extraction, making this the certified
+            # magnetic-air interface.  Keep this exception explicit so an
+            # arbitrary same-region internal facet still fails closed.
             roles.append("material_interface")
         else:
             raise ValueError(
@@ -424,6 +504,7 @@ def _extract_mesh_data(
     has_physical_groups: bool = False,
     per_domain_quality: dict[int, MeshQualityReport] | None = None,
     periodic_pair_specs: list[dict[str, object]] | None = None,
+    provisional_interface_markers: set[int] | None = None,
 ) -> MeshData:
     emit_progress("Gmsh: extracting mesh data")
     node_tags, coords, _ = gmsh.model.mesh.getNodes()
@@ -561,6 +642,28 @@ def _extract_mesh_data(
                 periodic_pair_specs,
             )
 
+    if provisional_interface_markers:
+        if not _is_single_region_tet4_air_topology(cell_types, element_markers):
+            raise ValueError(
+                "provisional interface extraction is restricted to the "
+                "single-region tet4 frozen-air workflow"
+            )
+        (
+            facet_types,
+            facet_offsets_array,
+            facet_nodes_array,
+            boundary_markers,
+        ) = _drop_unattached_provisional_facets(
+            cell_types,
+            cell_offsets_array,
+            cell_nodes_array,
+            facet_types,
+            facet_offsets_array,
+            facet_nodes_array,
+            boundary_markers,
+            provisional_interface_markers,
+        )
+
     aligned_quality = _align_quality_report_to_element_tags(
         quality,
         extracted_element_tags,
@@ -613,6 +716,7 @@ def _extract_mesh_data(
             for marker in (spec.get("marker_a"), spec.get("marker_b"))
             if marker is not None
         },
+        provisional_interface_markers=provisional_interface_markers,
     )
     return MeshData(
         nodes=nodes,

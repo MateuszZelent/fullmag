@@ -523,6 +523,46 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
             after["problem_meta"]["runtime_metadata"]["spin_wave_response"],
         )
 
+    def test_relax_stage_table_autosave_roundtrips_without_leaking(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("relax-table-roundtrip")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.add_relax(
+            stage_id="relax",
+            algorithm="projected_gradient_bb",
+            max_steps=20,
+        ).tableautosave(
+            every_steps=10,
+            quantities=["step", "mx"],
+            table_id="relax_metrics",
+        )
+        study.stages.add_run(stage_id="after", until=4e-12)
+        """
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "source.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "rewritten.py")
+
+        self.assertIn(
+            ').tableautosave(every_steps=10, quantities=["step", "mx"], '
+            'table_id="relax_metrics")',
+            rendered,
+        )
+        self.assertEqual(
+            rewritten.stages[0].table_autosave.to_ir(),
+            loaded.stages[0].table_autosave.to_ir(),
+        )
+        self.assertIsNone(rewritten.stages[1].table_autosave)
+        self.assertNotIn(
+            "table_autosave",
+            rewritten.pipeline_base_problem().study.to_ir()["sampling"],
+        )
+
     def test_automatic_sampling_stages_roundtrip_as_literal_auto(self) -> None:
         script = """
         import fullmag as fm

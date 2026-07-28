@@ -583,6 +583,8 @@ def _export_stage_draft_with_identity(stage: LoadedStage) -> dict[str, object]:
         payload["stage_id"] = stage.stage_id
     if stage.output_every_seconds is not None:
         payload["output_every_seconds"] = stage.output_every_seconds
+    if stage.table_autosave is not None:
+        payload["table_autosave"] = stage.table_autosave.to_ir()
     return payload
 
 
@@ -3901,7 +3903,12 @@ def _render_stages(
                         )
                     )
             if is_study_surface:
-                lines.append(f"study.stages.add_relax({', '.join(call_parts)})")
+                stage_call = f"study.stages.add_relax({', '.join(call_parts)})"
+                if stage.table_autosave is not None:
+                    stage_call += _render_relax_stage_table_autosave_suffix(
+                        stage.table_autosave
+                    )
+                lines.append(stage_call)
             else:
                 lines.append(f"{_surface_call(surface, 'relax')}({', '.join(call_parts)})")
             continue
@@ -3924,6 +3931,18 @@ def _render_stages(
         else:
             lines.append(f"{_surface_call(surface, 'run')}({_py_number(until_seconds)})")
     return lines
+
+
+def _render_relax_stage_table_autosave_suffix(policy: TableAutosave) -> str:
+    if policy.every_steps is None:
+        raise ValueError("relax stage table autosave requires accepted-step cadence")
+    args = [f"every_steps={policy.every_steps}"]
+    quantities = tuple(policy.quantities or DEFAULT_TABLE_AUTOSAVE_QUANTITIES)
+    if quantities != DEFAULT_TABLE_AUTOSAVE_QUANTITIES:
+        args.append(f"quantities={_py_literal(list(quantities))}")
+    if policy.table_id != "default":
+        args.append(f"table_id={_py_repr(policy.table_id)}")
+    return f".tableautosave({', '.join(args)})"
 
 
 def _render_hysteresis_stage_args(study: Hysteresis) -> list[str]:
