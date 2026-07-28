@@ -350,6 +350,32 @@ describe("SimulationStartupOverlay", () => {
     expect(orderedLabels).toEqual([...orderedLabels].sort((left, right) => left - right));
   });
 
+  it("renders an active Gmsh attempt as indeterminate without a fabricated percent", () => {
+    const resource = preparationResource();
+    resource.stages = resource.stages.map((stage) =>
+      stage.id === "meshing"
+        ? {
+            ...stage,
+            progress_label: "Attempt 3 — Frontal — progress indeterminate",
+            progress_percent: null,
+          }
+        : stage,
+    );
+    const model = resolveSimulationPreparationViewModel(
+      preparationResult(resource),
+      statusResource({ solver: { state: "bootstrapping" } }),
+      18_700,
+    );
+    const html = renderToStaticMarkup(
+      <SimulationStartupOverlayView state={model} />,
+    );
+
+    expect(html).toContain('data-kind="indeterminate"');
+    expect(html).not.toContain('aria-valuenow="');
+    expect(html).toContain("Attempt 3 — Frontal — progress indeterminate");
+    expect(html).not.toContain("75%");
+  });
+
   it("limits polite announcements to stage and terminal summaries", () => {
     const model = resolveSimulationPreparationViewModel(
       preparationResult(),

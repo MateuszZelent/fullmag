@@ -447,6 +447,75 @@ describe("mounted simulation preparation UI", () => {
     expect(clearTimeoutSpy).toHaveBeenCalledWith(displayTimerBeforeUnmount);
     dom.restore();
   });
+
+  it("keeps retry identity across indeterminate heartbeat refreshes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(20_000);
+    const dom = installSimulationPreparationTestDom();
+    const { kernel, resources } = makeKernel({
+      loadPreparation: async () => preparationFixture(),
+      loadStatus: async () => statusFixture(),
+    });
+    resources.invalidate(SESSION_STATUS_RESOURCE_KEY, 7);
+    resources.invalidate(SIMULATION_PREPARATION_PATH, 7);
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+
+    await act(async () => {
+      root.render(
+        <KernelContext.Provider value={kernel}>
+          <SimulationStartupOverlay />
+        </KernelContext.Provider>,
+      );
+    });
+    await settleLoads();
+    expect(container.textContent).toContain("63%");
+
+    await act(async () => {
+      sharedResourceRuntimeStore.updateData(
+        SIMULATION_PREPARATION_PATH,
+        attemptPreparationFixture(8, "Attempt 2 — HXT — progress indeterminate", 20_000),
+        8,
+      );
+    });
+    expect(container.textContent).toContain("Attempt 2 — HXT — progress indeterminate");
+    expect(container.textContent).not.toContain("63%");
+    expect(
+      findElement(
+        container,
+        (element) => element.getAttribute("data-kind") === "indeterminate",
+        "Indeterminate mesh progress",
+      ).getAttribute("aria-valuenow"),
+    ).toBeNull();
+
+    await act(async () => {
+      sharedResourceRuntimeStore.updateData(
+        SIMULATION_PREPARATION_PATH,
+        attemptPreparationFixture(9, "Attempt 2 — HXT — progress indeterminate", 35_000),
+        9,
+      );
+    });
+    expect(container.textContent).toContain("Attempt 2 — HXT — progress indeterminate");
+
+    await act(async () => {
+      sharedResourceRuntimeStore.updateData(
+        SIMULATION_PREPARATION_PATH,
+        attemptPreparationFixture(
+          10,
+          "Attempt 3 — Frontal — progress indeterminate",
+          50_000,
+        ),
+        10,
+      );
+    });
+    expect(container.textContent).toContain("Attempt 3 — Frontal — progress indeterminate");
+    expect(container.textContent).not.toContain("Attempt 2 — HXT — progress indeterminate");
+    expect(container.textContent).not.toContain("63%");
+
+    await act(async () => root.unmount());
+    dom.restore();
+  });
 });
 
 function resource<TData>(data: TData): ResourceResult<TData> {
@@ -522,6 +591,28 @@ function failedPreparationFixture(): SimulationPreparationResource {
         : stage,
     ),
     status: "failed",
+  };
+}
+
+function attemptPreparationFixture(
+  revision: number,
+  progressLabel: string,
+  durationMs: number,
+): SimulationPreparationResource {
+  const snapshot = preparationFixture();
+  return {
+    ...snapshot,
+    revision,
+    stages: snapshot.stages.map((stage) =>
+      stage.id === "meshing"
+        ? {
+            ...stage,
+            duration_ms: durationMs,
+            progress_label: progressLabel,
+            progress_percent: null,
+          }
+        : stage,
+    ),
   };
 }
 

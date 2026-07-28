@@ -17,7 +17,9 @@ use crate::control_room::{
 use crate::feature_flags::FeatureFlags;
 use crate::formatting::{push_engine_log, unix_time_millis};
 use crate::nvtx_range;
-use crate::python_bridge::{python_mesh_preparation_update, PythonMeshPreparationUpdate};
+use crate::python_bridge::{
+    map_remesh_progress_message, python_mesh_preparation_update, PythonMeshPreparationUpdate,
+};
 use crate::simulation_preparation::{
     PreparationLogLevel, PreparationStageId, PreparationTransitionError, SimulationPreparationState,
 };
@@ -2427,6 +2429,119 @@ mod tests {
     }
 
     #[test]
+    fn indeterminate_mesh_attempt_clears_stale_percent_and_updates_label() {
+        let workspace = workspace_in_preparation_stage(PreparationStageId::DomainPreparation);
+
+        apply_python_progress_event(
+            &workspace,
+            structured_event(
+                "mesh_build_phase",
+                serde_json::json!({
+                    "phase": "meshing",
+                    "progress_percent": 75,
+                    "progress_label": "legacy heuristic",
+                }),
+            ),
+        );
+        apply_python_progress_event(
+            &workspace,
+            structured_event(
+                "mesh_build_phase",
+                serde_json::json!({
+                    "phase": "meshing",
+                    "attempt_index": 2,
+                    "algorithm_3d": "HXT",
+                    "attempt_status": "failed_recoverable",
+                    "attempt_failure_reason": "degenerate tetra volume",
+                    "next_algorithm_3d": "Frontal",
+                    "progress_kind": "indeterminate",
+                    "progress_label": "Attempt 2 — HXT — failed; retrying",
+                }),
+            ),
+        );
+        apply_python_progress_event(
+            &workspace,
+            structured_event(
+                "mesh_build_phase",
+                serde_json::json!({
+                    "phase": "meshing",
+                    "attempt_index": 3,
+                    "algorithm_3d": "Frontal",
+                    "attempt_status": "active",
+                    "progress_kind": "indeterminate",
+                    "progress_label": "Attempt 3 — Frontal — progress indeterminate",
+                }),
+            ),
+        );
+
+        let before_heartbeat = workspace.snapshot();
+        let preparation_revision_before_heartbeat = before_heartbeat
+            .simulation_preparation
+            .as_ref()
+            .expect("preparation before heartbeat")
+            .revision;
+        let duration_before_heartbeat = before_heartbeat
+            .simulation_preparation
+            .as_ref()
+            .and_then(|preparation| {
+                preparation
+                    .stages
+                    .iter()
+                    .find(|stage| stage.id == PreparationStageId::Meshing)
+            })
+            .and_then(|stage| stage.duration_ms)
+            .unwrap_or(0);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        apply_python_progress_event(
+            &workspace,
+            PythonProgressEvent::Message(
+                "Gmsh: meshing active (generating 3D mesh; 35.0s elapsed; no detailed backend update for 15.0s)"
+                    .to_string(),
+            ),
+        );
+
+        let snapshot = workspace.snapshot();
+        let preparation = snapshot.simulation_preparation.expect("preparation");
+        assert!(preparation.revision > preparation_revision_before_heartbeat);
+        let stage = preparation
+            .stages
+            .iter()
+            .find(|stage| stage.id == PreparationStageId::Meshing)
+            .expect("meshing stage");
+        assert!(stage.duration_ms.unwrap_or(0) > duration_before_heartbeat);
+        assert_eq!(stage.progress_percent, None);
+        assert_eq!(
+            stage.progress_label.as_deref(),
+            Some("Attempt 3 — Frontal — progress indeterminate")
+        );
+        let detailed_phase = snapshot
+            .mesh_workspace
+            .as_ref()
+            .and_then(|workspace| workspace.get("mesh_pipeline_status"))
+            .and_then(serde_json::Value::as_array)
+            .and_then(|phases| phases.iter().find(|phase| phase["id"] == "meshing"))
+            .expect("detailed meshing phase");
+        assert!(detailed_phase.get("progress_percent").is_none());
+        assert_eq!(
+            detailed_phase["progress_label"],
+            "Attempt 3 — Frontal — progress indeterminate"
+        );
+        assert_eq!(detailed_phase["attempt_index"], 3);
+        assert_eq!(detailed_phase["algorithm_3d"], "Frontal");
+        assert_eq!(detailed_phase["attempt_status"], "active");
+        assert_eq!(
+            snapshot.mesh_workspace.as_ref().unwrap()["active_build"]["last_recoverable_attempt"]
+                ["attempt_failure_reason"],
+            "degenerate tetra volume"
+        );
+        assert_eq!(
+            snapshot.mesh_workspace.as_ref().unwrap()["active_build"]["last_recoverable_attempt"]
+                ["next_algorithm_3d"],
+            "Frontal"
+        );
+    }
+
+    #[test]
     fn mesh_failure_uses_safe_preparation_summary_and_keeps_raw_mesh_diagnostics() {
         let workspace = workspace_in_preparation_stage(PreparationStageId::Meshing);
 
@@ -3797,6 +3912,7 @@ fn mesh_build_pipeline_status_json(
     progress_percent: Option<u8>,
     progress_label: Option<&str>,
     duration_ms: Option<u64>,
+    attempt_telemetry: Option<&serde_json::Value>,
 ) -> serde_json::Value {
     let phase_details = [
         (
@@ -3856,6 +3972,23 @@ fn mesh_build_pipeline_status_json(
                     if let Some(duration_ms) = duration_ms {
                         phase["duration_ms"] = serde_json::json!(duration_ms);
                     }
+                    if let (Some(phase_object), Some(attempt_object)) = (
+                        phase.as_object_mut(),
+                        attempt_telemetry.and_then(|value| value.as_object()),
+                    ) {
+                        for key in [
+                            "attempt_index",
+                            "algorithm_3d",
+                            "attempt_status",
+                            "attempt_failure_reason",
+                            "next_algorithm_3d",
+                            "progress_kind",
+                        ] {
+                            if let Some(value) = attempt_object.get(key) {
+                                phase_object.insert(key.to_string(), value.clone());
+                            }
+                        }
+                    }
                 }
                 phase
             })
@@ -3885,6 +4018,46 @@ fn mesh_duration_ms_from_payload(payload: &serde_json::Value) -> Option<u64> {
     payload.get("duration_ms").and_then(|value| value.as_u64())
 }
 
+fn mesh_attempt_telemetry_from_payload(payload: &serde_json::Value) -> Option<serde_json::Value> {
+    let mut telemetry = serde_json::Map::new();
+    for key in [
+        "attempt_index",
+        "algorithm_3d",
+        "attempt_status",
+        "attempt_failure_reason",
+        "next_algorithm_3d",
+        "progress_kind",
+    ] {
+        if let Some(value) = payload.get(key) {
+            telemetry.insert(key.to_string(), value.clone());
+        }
+    }
+    (!telemetry.is_empty()).then_some(serde_json::Value::Object(telemetry))
+}
+
+fn mesh_active_build_with_attempt_telemetry(
+    active_build: Option<serde_json::Value>,
+    payload: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    let telemetry = mesh_attempt_telemetry_from_payload(payload)?;
+    let mut active_build = active_build.unwrap_or_else(|| serde_json::json!({}));
+    if !active_build.is_object() {
+        active_build = serde_json::json!({ "intent": active_build });
+    }
+    let object = active_build
+        .as_object_mut()
+        .expect("active mesh build telemetry container must be an object");
+    object.insert("runtime_attempt".to_string(), telemetry.clone());
+    if payload
+        .get("attempt_status")
+        .and_then(serde_json::Value::as_str)
+        == Some("failed_recoverable")
+    {
+        object.insert("last_recoverable_attempt".to_string(), telemetry);
+    }
+    Some(active_build)
+}
+
 fn upsert_mesh_build_overlay(
     state: &mut LocalLiveWorkspaceState,
     active_build: Option<serde_json::Value>,
@@ -3896,6 +4069,7 @@ fn upsert_mesh_build_overlay(
     progress_percent: Option<u8>,
     progress_label: Option<String>,
     duration_ms: Option<u64>,
+    attempt_telemetry: Option<serde_json::Value>,
     failed: bool,
 ) {
     let workspace = state
@@ -3939,6 +4113,7 @@ fn upsert_mesh_build_overlay(
             progress_percent,
             progress_label.as_deref(),
             duration_ms,
+            attempt_telemetry.as_ref(),
         ),
     );
 }
@@ -4022,13 +4197,23 @@ fn apply_mesh_preparation_update(
             progress_label,
         } => {
             begin_mesh_preparation_stage(preparation, stage_id, timestamp_unix_ms, &detail)?;
-            if let Some(progress_percent) = progress_percent {
-                preparation.update_progress(
-                    stage_id,
-                    progress_percent,
-                    progress_label.unwrap_or_else(|| detail.clone()),
-                    timestamp_unix_ms,
-                )?;
+            match (progress_percent, progress_label) {
+                (Some(progress_percent), progress_label) => {
+                    preparation.update_progress(
+                        stage_id,
+                        progress_percent,
+                        progress_label.unwrap_or_else(|| detail.clone()),
+                        timestamp_unix_ms,
+                    )?;
+                }
+                (None, Some(progress_label)) => {
+                    preparation.update_indeterminate_activity(
+                        stage_id,
+                        progress_label,
+                        timestamp_unix_ms,
+                    )?;
+                }
+                (None, None) => {}
             }
             preparation_log_once(
                 preparation,
@@ -4128,7 +4313,36 @@ pub(crate) fn apply_python_progress_event(
 ) {
     match event {
         PythonProgressEvent::Message(message) => {
-            live_workspace.push_log("info", message);
+            let indeterminate_activity =
+                map_remesh_progress_message(&message).filter(|progress| progress.percent.is_none());
+            live_workspace.update(|state| {
+                push_engine_log(&mut state.engine_log, "info", message);
+                let Some(activity) = indeterminate_activity else {
+                    return;
+                };
+                let Some(preparation) = state.simulation_preparation.as_mut() else {
+                    return;
+                };
+                if preparation.active_stage_id != Some(PreparationStageId::Meshing) {
+                    return;
+                }
+                let progress_label = preparation
+                    .stages
+                    .iter()
+                    .find(|stage| stage.id == PreparationStageId::Meshing)
+                    .and_then(|stage| stage.progress_label.clone())
+                    .filter(|label| label.starts_with("Attempt "))
+                    .unwrap_or_else(|| activity.label.to_string());
+                let timestamp_unix_ms = unix_time_millis()
+                    .ok()
+                    .and_then(|value| u64::try_from(value).ok())
+                    .unwrap_or(0);
+                let _ = preparation.update_indeterminate_activity(
+                    PreparationStageId::Meshing,
+                    progress_label,
+                    timestamp_unix_ms,
+                );
+            });
         }
         PythonProgressEvent::FemSurfacePreview {
             geometry_name,
@@ -4201,6 +4415,7 @@ pub(crate) fn apply_python_progress_event(
                             mesh_progress_percent_from_payload(&payload),
                             mesh_progress_label_from_payload(&payload),
                             mesh_duration_ms_from_payload(&payload),
+                            None,
                             false,
                         );
                     }
@@ -4211,7 +4426,11 @@ pub(crate) fn apply_python_progress_event(
                             .unwrap_or("queued");
                         upsert_mesh_build_overlay(
                             state,
-                            existing_active_build,
+                            mesh_active_build_with_attempt_telemetry(
+                                existing_active_build.clone(),
+                                &payload,
+                            )
+                            .or(existing_active_build),
                             existing_airbox_target,
                             existing_object_targets,
                             None,
@@ -4220,6 +4439,7 @@ pub(crate) fn apply_python_progress_event(
                             mesh_progress_percent_from_payload(&payload),
                             mesh_progress_label_from_payload(&payload),
                             mesh_duration_ms_from_payload(&payload),
+                            mesh_attempt_telemetry_from_payload(&payload),
                             false,
                         );
                     }
@@ -4235,6 +4455,7 @@ pub(crate) fn apply_python_progress_event(
                             Some(100),
                             Some("mesh ready".to_string()),
                             mesh_duration_ms_from_payload(&payload),
+                            None,
                             false,
                         );
                     }
@@ -4259,6 +4480,7 @@ pub(crate) fn apply_python_progress_event(
                             mesh_progress_percent_from_payload(&payload),
                             mesh_progress_label_from_payload(&payload),
                             mesh_duration_ms_from_payload(&payload),
+                            mesh_attempt_telemetry_from_payload(&payload),
                             true,
                         );
                     }

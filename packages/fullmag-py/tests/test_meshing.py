@@ -60,6 +60,7 @@ from fullmag.meshing._mesh_targets import (
     resolve_shared_domain_targets,
 )
 from fullmag.meshing._gmsh_types import _infer_axis_aligned_periodic_pairs
+from fullmag.meshing._gmsh_infra import _GmshProgressLogger, _gmsh_heartbeat_interval
 from fullmag.meshing._gmsh_extraction import _orient_periodic_boundary_faces
 from fullmag.model.discretization import PerObjectMeshRecipe, SharedMeshAssemblyPolicy
 from fullmag.meshing.gmsh_bridge import (
@@ -6817,13 +6818,61 @@ class MeshScaffoldTests(unittest.TestCase):
         )
         self.assertIsNone(_normalize_gmsh_log_line("Info: Meshing curve 3 (Line)"))
 
-    def test_format_gmsh_heartbeat_reports_phase_percent_and_last_message(self) -> None:
+    def test_format_gmsh_heartbeat_reports_indeterminate_activity_without_fake_percent(self) -> None:
         self.assertEqual(
             _format_gmsh_heartbeat(
                 85.7,
                 "Gmsh: Tetrahedrizing 737 nodes...",
+                backend_idle_s=12.3,
             ),
-            "Gmsh: meshing in progress ~75% (generating 3D mesh; 85.7s elapsed; last: Tetrahedrizing 737 nodes...)",
+            "Gmsh: meshing active (generating 3D mesh; 85.7s elapsed; "
+            "no detailed backend update for 12.3s; last: Tetrahedrizing 737 nodes...)",
+        )
+
+    def test_format_gmsh_heartbeat_reports_when_backend_has_not_emitted_detail(self) -> None:
+        self.assertEqual(
+            _format_gmsh_heartbeat(5.0, backend_idle_s=5.0),
+            "Gmsh: meshing active (generating 3D mesh; 5.0s elapsed; "
+            "no detailed backend update yet)",
+        )
+
+    def test_gmsh_heartbeat_interval_backs_off_during_long_quiet_meshing(self) -> None:
+        self.assertEqual(_gmsh_heartbeat_interval(5.0, 5.0), 5.0)
+        self.assertEqual(_gmsh_heartbeat_interval(30.0, 5.0), 15.0)
+        self.assertEqual(_gmsh_heartbeat_interval(120.0, 5.0), 30.0)
+        self.assertEqual(_gmsh_heartbeat_interval(300.0, 60.0), 60.0)
+
+    def test_gmsh_progress_logger_does_not_age_last_detail_from_filtered_noise(self) -> None:
+        class _FakeLogger:
+            @staticmethod
+            def get() -> list[str]:
+                return ["Info: Meshing curve 3 (Line)"]
+
+        class _FakeGmsh:
+            logger = _FakeLogger()
+
+        progress = _GmshProgressLogger(_FakeGmsh())
+        progress._last_detail_at = 10.0
+        with patch("fullmag.meshing._gmsh_infra.time.monotonic", return_value=20.0):
+            self.assertFalse(progress._flush())
+        self.assertEqual(progress._last_detail_at, 10.0)
+
+    def test_gmsh_progress_logger_reports_telemetry_failure_once(self) -> None:
+        class _FailingLogger:
+            @staticmethod
+            def get() -> list[str]:
+                raise RuntimeError("logger unavailable")
+
+        class _FakeGmsh:
+            logger = _FailingLogger()
+
+        progress = _GmshProgressLogger(_FakeGmsh())
+        with patch("fullmag.meshing._gmsh_infra.emit_progress") as emit:
+            self.assertFalse(progress._flush())
+            self.assertFalse(progress._flush())
+        emit.assert_called_once_with(
+            "Gmsh telemetry warning: failed to read native progress log "
+            "(logger unavailable); mesh progress is indeterminate"
         )
 
     def test_resolve_gmsh_thread_count_prefers_env_override(self) -> None:
@@ -8360,7 +8409,11 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         with patch(
             "fullmag.meshing._gmsh_occ.generate_shared_domain_mesh_via_occ",
             side_effect=_fake_occ,
-        ):
+        ), patch(
+            "fullmag.meshing.asset_pipeline.emit_progress"
+        ) as emit_progress_mock, patch(
+            "fullmag.meshing.asset_pipeline.emit_progress_event"
+        ) as emit_progress_event_mock:
             mesh, region_markers, report = realize_fem_domain_mesh_asset_from_components_with_report(
                 geometries=[left],
                 hints=fm.FEM(order=1, hmax=80e-9),
@@ -8394,6 +8447,72 @@ class FieldStackAcceptanceTests(unittest.TestCase):
                 "conformal_occ_hxt_degenerate_retry_delaunay",
                 "conformal_occ_delaunay_degenerate_retry_frontal",
             ],
+        )
+        progress_messages = [call.args[0] for call in emit_progress_mock.call_args_list]
+        self.assertIn(
+            "Conformal OCC mesh attempt 1 started with HXT (progress is indeterminate)",
+            progress_messages,
+        )
+        self.assertTrue(
+            any(
+                "Conformal OCC mesh attempt 1 failed" in message
+                and "starting attempt 2 with Delaunay" in message
+                for message in progress_messages
+            )
+        )
+        self.assertTrue(
+            any(
+                "Conformal OCC mesh attempt 2 failed" in message
+                and "starting attempt 3 with Frontal" in message
+                for message in progress_messages
+            )
+        )
+        self.assertIn(
+            "Conformal OCC mesh attempt 3 started with Frontal (progress is indeterminate)",
+            progress_messages,
+        )
+        attempt_events = [
+            call.args[0]
+            for call in emit_progress_event_mock.call_args_list
+            if call.args[0].get("attempt_index") is not None
+        ]
+        self.assertEqual(
+            [
+                (
+                    event["attempt_index"],
+                    event["algorithm_3d"],
+                    event["attempt_status"],
+                    event.get("progress_percent"),
+                )
+                for event in attempt_events
+            ],
+            [
+                (1, "HXT", "active", None),
+                (1, "HXT", "failed_recoverable", None),
+                (2, "Delaunay", "active", None),
+                (2, "Delaunay", "failed_recoverable", None),
+                (3, "Frontal", "active", None),
+                (3, "Frontal", "completed", None),
+            ],
+        )
+        self.assertEqual(
+            attempt_events[-2]["progress_label"],
+            "Attempt 3 — Frontal — progress indeterminate",
+        )
+        recoverable_failures = [
+            event
+            for event in attempt_events
+            if event["attempt_status"] == "failed_recoverable"
+        ]
+        self.assertTrue(
+            all(
+                "degenerate tetra volume" in event["attempt_failure_reason"]
+                for event in recoverable_failures
+            )
+        )
+        self.assertEqual(
+            [event["next_algorithm_3d"] for event in recoverable_failures],
+            ["Delaunay", "Frontal"],
         )
 
     def test_multi_object_sizing_cylinder_and_waveguide(self) -> None:

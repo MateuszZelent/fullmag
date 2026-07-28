@@ -3018,6 +3018,13 @@ struct CurrentMeshBuildOverlay {
     active_phase: Option<String>,
     progress_percent: Option<u8>,
     progress_label: Option<String>,
+    attempt_index: Option<u64>,
+    algorithm_3d: Option<String>,
+    attempt_status: Option<String>,
+    attempt_failure_reason: Option<String>,
+    next_algorithm_3d: Option<String>,
+    progress_kind: Option<String>,
+    last_recoverable_attempt: Option<serde_json::Value>,
     phase_started_at: Instant,
     phase_durations_ms: Vec<(String, u64)>,
     failed: bool,
@@ -3109,6 +3116,7 @@ fn mesh_build_pipeline_status_json(
     progress_label: Option<&str>,
     active_elapsed_ms: Option<u64>,
     phase_durations_ms: &[(String, u64)],
+    attempt_telemetry: Option<&CurrentMeshBuildOverlay>,
 ) -> serde_json::Value {
     let phase_details = [
         (
@@ -3168,6 +3176,29 @@ fn mesh_build_pipeline_status_json(
                     if let Some(duration_ms) = active_elapsed_ms {
                         phase["duration_ms"] = serde_json::json!(duration_ms);
                     }
+                    if let Some(telemetry) = attempt_telemetry {
+                        if let Some(value) = telemetry.attempt_index {
+                            phase["attempt_index"] = serde_json::json!(value);
+                        }
+                        if let Some(value) = telemetry.algorithm_3d.as_deref() {
+                            phase["algorithm_3d"] = serde_json::json!(value);
+                        }
+                        if let Some(value) = telemetry.attempt_status.as_deref() {
+                            phase["attempt_status"] = serde_json::json!(value);
+                        }
+                        if let Some(value) = telemetry.attempt_failure_reason.as_deref() {
+                            phase["attempt_failure_reason"] = serde_json::json!(value);
+                        }
+                        if let Some(value) = telemetry.next_algorithm_3d.as_deref() {
+                            phase["next_algorithm_3d"] = serde_json::json!(value);
+                        }
+                        if let Some(value) = telemetry.progress_kind.as_deref() {
+                            phase["progress_kind"] = serde_json::json!(value);
+                        }
+                        if let Some(value) = telemetry.last_recoverable_attempt.as_ref() {
+                            phase["last_recoverable_attempt"] = value.clone();
+                        }
+                    }
                 } else if let Some((_, duration_ms)) = phase_durations_ms
                     .iter()
                     .find(|(phase_id, _)| phase_id == id)
@@ -3207,6 +3238,106 @@ fn transition_mesh_build_phase(overlay: &mut CurrentMeshBuildOverlay, next_phase
     overlay.phase_started_at = now;
 }
 
+fn update_mesh_attempt_overlay_from_payload(
+    overlay: &mut CurrentMeshBuildOverlay,
+    kind: &str,
+    payload: &serde_json::Value,
+) -> bool {
+    if kind != "mesh_build_phase" || payload.get("attempt_index").is_none() {
+        return false;
+    }
+    let phase = payload
+        .get("phase")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("meshing");
+    transition_mesh_build_phase(overlay, phase);
+    overlay.progress_percent = payload
+        .get("progress_percent")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u8::try_from(value).ok());
+    overlay.progress_label = payload
+        .get("progress_label")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    overlay.attempt_index = payload
+        .get("attempt_index")
+        .and_then(serde_json::Value::as_u64);
+    overlay.algorithm_3d = payload
+        .get("algorithm_3d")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    overlay.attempt_status = payload
+        .get("attempt_status")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    overlay.attempt_failure_reason = payload
+        .get("attempt_failure_reason")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    overlay.next_algorithm_3d = payload
+        .get("next_algorithm_3d")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    overlay.progress_kind = payload
+        .get("progress_kind")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    if overlay.attempt_status.as_deref() == Some("failed_recoverable") {
+        overlay.last_recoverable_attempt = Some(serde_json::json!({
+            "attempt_index": overlay.attempt_index,
+            "algorithm_3d": overlay.algorithm_3d,
+            "attempt_status": overlay.attempt_status,
+            "attempt_failure_reason": overlay.attempt_failure_reason,
+            "next_algorithm_3d": overlay.next_algorithm_3d,
+            "progress_kind": overlay.progress_kind,
+        }));
+    }
+    overlay.failed = false;
+    true
+}
+
+fn gmsh_indeterminate_heartbeat(message: &str) -> bool {
+    message.trim_start().starts_with("Gmsh: meshing active (")
+}
+
+fn remesh_progress_label(
+    overlay: &CurrentMeshBuildOverlay,
+    stage: RemeshTerminalProgress,
+) -> String {
+    match (overlay.attempt_index, overlay.algorithm_3d.as_deref()) {
+        (Some(attempt_index), Some(algorithm)) if stage.percent.is_none() => {
+            format!("Attempt {attempt_index} — {algorithm} — {}", stage.label)
+        }
+        _ => stage.label.to_string(),
+    }
+}
+
+fn update_mesh_overlay_from_terminal_progress(
+    overlay: &mut CurrentMeshBuildOverlay,
+    stage: RemeshTerminalProgress,
+) {
+    let next_phase = match stage.label {
+        "mesh ready" | "extracting quality metrics" | "extracting mesh data" => "postprocessing",
+        "generating 3D mesh" | "meshing curves" | "meshing surfaces" | "meshing 3D volume"
+        | "optimizing mesh" => "meshing",
+        "accepted" => "queued",
+        _ => "preparing_domain",
+    };
+    transition_mesh_build_phase(overlay, next_phase);
+    overlay.progress_percent = stage.percent;
+    overlay.progress_label = Some(remesh_progress_label(overlay, stage));
+    if next_phase != "meshing" {
+        overlay.attempt_index = None;
+        overlay.algorithm_3d = None;
+        overlay.attempt_status = None;
+        overlay.attempt_failure_reason = None;
+        overlay.next_algorithm_3d = None;
+        overlay.progress_kind = None;
+        overlay.last_recoverable_attempt = None;
+    }
+    overlay.failed = false;
+}
+
 fn overlay_mesh_workspace(
     mesh_workspace: &mut serde_json::Value,
     overlay: &CurrentMeshBuildOverlay,
@@ -3222,7 +3353,32 @@ fn overlay_mesh_workspace(
         overlay
             .active_build
             .clone()
-            .unwrap_or(serde_json::Value::Null),
+            .map_or(serde_json::Value::Null, |mut value| {
+                if let Some(object) = value.as_object_mut() {
+                    if overlay.attempt_index.is_some() {
+                        object.insert(
+                            "runtime_attempt".to_string(),
+                            serde_json::json!({
+                                "attempt_index": overlay.attempt_index,
+                                "algorithm_3d": overlay.algorithm_3d,
+                                "attempt_status": overlay.attempt_status,
+                                "attempt_failure_reason": overlay.attempt_failure_reason,
+                                "next_algorithm_3d": overlay.next_algorithm_3d,
+                                "progress_kind": overlay.progress_kind,
+                            }),
+                        );
+                    }
+                    if let Some(last_recoverable_attempt) =
+                        overlay.last_recoverable_attempt.as_ref()
+                    {
+                        object.insert(
+                            "last_recoverable_attempt".to_string(),
+                            last_recoverable_attempt.clone(),
+                        );
+                    }
+                }
+                value
+            }),
     );
     obj.insert(
         "effective_airbox_target".to_string(),
@@ -3266,6 +3422,7 @@ fn overlay_mesh_workspace(
                 .as_ref()
                 .map(|_| saturating_duration_millis_u64(overlay.phase_started_at.elapsed())),
             &overlay.phase_durations_ms,
+            Some(overlay),
         ),
     );
 }
@@ -4133,6 +4290,13 @@ fn execute_manual_interactive_remesh(
             active_phase: Some("queued".to_string()),
             progress_percent: None,
             progress_label: None,
+            attempt_index: None,
+            algorithm_3d: None,
+            attempt_status: None,
+            attempt_failure_reason: None,
+            next_algorithm_3d: None,
+            progress_kind: None,
+            last_recoverable_attempt: None,
             phase_started_at: Instant::now(),
             phase_durations_ms: Vec::new(),
             failed: false,
@@ -4150,7 +4314,7 @@ fn execute_manual_interactive_remesh(
             state.mesh_workspace = Some(workspace);
         });
         let mesh_start = std::time::Instant::now();
-        let remesh_progress_stage = Arc::new(Mutex::new(None::<u8>));
+        let remesh_progress_stage = Arc::new(Mutex::new(None::<RemeshTerminalProgress>));
         let remesh_progress_callback = Some({
             let live_workspace = live_workspace.clone();
             let remesh_progress_stage = Arc::clone(&remesh_progress_stage);
@@ -4166,27 +4330,17 @@ fn execute_manual_interactive_remesh(
                                     let mut guard = remesh_progress_stage
                                         .lock()
                                         .expect("remesh progress mutex poisoned");
-                                    if guard
-                                        .map(|current| current == stage.percent)
-                                        .unwrap_or(false)
+                                    if guard.as_ref() == Some(&stage)
+                                        && !gmsh_indeterminate_heartbeat(message)
                                     {
                                         None
                                     } else {
-                                        *guard = Some(stage.percent);
-                                        let next_phase = if stage.percent >= 92 {
-                                            "postprocessing"
-                                        } else if stage.percent >= 75 {
-                                            "meshing"
-                                        } else if stage.percent >= 15 {
-                                            "preparing_domain"
-                                        } else {
-                                            "queued"
-                                        };
+                                        *guard = Some(stage);
                                         if let Ok(mut overlay) = build_overlay.lock() {
-                                            transition_mesh_build_phase(&mut overlay, next_phase);
-                                            overlay.progress_percent = Some(stage.percent);
-                                            overlay.progress_label = Some(stage.label.to_string());
-                                            overlay.failed = false;
+                                            update_mesh_overlay_from_terminal_progress(
+                                                &mut overlay,
+                                                stage,
+                                            );
                                             let overlay_snapshot = overlay.clone();
                                             live_workspace.update(|state| {
                                                 let mut workspace = state
@@ -4200,10 +4354,16 @@ fn execute_manual_interactive_remesh(
                                                 state.mesh_workspace = Some(workspace);
                                             });
                                         }
-                                        Some(format!(
-                                            "[fullmag] remesh {:02}% - {}",
-                                            stage.percent, stage.label
-                                        ))
+                                        Some(match stage.percent {
+                                            Some(percent) => format!(
+                                                "[fullmag] remesh {percent:02}% - {}",
+                                                stage.label
+                                            ),
+                                            None => format!(
+                                                "[fullmag] remesh active (indeterminate) - {}",
+                                                stage.label
+                                            ),
+                                        })
                                     }
                                 }
                                 None => Some(format!("[fullmag] remesh info - {}", message)),
@@ -4211,10 +4371,26 @@ fn execute_manual_interactive_remesh(
                         }
                     }
                     PythonProgressEvent::FemSurfacePreview { .. } => None,
-                    PythonProgressEvent::Structured { payload, .. } => payload
-                        .get("message")
-                        .and_then(|value| value.as_str())
-                        .map(|message| format!("[fullmag] remesh info - {}", message)),
+                    PythonProgressEvent::Structured { kind, payload } => {
+                        if let Ok(mut overlay) = build_overlay.lock() {
+                            if update_mesh_attempt_overlay_from_payload(&mut overlay, kind, payload)
+                            {
+                                let overlay_snapshot = overlay.clone();
+                                live_workspace.update(|state| {
+                                    let mut workspace = state
+                                        .mesh_workspace
+                                        .clone()
+                                        .unwrap_or_else(|| serde_json::json!({}));
+                                    overlay_mesh_workspace(&mut workspace, &overlay_snapshot);
+                                    state.mesh_workspace = Some(workspace);
+                                });
+                            }
+                        }
+                        payload
+                            .get("message")
+                            .and_then(|value| value.as_str())
+                            .map(|message| format!("[fullmag] remesh info - {}", message))
+                    }
                 };
                 apply_python_progress_event(&live_workspace, event);
                 if let Some(line) = terminal_update {
@@ -4489,6 +4665,18 @@ fn execute_manual_interactive_remesh(
                 live_workspace.push_log("error", format!("Remesh failed: {}", error));
                 if let Ok(mut overlay) = build_overlay.lock() {
                     overlay.active_build = None;
+                    overlay.last_build_summary = Some(serde_json::json!({
+                        "kind": "mesh_build_failed",
+                        "phase": overlay.active_phase.clone(),
+                        "attempt_index": overlay.attempt_index,
+                        "algorithm_3d": overlay.algorithm_3d.clone(),
+                        "attempt_status": overlay.attempt_status.clone(),
+                        "attempt_failure_reason": overlay.attempt_failure_reason.clone(),
+                        "next_algorithm_3d": overlay.next_algorithm_3d.clone(),
+                        "last_recoverable_attempt": overlay.last_recoverable_attempt.clone(),
+                        "error": error.to_string(),
+                        "duration_ms": saturating_duration_millis_u64(elapsed),
+                    }));
                     overlay.last_build_error = Some(error.to_string());
                     overlay.active_phase = Some(
                         overlay
@@ -12274,6 +12462,7 @@ mod tests {
             Some("generating 3D mesh"),
             Some(420),
             &[("queued".to_string(), 12)],
+            None,
         );
         let phases = phases
             .as_array()
@@ -12294,6 +12483,118 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn manual_remesh_attempt_survives_indeterminate_heartbeats_and_retry() {
+        let mut overlay = super::CurrentMeshBuildOverlay {
+            active_build: Some(serde_json::json!({"target": "study_domain"})),
+            effective_airbox_target: None,
+            effective_per_object_targets: None,
+            last_build_summary: None,
+            last_build_error: None,
+            active_phase: Some("meshing".to_string()),
+            progress_percent: Some(75),
+            progress_label: Some("legacy heuristic".to_string()),
+            attempt_index: None,
+            algorithm_3d: None,
+            attempt_status: None,
+            attempt_failure_reason: None,
+            next_algorithm_3d: None,
+            progress_kind: None,
+            last_recoverable_attempt: None,
+            phase_started_at: Instant::now(),
+            phase_durations_ms: Vec::new(),
+            failed: false,
+        };
+
+        assert!(super::update_mesh_attempt_overlay_from_payload(
+            &mut overlay,
+            "mesh_build_phase",
+            &serde_json::json!({
+                "phase": "meshing",
+                "attempt_index": 1,
+                "algorithm_3d": "Delaunay",
+                "attempt_status": "active",
+                "progress_label": "Attempt 1 — Delaunay — progress indeterminate",
+            }),
+        ));
+        super::update_mesh_overlay_from_terminal_progress(
+            &mut overlay,
+            super::RemeshTerminalProgress {
+                percent: None,
+                label: "generating 3D mesh",
+            },
+        );
+        assert_eq!(overlay.progress_percent, None);
+        assert_eq!(
+            overlay.progress_label.as_deref(),
+            Some("Attempt 1 — Delaunay — generating 3D mesh")
+        );
+
+        assert!(super::update_mesh_attempt_overlay_from_payload(
+            &mut overlay,
+            "mesh_build_phase",
+            &serde_json::json!({
+                "phase": "meshing",
+                "attempt_index": 1,
+                "algorithm_3d": "Delaunay",
+                "attempt_status": "failed_recoverable",
+                "attempt_failure_reason": "degenerate tetra volume",
+                "next_algorithm_3d": "Frontal",
+                "progress_kind": "indeterminate",
+                "progress_label": "Attempt 1 — Delaunay — failed; retrying",
+            }),
+        ));
+        assert!(super::update_mesh_attempt_overlay_from_payload(
+            &mut overlay,
+            "mesh_build_phase",
+            &serde_json::json!({
+                "phase": "meshing",
+                "attempt_index": 2,
+                "algorithm_3d": "Frontal",
+                "attempt_status": "active",
+                "progress_label": "Attempt 2 — Frontal — progress indeterminate",
+            }),
+        ));
+        super::update_mesh_overlay_from_terminal_progress(
+            &mut overlay,
+            super::RemeshTerminalProgress {
+                percent: None,
+                label: "generating 3D mesh",
+            },
+        );
+
+        assert_eq!(overlay.attempt_index, Some(2));
+        assert_eq!(overlay.algorithm_3d.as_deref(), Some("Frontal"));
+        assert_eq!(overlay.attempt_status.as_deref(), Some("active"));
+        assert_eq!(
+            overlay.last_recoverable_attempt.as_ref().unwrap()["attempt_failure_reason"],
+            "degenerate tetra volume"
+        );
+        assert_eq!(
+            overlay.last_recoverable_attempt.as_ref().unwrap()["next_algorithm_3d"],
+            "Frontal"
+        );
+        assert_eq!(overlay.progress_percent, None);
+        assert_eq!(
+            overlay.progress_label.as_deref(),
+            Some("Attempt 2 — Frontal — generating 3D mesh")
+        );
+        let mut workspace = serde_json::json!({});
+        super::overlay_mesh_workspace(&mut workspace, &overlay);
+        let meshing = workspace["mesh_pipeline_status"]
+            .as_array()
+            .and_then(|phases| phases.iter().find(|phase| phase["id"] == "meshing"))
+            .expect("meshing phase");
+        assert_eq!(meshing["attempt_index"], 2);
+        assert_eq!(meshing["algorithm_3d"], "Frontal");
+        assert_eq!(meshing["attempt_status"], "active");
+        assert_eq!(
+            workspace["active_build"]["last_recoverable_attempt"]["attempt_failure_reason"],
+            "degenerate tetra volume"
+        );
+        assert!(meshing.get("progress_percent").is_none());
     }
 
     #[test]

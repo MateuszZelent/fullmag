@@ -426,6 +426,25 @@ impl SimulationPreparationState {
         Ok(())
     }
 
+    pub fn update_indeterminate_activity(
+        &mut self,
+        stage_id: PreparationStageId,
+        progress_label: impl Into<String>,
+        timestamp_unix_ms: u64,
+    ) -> Result<(), PreparationTransitionError> {
+        self.ensure_active(stage_id)?;
+        let before = self.semantic_snapshot();
+        let clock_adjustment = self.clock_adjustment(stage_id, timestamp_unix_ms);
+        let duration_ms = self.stage_duration_ms();
+        let stage = self.stage_mut(stage_id);
+        Self::record_clock_adjustment(stage, clock_adjustment);
+        stage.progress_percent = None;
+        stage.progress_label = Some(progress_label.into());
+        stage.duration_ms = Some(duration_ms);
+        self.bump_revision_if_semantic_change(before);
+        Ok(())
+    }
+
     pub fn complete_stage(
         &mut self,
         stage_id: PreparationStageId,

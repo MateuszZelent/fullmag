@@ -339,7 +339,7 @@ const PYTHON_PROGRESS_JSON_PREFIX: &str = "json:";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RemeshTerminalProgress {
-    pub percent: u8,
+    pub percent: Option<u8>,
     pub label: &'static str,
 }
 
@@ -496,19 +496,19 @@ pub(crate) fn map_remesh_progress_message(message: &str) -> Option<RemeshTermina
 
     if lower.contains("remesh: accepted") || lower.contains("request queued") {
         return Some(RemeshTerminalProgress {
-            percent: 5,
+            percent: None,
             label: "accepted",
         });
     }
     if lower.contains("importing stl surface") {
         return Some(RemeshTerminalProgress {
-            percent: 15,
+            percent: None,
             label: "importing STL surface",
         });
     }
     if lower.contains("importing cad shapes") || lower.contains("importing cad geometry") {
         return Some(RemeshTerminalProgress {
-            percent: 15,
+            percent: None,
             label: "importing CAD geometry",
         });
     }
@@ -520,7 +520,7 @@ pub(crate) fn map_remesh_progress_message(message: &str) -> Option<RemeshTermina
         || lower.contains("generating cylinder geometry")
     {
         return Some(RemeshTerminalProgress {
-            percent: 15,
+            percent: None,
             label: "building geometry",
         });
     }
@@ -529,7 +529,7 @@ pub(crate) fn map_remesh_progress_message(message: &str) -> Option<RemeshTermina
         || lower.contains("configuring mesh size fields")
     {
         return Some(RemeshTerminalProgress {
-            percent: 30,
+            percent: None,
             label: "configuring mesh fields",
         });
     }
@@ -538,31 +538,31 @@ pub(crate) fn map_remesh_progress_message(message: &str) -> Option<RemeshTermina
         || lower.contains("generating 3d tetrahedral mesh")
     {
         return Some(RemeshTerminalProgress {
-            percent: 75,
+            percent: None,
             label: "generating 3D mesh",
         });
     }
     if lower.contains("optimizing mesh") {
         return Some(RemeshTerminalProgress {
-            percent: 85,
+            percent: None,
             label: "optimizing mesh",
         });
     }
     if lower.contains("extracting quality metrics") {
         return Some(RemeshTerminalProgress {
-            percent: 92,
+            percent: None,
             label: "extracting quality metrics",
         });
     }
     if lower.contains("extracting mesh data") {
         return Some(RemeshTerminalProgress {
-            percent: 97,
+            percent: None,
             label: "extracting mesh data",
         });
     }
     if lower.contains("mesh ready") {
         return Some(RemeshTerminalProgress {
-            percent: 100,
+            percent: Some(100),
             label: "mesh ready",
         });
     }
@@ -573,14 +573,6 @@ pub(crate) fn map_remesh_progress_message(message: &str) -> Option<RemeshTermina
 fn parse_gmsh_heartbeat_progress(message: &str) -> Option<RemeshTerminalProgress> {
     let trimmed = message.trim();
     let lower = trimmed.to_ascii_lowercase();
-    let marker = "meshing in progress ~";
-    let start = lower.find(marker)? + marker.len();
-    let percent_end = trimmed[start..].find('%')?;
-    let percent = trimmed[start..start + percent_end]
-        .trim()
-        .parse::<u8>()
-        .ok()?
-        .min(99);
     let label = if lower.contains("(meshing curves;") {
         "meshing curves"
     } else if lower.contains("(meshing surfaces;") {
@@ -593,29 +585,34 @@ fn parse_gmsh_heartbeat_progress(message: &str) -> Option<RemeshTerminalProgress
         "generating 3D mesh"
     };
 
-    Some(RemeshTerminalProgress { percent, label })
+    if lower.contains("gmsh: meshing active (") || lower.contains("meshing in progress ~") {
+        return Some(RemeshTerminalProgress {
+            percent: None,
+            label,
+        });
+    }
+    None
 }
 
 fn parse_gmsh_inline_progress(message: &str) -> Option<RemeshTerminalProgress> {
     let trimmed = message.trim();
     let start = trimmed.find('[')?;
     let end = trimmed[start..].find("%]")?;
-    let raw_percent = trimmed[start + 1..start + end].trim().parse::<u8>().ok()?;
+    let _raw_percent = trimmed[start + 1..start + end].trim().parse::<u8>().ok()?;
     let lower = trimmed.to_ascii_lowercase();
 
-    let (base, span, label) = if lower.contains("meshing curve") || lower.contains("meshing 1d") {
-        (10u8, 12u8, "meshing curves")
+    let label = if lower.contains("meshing curve") || lower.contains("meshing 1d") {
+        "meshing curves"
     } else if lower.contains("meshing surface") || lower.contains("meshing 2d") {
-        (22u8, 18u8, "meshing surfaces")
+        "meshing surfaces"
     } else if lower.contains("meshing volume") || lower.contains("meshing 3d") {
-        (55u8, 25u8, "meshing 3D volume")
+        "meshing 3D volume"
     } else {
         return None;
     };
 
-    let scaled = base.saturating_add(((u16::from(raw_percent) * u16::from(span)) / 100) as u8);
     Some(RemeshTerminalProgress {
-        percent: scaled.min(99),
+        percent: None,
         label,
     })
 }
@@ -1240,56 +1237,56 @@ mod tests {
                 "Remesh: accepted - mode=manual_remesh, hmax=2.0e-08, order=P1"
             ),
             Some(RemeshTerminalProgress {
-                percent: 5,
+                percent: None,
                 label: "accepted",
             })
         );
         assert_eq!(
             map_remesh_progress_message("Gmsh: importing STL surface"),
             Some(RemeshTerminalProgress {
-                percent: 15,
+                percent: None,
                 label: "importing STL surface",
             })
         );
         assert_eq!(
             map_remesh_progress_message("Gmsh: applying mesh options"),
             Some(RemeshTerminalProgress {
-                percent: 30,
+                percent: None,
                 label: "configuring mesh fields",
             })
         );
         assert_eq!(
             map_remesh_progress_message("Gmsh: generating 3D tetrahedral mesh"),
             Some(RemeshTerminalProgress {
-                percent: 75,
+                percent: None,
                 label: "generating 3D mesh",
             })
         );
         assert_eq!(
             map_remesh_progress_message("Gmsh: extracting quality metrics"),
             Some(RemeshTerminalProgress {
-                percent: 92,
+                percent: None,
                 label: "extracting quality metrics",
             })
         );
         assert_eq!(
             map_remesh_progress_message("Gmsh: mesh ready - 100 nodes, 200 elements"),
             Some(RemeshTerminalProgress {
-                percent: 100,
+                percent: Some(100),
                 label: "mesh ready",
             })
         );
         assert_eq!(
             map_remesh_progress_message("Gmsh: [ 40%] Meshing surface 3 (Plane, Frontal-Delaunay)"),
             Some(RemeshTerminalProgress {
-                percent: 29,
+                percent: None,
                 label: "meshing surfaces",
             })
         );
         assert_eq!(
             map_remesh_progress_message("Gmsh: [ 70%] Meshing curve 9 (Line)"),
             Some(RemeshTerminalProgress {
-                percent: 18,
+                percent: None,
                 label: "meshing curves",
             })
         );
@@ -1298,7 +1295,16 @@ mod tests {
                 "Gmsh: meshing in progress ~75% (generating 3D mesh; 85.7s elapsed; last: Tetrahedrizing 737 nodes...)"
             ),
             Some(RemeshTerminalProgress {
-                percent: 75,
+                percent: None,
+                label: "generating 3D mesh",
+            })
+        );
+        assert_eq!(
+            map_remesh_progress_message(
+                "Gmsh: meshing active (generating 3D mesh; 85.7s elapsed; no detailed backend update for 12.3s)"
+            ),
+            Some(RemeshTerminalProgress {
+                percent: None,
                 label: "generating 3D mesh",
             })
         );

@@ -844,6 +844,14 @@ def _conformal_occ_degenerate_retry(
     return None
 
 
+def _conformal_occ_algorithm_name(algorithm_3d: int) -> str:
+    return {
+        ALGO_3D_DELAUNAY: "Delaunay",
+        ALGO_3D_FRONTAL: "Frontal",
+        ALGO_3D_HXT: "HXT",
+    }.get(int(algorithm_3d), f"algorithm_3d={int(algorithm_3d)}")
+
+
 def _surface_trimesh_kwargs_from_mesh_options(opts: MeshOptions) -> dict[str, object]:
     return {
         "through_thickness_elements": opts.through_thickness_elements,
@@ -2384,7 +2392,34 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             }
                         )
                         attempted_algorithms = {int(mesh_options.algorithm_3d)}
+                        attempt_index = 0
                         while True:
+                            attempt_index += 1
+                            current_algorithm_name = _conformal_occ_algorithm_name(
+                                int(mesh_options.algorithm_3d)
+                            )
+                            emit_progress(
+                                f"Conformal OCC mesh attempt {attempt_index} started with "
+                                f"{current_algorithm_name} (progress is indeterminate)"
+                            )
+                            emit_progress_event(
+                                {
+                                    "kind": "mesh_build_phase",
+                                    "phase": "meshing",
+                                    "attempt_index": attempt_index,
+                                    "algorithm_3d": current_algorithm_name,
+                                    "attempt_status": "active",
+                                    "progress_kind": "indeterminate",
+                                    "progress_label": (
+                                        f"Attempt {attempt_index} — {current_algorithm_name} — "
+                                        "progress indeterminate"
+                                    ),
+                                    "message": (
+                                        f"Conformal OCC mesh attempt {attempt_index} started "
+                                        f"with {current_algorithm_name}"
+                                    ),
+                                }
+                            )
                             result = generate_shared_domain_mesh_via_occ(
                                 geometries,
                                 hmax=effective_hmax,
@@ -2396,6 +2431,24 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             try:
                                 result.mesh.validate_strict(
                                     require_positive_orientation=True
+                                )
+                                emit_progress_event(
+                                    {
+                                        "kind": "mesh_build_phase",
+                                        "phase": "meshing",
+                                        "attempt_index": attempt_index,
+                                        "algorithm_3d": current_algorithm_name,
+                                        "attempt_status": "completed",
+                                        "progress_kind": "indeterminate",
+                                        "progress_label": (
+                                            f"Attempt {attempt_index} — {current_algorithm_name} — "
+                                            "completed"
+                                        ),
+                                        "message": (
+                                            f"Conformal OCC mesh attempt {attempt_index} completed "
+                                            f"with {current_algorithm_name}"
+                                        ),
+                                    }
                                 )
                                 break
                             except ValueError as exc:
@@ -2409,10 +2462,38 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                                 )
                                 if retry is None:
                                     raise
-                                retry_algorithm, retry_message, retry_marker = retry
+                                retry_algorithm, _retry_message, retry_marker = retry
                                 if retry_algorithm in attempted_algorithms:
                                     raise
-                                emit_progress(retry_message)
+                                emit_progress_event(
+                                    {
+                                        "kind": "mesh_build_phase",
+                                        "phase": "meshing",
+                                        "attempt_index": attempt_index,
+                                        "algorithm_3d": current_algorithm_name,
+                                        "attempt_status": "failed_recoverable",
+                                        "attempt_failure_reason": str(exc),
+                                        "next_algorithm_3d": _conformal_occ_algorithm_name(
+                                            retry_algorithm
+                                        ),
+                                        "progress_kind": "indeterminate",
+                                        "progress_label": (
+                                            f"Attempt {attempt_index} — {current_algorithm_name} — "
+                                            "failed; retrying"
+                                        ),
+                                        "message": (
+                                            f"Conformal OCC mesh attempt {attempt_index} failed "
+                                            f"with {current_algorithm_name}; retrying with "
+                                            f"{_conformal_occ_algorithm_name(retry_algorithm)}"
+                                        ),
+                                    }
+                                )
+                                emit_progress(
+                                    f"Conformal OCC mesh attempt {attempt_index} failed "
+                                    f"({current_algorithm_name}: {exc}); "
+                                    f"starting attempt {attempt_index + 1} with "
+                                    f"{_conformal_occ_algorithm_name(retry_algorithm)}"
+                                )
                                 fallbacks_triggered.append(retry_marker)
                                 attempted_algorithms.add(retry_algorithm)
                                 mesh_options = _dc_replace(

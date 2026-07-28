@@ -2313,6 +2313,47 @@ mod tests {
     }
 
     #[test]
+    fn indeterminate_mesh_heartbeat_bumps_only_build_revision() {
+        let mut current = test_current_snapshot();
+        apply_mesh_workspace_update(
+            &mut current,
+            json!({
+                "mesh_summary": { "nodes": 4, "elements": 2 },
+                "mesh_pipeline_status": [{
+                    "id": "meshing",
+                    "status": "active",
+                    "duration_ms": 10_000,
+                    "attempt_index": 2,
+                    "algorithm_3d": "HXT",
+                    "attempt_status": "active",
+                    "progress_label": "Attempt 2 — HXT — progress indeterminate"
+                }]
+            }),
+        );
+        let mesh_revision = current.mesh_revision;
+        let mesh_build_revision = current.mesh_build_revision;
+
+        apply_mesh_workspace_update(
+            &mut current,
+            json!({
+                "mesh_summary": { "nodes": 4, "elements": 2 },
+                "mesh_pipeline_status": [{
+                    "id": "meshing",
+                    "status": "active",
+                    "duration_ms": 25_000,
+                    "attempt_index": 2,
+                    "algorithm_3d": "HXT",
+                    "attempt_status": "active",
+                    "progress_label": "Attempt 2 — HXT — progress indeterminate"
+                }]
+            }),
+        );
+
+        assert_eq!(current.mesh_revision, mesh_revision);
+        assert!(current.mesh_build_revision > mesh_build_revision);
+    }
+
+    #[test]
     fn scalar_frame_revisions_track_latest_replacements_not_stale_rows() {
         let mut current = default_current_live_state(&CurrentLiveSnapshotRequest {
             session_id: "test-session".to_string(),
