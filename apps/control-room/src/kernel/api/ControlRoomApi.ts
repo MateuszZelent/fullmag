@@ -32,6 +32,7 @@ import {
   API_CONTRACT_VERSION_HEADER,
   DATA_FIELDS_PATH,
   DATA_ARTIFACT_PATH,
+  DATA_ARTIFACTS_PATH,
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
@@ -227,6 +228,7 @@ import type {
   FrequencyDomainManifestResource,
   FrequencyDomainJsonArtifactResource,
   FrequencyDomainTextArtifactResource,
+  ArtifactResource,
   FrequencyDomainFieldResource,
   FrequencyDomainSweepProgressResource,
   JsonValue,
@@ -907,6 +909,8 @@ export class ControlRoomApi {
 
   readonly data = {
     artifacts: {
+      list: (options?: RequestOptions) =>
+        this.requestJson<ArtifactResource[]>(DATA_ARTIFACTS_PATH, options),
       bytes: (artifactRef: string, options?: BinaryRequestOptions) =>
         this.requestBinaryBytes(
           DATA_ARTIFACT_PATH,

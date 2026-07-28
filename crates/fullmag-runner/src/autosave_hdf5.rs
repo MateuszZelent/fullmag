@@ -1,4 +1,6 @@
-use crate::autosave_storage::{AutosaveTargetWriter, ContinuousIndexEntry, StageManifest};
+use crate::autosave_storage::{
+    update_artifact_manifest, AutosaveTargetWriter, ContinuousIndexEntry, StageManifest,
+};
 use fullmag_ir::AutosaveLayoutIR;
 use hdf5::{File, Group};
 use std::collections::BTreeMap;
@@ -34,6 +36,7 @@ impl AutosaveTargetWriter for Hdf5AutosaveWriter {
         if self.current.is_some() {
             return Err("HDF5 autosave already has an active stage".into());
         }
+        update_artifact_manifest(&self.root, manifest)?;
         self.current = Some(BufferedStage {
             manifest: manifest.clone(),
             table_rows: Vec::new(),
@@ -120,7 +123,8 @@ impl AutosaveTargetWriter for Hdf5AutosaveWriter {
             let name = format!("stage_{:04}_index_json", manifest.stage_index);
             write_json_bytes(&continuous, &name, &current.index)?;
         }
-        file.flush().map_err(|error| error.to_string())
+        file.flush().map_err(|error| error.to_string())?;
+        update_artifact_manifest(&self.root, manifest)
     }
 }
 

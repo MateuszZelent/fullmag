@@ -157,6 +157,41 @@
         ],
         "type": "object"
       },
+      "ArtifactResource": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "region_owned_provenance": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RegionOwnedArtifactProvenance"
+              }
+            ]
+          },
+          "stage_autosave": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StageAutosaveArtifactMetadata"
+              }
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "kind"
+        ],
+        "type": "object"
+      },
       "AuthoringTransactionRequest": {
         "oneOf": [
           {
@@ -19148,6 +19183,107 @@
         ],
         "type": "object"
       },
+      "StageAutosaveArtifactMetadata": {
+        "properties": {
+          "download_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "format": {
+            "type": "string"
+          },
+          "layout": {
+            "type": "string"
+          },
+          "resource_path": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/StageAutosaveArtifactStageMetadata"
+            },
+            "type": "array"
+          },
+          "target": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "target",
+          "format",
+          "layout",
+          "resource_path",
+          "stages"
+        ],
+        "type": "object"
+      },
+      "StageAutosaveArtifactStageMetadata": {
+        "properties": {
+          "complete": {
+            "type": "boolean"
+          },
+          "download_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "field_quantities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "field_sample_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resource_path": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "stage_index": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "table_quantities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "table_sample_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "stage_id",
+          "stage_index",
+          "resource_path",
+          "status",
+          "complete",
+          "table_quantities",
+          "field_quantities",
+          "table_sample_count",
+          "field_sample_count"
+        ],
+        "type": "object"
+      },
       "StageAutosaveFormatResource": {
         "enum": [
           "zarr",
@@ -24347,7 +24483,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/ArtifactEntry"
+                    "$ref": "#/components/schemas/ArtifactResource"
                   },
                   "type": "array"
                 }

@@ -1,5 +1,7 @@
 use fullmag_ir::{AutosaveFormatIR, AutosaveLayoutIR};
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -21,6 +23,57 @@ pub struct StageManifest {
     pub complete: bool,
     pub table_sample_count: u64,
     pub field_sample_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AutosaveArtifactManifest {
+    pub schema_version: String,
+    pub target: String,
+    pub format: AutosaveFormatIR,
+    pub layout: AutosaveLayoutIR,
+    pub stages: Vec<StageManifest>,
+}
+
+pub fn update_artifact_manifest(root: &Path, stage: &StageManifest) -> Result<(), String> {
+    fs::create_dir_all(root).map_err(|error| error.to_string())?;
+    let path = root.join(format!("{}.autosave.json", stage.target));
+    let mut manifest = if path.exists() {
+        serde_json::from_slice::<AutosaveArtifactManifest>(
+            &fs::read(&path).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?
+    } else {
+        AutosaveArtifactManifest {
+            schema_version: "fullmag.stage_autosave.artifact.v1".into(),
+            target: stage.target.clone(),
+            format: stage.format,
+            layout: stage.layout,
+            stages: Vec::new(),
+        }
+    };
+    if manifest.format != stage.format || manifest.layout != stage.layout {
+        return Err(format!(
+            "autosave target '{}' artifact metadata conflicts with its existing format or layout",
+            stage.target
+        ));
+    }
+    if let Some(existing) = manifest
+        .stages
+        .iter_mut()
+        .find(|existing| existing.stage_index == stage.stage_index)
+    {
+        *existing = stage.clone();
+    } else {
+        manifest.stages.push(stage.clone());
+        manifest.stages.sort_by_key(|stage| stage.stage_index);
+    }
+    let temporary = root.join(format!(".{}.autosave.json.tmp", stage.target));
+    fs::write(
+        &temporary,
+        serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    fs::rename(temporary, path).map_err(|error| error.to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -1,4 +1,6 @@
-use crate::autosave_storage::{AutosaveTargetWriter, ContinuousIndexEntry, StageManifest};
+use crate::autosave_storage::{
+    update_artifact_manifest, AutosaveTargetWriter, ContinuousIndexEntry, StageManifest,
+};
 use fullmag_ir::AutosaveLayoutIR;
 use serde_json::json;
 use std::fs::{self, OpenOptions};
@@ -32,6 +34,7 @@ impl ZarrAutosaveWriter {
 
 impl AutosaveTargetWriter for ZarrAutosaveWriter {
     fn begin_stage(&mut self, manifest: &StageManifest) -> Result<(), String> {
+        update_artifact_manifest(&self.root, manifest)?;
         let store = self.store_path(&manifest.target);
         initialize_group(&store)?;
         write_json(
@@ -132,7 +135,8 @@ impl AutosaveTargetWriter for ZarrAutosaveWriter {
             .current
             .take()
             .ok_or_else(|| "Zarr autosave has no active stage".to_string())?;
-        write_json(&current.path.join("manifest.json"), manifest)
+        write_json(&current.path.join("manifest.json"), manifest)?;
+        update_artifact_manifest(&self.root, manifest)
     }
 }
 

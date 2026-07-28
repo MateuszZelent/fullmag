@@ -310,6 +310,52 @@ pub(crate) struct ArtifactEntry {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub(crate) struct ArtifactResource {
+    pub path: String,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_autosave: Option<StageAutosaveArtifactMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_owned_provenance: Option<RegionOwnedArtifactProvenance>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub(crate) struct StageAutosaveArtifactMetadata {
+    pub schema_version: String,
+    pub target: String,
+    pub format: String,
+    pub layout: String,
+    pub resource_path: String,
+    pub download_path: Option<String>,
+    pub stages: Vec<StageAutosaveArtifactStageMetadata>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub(crate) struct StageAutosaveArtifactStageMetadata {
+    pub stage_id: String,
+    pub stage_index: u64,
+    pub resource_path: String,
+    pub download_path: Option<String>,
+    pub status: String,
+    pub complete: bool,
+    pub table_quantities: Vec<String>,
+    pub field_quantities: Vec<String>,
+    pub table_sample_count: u64,
+    pub field_sample_count: u64,
+}
+
+impl From<ArtifactEntry> for ArtifactResource {
+    fn from(entry: ArtifactEntry) -> Self {
+        Self {
+            path: entry.path,
+            kind: entry.kind,
+            stage_autosave: None,
+            region_owned_provenance: entry.region_owned_provenance,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 pub(crate) struct RegionOwnedArtifactProvenance {
     pub scene_revision: u64,
     pub region_topology_revision: u64,

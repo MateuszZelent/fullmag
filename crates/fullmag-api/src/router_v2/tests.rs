@@ -19746,6 +19746,71 @@ async fn artifacts_list_returns_304_when_etag_matches() {
 }
 
 #[tokio::test]
+async fn artifacts_list_exposes_stage_autosave_progress_completion_and_failure() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    fs::write(
+        artifact_dir.join("main.autosave.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "fullmag.stage_autosave.artifact.v1",
+            "target": "main",
+            "format": "zarr",
+            "layout": "continuous",
+            "stages": [
+                {"schema_version":"stage_autosave.v1","target":"main","stage_id":"done","stage_index":0,"layout":"continuous","format":"zarr","table_quantities":["step","mx"],"field_quantities":[],"complete":true,"table_sample_count":3,"field_sample_count":0},
+                {"schema_version":"stage_autosave.v1","target":"main","stage_id":"active","stage_index":1,"layout":"continuous","format":"zarr","table_quantities":["step","mx"],"field_quantities":["m"],"complete":false,"table_sample_count":2,"field_sample_count":1},
+                {"schema_version":"stage_autosave.v1","target":"main","stage_id":"broken","stage_index":2,"layout":"continuous","format":"zarr","table_quantities":["step","mx"],"field_quantities":[],"complete":false,"table_sample_count":1,"field_sample_count":0}
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.stage_execution = Some(
+            serde_json::from_value(serde_json::json!({
+                "total_stages": 3,
+                "stages": [
+                    {"stage_id":"done","status":"completed"},
+                    {"stage_id":"active","status":"running"},
+                    {"stage_id":"broken","status":"failed"}
+                ],
+                "runtime_state": "failed"
+            }))
+            .unwrap(),
+        );
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/artifacts")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let autosave = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|artifact| artifact["kind"] == "stage_autosave")
+        .expect("stage autosave artifact metadata");
+    assert_eq!(
+        autosave["stage_autosave"]["schema_version"],
+        "fullmag.stage_autosave.artifact.v1"
+    );
+    assert_eq!(autosave["stage_autosave"]["resource_path"], "main.zarr");
+    assert_eq!(
+        autosave["stage_autosave"]["stages"][0]["status"],
+        "completed"
+    );
+    assert_eq!(autosave["stage_autosave"]["stages"][1]["status"], "running");
+    assert_eq!(autosave["stage_autosave"]["stages"][2]["status"], "failed");
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
 async fn artifact_download_accepts_encoded_relative_paths() {
     let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
     let field_state_dir = artifact_dir.join("field-states");

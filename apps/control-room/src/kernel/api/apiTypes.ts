@@ -176,6 +176,7 @@ export type FrequencyDomainJsonArtifactResource =
   components["schemas"]["FrequencyDomainJsonArtifactResource"];
 export type FrequencyDomainTextArtifactResource =
   components["schemas"]["FrequencyDomainTextArtifactResource"];
+export type ArtifactResource = components["schemas"]["ArtifactResource"];
 export type FrequencyDomainKPathMetadataResource =
   components["schemas"]["FrequencyDomainKPathMetadataResource"];
 export type FrequencyDomainKPathSamplingResource =

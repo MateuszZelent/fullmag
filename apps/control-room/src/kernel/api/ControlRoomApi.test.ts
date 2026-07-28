@@ -3112,6 +3112,48 @@ describe("ControlRoomApi", () => {
     await expect(api.meshing.sharedDomainManifest()).resolves.toBeNull();
   });
 
+  it("loads stage autosave metadata through the artifact resource facade", async () => {
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrl = String(url);
+        return new Response(JSON.stringify([{
+          kind: "stage_autosave",
+          path: "main.autosave.json",
+          stage_autosave: {
+            download_path: null,
+            format: "zarr",
+            layout: "continuous",
+            resource_path: "main.zarr",
+            schema_version: "fullmag.stage_autosave.artifact.v1",
+            stages: [{
+              complete: false,
+              download_path: null,
+              field_quantities: ["m"],
+              field_sample_count: 1,
+              stage_id: "relax",
+              stage_index: 0,
+              resource_path: "main.zarr",
+              status: "running",
+              table_quantities: ["step", "mx"],
+              table_sample_count: 2,
+            }],
+            target: "main",
+          },
+        }]), { headers: contractHeaders });
+      },
+    });
+
+    const artifacts = await api.data.artifacts.list();
+    expect(observedUrl).toBe("http://127.0.0.1:8765/v2/sessions/current/data/artifacts");
+    expect(artifacts[0].stage_autosave?.stages[0]).toMatchObject({
+      stage_id: "relax",
+      status: "running",
+      table_sample_count: 2,
+    });
+  });
+
   it("propagates aborted binary resource requests", async () => {
     const controller = new AbortController();
     const abortError = new DOMException("aborted", "AbortError");

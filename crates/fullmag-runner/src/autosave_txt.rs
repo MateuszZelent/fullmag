@@ -1,5 +1,6 @@
 use crate::autosave_storage::{
-    AutosaveTargetWriter, ContinuousIndexEntry, StageManifest, StageSampleCoordinate,
+    update_artifact_manifest, AutosaveTargetWriter, ContinuousIndexEntry, StageManifest,
+    StageSampleCoordinate,
 };
 use fullmag_ir::AutosaveLayoutIR;
 use std::fs::{self, File, OpenOptions};
@@ -36,6 +37,7 @@ impl AutosaveTargetWriter for TxtAutosaveWriter {
             return Err("TXT stage autosave supports scalar tables only".into());
         }
         fs::create_dir_all(&self.root).map_err(|error| error.to_string())?;
+        update_artifact_manifest(&self.root, manifest)?;
         let file_name = match manifest.layout {
             AutosaveLayoutIR::Continuous => format!("{}.txt", manifest.target),
             AutosaveLayoutIR::Separate => {
@@ -121,7 +123,7 @@ impl AutosaveTargetWriter for TxtAutosaveWriter {
         Err("TXT stage autosave does not support field samples".into())
     }
 
-    fn finish_stage(&mut self, _: &StageManifest) -> Result<(), String> {
+    fn finish_stage(&mut self, manifest: &StageManifest) -> Result<(), String> {
         let mut current = self
             .current
             .take()
@@ -131,7 +133,8 @@ impl AutosaveTargetWriter for TxtAutosaveWriter {
             .writer
             .get_ref()
             .sync_data()
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        update_artifact_manifest(&self.root, manifest)
     }
 }
 

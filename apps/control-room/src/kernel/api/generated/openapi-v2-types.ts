@@ -3160,6 +3160,12 @@ export interface components {
             path: string;
             region_owned_provenance?: null | components["schemas"]["RegionOwnedArtifactProvenance"];
         };
+        ArtifactResource: {
+            kind: string;
+            path: string;
+            region_owned_provenance?: null | components["schemas"]["RegionOwnedArtifactProvenance"];
+            stage_autosave?: null | components["schemas"]["StageAutosaveArtifactMetadata"];
+        };
         AuthoringTransactionRequest: {
             /** @enum {string} */
             kind: "replace_scene";
@@ -7946,6 +7952,30 @@ export interface components {
             /** Format: double */
             power: number;
         };
+        StageAutosaveArtifactMetadata: {
+            download_path?: string | null;
+            format: string;
+            layout: string;
+            resource_path: string;
+            schema_version: string;
+            stages: components["schemas"]["StageAutosaveArtifactStageMetadata"][];
+            target: string;
+        };
+        StageAutosaveArtifactStageMetadata: {
+            complete: boolean;
+            download_path?: string | null;
+            field_quantities: string[];
+            /** Format: int64 */
+            field_sample_count: number;
+            resource_path: string;
+            stage_id: string;
+            /** Format: int64 */
+            stage_index: number;
+            status: string;
+            table_quantities: string[];
+            /** Format: int64 */
+            table_sample_count: number;
+        };
         /** @enum {string} */
         StageAutosaveFormatResource: "zarr" | "hdf5" | "txt";
         /** @enum {string} */
@@ -10075,7 +10105,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ArtifactEntry"][];
+                    "application/json": components["schemas"]["ArtifactResource"][];
                 };
             };
             /** @description Artifact list not modified for the supplied ETag */

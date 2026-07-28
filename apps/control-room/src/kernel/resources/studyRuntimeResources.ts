@@ -31,6 +31,7 @@ import {
   ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
   ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH,
   DATA_FIELD_META_PATH,
+  DATA_ARTIFACTS_PATH,
   DATA_FIELDS_PATH,
   DATA_SCALARS_PATH,
   DATA_TABLE_COLUMNS_PATH,
@@ -69,6 +70,7 @@ import {
 import { ControlRoomApiError } from "../api/ControlRoomApi";
 import type {
   BinaryResourceResult,
+  ArtifactResource,
   CommandQueueStatusResource,
   CommandDetailResource,
   CheckpointEntry,
@@ -616,6 +618,30 @@ export function useStageExecutionResource({
     load,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey: SIMULATION_STAGES_EXECUTION_PATH,
+  });
+}
+
+export function useArtifactsResource({
+  enabled = true,
+}: RuntimeResourceOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) => api.data.artifacts.list({ signal }),
+    [api],
+  );
+
+  return useResource<ArtifactResource[]>({
+    enabled,
+    load,
+    resolveRevision: (artifacts) => artifacts
+      .map((artifact) => {
+        const autosave = artifact.stage_autosave;
+        return autosave
+          ? `${artifact.path}:${autosave.stages.map((stage) => `${stage.stage_id}:${stage.status}:${stage.table_sample_count}:${stage.field_sample_count}`).join(",")}`
+          : `${artifact.path}:${artifact.kind}`;
+      })
+      .join("|"),
+    resourceKey: DATA_ARTIFACTS_PATH,
   });
 }
 
