@@ -7,7 +7,7 @@ from pathlib import Path
 from types import ModuleType
 from uuid import uuid4
 
-from fullmag.model import Problem, Relaxation, TimeEvolution
+from fullmag.model import Problem, Relaxation, StageAutosave, TableAutosave, TimeEvolution
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +18,8 @@ class LoadedStage:
     action: dict[str, object] | None = None
     stage_id: str | None = None
     output_every_seconds: float | None = None
+    table_autosave: TableAutosave | None = None
+    autosave: StageAutosave | None = None
 
     def to_ir(
         self,
@@ -243,6 +245,8 @@ def load_problem_from_script(
                     action=stage.action,
                     stage_id=stage.stage_id,
                     output_every_seconds=stage.output_every_seconds,
+                    table_autosave=stage.table_autosave,
+                    autosave=stage.autosave,
                 )
                 for stage in captured_stages
             )
@@ -267,6 +271,8 @@ def load_problem_from_script(
                     action=stage.action,
                     stage_id=stage.stage_id,
                     output_every_seconds=stage.output_every_seconds,
+                    table_autosave=stage.table_autosave,
+                    autosave=stage.autosave,
                 )
                 for stage in declared_stages
             )

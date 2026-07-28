@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import textwrap
 import unittest
+import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -29,6 +30,154 @@ body.m = fm.texture.uniform(1, 0, 0)
 
 
 class StudyStageIdTests(unittest.TestCase):
+    def test_relax_and_run_stage_handles_own_autosave_without_leaking(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="projected_gradient_bb",
+    max_steps=20,
+).autosave(fm.StageAutosave(
+    target="main",
+    table=fm.TableAutosave(every_steps=10, quantities=["step", "mx"]),
+    fields=[fm.FieldAutosave("m", every_steps=20)],
+))
+study.stages.add_run(stage_id="run", until=4e-12).autosave(fm.StageAutosave(
+    target="main",
+    table=fm.TableAutosave(t_sampl=1e-12, quantities=["step", "t", "mx"]),
+    fields=[fm.FieldAutosave("m", every=2e-12)],
+))
+study.stages.add_run(stage_id="plain", until=8e-12)
+"""
+        )
+
+        self.assertEqual(loaded.stages[0].autosave.target, "main")
+        self.assertEqual(loaded.stages[1].autosave.target, "main")
+        self.assertIsNone(loaded.stages[2].autosave)
+        self.assertNotIn(
+            "stage_autosave",
+            loaded.pipeline_base_problem().study.to_ir()["sampling"],
+        )
+
+    def test_stage_handle_rejects_duplicate_autosave(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "run stage 'run' already has autosave configured",
+        ):
+            _load(
+                _PREAMBLE
+                + """
+run = study.stages.add_run(stage_id="run", until=4e-12)
+run.autosave(fm.StageAutosave(table=fm.TableAutosave(t_sampl=1e-12)))
+run.autosave(fm.StageAutosave(table=fm.TableAutosave(t_sampl=2e-12)))
+"""
+            )
+
+    def test_stage_handles_reject_wrong_clock_kind(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "relax stage autosave requires accepted-step cadence",
+        ):
+            _load(
+                _PREAMBLE
+                + """
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="projected_gradient_bb",
+    max_steps=20,
+).autosave(
+    fm.StageAutosave(table=fm.TableAutosave(t_sampl=1e-12))
+)
+"""
+            )
+        with self.assertRaisesRegex(
+            ValueError,
+            "run stage autosave requires physical-time cadence",
+        ):
+            _load(
+                _PREAMBLE
+                + """
+study.stages.add_run(stage_id="run", until=4e-12).autosave(
+    fm.StageAutosave(fields=[fm.FieldAutosave("m", every_steps=10)])
+)
+"""
+            )
+
+    def test_relax_stage_handle_owns_table_autosave_without_leaking(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="projected_gradient_bb",
+    max_steps=20,
+).tableautosave(every_steps=10, quantities=["step", "mx"])
+study.stages.add_run(stage_id="after", until=4e-12)
+"""
+        )
+
+        pipeline = loaded.study_pipeline_document()
+        self.assertIsNotNone(pipeline)
+        relax_payload = pipeline["nodes"][0]["payload"]
+        self.assertEqual(
+            relax_payload["table_autosave"],
+            {
+                "kind": "table_autosave",
+                "table_id": "default",
+                "every_steps": 10,
+                "quantities": ["step", "mx"],
+            },
+        )
+        self.assertNotIn("table_autosave", pipeline["nodes"][1]["payload"])
+        base_ir = loaded.pipeline_base_problem().study.to_ir()
+        self.assertNotIn("table_autosave", base_ir["sampling"])
+
+    def test_relax_stage_handle_rejects_duplicate_table_autosave(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "relax stage 'relax' already has table autosave configured",
+        ):
+            _load(
+                _PREAMBLE
+                + """
+relax = study.stages.add_relax(
+    stage_id="relax",
+    algorithm="projected_gradient_bb",
+    max_steps=20,
+)
+relax.tableautosave(every_steps=10)
+relax.tableautosave(every_steps=20)
+"""
+            )
+
+    def test_persistent_table_autosave_warns_about_stage_local_migration(self) -> None:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            loaded = _load(
+                _PREAMBLE
+                + """
+study.stages.tableautosave(every_steps=10)
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="projected_gradient_bb",
+    max_steps=20,
+)
+"""
+            )
+
+        self.assertTrue(
+            any(
+                issubclass(item.category, DeprecationWarning)
+                and "add_relax(...).tableautosave(...)" in str(item.message)
+                for item in caught
+            )
+        )
+        self.assertEqual(
+            loaded.study_pipeline_document()["nodes"][0]["stage_kind"],
+            "table_autosave",
+        )
+
     def test_build_entrypoint_run_pipeline_contains_only_run_owned_controls(self) -> None:
         loaded = _load(
             """
