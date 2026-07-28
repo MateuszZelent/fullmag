@@ -152,6 +152,42 @@ use topology-aware maps, basis values, reference gradients, quadrature, and
 Jacobian transforms. Treating the first four nodes of a prism or pyramid as a
 tetrahedron is invalid.
 
+#### 3.2.1 Nodal volume weights and material averaging
+
+For the qualified P1 mixed path, nodal volume weights are the row sums of the
+MFEM scalar mass matrix assembled only over magnetic volume attributes:
+
+```text
+M_ij = integral_Omega_m N_i N_j dV
+w_i  = sum_j M_ij = integral_Omega_m N_i dV
+```
+
+The runtime must assemble this operator with the geometry-specific MFEM basis,
+quadrature, and Jacobian for each cell family. It must not substitute
+`cell_volume / local_node_count`, `volume / 4`, or a tetrahedral formula for a
+wedge or pyramid. Partition of unity gives the required conservation check:
+
+```text
+sum_i w_i = volume(Omega_m)
+```
+
+The canonical runtime weight vector is the MFEM mass-row-sum result. Any
+compatibility view of nodal volumes must be synchronized from that vector after
+assembly and cannot remain an independent integration rule.
+
+For uniform or nodal-P1 saturation magnetization, reported average reduced
+magnetization keeps the existing lumped material/volume policy:
+
+```text
+<m> = sum_i Ms_i w_i m_i / sum_i Ms_i w_i
+```
+
+The first mixed qualification uses uniform `Ms`, for which this reduction is
+exact for P1 `m`. Sharp element-DG0 material coefficients retain their existing
+exact tetrahedral element integration and remain rejected for any mesh
+containing `prism6`, `pyramid5`, or `hex8`; they must never be projected onto
+shared nodes as an implicit fallback.
+
 The magnetic vector field and material coefficients are defined only on
 magnetic prisms. Scalar Poisson potential spans magnetic prisms plus air
 pyramids/tetrahedra. Magnetic masking, integration, field recovery, and
