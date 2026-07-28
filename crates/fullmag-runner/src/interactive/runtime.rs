@@ -231,7 +231,8 @@ impl InteractiveRuntime {
             return Ok(result);
         }
 
-        let mut artifact_pipeline = ArtifactPipeline::start(
+        let mut artifact_pipeline = ArtifactPipeline::start_for_problem(
+            problem,
             output_dir.to_path_buf(),
             artifacts::build_field_context(problem, plan),
             crate::artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
