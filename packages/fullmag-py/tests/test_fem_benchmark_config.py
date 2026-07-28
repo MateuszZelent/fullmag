@@ -3816,6 +3816,108 @@ def test_cpu_gpu_consistency_summary_reports_deltas_and_timing(capsys):
     assert '"pair_count": 1' in output
 
 
+def test_cpu_gpu_consistency_pairs_only_matching_requested_demag_policies():
+    bench = load_analysis_benchmark_module()
+    rows = []
+    for preconditioner in ("OMIT", "AMG", "JACOBI"):
+        for backend in ("fem_cpu", "fem_gpu"):
+            effective_preconditioner = preconditioner
+            if preconditioner == "OMIT":
+                effective_preconditioner = "AMG" if backend == "fem_cpu" else "JACOBI"
+            rows.append(
+                {
+                    "backend": backend,
+                    "status": "ok",
+                    "solver_mesh_signature": "mesh-a",
+                    "scenario": "box500_airbox_exchange_demag",
+                    "integrator": "heun",
+                    "relaxation_algorithm": "llg_overdamped",
+                    "timestep_policy": "fixed",
+                    "dt_s": 1e-13,
+                    "steps": 4,
+                    "reported_precision": "double",
+                    "requested_demag_solver": "CG",
+                    "requested_demag_preconditioner": preconditioner,
+                    "demag_linear_solver": "CG",
+                    "demag_preconditioner": effective_preconditioner,
+                    "executed_steps": 4,
+                    "final_e_total_j": 1.0,
+                    "final_torque_apm": 1.0,
+                    "final_torque_t": 1.0,
+                    "execution_engine": (
+                        "fem_cpu_native" if backend == "fem_cpu" else "fem_native_gpu"
+                    ),
+                    "fem_execution_mode": (
+                        "cpu_native"
+                        if backend == "fem_cpu"
+                        else "all_in_gpu_legacy_sparse"
+                    ),
+                    "mfem_device": "cpu" if backend == "fem_cpu" else "cuda",
+                    "uses_cuda_kernels": backend == "fem_gpu",
+                }
+            )
+
+    summary = bench.cpu_gpu_consistency_summary(rows)
+
+    assert summary["pair_count"] == 3
+    assert {
+        pair["requested_demag_preconditioner"] for pair in summary["pairs"]
+    } == {"OMIT", "AMG", "JACOBI"}
+    omit_pair = next(
+        pair
+        for pair in summary["pairs"]
+        if pair["requested_demag_preconditioner"] == "OMIT"
+    )
+    assert omit_pair["cpu_demag_preconditioner"] == "AMG"
+    assert omit_pair["gpu_demag_preconditioner"] == "JACOBI"
+
+
+def test_cpu_gpu_consistency_falls_back_to_matching_effective_demag_policy():
+    bench = load_analysis_benchmark_module()
+    rows = []
+    for backend, preconditioners in (
+        ("fem_cpu", ("AMG", "JACOBI")),
+        ("fem_gpu", ("AMG",)),
+    ):
+        for preconditioner in preconditioners:
+            rows.append(
+                {
+                    "backend": backend,
+                    "status": "ok",
+                    "solver_mesh_signature": "mesh-a",
+                    "scenario": "box500_airbox_exchange_demag",
+                    "integrator": "heun",
+                    "relaxation_algorithm": "llg_overdamped",
+                    "timestep_policy": "fixed",
+                    "dt_s": 1e-13,
+                    "steps": 4,
+                    "reported_precision": "double",
+                    "demag_linear_solver": "CG",
+                    "demag_preconditioner": preconditioner,
+                    "executed_steps": 4,
+                    "final_e_total_j": 1.0,
+                    "final_torque_apm": 1.0,
+                    "final_torque_t": 1.0,
+                    "execution_engine": (
+                        "fem_cpu_native" if backend == "fem_cpu" else "fem_native_gpu"
+                    ),
+                    "fem_execution_mode": (
+                        "cpu_native"
+                        if backend == "fem_cpu"
+                        else "all_in_gpu_legacy_sparse"
+                    ),
+                    "mfem_device": "cpu" if backend == "fem_cpu" else "cuda",
+                    "uses_cuda_kernels": backend == "fem_gpu",
+                }
+            )
+
+    summary = bench.cpu_gpu_consistency_summary(rows)
+
+    assert summary["pair_count"] == 1
+    assert summary["pairs"][0]["cpu_demag_preconditioner"] == "AMG"
+    assert summary["pairs"][0]["gpu_demag_preconditioner"] == "AMG"
+
+
 def test_gpu_demag_total_speedup_failures_rejects_slow_total_demag():
     bench = load_analysis_benchmark_module()
 

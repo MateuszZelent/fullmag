@@ -7696,6 +7696,49 @@ def performance_regression_failures(
     return failures
 
 
+CPU_GPU_REQUESTED_DEMAG_POLICY_FIELDS = (
+    "requested_demag_solver",
+    "requested_demag_preconditioner",
+    "requested_demag_relative_tolerance",
+    "requested_demag_absolute_tolerance",
+    "requested_demag_max_iterations",
+    "requested_demag_print_level",
+    "requested_demag_amg_relax_type",
+    "requested_demag_amg_coarsening",
+    "requested_demag_amg_interpolation",
+    "requested_demag_amg_aggressive_coarsening",
+    "requested_demag_amg_strength_threshold",
+    "requested_demag_amg_max_levels",
+)
+
+CPU_GPU_EFFECTIVE_DEMAG_POLICY_FIELDS = (
+    "demag_linear_solver",
+    "demag_preconditioner",
+    "demag_relative_tolerance",
+    "demag_absolute_tolerance",
+    "demag_max_iterations",
+    "demag_print_level",
+    "demag_amg_relax_type",
+    "demag_amg_coarsening",
+    "demag_amg_interpolation",
+    "demag_amg_aggressive_coarsening",
+    "demag_amg_strength_threshold",
+    "demag_amg_max_levels",
+)
+
+
+def cpu_gpu_demag_policy_pairing_key(
+    row: Mapping[str, object],
+) -> tuple[object, ...]:
+    requested = tuple(row.get(field) for field in CPU_GPU_REQUESTED_DEMAG_POLICY_FIELDS)
+    if any(value not in {None, ""} for value in requested):
+        return ("requested", *requested)
+    return (
+        "effective",
+        *(row.get(field) for field in CPU_GPU_EFFECTIVE_DEMAG_POLICY_FIELDS),
+    )
+
+
 def cpu_gpu_consistency_case_key(row: Mapping[str, object]) -> tuple[object, ...]:
     signature = row.get("solver_mesh_signature")
     if not signature:
@@ -7709,6 +7752,7 @@ def cpu_gpu_consistency_case_key(row: Mapping[str, object]) -> tuple[object, ...
         row.get("dt_s"),
         row.get("steps"),
         row.get("reported_precision"),
+        cpu_gpu_demag_policy_pairing_key(row),
     )
 
 
@@ -8065,7 +8109,7 @@ def cpu_gpu_consistency_pair_summary(
     cpu_steps = as_int(cpu_row.get("executed_steps"))
     gpu_steps = as_int(gpu_row.get("executed_steps"))
     summary: dict[str, object] = {
-        "case_key": list(case),
+        "case_key": [*case[:8], list(case[8])],
         "solver_mesh_signature": case[0],
         "scenario": case[1],
         "integrator": case[2],
@@ -8074,6 +8118,15 @@ def cpu_gpu_consistency_pair_summary(
         "dt_s": case[5],
         "steps": case[6],
         "precision": case[7],
+        "demag_policy_pairing_key": list(case[8]),
+        "requested_demag_solver": cpu_row.get("requested_demag_solver"),
+        "requested_demag_preconditioner": cpu_row.get(
+            "requested_demag_preconditioner"
+        ),
+        "cpu_demag_linear_solver": cpu_row.get("demag_linear_solver"),
+        "gpu_demag_linear_solver": gpu_row.get("demag_linear_solver"),
+        "cpu_demag_preconditioner": cpu_row.get("demag_preconditioner"),
+        "gpu_demag_preconditioner": gpu_row.get("demag_preconditioner"),
         "cpu_execution_engine": cpu_row.get("execution_engine"),
         "gpu_execution_engine": gpu_row.get("execution_engine"),
         "cpu_executed_steps": cpu_steps,
