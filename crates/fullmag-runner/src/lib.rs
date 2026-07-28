@@ -15,13 +15,13 @@
 pub const MU0: f64 = 4.0 * std::f64::consts::PI * 1e-7;
 
 mod antenna_fields;
+pub mod artifact_pipeline;
+mod artifacts;
+#[cfg(feature = "stage-autosave-hdf5")]
+pub mod autosave_hdf5;
 pub mod autosave_storage;
 pub mod autosave_txt;
 pub mod autosave_zarr;
-#[cfg(feature = "stage-autosave-hdf5")]
-pub mod autosave_hdf5;
-pub mod artifact_pipeline;
-mod artifacts;
 pub mod capabilities;
 mod derived_fields;
 mod dispatch;
@@ -2173,6 +2173,34 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     initial_snapshot: bool,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity_and_autosave_root(
+        problem,
+        plan,
+        fem_mesh_identity,
+        until_seconds,
+        output_dir,
+        output_dir,
+        field_every_n,
+        display_selection,
+        interrupt_requested,
+        initial_snapshot,
+        on_step,
+    )
+}
+
+pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity_and_autosave_root(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    autosave_root: &Path,
+    field_every_n: u64,
+    display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    initial_snapshot: bool,
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     require_resolved_runtime_sampling(problem, plan)?;
@@ -2194,12 +2222,14 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     let fem_stage_context = fem_mesh_identity
         .cloned()
         .map(types::FemStageExecutionContext::from_mesh_identity);
-    let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start_for_problem(
-        problem,
-        output_dir.to_path_buf(),
-        artifacts::build_field_context(problem, plan),
-        artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
-    )?;
+    let mut artifact_pipeline =
+        artifact_pipeline::ArtifactPipeline::start_for_problem_with_autosave_root(
+            problem,
+            output_dir.to_path_buf(),
+            autosave_root.to_path_buf(),
+            artifacts::build_field_context(problem, plan),
+            artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
+        )?;
     let artifact_writer = Some(artifact_pipeline.sender());
 
     let cpu_threads = configured_cpu_threads(problem);
@@ -2437,6 +2467,36 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     initial_snapshot: bool,
     hysteresis_stage_id: Option<&str>,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id_and_fem_mesh_identity_and_autosave_root(
+        problem,
+        plan,
+        fem_mesh_identity,
+        until_seconds,
+        output_dir,
+        output_dir,
+        field_every_n,
+        display_selection,
+        interrupt_requested,
+        initial_snapshot,
+        hysteresis_stage_id,
+        on_step,
+    )
+}
+
+pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id_and_fem_mesh_identity_and_autosave_root(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    autosave_root: &Path,
+    field_every_n: u64,
+    display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    initial_snapshot: bool,
+    hysteresis_stage_id: Option<&str>,
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     require_resolved_runtime_sampling(problem, plan)?;
@@ -2455,12 +2515,13 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             &mut on_step,
         );
     }
-    run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity(
+    run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity_and_autosave_root(
         problem,
         plan,
         fem_mesh_identity,
         until_seconds,
         output_dir,
+        autosave_root,
         field_every_n,
         display_selection,
         interrupt_requested,

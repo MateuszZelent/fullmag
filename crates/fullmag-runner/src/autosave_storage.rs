@@ -146,6 +146,46 @@ impl AutosaveTargetState {
         }
     }
 
+    pub fn resume(root: &Path, target: impl Into<String>) -> Result<Self, String> {
+        let target = target.into();
+        let path = root.join(format!("{target}.autosave.json"));
+        if !path.exists() {
+            return Ok(Self::new(target));
+        }
+        let manifest = serde_json::from_slice::<AutosaveArtifactManifest>(
+            &fs::read(&path).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+        if manifest.target != target {
+            return Err(format!(
+                "autosave manifest target '{}' does not match requested target '{}'",
+                manifest.target, target
+            ));
+        }
+        let schema = manifest.stages.first().map(|stage| AutosaveTargetSchema {
+            format: stage.format,
+            table_quantities: stage.table_quantities.clone(),
+            field_quantities: stage.field_quantities.clone(),
+        });
+        Ok(Self {
+            target,
+            schema,
+            next_stage_index: manifest
+                .stages
+                .iter()
+                .map(|stage| stage.stage_index)
+                .max()
+                .map_or(0, |index| index + 1),
+            next_target_sample_index: manifest
+                .stages
+                .iter()
+                .map(|stage| stage.table_sample_count + stage.field_sample_count)
+                .sum(),
+            active: None,
+            continuous_index: Vec::new(),
+        })
+    }
+
     pub fn begin_stage<W: AutosaveTargetWriter>(
         &mut self,
         writer: &mut W,
@@ -451,5 +491,51 @@ mod tests {
             .unwrap_err();
         assert!(error.contains("schema drift"));
         assert_eq!(writer.finished.len(), 1);
+    }
+
+    #[test]
+    fn resume_continues_stage_and_target_sample_indexes_from_manifest() {
+        let root =
+            std::env::temp_dir().join(format!("fullmag-autosave-resume-{}", uuid::Uuid::new_v4()));
+        update_artifact_manifest(
+            &root,
+            &StageManifest {
+                schema_version: "stage_autosave.v1".into(),
+                target: "main".into(),
+                stage_id: "relax".into(),
+                stage_index: 3,
+                layout: AutosaveLayoutIR::Continuous,
+                format: AutosaveFormatIR::Zarr,
+                table_quantities: vec!["step".into()],
+                field_quantities: vec!["m".into()],
+                complete: true,
+                table_sample_count: 2,
+                field_sample_count: 1,
+            },
+        )
+        .unwrap();
+
+        let mut state = AutosaveTargetState::resume(&root, "main").unwrap();
+        let mut writer = RecordingWriter::default();
+        let stage = state
+            .begin_stage(
+                &mut writer,
+                "run",
+                AutosaveLayoutIR::Continuous,
+                AutosaveFormatIR::Zarr,
+                vec!["step".into()],
+                vec!["m".into()],
+            )
+            .unwrap();
+        assert_eq!(stage.stage_index, 4);
+        let entry = state
+            .append_table_row(
+                &mut writer,
+                StageSampleCoordinate::PhysicalTime { time_s: 1e-12 },
+                &[4.0],
+            )
+            .unwrap();
+        assert_eq!(entry.target_sample_index, 3);
+        fs::remove_dir_all(root).unwrap();
     }
 }

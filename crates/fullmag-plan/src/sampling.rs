@@ -196,6 +196,45 @@ pub(crate) fn has_unresolved_auto_sampling(problem: &ProblemIR) -> bool {
         .any(OutputIR::requests_auto_sinc_cutoff)
 }
 
+pub(crate) fn runtime_outputs(problem: &ProblemIR) -> Vec<OutputIR> {
+    let mut outputs = problem.study.sampling().outputs.clone();
+    if matches!(problem.study, StudyIR::TimeEvolution { .. }) {
+        if let Some(policy) = &problem.study.sampling().stage_autosave {
+            for field in &policy.fields {
+                let Some(every_seconds) = field.every_seconds else {
+                    continue;
+                };
+                let existing = outputs.iter_mut().find(|output| match output {
+                    OutputIR::Field { name, .. }
+                    | OutputIR::FieldResolvedAuto { name, .. }
+                    | OutputIR::FieldAuto { name, .. } => name == &field.quantity,
+                    _ => false,
+                });
+                if let Some(existing) = existing {
+                    match existing {
+                        OutputIR::Field {
+                            every_seconds: existing,
+                            ..
+                        }
+                        | OutputIR::FieldResolvedAuto {
+                            every_seconds: existing,
+                            ..
+                        } => *existing = existing.min(every_seconds),
+                        OutputIR::FieldAuto { .. } => {}
+                        _ => unreachable!("field output was selected above"),
+                    }
+                } else {
+                    outputs.push(OutputIR::Field {
+                        name: field.quantity.clone(),
+                        every_seconds,
+                    });
+                }
+            }
+        }
+    }
+    outputs
+}
+
 pub fn resolve_auto_sampling_for_stage(
     problem: &mut ProblemIR,
 ) -> Result<Option<SamplingResolutionIR>, PlanError> {

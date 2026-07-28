@@ -170,6 +170,38 @@ pub(crate) fn finalize_native_fem_relaxation(
         let _refreshed_final_snapshot_stats = backend.snapshot_step_stats(node_count)?;
     }
 
+    let scheduled_names = field_schedules
+        .iter()
+        .map(|schedule| schedule.name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    for name in artifacts
+        .due_accepted_step_fields(final_stats.step, true)
+        .into_iter()
+        .filter(|name| !scheduled_names.contains(name.as_str()))
+    {
+        let copy_start = std::time::Instant::now();
+        if artifacts.is_streaming() {
+            let snapshot = backend.begin_field_snapshot(
+                &name,
+                final_stats.step,
+                final_stats.time,
+                final_stats.dt,
+            )?;
+            artifacts.record_native_fem_field_snapshot(snapshot)?;
+        } else {
+            let values = copy_native_fem_field_snapshot(backend, &name, node_count)?;
+            artifacts.record_field_snapshot(FieldSnapshot {
+                name,
+                step: final_stats.step,
+                time: final_stats.time,
+                solver_dt: final_stats.dt,
+                values,
+            })?;
+        }
+        finalization_field_copy_wall_time_ns =
+            finalization_field_copy_wall_time_ns.saturating_add(elapsed_ns(copy_start));
+    }
+
     for schedule in &mut field_schedules {
         let copy_start = std::time::Instant::now();
         if artifacts.is_streaming() {

@@ -114,6 +114,40 @@ fn stage_autosave_hdf5_capability_fails_closed_when_unavailable() {
         .expect("available HDF5 capability should accept the stage");
 }
 
+#[test]
+fn run_stage_autosave_fields_are_added_to_runtime_outputs_without_duplicates() {
+    let mut problem = ProblemIR::bootstrap_example();
+    problem.study.sampling_mut().outputs = vec![OutputIR::Field {
+        name: "m".into(),
+        every_seconds: 5e-12,
+    }];
+    problem.study.sampling_mut().stage_autosave = Some(
+        serde_json::from_value(serde_json::json!({
+            "kind": "stage_autosave",
+            "target": "main",
+            "layout": "continuous",
+            "format": "zarr",
+            "fields": [{"quantity": "m", "every_seconds": 2e-12}]
+        }))
+        .unwrap(),
+    );
+    let outputs = crate::sampling::runtime_outputs(&problem);
+    assert_eq!(
+        outputs
+            .iter()
+            .filter(|output| matches!(output, OutputIR::Field { name, .. } if name == "m"))
+            .count(),
+        1
+    );
+    assert!(matches!(
+        outputs.as_slice(),
+        [OutputIR::Field {
+            name,
+            every_seconds
+        }] if name == "m" && *every_seconds == 2e-12
+    ));
+}
+
 fn auto_sampling_problem(cutoffs_hz: &[f64], active_stage_id: Option<&str>) -> ProblemIR {
     let mut problem = ProblemIR::bootstrap_example();
     if let Some(stage_id) = active_stage_id {

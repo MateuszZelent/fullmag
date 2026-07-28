@@ -1645,7 +1645,7 @@ fn time_domain_sampling_from(base: &fullmag_ir::SamplingIR) -> fullmag_ir::Sampl
         .collect();
     fullmag_ir::SamplingIR {
         table_autosave: base.table_autosave.clone(),
-        stage_autosave: None,
+        stage_autosave: base.stage_autosave.clone(),
         outputs,
     }
 }
@@ -5643,6 +5643,45 @@ mod tests {
         assert_eq!(stages.len(), 1);
         assert_eq!(stages[0].entrypoint_kind, "explicit_run");
         assert!((stages[0].until_seconds - 7e-12).abs() < 1e-24);
+    }
+
+    #[test]
+    fn materialize_script_stages_preserves_explicit_stage_autosave() {
+        let mut ir = sample_problem_ir();
+        ir.study.sampling_mut().stage_autosave = Some(
+            serde_json::from_value(json!({
+                "kind": "stage_autosave",
+                "target": "main",
+                "layout": "continuous",
+                "format": "zarr",
+                "table": {"sample_period_s": 1e-12, "quantities": ["step", "mx"]},
+                "fields": [{"quantity": "m", "every_seconds": 2e-12}]
+            }))
+            .expect("stage autosave"),
+        );
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(5e-12),
+            study_pipeline: None,
+            stages: vec![crate::types::ScriptExecutionStage {
+                ir,
+                default_until_seconds: Some(5e-12),
+                entrypoint_kind: "explicit_run".to_string(),
+                action: None,
+            }],
+        };
+
+        let stages = materialize_script_stages(config).expect("explicit stage should materialize");
+        let autosave = stages[0]
+            .ir
+            .study
+            .sampling()
+            .stage_autosave
+            .as_ref()
+            .expect("stage-local autosave must survive sampling normalization");
+        assert_eq!(autosave.target, "main");
+        assert_eq!(autosave.fields[0].every_seconds, Some(2e-12));
     }
 
     #[test]

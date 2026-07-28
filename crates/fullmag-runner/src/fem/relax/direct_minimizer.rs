@@ -204,6 +204,16 @@ pub(crate) fn execute_direct_minimizer(
 
         let artifact_metrics = artifacts.record_scalar(&accepted_stats)?;
         apply_artifact_enqueue_metrics(&mut accepted_stats, artifact_metrics);
+        for name in artifacts.due_accepted_step_fields(accepted_stats.step, false) {
+            let snapshot = backend.begin_field_snapshot(
+                &name,
+                accepted_stats.step,
+                accepted_stats.time,
+                accepted_stats.dt,
+            )?;
+            let artifact_metrics = artifacts.record_native_fem_field_snapshot(snapshot)?;
+            apply_artifact_enqueue_metrics(&mut accepted_stats, artifact_metrics);
+        }
         steps.push(accepted_stats.clone());
         latest_stats = Some(accepted_stats.clone());
         current_stats = accepted_stats;

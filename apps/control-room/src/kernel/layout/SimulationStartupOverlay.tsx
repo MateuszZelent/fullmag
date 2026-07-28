@@ -135,6 +135,11 @@ export function SimulationStartupOverlayView({
                 {state.title}
               </h2>
               <p className="fm-simulation-startup__detail">{state.detail}</p>
+              {state.failure?.correlationId ? (
+                <p className="fm-simulation-startup__detail">
+                  Diagnostic ID: <code>{state.failure.correlationId}</code>
+                </p>
+              ) : null}
             </div>
             {state.totalElapsedLabel ? (
               <div className="fm-simulation-startup__elapsed">

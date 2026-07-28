@@ -390,6 +390,7 @@ describe("SimulationStartupOverlay", () => {
     );
 
     expect(html).toContain("Mesh generation did not converge.");
+    expect(html).toContain("diag-42");
     expect(html).toContain("Copy diagnostics");
     expect(html).toContain("Open full diagnostics");
     expect(html).toContain('data-kind="terminal"');

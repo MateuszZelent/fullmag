@@ -5200,10 +5200,14 @@ fn record_native_fem_initial_field_snapshots(
         return Ok(());
     }
 
-    for schedule in field_schedules {
+    let mut names = artifacts.due_accepted_step_fields(current_stats.step, false);
+    names.extend(field_schedules.iter().map(|schedule| schedule.name.clone()));
+    names.sort();
+    names.dedup();
+    for name in names {
         if artifacts.is_streaming() {
             let snapshot = backend.begin_field_snapshot(
-                &schedule.name,
+                &name,
                 current_stats.step,
                 current_stats.time,
                 current_stats.dt,
@@ -5211,12 +5215,10 @@ fn record_native_fem_initial_field_snapshots(
             artifacts.record_native_fem_field_snapshot(snapshot)?;
         } else {
             let values = crate::fem::relax::snapshots::copy_native_fem_field_snapshot(
-                backend,
-                &schedule.name,
-                node_count,
+                backend, &name, node_count,
             )?;
             artifacts.record_field_snapshot(FieldSnapshot {
-                name: schedule.name.clone(),
+                name,
                 step: current_stats.step,
                 time: current_stats.time,
                 solver_dt: current_stats.dt,

@@ -144,6 +144,50 @@ fn fail_owned_preparation_stage(
     })
 }
 
+fn fail_owned_preparation_stage_with_diagnostics(
+    workspace: &LocalLiveWorkspace,
+    stage_id: PreparationStageId,
+    error_code: &str,
+    safe_summary: &str,
+) -> Result<()> {
+    let timestamp_unix_ms = preparation_unix_time_millis()?;
+    transition_preparation(workspace, |preparation| {
+        preparation.fail_stage(stage_id, timestamp_unix_ms, error_code, safe_summary)?;
+        let correlation_id = format!(
+            "preparation-{}-{}-{}",
+            stage_id.as_str(),
+            preparation.preparation_id,
+            timestamp_unix_ms
+        );
+        if let Some(failure) = preparation.failure.as_mut() {
+            failure.diagnostics_correlation_id = Some(correlation_id);
+        }
+        push_preparation_log_once(
+            preparation,
+            timestamp_unix_ms,
+            PreparationLogLevel::Error,
+            stage_id,
+            safe_summary,
+        );
+        Ok(())
+    })
+}
+
+fn safe_validation_failure_summary(error: &anyhow::Error, fallback: &str) -> String {
+    let message = error.to_string();
+    let trimmed = message.trim();
+    let is_single_line = !trimmed.contains('\n') && !trimmed.contains('\r');
+    let is_bounded = !trimmed.is_empty() && trimmed.chars().count() <= 240;
+    let has_private_path = trimmed.contains('/') || trimmed.contains('\\');
+    let normalized = trimmed.to_ascii_lowercase();
+    let has_secret_marker = normalized.contains("secret") || normalized.contains("token");
+    if is_single_line && is_bounded && !has_private_path && !has_secret_marker {
+        trimmed.to_string()
+    } else {
+        fallback.to_string()
+    }
+}
+
 fn fail_active_preparation_stage(
     workspace: &LocalLiveWorkspace,
     error_code: &str,
@@ -213,9 +257,22 @@ fn wait_for_failed_preparation_close(
         return;
     }
 
-    eprintln!(
-        "[fullmag] simulation preparation failed; Control Room remains available until explicit close"
-    );
+    let failure = workspace
+        .snapshot()
+        .simulation_preparation
+        .and_then(|preparation| preparation.failure);
+    if let Some(failure) = failure {
+        eprintln!(
+            "[fullmag] simulation preparation failed: {}",
+            failure.summary
+        );
+        if let Some(correlation_id) = failure.diagnostics_correlation_id {
+            eprintln!("[fullmag] diagnostic correlation id: {correlation_id}");
+        }
+    } else {
+        eprintln!("[fullmag] simulation preparation failed");
+    }
+    eprintln!("[fullmag] Control Room remains available until explicit close");
     workspace.push_log(
         "system",
         "Simulation preparation failed — Control Room remains available until Close",
@@ -266,6 +323,7 @@ fn run_owned_preparation_stage<T>(
     skip_on_success: bool,
     error_code: &str,
     safe_failure_summary: &str,
+    expose_safe_operation_error: bool,
     operation: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
     let started_at_unix_ms = preparation_unix_time_millis()?;
@@ -308,7 +366,19 @@ fn run_owned_preparation_stage<T>(
             Ok(value)
         }
         Err(error) => {
-            fail_owned_preparation_stage(workspace, stage_id, error_code, safe_failure_summary)?;
+            if expose_safe_operation_error {
+                let summary = safe_validation_failure_summary(&error, safe_failure_summary);
+                fail_owned_preparation_stage_with_diagnostics(
+                    workspace, stage_id, error_code, &summary,
+                )?;
+            } else {
+                fail_owned_preparation_stage(
+                    workspace,
+                    stage_id,
+                    error_code,
+                    safe_failure_summary,
+                )?;
+            }
             Err(error)
         }
     }
@@ -439,6 +509,7 @@ fn run_script_preparation_preflight(
         false,
         "validation_failed",
         "Simulation validation failed",
+        true,
         validate,
     )?;
     run_owned_preparation_stage(
@@ -449,6 +520,7 @@ fn run_script_preparation_preflight(
         false,
         "planning_failed",
         "Simulation planning failed",
+        false,
         plan,
     )?;
     let domain_started_at_unix_ms = preparation_unix_time_millis()?;
@@ -7984,12 +8056,13 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 let mut live_cadence = LiveProgressCadence::default();
                 let display_selection = || display_selection_handle.display_selection_snapshot();
                 let interrupt_signal = display_selection_handle.running_interrupt_signal();
-                fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id_and_fem_mesh_identity(
+                fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id_and_fem_mesh_identity_and_autosave_root(
                     &stage.ir,
                     &execution_plan,
                     stage_fem_mesh_asset.as_ref().map(|asset| &asset.identity),
                     stage.until_seconds,
                     &current_stage_artifact_dir,
+                    &artifact_dir,
                     field_every_n,
                     &display_selection,
                     Some(interrupt_signal.as_ref()),
@@ -10964,7 +11037,7 @@ mod tests {
     #[test]
     fn validation_failure_is_owned_before_propagation() {
         let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
-        let raw_error = "validator leaked /private/model/path";
+        let raw_error = "sampling.table_autosave.every_steps is only valid for relaxation studies";
 
         let error = run_script_preparation_preflight(
             &workspace,
@@ -10974,6 +11047,36 @@ mod tests {
         .expect_err("validation should fail");
 
         assert!(error.to_string().contains(raw_error));
+        let preparation = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("preparation state");
+        let failure = preparation.failure.expect("owned failure");
+        assert_eq!(failure.stage_id, PreparationStageId::Validation);
+        assert_eq!(failure.error_code, "validation_failed");
+        assert_eq!(failure.summary, raw_error);
+        assert!(failure
+            .diagnostics_correlation_id
+            .as_deref()
+            .is_some_and(|value| value.starts_with("preparation-validation-")));
+        assert!(preparation.log_tail.iter().any(|entry| {
+            entry.level == crate::simulation_preparation::PreparationLogLevel::Error
+                && entry.message == raw_error
+        }));
+    }
+
+    #[test]
+    fn validation_failure_keeps_unsafe_details_out_of_public_preparation() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "validator leaked /private/model/path\nsecret-token";
+
+        run_script_preparation_preflight(
+            &workspace,
+            || Err::<(), _>(anyhow::anyhow!(raw_error)),
+            || panic!("planning must not run after validation failure"),
+        )
+        .expect_err("validation should fail");
+
         assert_owned_preparation_failure(
             &workspace,
             PreparationStageId::Validation,
@@ -11404,6 +11507,7 @@ mod tests {
             false,
             "solver_initialization_failed",
             "Solver initialization failed",
+            false,
             || Err::<(), _>(anyhow::anyhow!(raw_error)),
         )
         .expect_err("solver construction should fail");
@@ -12811,6 +12915,7 @@ mod tests {
                 },
                 sampling: SamplingIR {
                     table_autosave: None,
+                    stage_autosave: None,
                     outputs: Vec::new(),
                 },
             },
@@ -12885,6 +12990,7 @@ mod tests {
             solver_policy: None,
             sampling: SamplingIR {
                 table_autosave: None,
+                stage_autosave: None,
                 outputs: Vec::new(),
             },
         };

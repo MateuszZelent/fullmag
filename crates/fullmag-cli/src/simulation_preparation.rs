@@ -146,6 +146,20 @@ impl PreparationStageId {
             Self::Ready => "Ready",
         }
     }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::RuntimeStartup => "runtime_startup",
+            Self::ScriptMaterialization => "script_materialization",
+            Self::Validation => "validation",
+            Self::Planning => "planning",
+            Self::DomainPreparation => "domain_preparation",
+            Self::Meshing => "meshing",
+            Self::MeshPostprocessing => "mesh_postprocessing",
+            Self::SolverInitialization => "solver_initialization",
+            Self::Ready => "ready",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

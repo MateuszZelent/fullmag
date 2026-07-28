@@ -1417,7 +1417,7 @@ pub(crate) fn plan_fdm(
         },
         backend_plan: BackendPlanIR::Fdm(fdm_plan),
         output_plan: OutputPlanIR {
-            outputs: problem.study.sampling().outputs.clone(),
+            outputs: crate::sampling::runtime_outputs(problem),
         },
         provenance: ProvenancePlanIR {
             notes: vec![
@@ -2497,7 +2497,7 @@ pub(crate) fn plan_fdm_multilayer(
         },
         backend_plan: BackendPlanIR::FdmMultilayer(plan),
         output_plan: OutputPlanIR {
-            outputs: problem.study.sampling().outputs.clone(),
+            outputs: crate::sampling::runtime_outputs(problem),
         },
         provenance: ProvenancePlanIR {
             notes: vec![

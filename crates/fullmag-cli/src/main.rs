@@ -1410,6 +1410,7 @@ mod tests {
             mode_tracking: None,
             sampling: fullmag_ir::SamplingIR {
                 table_autosave: None,
+                stage_autosave: None,
                 outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                     quantity: "eigenfrequency".to_string(),
                 }],

@@ -27,8 +27,8 @@
 - Modify: `packages/fullmag-py/src/fullmag/world.py`
 - Modify: `packages/fullmag-py/src/fullmag/runtime/loader.py`
 - Modify: `packages/fullmag-py/src/fullmag/runtime/script_builder.py`
-- Test: `packages/fullmag-py/tests/test_study_builder.py`
-- Test: `packages/fullmag-py/tests/test_script_builder.py`
+- Test: `packages/fullmag-py/tests/test_study_stages.py`
+- Test: `packages/fullmag-py/tests/test_script_builder_roundtrip.py`
 
 **Interfaces:**
 - Produces: `RelaxStageBuilder.tableautosave(*, every_steps: int, quantities: Sequence[str] | None = None, table_id: str = "default") -> RelaxStageBuilder`.
@@ -54,7 +54,7 @@ Also assert a following run node has no stage-local table, duplicate attachment 
 Run:
 
 ```bash
-PYTHONPATH=packages/fullmag-py/src .fullmag/local/python/bin/python -m pytest -q packages/fullmag-py/tests/test_study_builder.py packages/fullmag-py/tests/test_script_builder.py
+PYTHONPATH=packages/fullmag-py/src python3 -m pytest -q packages/fullmag-py/tests/test_study_stages.py packages/fullmag-py/tests/test_script_builder_roundtrip.py
 ```
 
 Expected: fluent-handle assertions fail because `add_relax()` currently returns `StudyStagesBuilder` and stage-local serialization is absent.

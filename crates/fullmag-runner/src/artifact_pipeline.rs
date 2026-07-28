@@ -175,6 +175,8 @@ pub(crate) struct ArtifactPipelineSender {
     tx: SyncSender<ArtifactJob>,
     queue_depth: Arc<AtomicUsize>,
     diagnostics: Arc<ArtifactPipelineDiagnosticsState>,
+    #[cfg(feature = "fem-gpu")]
+    accepted_step_fields: Arc<Vec<(String, u64)>>,
 }
 
 impl ArtifactPipelineSender {
@@ -217,12 +219,30 @@ pub(crate) struct ArtifactPipeline {
     handle: Option<JoinHandle<Result<ArtifactPipelineSummary, String>>>,
     queue_depth: Arc<AtomicUsize>,
     diagnostics: Arc<ArtifactPipelineDiagnosticsState>,
+    #[cfg(feature = "fem-gpu")]
+    accepted_step_fields: Arc<Vec<(String, u64)>>,
 }
 
 impl ArtifactPipeline {
     pub(crate) fn start_for_problem(
         problem: &fullmag_ir::ProblemIR,
         output_dir: PathBuf,
+        field_context: FieldArtifactContext,
+        capacity: usize,
+    ) -> Result<Self, RunError> {
+        Self::start_for_problem_with_autosave_root(
+            problem,
+            output_dir.clone(),
+            output_dir,
+            field_context,
+            capacity,
+        )
+    }
+
+    pub(crate) fn start_for_problem_with_autosave_root(
+        problem: &fullmag_ir::ProblemIR,
+        output_dir: PathBuf,
+        autosave_root: PathBuf,
         field_context: FieldArtifactContext,
         capacity: usize,
     ) -> Result<Self, RunError> {
@@ -241,11 +261,34 @@ impl ArtifactPipeline {
                     .to_string(),
                 policy,
             });
-        Self::start_with_stage_autosave(output_dir, field_context, capacity, stage_autosave)
+        Self::start_with_stage_autosave_roots(
+            output_dir,
+            autosave_root,
+            field_context,
+            capacity,
+            stage_autosave,
+        )
     }
 
+    #[cfg(test)]
     fn start_with_stage_autosave(
         output_dir: PathBuf,
+        field_context: FieldArtifactContext,
+        capacity: usize,
+        stage_autosave: Option<StageAutosavePipelineConfig>,
+    ) -> Result<Self, RunError> {
+        Self::start_with_stage_autosave_roots(
+            output_dir.clone(),
+            output_dir,
+            field_context,
+            capacity,
+            stage_autosave,
+        )
+    }
+
+    fn start_with_stage_autosave_roots(
+        output_dir: PathBuf,
+        autosave_root: PathBuf,
         field_context: FieldArtifactContext,
         capacity: usize,
         stage_autosave: Option<StageAutosavePipelineConfig>,
@@ -257,6 +300,24 @@ impl ArtifactPipeline {
                 error
             ),
         })?;
+        #[cfg(feature = "fem-gpu")]
+        let accepted_step_fields = Arc::new(
+            stage_autosave
+                .as_ref()
+                .map(|config| {
+                    config
+                        .policy
+                        .fields
+                        .iter()
+                        .filter_map(|field| {
+                            field
+                                .every_steps
+                                .map(|every| (field.quantity.clone(), every))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        );
         let queue_depth = Arc::new(AtomicUsize::new(0));
         let writer_queue_depth = Arc::clone(&queue_depth);
         let diagnostics = Arc::new(ArtifactPipelineDiagnosticsState::default());
@@ -267,6 +328,7 @@ impl ArtifactPipeline {
             .spawn(move || {
                 writer_loop(
                     &output_dir,
+                    &autosave_root,
                     field_context,
                     rx,
                     writer_queue_depth,
@@ -283,6 +345,8 @@ impl ArtifactPipeline {
             handle: Some(handle),
             queue_depth,
             diagnostics,
+            #[cfg(feature = "fem-gpu")]
+            accepted_step_fields,
         })
     }
 
@@ -295,6 +359,8 @@ impl ArtifactPipeline {
                 .clone(),
             queue_depth: Arc::clone(&self.queue_depth),
             diagnostics: Arc::clone(&self.diagnostics),
+            #[cfg(feature = "fem-gpu")]
+            accepted_step_fields: Arc::clone(&self.accepted_step_fields),
         }
     }
 
@@ -451,7 +517,7 @@ impl StageAutosaveRuntime {
             })
             .collect();
         let mut runtime = Self {
-            state: AutosaveTargetState::new(&policy.target),
+            state: AutosaveTargetState::resume(output_dir, &policy.target)?,
             writer,
             table,
             fields,
@@ -522,8 +588,8 @@ impl StageAutosaveRuntime {
         let Some(cadence) = self.fields.get_mut(name) else {
             return Ok(());
         };
-        let due = if let Some(every_steps) = cadence.every_steps {
-            step == 0 || step % every_steps == 0
+        let due = if cadence.every_steps.is_some() {
+            true
         } else if let Some(every_seconds) = cadence.every_seconds {
             if time + every_seconds.abs() * 1e-9 < cadence.next_time_s {
                 false
@@ -606,6 +672,10 @@ pub(crate) struct ArtifactRecorder {
     field_snapshot_count: usize,
     pipeline: Option<ArtifactPipelineSender>,
     provenance: ExecutionProvenance,
+    #[cfg(feature = "fem-gpu")]
+    accepted_step_fields: Arc<Vec<(String, u64)>>,
+    #[cfg(feature = "fem-gpu")]
+    accepted_step_field_last_sample: std::collections::BTreeMap<String, u64>,
 }
 
 impl ArtifactRecorder {
@@ -615,6 +685,10 @@ impl ArtifactRecorder {
             field_snapshot_count: 0,
             pipeline: None,
             provenance,
+            #[cfg(feature = "fem-gpu")]
+            accepted_step_fields: Arc::new(Vec::new()),
+            #[cfg(feature = "fem-gpu")]
+            accepted_step_field_last_sample: std::collections::BTreeMap::new(),
         }
     }
 
@@ -622,12 +696,40 @@ impl ArtifactRecorder {
         provenance: ExecutionProvenance,
         pipeline: ArtifactPipelineSender,
     ) -> Self {
+        #[cfg(feature = "fem-gpu")]
+        let accepted_step_fields = Arc::clone(&pipeline.accepted_step_fields);
         Self {
             field_snapshots: Vec::new(),
             field_snapshot_count: 0,
             pipeline: Some(pipeline),
             provenance,
+            #[cfg(feature = "fem-gpu")]
+            accepted_step_fields,
+            #[cfg(feature = "fem-gpu")]
+            accepted_step_field_last_sample: std::collections::BTreeMap::new(),
         }
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    pub(crate) fn due_accepted_step_fields(
+        &mut self,
+        accepted_step: u64,
+        final_sample: bool,
+    ) -> Vec<String> {
+        let due = self
+            .accepted_step_fields
+            .iter()
+            .filter(|(name, every)| {
+                (final_sample || accepted_step % *every == 0)
+                    && self.accepted_step_field_last_sample.get(name) != Some(&accepted_step)
+            })
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        for name in &due {
+            self.accepted_step_field_last_sample
+                .insert(name.clone(), accepted_step);
+        }
+        due
     }
 
     pub(crate) fn record_scalar(
@@ -1020,6 +1122,7 @@ fn zarr_dtype(scalar_type: NativeSnapshotScalarType) -> &'static str {
 
 fn writer_loop(
     output_dir: &Path,
+    autosave_root: &Path,
     field_context: FieldArtifactContext,
     rx: mpsc::Receiver<ArtifactJob>,
     queue_depth: Arc<AtomicUsize>,
@@ -1034,7 +1137,7 @@ fn writer_loop(
     let mut summary = ArtifactPipelineSummary::default();
     let mut scalar_writer: Option<BufWriter<File>> = None;
     let mut stage_autosave = stage_autosave_config
-        .map(|config| StageAutosaveRuntime::new(output_dir, config))
+        .map(|config| StageAutosaveRuntime::new(autosave_root, config))
         .transpose()?;
     #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
     let mut zarr_writers: HashMap<String, ZarrFieldSeriesWriter> = HashMap::new();
@@ -1366,6 +1469,62 @@ mod stage_autosave_tests {
     }
 
     #[test]
+    fn consecutive_stage_pipelines_share_autosave_root_without_mixing_stage_artifacts() {
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-artifact-pipeline-shared-autosave-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let autosave_root = root.join("artifacts");
+        for (stage_index, stage_id) in ["relax", "run"].into_iter().enumerate() {
+            let stage_output = root.join(format!("stage-{stage_index}"));
+            let mut pipeline = ArtifactPipeline::start_with_stage_autosave_roots(
+                stage_output.clone(),
+                autosave_root.clone(),
+                context(),
+                1,
+                Some(StageAutosavePipelineConfig {
+                    stage_id: stage_id.into(),
+                    policy: policy("zarr", serde_json::json!([])),
+                }),
+            )
+            .unwrap();
+            let mut recorder =
+                ArtifactRecorder::streaming(ExecutionProvenance::default(), pipeline.sender());
+            recorder
+                .record_scalar(&StepStats {
+                    step: stage_index as u64,
+                    mx: stage_index as f64,
+                    ..StepStats::default()
+                })
+                .unwrap();
+            let _ = recorder.finish();
+            pipeline.finish().unwrap();
+            assert!(stage_output.join("scalars.csv").is_file());
+        }
+
+        let manifest: crate::autosave_storage::AutosaveArtifactManifest =
+            serde_json::from_slice(&fs::read(autosave_root.join("main.autosave.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            manifest
+                .stages
+                .iter()
+                .map(|stage| (stage.stage_index, stage.stage_id.as_str()))
+                .collect::<Vec<_>>(),
+            [(0, "relax"), (1, "run")]
+        );
+        assert_eq!(
+            crate::autosave_zarr::read_logical_index(&autosave_root.join("main.zarr"))
+                .unwrap()
+                .iter()
+                .map(|entry| entry.target_sample_index)
+                .collect::<Vec<_>>(),
+            [0, 1]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn stage_autosave_writer_failure_is_returned_by_pipeline_finish() {
         let root = std::env::temp_dir().join(format!(
             "fullmag-artifact-pipeline-autosave-error-{}",
@@ -1389,5 +1548,37 @@ mod stage_autosave_tests {
             .expect_err("writer failure must propagate");
         assert!(error.message.contains("scalar tables only"));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn accepted_step_field_capture_schedule_includes_initial_due_and_final_once() {
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-artifact-pipeline-field-schedule-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let mut pipeline = ArtifactPipeline::start_with_stage_autosave(
+            root.clone(),
+            context(),
+            1,
+            Some(StageAutosavePipelineConfig {
+                stage_id: "relax".into(),
+                policy: policy(
+                    "zarr",
+                    serde_json::json!([{"quantity": "m", "every_steps": 2}]),
+                ),
+            }),
+        )
+        .unwrap();
+        let mut recorder =
+            ArtifactRecorder::streaming(ExecutionProvenance::default(), pipeline.sender());
+        assert_eq!(recorder.due_accepted_step_fields(0, false), ["m"]);
+        assert!(recorder.due_accepted_step_fields(1, false).is_empty());
+        assert_eq!(recorder.due_accepted_step_fields(2, false), ["m"]);
+        assert!(recorder.due_accepted_step_fields(2, true).is_empty());
+        assert_eq!(recorder.due_accepted_step_fields(3, true), ["m"]);
+        drop(recorder);
+        pipeline.finish().unwrap();
+        fs::remove_dir_all(root).unwrap();
     }
 }

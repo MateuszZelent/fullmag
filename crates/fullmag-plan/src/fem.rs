@@ -2764,7 +2764,7 @@ pub(crate) fn plan_fem(
         },
         backend_plan: BackendPlanIR::Fem(fem_plan),
         output_plan: OutputPlanIR {
-            outputs: problem.study.sampling().outputs.clone(),
+            outputs: crate::sampling::runtime_outputs(problem),
         },
         provenance: ProvenancePlanIR {
             notes: provenance_notes,
