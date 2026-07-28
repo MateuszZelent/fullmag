@@ -34,6 +34,18 @@ closed lifecycle, orientation, rollback-matrix, and false-positive source-test
 findings; final verdict `Ready: Yes` with no Critical or Important issues.
 The public mixed solver remains fail-closed before material/MFEM/GPU startup.
 
+Task 4.2 generic mixed-P1 measures and nodal materials: complete. Production
+MFEM magnetic mass row sums are the canonical integration weights and feed the
+compatibility node-volume copy and Ms-weighted averages. Uniform and legal
+nodal-P1 Ms/A material realizations work on prism/pyramid/tet meshes; DG0 stays
+fail-closed. Review remediation added a non-affine prism oracle that
+distinguishes MFEM row sums from volume/arity and validates nodal Ms/A through
+the real validator plus `GridFunctionCoefficient` evaluation. Managed
+`just verify-fem-mixed-p1-native-contract` passed including CPU/CUDA rollback
+processes. Independent final review: approved with 0 Critical/Important.
+Commits: `83b69feb`, `44ce8ef2`. The public mixed solver remains fail-closed
+until Task 4.3 exchange and Poisson operators are complete.
+
 ## Global constraints
 
 - Native mixed topology is `prism6` in the magnet, `pyramid5` only in air transition, and `tet4` in far air; facets are `tri3 | quad4`.
