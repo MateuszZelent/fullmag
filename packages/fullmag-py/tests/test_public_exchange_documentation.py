@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import contextlib
 import io
-import inspect
 import json
 from pathlib import Path
 import re
@@ -71,35 +70,29 @@ class PublicExchangeDocumentationTests(unittest.TestCase):
         documented_ir = json.loads(JSON_BLOCK.search(page).group(1))
         assert_json_subset(self, documented_ir, problem_ir)
 
-    def test_every_parameter_of_each_example_constructor_is_documented(self) -> None:
+    def test_exchange_page_contains_only_exchange_facing_api(self) -> None:
         page = EXCHANGE_PAGE.read_text(encoding="utf-8")
-        constructors = {
-            "Exchange": fm.Exchange,
-            "Material": fm.Material,
-            "Box": fm.Box,
-            "Ferromagnet": fm.Ferromagnet,
-            "texture.uniform": fm.texture.uniform,
-            "TimeEvolution": fm.TimeEvolution,
-            "LLG": fm.LLG,
-            "SaveField": fm.SaveField,
-            "SaveScalar": fm.SaveScalar,
-            "Problem": fm.Problem,
-            "DiscretizationHints": fm.DiscretizationHints,
-            "FDM": fm.FDM,
-            "FEM": fm.FEM,
-        }
-        missing: list[str] = []
-        for qualified_name, constructor in constructors.items():
-            for parameter in inspect.signature(constructor).parameters.values():
-                if parameter.kind in {
-                    inspect.Parameter.VAR_POSITIONAL,
-                    inspect.Parameter.VAR_KEYWORD,
-                }:
-                    continue
-                documented = f"`{qualified_name}.{parameter.name}`"
-                if documented not in page:
-                    missing.append(documented)
-        self.assertEqual(missing, [], f"undocumented constructor parameters: {missing}")
+        for forbidden in (
+            "Geometry, magnet, study, and output parameters used above",
+            "Discretization parameters used above",
+            "`Material.Ku1`",
+            "`Problem.elastic_materials`",
+            "`LLG.integrator`",
+        ):
+            self.assertNotIn(forbidden, page)
+
+        for required in (
+            "`Material.A`",
+            "`Material.A_field`",
+            "`Material.Ms`",
+            "`Material.Ms_field`",
+            "`H_ex`",
+            "`E_ex`",
+            "`FDM.boundary_correction`",
+            "`FDM.boundary_phi_floor`",
+            "`FDM.boundary_delta_min`",
+        ):
+            self.assertIn(required, page)
 
 
 if __name__ == "__main__":

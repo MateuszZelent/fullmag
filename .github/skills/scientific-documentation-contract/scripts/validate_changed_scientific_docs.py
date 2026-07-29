@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import subprocess
+import sys
 from pathlib import Path, PurePosixPath
+from types import ModuleType
 
 from validate_scientific_docs import validate_page
 
@@ -47,6 +50,102 @@ def _page_for(manifest: str) -> str:
     return manifest.removesuffix(".source-map.json") + ".md"
 
 
+def _load_architecture_manifest(repo_root: Path) -> ModuleType | None:
+    manifest_path = repo_root / "scripts" / "public_docs_information_architecture.py"
+    if not manifest_path.is_file():
+        return None
+    module_name = "_fullmag_public_docs_information_architecture"
+    spec = importlib.util.spec_from_file_location(module_name, manifest_path)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        return None
+    finally:
+        sys.modules.pop(module_name, None)
+    return module
+
+
+def _independent_scaffold_text(page_spec: object) -> str | None:
+    """Render the only source-map-free shape without trusting repo generator code."""
+    title = getattr(page_spec, "title", None)
+    label = getattr(page_spec, "label", None)
+    scope = getattr(page_spec, "scope", None)
+    children = getattr(page_spec, "children", ())
+    path = getattr(page_spec, "path", None)
+    if not all(isinstance(value, str) and value for value in (title, label, scope, path)):
+        return None
+    if any(token in scope for token in ("=", "\\", "`", "$", "{", "}", "[", "]", "\n")):
+        return None
+    if not isinstance(children, tuple) or not all(isinstance(child, str) for child in children):
+        return None
+    rendered = (
+        "---\n"
+        f"title: {title}\n"
+        "status: planned\n"
+        "doc_kind: scaffold\n"
+        "audience: user\n"
+        "owner: fullmag-public-docs\n"
+        "---\n\n"
+        f"({label})=\n"
+        f"# {title}\n\n"
+        f"This page reserves the public documentation location for {scope}.\n"
+    )
+    if children:
+        parent = PurePosixPath(path).parent
+        entries = "\n".join(
+            str(PurePosixPath(child).relative_to(parent).with_suffix(""))
+            for child in children
+        )
+        rendered += f"\n```{{toctree}}\n:maxdepth: 1\n\n{entries}\n```\n"
+    if path in {
+        "physics/solvers/fdm/cpu/interactions/exchange.md",
+        "physics/solvers/fdm/gpu/interactions/exchange.md",
+        "physics/solvers/fem/cpu/interactions/exchange.md",
+        "physics/solvers/fem/gpu/interactions/exchange.md",
+    }:
+        rendered += (
+            "\n## Related pages\n\n"
+            "- {doc}`../../../../exchange`\n"
+            "- {doc}`../../../../../python-api/interactions/exchange`\n"
+        )
+    return rendered
+
+
+def is_registered_scaffold(path: Path, repo_root: Path) -> bool:
+    try:
+        relative = path.resolve().relative_to(repo_root.resolve())
+    except ValueError:
+        return False
+    public_root = PurePosixPath("public_docs/site")
+    relative_posix = PurePosixPath(relative.as_posix())
+    try:
+        manifest_path = str(relative_posix.relative_to(public_root))
+    except ValueError:
+        return False
+
+    module = _load_architecture_manifest(repo_root)
+    if module is None:
+        return False
+    page_specs = getattr(module, "PAGE_SPECS", ())
+    matching = [spec for spec in page_specs if getattr(spec, "path", None) == manifest_path]
+    if len(matching) != 1:
+        return False
+    page_spec = matching[0]
+    if getattr(page_spec, "status", None) != "planned":
+        return False
+    if getattr(page_spec, "doc_kind", None) != "scaffold":
+        return False
+    try:
+        expected = _independent_scaffold_text(page_spec)
+        return expected is not None and path.read_bytes() == expected.encode("utf-8")
+    except (OSError, UnicodeError, ValueError, TypeError):
+        return False
+
+
 def validate_changed(repo: Path, base: str, head: str) -> list[str]:
     diff = _git(
         repo,
@@ -68,10 +167,10 @@ def validate_changed(repo: Path, base: str, head: str) -> list[str]:
         if _is_scientific_page(path):
             manifest = _manifest_for(path)
             if _exists(repo, head, path):
-                if not _exists(repo, head, manifest):
-                    errors.append(f"changed scientific page requires sidecar manifest: {manifest}")
-                else:
+                if _exists(repo, head, manifest):
                     manifests.add(manifest)
+                elif not is_registered_scaffold(repo / path, repo):
+                    errors.append(f"changed scientific page requires sidecar manifest: {manifest}")
             elif _exists(repo, head, manifest):
                 errors.append(f"deleted scientific page left an orphan sidecar manifest: {manifest}")
         elif path.endswith(".source-map.json"):

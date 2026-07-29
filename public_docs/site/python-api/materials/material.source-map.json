@@ -1,0 +1,281 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/materials/material.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "owner",
+      "path": "packages/fullmag-py/src/fullmag/model/structure.py",
+      "symbol": "class Material",
+      "responsibility": "Owns the documented public API, validation, and lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "Material.name",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "Non-empty material identity referenced by magnets.",
+        "meaning": "Non-empty material identity referenced by magnets.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "materials[].name"
+      },
+      {
+        "python": "Material.Ms",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{A\\,m^{-1}}",
+        "validation": "Finite and positive saturation magnetization.",
+        "meaning": "Finite and positive saturation magnetization.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "materials[].saturation_magnetisation"
+      },
+      {
+        "python": "Material.A",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{J\\,m^{-1}}",
+        "validation": "Finite and positive bulk exchange stiffness; unusual-SI values outside $[10^{-14},10^{-8}]$ warn.",
+        "meaning": "Finite and positive bulk exchange stiffness; unusual-SI values outside $[10^{-14},10^{-8}]$ warn.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "materials[].exchange_stiffness"
+      },
+      {
+        "python": "Material.alpha",
+        "type": "float",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "Finite non-negative Gilbert damping.",
+        "meaning": "Finite non-negative Gilbert damping.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "materials[].damping"
+      },
+      {
+        "python": "Material.Ku1",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{J\\,m^{-3}}",
+        "validation": "Finite signed first-order uniaxial anisotropy.",
+        "meaning": "Finite signed first-order uniaxial anisotropy.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "materials[].uniaxial_anisotropy"
+      },
+      {
+        "python": "Material.Ku2",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{J\\,m^{-3}}",
+        "validation": "Finite signed second-order uniaxial anisotropy.",
+        "meaning": "Finite signed second-order uniaxial anisotropy.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "materials[].uniaxial_anisotropy_k2"
+      },
+      {
+        "python": "Material.anisU",
+        "type": "three floats or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Finite three-vector defining the uniaxial axis; normalization and legality are checked downstream.",
+        "meaning": "Finite three-vector defining the uniaxial axis; normalization and legality are checked downstream.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "materials[].anisotropy_axis"
+      },
+      {
+        "python": "Material.Kc1",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{J\\,m^{-3}}",
+        "validation": "First cubic-anisotropy coefficient; suspicious-SI values warn.",
+        "meaning": "First cubic-anisotropy coefficient; suspicious-SI values warn.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "materials[].cubic_anisotropy_kc1"
+      },
+      {
+        "python": "Material.Kc2",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{J\\,m^{-3}}",
+        "validation": "Second cubic-anisotropy coefficient; suspicious-SI values warn.",
+        "meaning": "Second cubic-anisotropy coefficient; suspicious-SI values warn.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "materials[].cubic_anisotropy_kc2"
+      },
+      {
+        "python": "Material.Kc3",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{J\\,m^{-3}}",
+        "validation": "Third cubic-anisotropy coefficient; suspicious-SI values warn.",
+        "meaning": "Third cubic-anisotropy coefficient; suspicious-SI values warn.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "materials[].cubic_anisotropy_kc3"
+      },
+      {
+        "python": "Material.anisC1",
+        "type": "three floats or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Finite first cubic-anisotropy axis.",
+        "meaning": "Finite first cubic-anisotropy axis.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "materials[].cubic_anisotropy_axis1"
+      },
+      {
+        "python": "Material.anisC2",
+        "type": "three floats or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Finite second cubic-anisotropy axis.",
+        "meaning": "Finite second cubic-anisotropy axis.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "materials[].cubic_anisotropy_axis2"
+      },
+      {
+        "python": "Material.Dind",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{J\\,m^{-2}}",
+        "validation": "Finite interfacial-DMI material coefficient; it does not enable DMI by itself.",
+        "meaning": "Finite interfacial-DMI material coefficient; it does not enable DMI by itself.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "materials[].interfacial_dmi"
+      },
+      {
+        "python": "Material.Dbulk",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{J\\,m^{-3}}",
+        "validation": "Finite bulk-DMI material coefficient; it does not enable DMI by itself.",
+        "meaning": "Finite bulk-DMI material coefficient; it does not enable DMI by itself.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "materials[].bulk_dmi"
+      },
+      {
+        "python": "Material.Ms_field",
+        "type": "list[float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm{A\\,m^{-1}}",
+        "validation": "Optional spatial values overriding scalar `Ms`; mesh cardinality and lane legality are checked downstream.",
+        "meaning": "Optional spatial values overriding scalar `Ms`; mesh cardinality and lane legality are checked downstream.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "materials[].ms_field"
+      },
+      {
+        "python": "Material.A_field",
+        "type": "list[float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm{J\\,m^{-1}}",
+        "validation": "Optional spatial values overriding scalar `A`; not an FDM pair-coefficient lookup table.",
+        "meaning": "Optional spatial values overriding scalar `A`; not an FDM pair-coefficient lookup table.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "materials[].a_field"
+      },
+      {
+        "python": "Material.alpha_field",
+        "type": "list[float] | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Optional mesh-aligned damping values; cardinality and lane support are checked downstream.",
+        "meaning": "Optional mesh-aligned damping values; cardinality and lane support are checked downstream.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "materials[].alpha_field"
+      },
+      {
+        "python": "Material.Ku_field",
+        "type": "list[float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm{J\\,m^{-3}}",
+        "validation": "Optional spatial `Ku1` values.",
+        "meaning": "Optional spatial `Ku1` values.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "materials[].ku_field"
+      },
+      {
+        "python": "Material.Ku2_field",
+        "type": "list[float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm{J\\,m^{-3}}",
+        "validation": "Optional spatial `Ku2` values.",
+        "meaning": "Optional spatial `Ku2` values.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "materials[].ku2_field"
+      },
+      {
+        "python": "Material.Kc1_field",
+        "type": "list[float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm{J\\,m^{-3}}",
+        "validation": "Optional spatial `Kc1` values.",
+        "meaning": "Optional spatial `Kc1` values.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "materials[].kc1_field"
+      },
+      {
+        "python": "Material.Kc2_field",
+        "type": "list[float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm{J\\,m^{-3}}",
+        "validation": "Optional spatial `Kc2` values.",
+        "meaning": "Optional spatial `Kc2` values.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "materials[].kc2_field"
+      },
+      {
+        "python": "Material.Kc3_field",
+        "type": "list[float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm{J\\,m^{-3}}",
+        "validation": "Optional spatial `Kc3` values.",
+        "meaning": "Optional spatial `Kc3` values.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "materials[].kc3_field"
+      },
+      {
+        "python": "Material.Dind_field",
+        "type": "list[float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm{J\\,m^{-2}}",
+        "validation": "Optional spatial interfacial-DMI values.",
+        "meaning": "Optional spatial interfacial-DMI values.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "materials[].dind_field"
+      },
+      {
+        "python": "Material.Dbulk_field",
+        "type": "list[float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm{J\\,m^{-3}}",
+        "validation": "Optional spatial bulk-DMI values.",
+        "meaning": "Optional spatial bulk-DMI values.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "materials[].dbulk_field"
+      }
+    ]
+  }
+}

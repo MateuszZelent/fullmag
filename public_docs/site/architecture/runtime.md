@@ -1,11 +1,13 @@
 ---
 title: Runtime and provenance
-status: draft
+status: partial
+doc_kind: reference
 audience: user
 owner: fullmag-public-docs
 source_of_truth: docs/specs/runtime-distribution-and-managed-backends-v1.md
 ---
 
+(public-docs-architecture-runtime)=
 # Runtime and provenance
 
 FullMag presents one launcher and one control room even when implementation uses managed runtime

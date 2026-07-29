@@ -1,0 +1,71 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/studies/time-evolution.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "owner",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class TimeEvolution",
+      "responsibility": "Owns the documented public API, validation, and lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "TimeEvolution.dynamics",
+        "type": "LLG",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "Time-domain equation and integrator settings.",
+        "meaning": "Time-domain equation and integrator settings.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "study.dynamics"
+      },
+      {
+        "python": "TimeEvolution.outputs",
+        "type": "sequence",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "Sampling requests. An empty sequence is valid.",
+        "meaning": "Sampling requests. An empty sequence is valid.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "study.outputs"
+      },
+      {
+        "python": "TimeEvolution.table_autosave",
+        "type": "TableAutosave | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Optional tabular autosave policy.",
+        "meaning": "Optional tabular autosave policy.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "study.table_autosave"
+      }
+    ]
+  }
+}

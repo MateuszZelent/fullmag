@@ -1,0 +1,87 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/outputs/fields-and-scalars.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "owner",
+      "path": "packages/fullmag-py/src/fullmag/model/outputs.py",
+      "symbol": "class SaveField",
+      "responsibility": "Owns the documented public API, validation, and lowering."
+    },
+    {
+      "id": "save-scalar-owner",
+      "path": "packages/fullmag-py/src/fullmag/model/outputs.py",
+      "symbol": "class SaveScalar",
+      "responsibility": "Owns SaveScalar validation and lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "SaveField.field",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "Canonical field ID. For example, `H_ex` requires `Exchange()`.",
+        "meaning": "Canonical field ID. For example, `H_ex` requires `Exchange()`.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "study.sampling.outputs[].field"
+      },
+      {
+        "python": "SaveField.every",
+        "type": "positive float or \"auto\"",
+        "default": "required",
+        "si_unit": "\\mathrm{s}",
+        "validation": "Finite positive sampling period in seconds, or `\"auto\"`; step-count sampling is not accepted here.",
+        "meaning": "Finite positive sampling period in seconds, or `\"auto\"`; step-count sampling is not accepted here.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "study.sampling.outputs[].every"
+      },
+      {
+        "python": "SaveScalar.scalar",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "Canonical scalar ID. For example, `E_ex` requires `Exchange()`.",
+        "meaning": "Canonical scalar ID. For example, `E_ex` requires `Exchange()`.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "study.sampling.outputs[].scalar"
+      },
+      {
+        "python": "SaveScalar.every",
+        "type": "positive float or \"auto\"",
+        "default": "required",
+        "si_unit": "\\mathrm{s}",
+        "validation": "Finite positive sampling period in seconds, or `\"auto\"`; step-count sampling is not accepted here.",
+        "meaning": "Finite positive sampling period in seconds, or `\"auto\"`; step-count sampling is not accepted here.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "study.sampling.outputs[].every"
+      }
+    ]
+  }
+}

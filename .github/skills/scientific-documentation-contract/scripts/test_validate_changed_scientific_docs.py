@@ -33,6 +33,75 @@ class ChangedScientificDocumentationTests(unittest.TestCase):
         _git(self.repo, "commit", "-qm", "base")
         self.base = _git(self.repo, "rev-parse", "HEAD")
 
+    def _write_architecture_manifest(self) -> tuple[Path, str]:
+        page_path = "public_docs/site/physics/solvers/fdm/cpu/exchange.md"
+        scripts = self.repo / "scripts"
+        scripts.mkdir()
+        (scripts / "public_docs_information_architecture.py").write_text(
+            """from dataclasses import dataclass
+from pathlib import Path
+
+@dataclass(frozen=True)
+class PageSpec:
+    path: str
+    title: str
+    label: str
+    status: str
+    doc_kind: str
+    scope: str
+    children: tuple[str, ...] = ()
+
+PAGE_SPECS = (
+    PageSpec(
+        \"physics/solvers/fdm/cpu/exchange.md\",
+        \"Exchange\",
+        \"public-docs-physics-solvers-fdm-cpu-exchange\",
+        \"planned\",
+        \"scaffold\",
+        \"FDM CPU exchange\",
+    ),
+)
+
+def render_page(spec: PageSpec, root: Path) -> str:
+    return (
+        \"---\\n\"
+        f\"title: {spec.title}\\n\"
+        f\"status: {spec.status}\\n\"
+        f\"doc_kind: {spec.doc_kind}\\n\"
+        \"audience: user\\n\"
+        \"owner: fullmag-public-docs\\n\"
+        \"---\\n\\n\"
+        f\"({spec.label})=\\n\"
+        f\"# {spec.title}\\n\\n\"
+        f\"This page reserves the public documentation location for {spec.scope}.\\n\"
+    )
+""",
+            encoding="utf-8",
+        )
+        page = self.repo / page_path
+        page.parent.mkdir(parents=True)
+        return page, page_path
+
+    def _render_registered_scaffold(self) -> tuple[Path, str]:
+        page, page_path = self._write_architecture_manifest()
+        page.write_text(
+            """---
+title: Exchange
+status: planned
+doc_kind: scaffold
+audience: user
+owner: fullmag-public-docs
+---
+
+(public-docs-physics-solvers-fdm-cpu-exchange)=
+# Exchange
+
+This page reserves the public documentation location for FDM CPU exchange.
+""",
+            encoding="utf-8",
+        )
+        return page, page_path
+
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
@@ -47,6 +116,84 @@ class ChangedScientificDocumentationTests(unittest.TestCase):
         self.assertIn(
             "changed scientific page requires sidecar manifest: "
             "public_docs/site/physics/exchange.source-map.json",
+            errors,
+        )
+
+    def test_registered_canonical_scaffold_does_not_require_source_map(self) -> None:
+        self._render_registered_scaffold()
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "add canonical scaffold")
+
+        self.assertEqual(validate_changed(self.repo, self.base, "HEAD"), [])
+
+    def test_unregistered_planned_page_still_requires_source_map(self) -> None:
+        self._write_architecture_manifest()
+        page = self.repo / "public_docs/site/physics/unregistered.md"
+        page.write_text("---\nstatus: planned\n---\n\n# Unregistered\n", encoding="utf-8")
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "add unregistered planned page")
+
+        errors = validate_changed(self.repo, self.base, "HEAD")
+
+        self.assertIn(
+            "changed scientific page requires sidecar manifest: "
+            "public_docs/site/physics/unregistered.source-map.json",
+            errors,
+        )
+
+    def test_registered_scaffold_with_scientific_content_requires_source_map(self) -> None:
+        page, page_path = self._render_registered_scaffold()
+        page.write_text(page.read_text(encoding="utf-8") + "\\[E = A |\\nabla m|^2\\]\n")
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "modify scaffold content")
+
+        errors = validate_changed(self.repo, self.base, "HEAD")
+
+        self.assertIn(
+            f"changed scientific page requires sidecar manifest: "
+            f"{page_path.removesuffix('.md')}.source-map.json",
+            errors,
+        )
+
+    def test_changed_generator_cannot_approve_arbitrary_scaffold_content(self) -> None:
+        page, page_path = self._render_registered_scaffold()
+        generator = self.repo / "scripts/public_docs_information_architecture.py"
+        generator.write_text(
+            generator.read_text(encoding="utf-8").replace(
+                'f"This page reserves the public documentation location for {spec.scope}.\\n"',
+                '"The exchange field is exactly H = 2 A laplacian(m).\\n"',
+            ),
+            encoding="utf-8",
+        )
+        page.write_text(
+            page.read_text(encoding="utf-8").replace(
+                "This page reserves the public documentation location for FDM CPU exchange.",
+                "The exchange field is exactly H = 2 A laplacian(m).",
+            ),
+            encoding="utf-8",
+        )
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "change generator and scaffold together")
+
+        errors = validate_changed(self.repo, self.base, "HEAD")
+
+        self.assertIn(
+            f"changed scientific page requires sidecar manifest: "
+            f"{page_path.removesuffix('.md')}.source-map.json",
+            errors,
+        )
+
+    def test_registered_scaffold_with_changed_status_requires_source_map(self) -> None:
+        page, page_path = self._render_registered_scaffold()
+        page.write_text(page.read_text(encoding="utf-8").replace("status: planned", "status: implemented"))
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "change scaffold status")
+
+        errors = validate_changed(self.repo, self.base, "HEAD")
+
+        self.assertIn(
+            f"changed scientific page requires sidecar manifest: "
+            f"{page_path.removesuffix('.md')}.source-map.json",
             errors,
         )
 

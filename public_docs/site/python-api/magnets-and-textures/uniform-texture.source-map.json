@@ -1,0 +1,71 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/magnets-and-textures/uniform-texture.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "owner",
+      "path": "packages/fullmag-py/src/fullmag/init/textures.py",
+      "symbol": "uniform",
+      "responsibility": "Owns the documented public API, validation, and lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "texture.uniform.direction_or_x",
+        "type": "three floats or scalar",
+        "default": "(1, 0, 0)",
+        "si_unit": "1",
+        "validation": "Direction tuple or first Cartesian component of uniform reduced magnetization.",
+        "meaning": "Direction tuple or first Cartesian component of uniform reduced magnetization.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "magnets[].initial_magnetization.params.direction"
+      },
+      {
+        "python": "texture.uniform.y",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Second component for scalar-form authoring.",
+        "meaning": "Second component for scalar-form authoring.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "magnets[].initial_magnetization.params.direction"
+      },
+      {
+        "python": "texture.uniform.z",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Third component for scalar-form authoring.",
+        "meaning": "Third component for scalar-form authoring.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "magnets[].initial_magnetization.params.direction"
+      }
+    ]
+  }
+}

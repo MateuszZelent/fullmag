@@ -1,0 +1,71 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/discretization/discretization-hints.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "owner",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class DiscretizationHints",
+      "responsibility": "Owns the documented public API, validation, and lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "DiscretizationHints.fdm",
+        "type": "FDM | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "FDM-specific hint; it does not force FDM when backend selection remains `auto`.",
+        "meaning": "FDM-specific hint; it does not force FDM when backend selection remains `auto`.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "backend_policy.discretization_hints.fdm"
+      },
+      {
+        "python": "DiscretizationHints.fem",
+        "type": "FEM | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "FEM-specific hint; it does not force FEM when backend selection remains `auto`.",
+        "meaning": "FEM-specific hint; it does not force FEM when backend selection remains `auto`.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "backend_policy.discretization_hints.fem"
+      },
+      {
+        "python": "DiscretizationHints.hybrid",
+        "type": "Hybrid | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Optional hybrid hint.",
+        "meaning": "Optional hybrid hint.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "backend_policy.discretization_hints.hybrid"
+      }
+    ]
+  }
+}

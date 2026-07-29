@@ -1,11 +1,13 @@
 ---
 title: Physics reference
-status: draft
+status: partial
+doc_kind: reference
 audience: user
 owner: fullmag-public-docs
 source_of_truth: docs/physics/0000-physics-documentation-standard.md
 ---
 
+(public-docs-physics-root)=
 # Physics reference
 
 Each public physics page follows the same chain:
@@ -16,6 +18,8 @@ reproducible example.
 ```{toctree}
 :maxdepth: 2
 
+foundations/index
+solvers/index
 conventions
 geometry-and-materials
 exchange
