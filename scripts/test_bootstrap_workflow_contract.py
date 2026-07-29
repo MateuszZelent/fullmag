@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import unittest
 
 
@@ -31,6 +32,11 @@ class BootstrapWorkflowContractTests(unittest.TestCase):
         pyproject = (ROOT / "packages/fullmag-py/pyproject.toml").read_text()
 
         self.assertIn('"manifold3d>=3,<4"', pyproject)
+
+    def test_control_room_declares_playwright_for_browser_audits(self) -> None:
+        package = json.loads((ROOT / "apps/control-room/package.json").read_text())
+
+        self.assertEqual(package["devDependencies"]["playwright"], "1.62.0")
 
     def test_every_tracked_gitlink_has_submodule_metadata(self) -> None:
         gitmodules = (ROOT / ".gitmodules").read_text()
