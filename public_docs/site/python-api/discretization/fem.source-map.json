@@ -1,0 +1,91 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/discretization/fem.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "owner",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FEM",
+      "responsibility": "Owns the documented public API, validation, and lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "FEM.order",
+        "type": "int",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "Positive finite-element order.",
+        "meaning": "Positive finite-element order.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "backend_policy.discretization_hints.fem.order"
+      },
+      {
+        "python": "FEM.maximum_element_size",
+        "type": "positive `float`",
+        "default": "required unless `hmax` is supplied",
+        "si_unit": "\\mathrm{m}",
+        "validation": "Canonical maximum element size. Construction fails if neither spelling is provided.",
+        "meaning": "Canonical maximum element size. Construction fails if neither spelling is provided.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "backend_policy.discretization_hints.fem.maximum_element_size"
+      },
+      {
+        "python": "FEM.hmax",
+        "type": "positive `float | None`",
+        "default": "None",
+        "si_unit": "\\mathrm{m}",
+        "validation": "Alternate input spelling for the same required size; unequal simultaneous values are rejected.",
+        "meaning": "Alternate input spelling for the same required size; unequal simultaneous values are rejected.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "backend_policy.discretization_hints.fem.maximum_element_size"
+      },
+      {
+        "python": "FEM.mesh",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Optional imported mesh reference.",
+        "meaning": "Optional imported mesh reference.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "backend_policy.discretization_hints.fem.mesh"
+      },
+      {
+        "python": "FEM.demag_solver_policy",
+        "type": "policy or `None`",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Demagnetization linear-solver policy.",
+        "meaning": "Demagnetization linear-solver policy.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "backend_policy.discretization_hints.fem.demag_solver_policy"
+      }
+    ]
+  }
+}

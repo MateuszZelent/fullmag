@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import inspect
+import importlib.util
+import json
 from pathlib import Path
 import unittest
 
@@ -9,6 +11,7 @@ import fullmag as fm
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 PUBLIC_DOCS_ROOT = REPOSITORY_ROOT / "public_docs/site"
+WORKFLOW = REPOSITORY_ROOT / ".github/workflows/documentation.yml"
 
 API_PARAMETER_OWNERS: dict[str, Path] = {
     "Material": Path("python-api/materials/material.md"),
@@ -70,6 +73,58 @@ class PublicPythonApiDocumentationTests(unittest.TestCase):
             [],
             f"constructor parameters with multiple canonical API owners: {duplicate_owners}",
         )
+
+    def test_each_authored_python_api_reference_has_a_valid_source_map(self) -> None:
+        validator_path = REPOSITORY_ROOT / (
+            ".agents/skills/scientific-documentation-contract/scripts/"
+            "validate_scientific_docs.py"
+        )
+        spec = importlib.util.spec_from_file_location("validate_scientific_docs", validator_path)
+        assert spec is not None and spec.loader is not None
+        validator = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(validator)
+
+        authored_pages = {
+            *API_PARAMETER_OWNERS.values(),
+            Path("python-api/materials/spatial-parameter-fields.md"),
+            Path("python-api/problem/problem-ir.md"),
+        }
+        failures: dict[str, list[str]] = {}
+        for relative_page in sorted(authored_pages):
+            source_map = (PUBLIC_DOCS_ROOT / relative_page).with_suffix(".source-map.json")
+            if not source_map.is_file():
+                failures[str(relative_page)] = ["adjacent source map is missing"]
+                continue
+            manifest = json.loads(source_map.read_text(encoding="utf-8"))
+            errors = validator.validate_page(REPOSITORY_ROOT, manifest)
+            documented = {
+                parameter["python"]
+                for parameter in manifest.get("public_api", {}).get("parameters", [])
+            }
+            page_owners = [
+                name for name, owner in API_PARAMETER_OWNERS.items() if owner == relative_page
+            ]
+            expected = {
+                f"{name}.{parameter.name}"
+                for name in page_owners
+                for parameter in inspect.signature(API_CONSTRUCTORS[name]).parameters.values()
+                if parameter.kind
+                not in {inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD}
+            }
+            if documented != expected:
+                errors.append(
+                    f"source-map parameters differ from constructor signature: "
+                    f"missing={sorted(expected - documented)}, extra={sorted(documented - expected)}"
+                )
+            if errors:
+                failures[str(relative_page)] = errors
+        self.assertEqual(failures, {})
+
+    def test_documentation_workflow_guards_python_api_contracts(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertGreaterEqual(workflow.count('"packages/fullmag-py/**"'), 2)
+        self.assertIn("test_public_python_api_documentation.py", workflow)
+        self.assertIn("public_docs/site/python-api", workflow)
 
 
 if __name__ == "__main__":

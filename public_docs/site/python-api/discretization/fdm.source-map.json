@@ -1,0 +1,111 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/discretization/fdm.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "owner",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FDM",
+      "responsibility": "Owns the documented public API, validation, and lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "FDM.cell",
+        "type": "three positive floats or `None`",
+        "default": "None",
+        "si_unit": "\\mathrm{m}",
+        "validation": "Canonical uniform cell size; it also becomes `default_cell` when supplied.",
+        "meaning": "Canonical uniform cell size; it also becomes `default_cell` when supplied.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "backend_policy.discretization_hints.fdm.cell"
+      },
+      {
+        "python": "FDM.default_cell",
+        "type": "three positive floats or `None`",
+        "default": "None",
+        "si_unit": "\\mathrm{m}",
+        "validation": "Default cell size when per-magnet grids are present.",
+        "meaning": "Default cell size when per-magnet grids are present.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "backend_policy.discretization_hints.fdm.default_cell"
+      },
+      {
+        "python": "FDM.per_magnet",
+        "type": "mapping or `None`",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Optional explicit per-magnet FDM grids.",
+        "meaning": "Optional explicit per-magnet FDM grids.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "backend_policy.discretization_hints.fdm.per_magnet"
+      },
+      {
+        "python": "FDM.demag",
+        "type": "FDMDemag | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Demagnetization hint.",
+        "meaning": "Demagnetization hint.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "backend_policy.discretization_hints.fdm.demag"
+      },
+      {
+        "python": "FDM.boundary_correction",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Optional `T0`/`T1`-family sub-cell policy. Support differs by precision and device.",
+        "meaning": "Optional `T0`/`T1`-family sub-cell policy. Support differs by precision and device.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "backend_policy.discretization_hints.fdm.boundary_correction"
+      },
+      {
+        "python": "FDM.boundary_phi_floor",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Optional lower bound $\\varphi_{\\mathrm{floor}}$ with strict domain $0<\\varphi_{\\mathrm{floor}}<1$.",
+        "meaning": "Optional lower bound $\\varphi_{\\mathrm{floor}}$ with strict domain $0<\\varphi_{\\mathrm{floor}}<1$.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "backend_policy.discretization_hints.fdm.boundary_phi_floor"
+      },
+      {
+        "python": "FDM.boundary_delta_min",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{m}",
+        "validation": "Optional T1 distance floor $\\delta_{\\min}\\geq0$; zero is accepted.",
+        "meaning": "Optional T1 distance floor $\\delta_{\\min}\\geq0$; zero is accepted.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "backend_policy.discretization_hints.fdm.boundary_delta_min"
+      }
+    ]
+  }
+}

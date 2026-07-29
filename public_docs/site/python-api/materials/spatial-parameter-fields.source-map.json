@@ -1,0 +1,40 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/materials/spatial-parameter-fields.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "owner",
+      "path": "packages/fullmag-py/src/fullmag/model/structure.py",
+      "symbol": "class Material",
+      "responsibility": "Owns the documented public API, validation, and lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}
