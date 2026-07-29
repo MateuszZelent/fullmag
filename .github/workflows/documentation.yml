@@ -8,6 +8,8 @@ on:
       - "public_docs/site/**"
       - "public_docs/fullmag_profesjonalna_dokumentacja_architektura.md"
       - "docs/physics/**"
+      - "scripts/public_docs_information_architecture.py"
+      - "scripts/test_public_docs_information_architecture.py"
       - ".agents/skills/scientific-documentation-contract/**"
       - ".github/workflows/documentation.yml"
   pull_request:
@@ -15,6 +17,8 @@ on:
       - "public_docs/site/**"
       - "public_docs/fullmag_profesjonalna_dokumentacja_architektura.md"
       - "docs/physics/**"
+      - "scripts/public_docs_information_architecture.py"
+      - "scripts/test_public_docs_information_architecture.py"
       - ".agents/skills/scientific-documentation-contract/**"
       - ".github/workflows/documentation.yml"
   workflow_dispatch:
@@ -49,6 +53,11 @@ jobs:
           python -m unittest discover
           -s .agents/skills/scientific-documentation-contract/scripts
           -p 'test_*.py' -v
+
+      - name: Validate public documentation information architecture
+        run: |
+          python -m unittest scripts/test_public_docs_information_architecture.py -v
+          python scripts/public_docs_information_architecture.py --check --root public_docs/site
 
       - name: Resolve scientific documentation diff base
         id: docs-diff
