@@ -65,6 +65,11 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
+      - name: Install ripgrep
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
+
       - name: Resource-first migration gates
         run: ./scripts/ci-resource-first-gates.sh --strict
 
