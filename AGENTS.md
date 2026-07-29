@@ -411,7 +411,8 @@ Non-negotiable rules:
    validation, limitations, scientific bibliography, and source-code index. Do not replace the
    implemented model with a pedagogical simplification.
 8. Store every terminal scientific page together with its adjacent `.source-map.json`. The
-   documentation workflow must run the validator tests and changed-page gate; any failure blocks
+   documentation workflow must run the validator tests and changed-page gate, and `contract-guard`
+   must revalidate all existing source maps on implementation-only pull requests; any failure blocks
    publication.
 9. Automated validation proves structural completeness, traceability, and exact source existence;
    it does not prove mathematical equivalence. Publication also requires an approved semantic
