@@ -239,21 +239,35 @@ fullmag_fem_plan_desc qualified_mixed_operator_plan(const MeshBuffers &source) {
     return plan;
 }
 
-void native_physics_gate_accepts_only_qualified_cpu_mixed_p1_operator_scope() {
+void native_physics_gate_accepts_only_qualified_explicit_cpu_or_cuda_mixed_p1_operator_scope() {
     MeshBuffers source = qualified_mixed_operator_mesh();
     fullmag::fem::Context ctx;
     std::string error;
     check(fullmag::fem::initialize_mesh_plan_fields(ctx, source.desc(), error), error.c_str());
     auto plan = qualified_mixed_operator_plan(source);
-    check(fullmag::fem::validate_supported_physics_topology(ctx, plan, error), error.c_str());
+    const char *accepted_devices[] = {"cpu", "cuda"};
+    for (const char *device : accepted_devices) {
+        plan.mfem_device_string = device;
+        error.clear();
+        check(fullmag::fem::validate_supported_physics_topology(ctx, plan, error), error.c_str());
+    }
 
     struct Case {
         const char *name;
         void (*mutate)(fullmag_fem_plan_desc &, MeshBuffers &);
     };
     const Case cases[] = {
-        {"gpu", [](fullmag_fem_plan_desc &value, MeshBuffers &) {
-             value.mfem_device_string = "cuda";
+        {"missing device", [](fullmag_fem_plan_desc &value, MeshBuffers &) {
+             value.mfem_device_string = nullptr;
+         }},
+        {"empty device", [](fullmag_fem_plan_desc &value, MeshBuffers &) {
+             value.mfem_device_string = "";
+         }},
+        {"auto device", [](fullmag_fem_plan_desc &value, MeshBuffers &) {
+             value.mfem_device_string = "auto";
+         }},
+        {"unknown device", [](fullmag_fem_plan_desc &value, MeshBuffers &) {
+             value.mfem_device_string = "hip";
          }},
         {"single", [](fullmag_fem_plan_desc &value, MeshBuffers &) {
              value.precision = FULLMAG_FEM_PRECISION_SINGLE;
@@ -302,6 +316,7 @@ void native_physics_gate_accepts_only_qualified_cpu_mixed_p1_operator_scope() {
                   rejected_ctx, rejected, error),
               item.name);
         check(error.find("mixed P1") != std::string::npos, error.c_str());
+        check(error.find("explicit_cpu_or_gpu") != std::string::npos, error.c_str());
         check(error.find("fallback=none") != std::string::npos, error.c_str());
     }
 }
@@ -518,7 +533,7 @@ void element_family_tables_cover_all_supported_cells() {
 int main() {
     typed_mesh_import_copies_every_canonical_buffer();
     exported_mesh_abi_query_matches_compiled_layout();
-    native_physics_gate_accepts_only_qualified_cpu_mixed_p1_operator_scope();
+    native_physics_gate_accepts_only_qualified_explicit_cpu_or_cuda_mixed_p1_operator_scope();
     typed_mesh_import_accepts_empty_optional_buffers();
     typed_mesh_import_rejects_bad_version_pointers_and_lengths();
     typed_mesh_import_rejects_invalid_csr_enums_indices_duplicates_and_jacobians();

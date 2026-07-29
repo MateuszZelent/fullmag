@@ -519,8 +519,10 @@ bool validate_supported_physics_topology(
         std::equal(
             ctx.mesh.cell_types.begin(), ctx.mesh.cell_types.end(),
             plan.mesh.cell_types);
-    const bool cpu_device = plan.mfem_device_string != nullptr &&
-        std::string(plan.mfem_device_string) == "cpu";
+    const std::string mfem_device =
+        plan.mfem_device_string != nullptr ? plan.mfem_device_string : "";
+    const bool explicit_cpu_or_cuda_device =
+        mfem_device == "cpu" || mfem_device == "cuda";
     const bool no_extended_physics =
         plan.has_uniaxial_anisotropy == 0 &&
         plan.has_cubic_anisotropy == 0 &&
@@ -537,7 +539,7 @@ bool validate_supported_physics_topology(
         plan.temperature == 0.0 && plan.has_magnetoelastic == 0 &&
         plan.regional_field_drive_count == 0u;
     const bool qualified = exact_cell_families && exact_facet_families &&
-        markers_match_scope && exact_plan_topology && cpu_device &&
+        markers_match_scope && exact_plan_topology && explicit_cpu_or_cuda_device &&
         plan.fe_order == 1u && plan.precision == FULLMAG_FEM_PRECISION_DOUBLE &&
         plan.enable_exchange != 0 && plan.enable_demag != 0 &&
         (plan.demag_realization == FULLMAG_FEM_DEMAG_AIRBOX_ROBIN ||
@@ -545,7 +547,7 @@ bool validate_supported_physics_topology(
         no_extended_physics;
     if (!qualified) {
         error =
-            "native FEM mixed P1 scope rejected: required=explicit_cpu+double+P1+"
+            "native FEM mixed P1 scope rejected: required=explicit_cpu_or_gpu+double+P1+"
             "prism6_magnetic+pyramid5_tet4_air+tri3_quad4+exchange+"
             "poisson_robin_or_dirichlet+uniform_material; fallback=none";
         return false;

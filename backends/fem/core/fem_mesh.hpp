@@ -75,9 +75,9 @@ bool initialize_mesh_plan_fields(
     std::string &error);
 
 /*
- * Admit the legacy tet4/tri3 lane and the narrowly qualified mixed-P1 CPU
- * operator tuple. All other mixed-topology plans fail closed before backend
- * operator construction.
+ * Admit the legacy tet4/tri3 lane and the narrowly qualified explicit CPU/GPU
+ * mixed-P1 operator tuple. All other mixed-topology plans fail closed before
+ * backend operator construction.
  */
 bool validate_supported_physics_topology(
     const Context &ctx,
