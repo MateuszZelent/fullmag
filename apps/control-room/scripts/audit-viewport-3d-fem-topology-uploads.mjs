@@ -973,7 +973,37 @@ async function fulfillJson(route, body, status = 200) {
 }
 
 async function fulfillBinary(route, arrayBuffer, status = 200) {
-  await route.fulfill({ body: Buffer.from(arrayBuffer), headers: fixtureHeaders({ "content-type": "application/octet-stream" }), status });
+  const body = Buffer.from(arrayBuffer);
+  const range = /^bytes=(\d+)-(\d+)$/.exec(
+    route.request().headers().range?.trim() ?? "",
+  );
+  if (!range) {
+    await route.fulfill({
+      body,
+      headers: fixtureHeaders({
+        "content-length": String(body.byteLength),
+        "content-type": "application/octet-stream",
+        etag: '"fem-topology-fixture"',
+      }),
+      status,
+    });
+    return;
+  }
+
+  const start = Number(range[1]);
+  const end = Math.min(Number(range[2]), body.byteLength - 1);
+  const chunk = body.subarray(start, end + 1);
+  await route.fulfill({
+    body: chunk,
+    headers: fixtureHeaders({
+      "accept-ranges": "bytes",
+      "content-length": String(chunk.byteLength),
+      "content-range": `bytes ${start}-${end}/${body.byteLength}`,
+      "content-type": "application/octet-stream",
+      etag: '"fem-topology-fixture"',
+    }),
+    status: 206,
+  });
 }
 
 async function fulfillEmpty(route, status = 204) {
@@ -981,7 +1011,7 @@ async function fulfillEmpty(route, status = 204) {
 }
 
 function fixtureHeaders(extra = {}) {
-  return { "access-control-allow-headers": "*", "access-control-allow-methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS", "access-control-allow-origin": "*", "access-control-expose-headers": "x-api-contract-version,etag,x-request-id", "x-api-contract-version": "1.0.0", ...extra };
+  return { "access-control-allow-headers": "*", "access-control-allow-methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS", "access-control-allow-origin": "*", "access-control-expose-headers": "x-api-contract-version,content-range,etag,x-request-id", "x-api-contract-version": "1.0.0", ...extra };
 }
 
 async function loadPlaywright() {

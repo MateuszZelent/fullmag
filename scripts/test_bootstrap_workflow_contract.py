@@ -38,6 +38,17 @@ class BootstrapWorkflowContractTests(unittest.TestCase):
 
         self.assertEqual(package["devDependencies"]["playwright"], "1.62.0")
 
+    def test_fem_browser_fixture_honors_chunked_topology_ranges(self) -> None:
+        audit = (
+            ROOT
+            / "apps/control-room/scripts/audit-viewport-3d-fem-topology-uploads.mjs"
+        ).read_text()
+
+        self.assertIn('route.request().headers().range', audit)
+        self.assertIn('"content-range": `bytes ${start}-${end}/${body.byteLength}`', audit)
+        self.assertIn('etag: \'"fem-topology-fixture"\'', audit)
+        self.assertIn('status: 206', audit)
+
     def test_every_tracked_gitlink_has_submodule_metadata(self) -> None:
         gitmodules = (ROOT / ".gitmodules").read_text()
 
