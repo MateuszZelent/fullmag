@@ -16,6 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 meshing = [
     "gmsh>=4.12,<5",
+    "manifold3d>=3,<4",
     "meshio>=5.3,<6",
     "scipy>=1.10,<2",
     "trimesh>=4.2,<5",
