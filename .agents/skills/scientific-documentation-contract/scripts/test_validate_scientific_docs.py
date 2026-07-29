@@ -154,6 +154,9 @@ Source `src-demag` realizes `eq-demag`.
         unit = copy.deepcopy(self.manifest)
         unit["symbols"][0]["si_unit"] = ""
         self.assertTrue(any("si_unit is required" in e for e in self.errors(unit)))
+        scattered = copy.deepcopy(self.manifest)
+        scattered["symbols"][0]["definition"] = "Field definition mentioned elsewhere"
+        self.assertTrue(any("symbol-table row" in e for e in self.errors(scattered)))
 
     def test_resolves_source_and_test_at_declared_git_revision(self) -> None:
         bad_sha = copy.deepcopy(self.manifest)
