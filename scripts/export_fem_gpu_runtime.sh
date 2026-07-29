@@ -23,6 +23,7 @@ fi
 
 cleanup_failed_export() {
   local status="$?"
+  trap - EXIT HUP INT TERM
   if [ -n "${docker_build_ref}" ]; then
     remove_managed_fem_build_ref "${docker_build_ref}" || true
   fi
@@ -39,6 +40,9 @@ cleanup_failed_export() {
   exit "${status}"
 }
 trap cleanup_failed_export EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 print_container_target_remount_guidance() {
   echo "Canonical durable build-storage root: ${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}" >&2
@@ -858,7 +862,10 @@ EOF
 validate_persistent_runtime_archive() {
   local archive="$1"
   local expected_root="$2"
-  persistent_validation_root="$(mktemp -d "${TMPDIR:-/tmp}/fullmag-fem-runtime-archive.XXXXXXXX")"
+  local validation_parent="${FULLMAG_CONTAINER_TARGET_DIR}/runtime-archive-validation"
+  validate_container_target_dir
+  mkdir -p "${validation_parent}"
+  persistent_validation_root="$(mktemp -d "${validation_parent}/fullmag-fem-runtime-archive.XXXXXXXX")"
   if ! tar -C "${persistent_validation_root}" -xf "${archive}" || \
      ! python3 scripts/validate_managed_fem_runtime_bundle.py \
        --runtime-root "${persistent_validation_root}" --allow-unaddressed-staging || \
@@ -925,6 +932,6 @@ remove_managed_fem_build_ref "${docker_build_ref}"
 docker_build_ref=""
 rmdir -- "${docker_build_ref_marker}"
 docker_build_ref_marker=""
-trap - EXIT
+trap - EXIT HUP INT TERM
 echo "Exported FEM GPU host runtime bundle: ${RUNTIME_ROOT}"
 echo "Main executable: ${RUNTIME_ROOT}/bin/fullmag-fem-gpu"

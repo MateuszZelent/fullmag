@@ -7,6 +7,7 @@ import importlib.util
 import subprocess
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -1033,6 +1034,89 @@ def test_export_validates_persistent_archive_before_switching_repo_alias() -> No
     )
     alias_index = exporter.index('mv -Tf "${repo_next_alias}"')
     assert archive_index < validate_index < alias_index
+
+
+def test_export_archive_validation_scratch_contract_uses_task_ext4_target() -> None:
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+    function_start = exporter.index("validate_persistent_runtime_archive() {")
+    function_end = exporter.index("\n}\n", function_start) + len("\n}")
+    validation_function = exporter[function_start:function_end]
+
+    assert "FULLMAG_CONTAINER_TARGET_DIR" in validation_function
+    assert "validate_container_target_dir" in validation_function
+    assert "${TMPDIR:-/tmp}" not in validation_function
+    assert "trap 'exit 129' HUP" in exporter
+    assert "trap 'exit 130' INT" in exporter
+    assert "trap 'exit 143' TERM" in exporter
+
+
+def test_export_archive_validation_scratch_is_unique_and_ignores_tmpdir(
+    tmp_path: Path,
+) -> None:
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+    function_start = exporter.index("validate_persistent_runtime_archive() {")
+    function_end = exporter.index("\n}\n", function_start) + len("\n}")
+    validation_function = exporter[function_start:function_end]
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    scratch_paths = tmp_path / "scratch-paths.txt"
+    fake_tar = fake_bin / "tar"
+    fake_tar.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "[ \"$1\" = \"-C\" ]\n"
+        "printf '%s\\n' \"$2\" >> \"$SCRATCH_PATHS\"\n",
+        encoding="utf-8",
+    )
+    fake_tar.chmod(0o755)
+    fake_python = fake_bin / "python3"
+    fake_python.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_python.chmod(0o755)
+    task_target = tmp_path / "task-ext4-target"
+    task_target.mkdir()
+    unrelated_tmpdir = tmp_path / "tmpdir"
+    unrelated_tmpdir.mkdir()
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fake_bin}:{environment['PATH']}",
+            "SCRATCH_PATHS": str(scratch_paths),
+            "TMPDIR": str(unrelated_tmpdir),
+        }
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            "-euo",
+            "pipefail",
+            "-c",
+            (
+                'FULLMAG_CONTAINER_TARGET_DIR="$1"\n'
+                'persistent_validation_root=""\n'
+                'validate_container_target_dir() { :; }\n'
+                f"{validation_function}\n"
+                'validate_persistent_runtime_archive "$2" "$3"\n'
+                'validate_persistent_runtime_archive "$2" "$3"\n'
+            ),
+            "bash",
+            str(task_target),
+            str(tmp_path / "runtime.tar"),
+            str(tmp_path / "expected-runtime"),
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    observed = [Path(line) for line in scratch_paths.read_text().splitlines()]
+    assert len(observed) == 2
+    assert observed[0] != observed[1]
+    assert all(path.parent == task_target / "runtime-archive-validation" for path in observed)
+    assert all(unrelated_tmpdir not in path.parents for path in observed)
+    assert all(not path.exists() for path in observed)
 
 
 def test_fullmag_fem_launch_always_ensures_managed_runtime_unless_forced() -> None:
