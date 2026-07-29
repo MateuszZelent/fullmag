@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import test_validate_scientific_docs as fixture_module
-from validate_changed_scientific_docs import validate_changed
+from validate_changed_scientific_docs import validate_all, validate_changed
 
 
 class ChangedScientificDocumentationTests(unittest.TestCase):
@@ -53,6 +53,21 @@ class ChangedScientificDocumentationTests(unittest.TestCase):
         page.write_text(page.read_text(encoding="utf-8") + "\nValidated update.\n", encoding="utf-8")
         head = self._commit("update scientific page with source map")
         self.assertEqual([], validate_changed(self.repo, self.base, head))
+        self.assertEqual([], validate_all(self.repo, head))
+
+    def test_sidecar_cannot_point_to_a_different_valid_page(self) -> None:
+        self.manifest["document"]["revision"] = "HEAD"
+        self.manifest["sources"][0]["revision"] = "HEAD"
+        self.manifest["evidence"][0]["revision"] = "HEAD"
+        self.manifest["equations"][0]["semantic_review"]["revision"] = "HEAD"
+        self._write(
+            "docs/physics/fdm/gpu/unrelated.source-map.json",
+            json.dumps(self.manifest, indent=2) + "\n",
+        )
+        self._write("docs/physics/fdm/gpu/unrelated.md", "# Unrelated\n")
+        head = self._commit("add mismatched sidecar")
+        errors = validate_changed(self.repo, self.base, head)
+        self.assertTrue(any("document.path must equal adjacent page" in error for error in errors))
 
     def test_deleted_sidecar_is_rejected_while_page_remains(self) -> None:
         self._write("docs/physics/fdm/gpu/demag.source-map.json", "{}\n")
