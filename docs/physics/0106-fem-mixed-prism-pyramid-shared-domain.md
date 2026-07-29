@@ -275,6 +275,30 @@ hash and region/material realization. For the first workload it proves:
 The certificate fails closed. A warning, inferred layer count, clipped cell,
 tet conversion, or unversioned connectivity does not satisfy it.
 
+Cross-language certificate recomputation admits the bounded binary64
+comparison
+
+```text
+abs(claimed - recomputed)
+  <= max(1e-12 * max(abs(claimed), abs(recomputed)),
+         16 * f64::EPSILON)
+```
+
+only for dimensionless `scaled_jacobian_minima_by_family`,
+`scaled_jacobian_p05_by_family`, `magnetic_relative_volume_error`, and
+`shared_domain_relative_volume_error`. This accounts for NumPy/LAPACK versus
+direct-Rust determinant and reduction ordering. No other certificate field
+inherits the `16 * f64::EPSILON` absolute allowance: dimensional Jacobians,
+volumes, and related scalar evidence retain `1e-12` relative plus `1e-30`
+absolute comparison, while bounds, plane coordinates, counts, markers, and
+identities retain their field-specific fail-closed checks.
+
+This certificate rule is distinct from the final-artifact magnetization
+norm-defect rule in Section 4.6. The norm-defect check uses only an absolute
+`16 * epsilon64` recomputation allowance over selected magnetic nodes and has
+no `1e-12` relative term; sharing the same binary64 absolute constant does not
+make the two validation contracts interchangeable.
+
 #### 3.4.1 Language-neutral topology fingerprint v3
 
 Accepted mixed-layer certificates emitted after this migration bind to topology
