@@ -40,6 +40,8 @@ python3 .agents/skills/scientific-documentation-contract/scripts/validate_change
 ```
 
 The documentation workflow runs the validator unit tests and this changed-page gate automatically.
+The repository-wide contract guard also runs the same validator with `--all` on every pull request,
+so an implementation change cannot silently leave an existing source symbol or test mapping stale.
 
 ## Non-negotiable gates
 
