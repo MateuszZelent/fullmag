@@ -1,3 +1,4 @@
+# Public-only Sphinx publication for GitHub Pages.
 name: Public documentation
 
 on:
