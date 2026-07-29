@@ -34,6 +34,7 @@ class LoadedStage:
         study_pipeline: dict[str, object] | None = None,
         runtime_device_override: str | None = None,
         stage_start_time_s: float = 0.0,
+        _copy_cached_geometry_assets: bool = True,
     ) -> dict[str, object]:
         ir = self.problem.to_ir(
             requested_backend=requested_backend,
@@ -45,6 +46,7 @@ class LoadedStage:
             asset_cache=asset_cache,
             include_geometry_assets=include_geometry_assets,
             study_pipeline=study_pipeline,
+            _copy_cached_geometry_assets=_copy_cached_geometry_assets,
         )
         study = ir.get("study")
         sampling = study.get("sampling") if isinstance(study, dict) else None
@@ -198,6 +200,7 @@ class LoadedProblem:
         asset_cache: dict[str, dict[str, object] | None] | None = None,
         include_geometry_assets: bool = True,
         runtime_device_override: str | None = None,
+        _copy_cached_geometry_assets: bool = True,
     ) -> dict[str, object]:
         study_pipeline = self.study_pipeline_document()
         base_problem = self.pipeline_base_problem()
@@ -211,6 +214,7 @@ class LoadedProblem:
             asset_cache=asset_cache,
             include_geometry_assets=include_geometry_assets,
             study_pipeline=study_pipeline,
+            _copy_cached_geometry_assets=_copy_cached_geometry_assets,
         )
         workspace_problem = (
             self.pipeline_base_problem(self.workspace_problem)

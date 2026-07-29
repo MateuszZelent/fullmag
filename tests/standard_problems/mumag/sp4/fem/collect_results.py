@@ -18,6 +18,7 @@ from typing import Any, Iterable
 
 import numpy as np
 
+from fullmag.meshing._gmsh_types import MixedLayerTopologyCertificate
 from tests.standard_problems.mumag.sp4.common.metrics import (
     find_first_zero_crossing,
     reference_envelope_metrics,
@@ -54,6 +55,11 @@ FIELDNAMES = (
     "mesh_topology_fingerprint",
     "mesh_node_count",
     "mesh_element_count",
+    "mesh_certificate_status",
+    "mesh_node_plane_count",
+    "mesh_magnetic_prism6_count",
+    "mesh_magnetic_tet4_count",
+    "mesh_magnetic_pyramid5_count",
     "airbox_x_m",
     "airbox_y_m",
     "airbox_z_m",
@@ -110,8 +116,21 @@ _DIRECT_RELAXATION_SCENARIO = re.compile(
 _LLG_RELAXATION_SCENARIO = re.compile(
     r"^relax_llg_(heun|rk23|rk4|rk45)_(fixed_dt_[0-9a-z]+|adaptive)$"
 )
+_TOPOLOGY_SCENARIO = "mesh_single_prism_layer"
 
 RELAXATION_TORQUE_LIMIT_T = 1e-5
+_MIXED_TOPOLOGY_LEDGER_FIELDS = frozenset(
+    {
+        "mesh_certificate_status",
+        "mesh_node_plane_count",
+        "mesh_magnetic_prism6_count",
+        "mesh_magnetic_tet4_count",
+        "mesh_magnetic_pyramid5_count",
+    }
+)
+_LEGACY_FIELDNAMES = tuple(
+    name for name in FIELDNAMES if name not in _MIXED_TOPOLOGY_LEDGER_FIELDS
+)
 
 
 @dataclass(frozen=True)
@@ -238,6 +257,8 @@ def _scenario_info(scenario: str) -> ScenarioInfo:
             match.group(1),
             policy,
         )
+    if scenario == _TOPOLOGY_SCENARIO:
+        return ScenarioInfo("topology", None, None, None, None)
     raise CollectionError(f"unsupported SP4 scenario name: {scenario}")
 
 
@@ -323,7 +344,7 @@ def _validated_timestep_values(
     metadata: dict[str, Any],
     scenario: ScenarioInfo,
 ) -> dict[str, Any]:
-    if scenario.relaxation_algorithm in {
+    if scenario.phase == "topology" or scenario.relaxation_algorithm in {
         "projected_gradient_bb",
         "nonlinear_cg",
     }:
@@ -340,6 +361,169 @@ def _validated_timestep_values(
             f"{values['timestep_policy']} != {scenario.timestep_policy}"
         )
     return values
+
+
+def _mixed_topology_certificate_values(
+    mesh: dict[str, Any],
+    *,
+    required: bool,
+    runtime_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    empty = {
+        "mesh_certificate_status": None,
+        "mesh_node_plane_count": None,
+        "mesh_magnetic_prism6_count": None,
+        "mesh_magnetic_tet4_count": None,
+        "mesh_magnetic_pyramid5_count": None,
+    }
+    report = mesh.get("mesh_build_report")
+    certificate = (
+        report.get("mixed_layer_topology_certificate")
+        if isinstance(report, dict)
+        else None
+    )
+    if not isinstance(certificate, dict):
+        if required:
+            raise CollectionError("mixed layer topology certificate metadata missing")
+        return empty
+
+    planes = certificate.get("magnetic_plane_coordinates_m")
+    counts_by_marker = certificate.get("cell_family_counts_by_marker")
+    magnetic_counts = counts_by_marker.get("1") if isinstance(counts_by_marker, dict) else None
+    if not isinstance(planes, list) or not isinstance(magnetic_counts, dict):
+        if required:
+            raise CollectionError("mixed layer topology certificate evidence is malformed")
+        return empty
+
+    values = {
+        "mesh_certificate_status": certificate.get("certificate_status"),
+        "mesh_node_plane_count": len(planes),
+        "mesh_magnetic_prism6_count": magnetic_counts.get("prism6", 0),
+        "mesh_magnetic_tet4_count": magnetic_counts.get("tet4", 0),
+        "mesh_magnetic_pyramid5_count": magnetic_counts.get("pyramid5", 0),
+    }
+    if not required:
+        return values
+
+    if report.get("build_mode") != "single_geometry_geo_mixed":
+        raise CollectionError("topology smoke requires single_geometry_geo_mixed build evidence")
+    if report.get("fallbacks_triggered") != []:
+        raise CollectionError("mesh build report fallbacks must be empty")
+    if report.get("degraded") is not False:
+        raise CollectionError("mesh build report must prove degraded=false")
+    if report.get("orphan_entities") != []:
+        raise CollectionError("mesh build report must prove no orphan entities")
+    try:
+        parsed = MixedLayerTopologyCertificate.from_dict(certificate)
+    except (TypeError, ValueError) as exc:
+        raise CollectionError(f"invalid mixed layer topology certificate: {exc}") from exc
+
+    if parsed.topology_fingerprint != mesh.get("topology_fingerprint"):
+        raise CollectionError("mixed layer topology certificate fingerprint differs from mesh")
+    if parsed.requested_layer_count != 1 or parsed.realized_layer_count != 1:
+        raise CollectionError("topology smoke requires exactly one layer and two magnetic node planes")
+    if len(parsed.magnetic_plane_coordinates_m) != 2:
+        raise CollectionError("topology smoke requires exactly one layer and two magnetic node planes")
+    parsed_magnetic_counts = parsed.cell_family_counts_by_marker.get("1", {})
+    if set(parsed_magnetic_counts) != {"prism6"} or parsed_magnetic_counts.get("prism6", 0) <= 0:
+        raise CollectionError("topology smoke requires prism6-only magnetic cells")
+    if not isinstance(runtime_metadata, dict):
+        raise CollectionError("topology smoke runtime metadata is malformed")
+    domain_frame = runtime_metadata.get("domain_frame")
+    if not isinstance(domain_frame, dict):
+        raise CollectionError("topology smoke domain frame metadata is missing")
+    magnetic_min = domain_frame.get("object_bounds_min")
+    magnetic_max = domain_frame.get("object_bounds_max")
+    universe = domain_frame.get("declared_universe")
+    if (
+        not isinstance(magnetic_min, (list, tuple))
+        or not isinstance(magnetic_max, (list, tuple))
+        or len(magnetic_min) != 3
+        or len(magnetic_max) != 3
+        or not isinstance(universe, dict)
+    ):
+        raise CollectionError("topology smoke authored bounds metadata is missing")
+    universe_size = universe.get("size")
+    universe_center = universe.get("center")
+    if (
+        not isinstance(universe_size, (list, tuple))
+        or not isinstance(universe_center, (list, tuple))
+        or len(universe_size) != 3
+        or len(universe_center) != 3
+    ):
+        raise CollectionError("topology smoke authored airbox metadata is missing")
+    try:
+        magnetic_min_values = tuple(float(value) for value in magnetic_min)
+        magnetic_max_values = tuple(float(value) for value in magnetic_max)
+        universe_size_values = tuple(float(value) for value in universe_size)
+        universe_center_values = tuple(float(value) for value in universe_center)
+    except (TypeError, ValueError) as exc:
+        raise CollectionError("topology smoke authored bounds metadata is malformed") from exc
+    airbox_min = tuple(
+        center - 0.5 * size
+        for center, size in zip(universe_center_values, universe_size_values, strict=True)
+    )
+    airbox_max = tuple(
+        center + 0.5 * size
+        for center, size in zip(universe_center_values, universe_size_values, strict=True)
+    )
+
+    def bounds_match(actual: tuple[float, ...], expected: tuple[float, ...]) -> bool:
+        return all(
+            math.isclose(left, right, rel_tol=1.0e-8, abs_tol=1.0e-18)
+            for left, right in zip(actual, expected, strict=True)
+        )
+
+    if not bounds_match(parsed.magnetic_bounds_min_m, magnetic_min_values) or not bounds_match(
+        parsed.magnetic_bounds_max_m, magnetic_max_values
+    ):
+        raise CollectionError("mixed topology magnetic bounds differ from runtime metadata")
+    if not bounds_match(parsed.airbox_bounds_min_m, airbox_min) or not bounds_match(
+        parsed.airbox_bounds_max_m, airbox_max
+    ):
+        raise CollectionError("mixed topology airbox bounds differ from runtime metadata")
+    magnetic_volume = math.prod(
+        maximum - minimum
+        for minimum, maximum in zip(magnetic_min_values, magnetic_max_values, strict=True)
+    )
+    shared_domain_volume = math.prod(universe_size_values)
+    air_volume = shared_domain_volume - magnetic_volume
+    if not all(
+        math.isclose(value, magnetic_volume, rel_tol=1.0e-8, abs_tol=0.0)
+        for value in (parsed.magnetic_volume_m3, parsed.expected_magnetic_volume_m3)
+    ):
+        raise CollectionError("mixed topology magnetic volume differs from runtime metadata")
+    if not all(
+        math.isclose(value, shared_domain_volume, rel_tol=1.0e-8, abs_tol=0.0)
+        for value in (
+            parsed.shared_domain_volume_m3,
+            parsed.expected_shared_domain_volume_m3,
+        )
+    ) or not math.isclose(parsed.air_volume_m3, air_volume, rel_tol=1.0e-8, abs_tol=0.0):
+        raise CollectionError("mixed topology shared-domain volume differs from runtime metadata")
+    provenance = report.get("mixed_topology_provenance")
+    if not isinstance(provenance, dict):
+        raise CollectionError("mixed topology provenance missing from mesh build report")
+    expected_provenance = {
+        "requested_topology": "mixed_p1",
+        "resolved_topology": "mixed_p1",
+        "accepted_certificate_fingerprint": parsed.topology_fingerprint,
+        "requested_device": "cpu",
+        "precision": "double",
+        "capability_status": "implemented",
+    }
+    for name, expected in expected_provenance.items():
+        if provenance.get(name) != expected:
+            raise CollectionError(
+                f"mixed topology provenance {name} must be {expected!r}"
+            )
+    return {
+        "mesh_certificate_status": parsed.certificate_status,
+        "mesh_node_plane_count": len(parsed.magnetic_plane_coordinates_m),
+        "mesh_magnetic_prism6_count": parsed_magnetic_counts.get("prism6", 0),
+        "mesh_magnetic_tet4_count": parsed_magnetic_counts.get("tet4", 0),
+        "mesh_magnetic_pyramid5_count": parsed_magnetic_counts.get("pyramid5", 0),
+    }
 
 
 def _relaxation_qualification(metadata: dict[str, Any]) -> dict[str, Any]:
@@ -426,9 +610,13 @@ def _existing_rows(ledger: Path) -> list[dict[str, str]]:
         return []
     with ledger.open(newline="", encoding="utf-8") as stream:
         reader = csv.DictReader(stream)
-        if tuple(reader.fieldnames or ()) != FIELDNAMES:
-            raise CollectionError("existing ledger schema does not match the SP4 schema")
-        return list(reader)
+        schema = tuple(reader.fieldnames or ())
+        rows = list(reader)
+    if schema == FIELDNAMES:
+        return rows
+    if schema == _LEGACY_FIELDNAMES:
+        return [{name: row.get(name, "") for name in FIELDNAMES} for row in rows]
+    raise CollectionError("existing ledger schema does not match the SP4 schema")
 
 
 def _resolve_artifacts(path: Path) -> Path:
@@ -484,9 +672,13 @@ def collect_attempt(
     scenario_info = _scenario_info(scenario)
     artifacts = _resolve_artifacts(Path(artifacts))
     metadata_path = artifacts / "metadata.json"
-    scalars_path = artifacts / "scalars.csv"
     metadata = _json(metadata_path)
-    rows = _read_scalars(scalars_path, scenario=scenario_info)
+    scalars_path = artifacts / "scalars.csv"
+    rows = (
+        []
+        if scenario_info.phase == "topology"
+        else _read_scalars(scalars_path, scenario=scenario_info)
+    )
 
     requested = metadata.get("requested_execution", {})
     provenance = metadata.get("execution_provenance", {})
@@ -503,14 +695,21 @@ def collect_attempt(
         airbox = (None, None, None)
     if not isinstance(magnetic_mesh, dict):
         magnetic_mesh = {}
-    final = rows[-1]
+    topology_certificate = _mixed_topology_certificate_values(
+        mesh,
+        required=scenario_info.phase == "topology",
+        runtime_metadata=runtime if isinstance(runtime, dict) else None,
+    )
+    final = rows[-1] if rows else {}
     direct_minimizer = scenario_info.relaxation_algorithm in {
         "projected_gradient_bb",
         "nonlinear_cg",
     }
 
     phase_metrics: dict[str, Any]
-    if scenario_info.phase == "dynamics":
+    if scenario_info.phase == "topology":
+        phase_metrics = {}
+    elif scenario_info.phase == "dynamics":
         trace = Trajectory(
             np.asarray([item["time"] for item in rows], dtype=float),
             np.asarray(
@@ -568,6 +767,7 @@ def collect_attempt(
         "mesh_topology_fingerprint": mesh.get("topology_fingerprint"),
         "mesh_node_count": mesh.get("node_count"),
         "mesh_element_count": mesh.get("element_count"),
+        **topology_certificate,
         "airbox_x_m": airbox[0],
         "airbox_y_m": airbox[1],
         "airbox_z_m": airbox[2],
@@ -576,14 +776,14 @@ def collect_attempt(
             magnetic_mesh.get("hmax"),
         ),
         "film_layers": magnetic_mesh.get("through_thickness_elements"),
-        "sample_count": len(rows),
-        "step_start": rows[0].get("step"),
+        "sample_count": len(rows) if rows else None,
+        "step_start": rows[0].get("step") if rows else None,
         "step_stop": final.get("step"),
-        "time_start_s": None if direct_minimizer else rows[0]["time"],
-        "time_stop_s": None if direct_minimizer else final["time"],
-        "final_mx": final["mx"],
-        "final_my": final["my"],
-        "final_mz": final["mz"],
+        "time_start_s": None if direct_minimizer or not rows else rows[0]["time"],
+        "time_stop_s": None if direct_minimizer or not rows else final["time"],
+        "final_mx": final.get("mx"),
+        "final_my": final.get("my"),
+        "final_mz": final.get("mz"),
         **phase_metrics,
         "wall_time_s": _wall_time(metadata, artifacts),
         "status": metadata.get("status", "completed"),
@@ -591,7 +791,7 @@ def collect_attempt(
         "failure_detail": "",
         "artifact_dir": str(artifacts.resolve()),
         "metadata_sha256": _sha256(metadata_path),
-        "scalars_sha256": _sha256(scalars_path),
+        "scalars_sha256": _sha256(scalars_path) if rows else None,
     }
     row = {name: _cell(values.get(name)) for name in FIELDNAMES}
     _append_atomic(Path(ledger), row)

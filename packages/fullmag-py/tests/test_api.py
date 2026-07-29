@@ -34,6 +34,32 @@ from fullmag.model.problem import build_geometry_assets_for_request
 
 
 class ProblemApiTests(unittest.TestCase):
+    def test_geometry_asset_cache_copies_by_default_and_can_be_borrowed_internally(self) -> None:
+        cached_assets = {"fem_domain_mesh_asset": {"mesh": {"nodes": [[0.0, 0.0, 0.0]]}}}
+        cache = {"cached": cached_assets}
+        with patch(
+            "fullmag.model.problem._geometry_asset_cache_key",
+            return_value="cached",
+        ):
+            copied = build_geometry_assets_for_request(
+                requested_backend=fm.BackendTarget.FEM,
+                geometries=[],
+                discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, hmax=1e-9)),
+                asset_cache=cache,
+            )
+            borrowed = build_geometry_assets_for_request(
+                requested_backend=fm.BackendTarget.FEM,
+                geometries=[],
+                discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, hmax=1e-9)),
+                asset_cache=cache,
+                _copy_cached_assets=False,
+            )
+
+        self.assertIsNot(copied, cached_assets)
+        self.assertIs(borrowed, cached_assets)
+        copied["fem_domain_mesh_asset"]["mesh"]["nodes"].append([1.0, 0.0, 0.0])
+        self.assertEqual(len(cached_assets["fem_domain_mesh_asset"]["mesh"]["nodes"]), 1)
+
     def test_fdm_grid_cache_ignores_region_only_changes(self) -> None:
         geometry = fm.Cylinder(radius=10e-9, height=4e-9, name="film")
         discretization = fm.DiscretizationHints(
@@ -9059,7 +9085,91 @@ class ProblemApiTests(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["default_until_seconds"], 3e-12)
         self.assertEqual(payload["ir"]["problem_meta"]["name"], "runtime_config_problem")
-        self.assertIn("shared_geometry_assets", payload)
+        self.assertIsNone(payload["shared_geometry_assets"])
+        self.assertIn("geometry_assets", payload["ir"])
+
+    def test_run_config_geometry_assets_have_single_owner_without_stages(self) -> None:
+        original_assets = {"fem_domain_mesh_asset": {"mesh": {"nodes": [[0.0, 0.0, 0.0]]}}}
+        original_ir = {"geometry_assets": original_assets}
+
+        exported_ir, shared_assets = runtime_helper._prepare_run_config_geometry_assets(
+            original_ir,
+            has_stages=False,
+        )
+
+        self.assertIs(exported_ir, original_ir)
+        self.assertIs(exported_ir["geometry_assets"], original_assets)
+        self.assertIsNone(shared_assets)
+        exported_ir["geometry_assets"]["fem_domain_mesh_asset"]["mesh"]["nodes"].append(
+            [1.0, 0.0, 0.0]
+        )
+        self.assertEqual(len(original_assets["fem_domain_mesh_asset"]["mesh"]["nodes"]), 2)
+
+    def test_run_config_geometry_assets_are_isolated_for_stage_compaction(self) -> None:
+        class NoDeepcopyAssets(dict[str, object]):
+            def __deepcopy__(self, memo: dict[int, object]) -> object:
+                raise AssertionError("geometry assets must be detached before deepcopy")
+
+        original_assets = NoDeepcopyAssets(
+            {"fem_domain_mesh_asset": {"mesh": {"nodes": [[0.0, 0.0, 0.0]]}}}
+        )
+        original_ir = {"geometry_assets": original_assets}
+
+        exported_ir, shared_assets = runtime_helper._prepare_run_config_geometry_assets(
+            original_ir,
+            has_stages=True,
+        )
+
+        self.assertIsNot(exported_ir, original_ir)
+        self.assertIsNone(exported_ir["geometry_assets"])
+        self.assertIs(shared_assets, original_assets)
+        shared_assets["fem_domain_mesh_asset"]["mesh"]["nodes"].append([1.0, 0.0, 0.0])
+        self.assertEqual(len(original_assets["fem_domain_mesh_asset"]["mesh"]["nodes"]), 2)
+
+    def test_compact_stage_ir_detaches_shared_assets_before_deepcopy(self) -> None:
+        class NoDeepcopyAssets(dict[str, object]):
+            def __deepcopy__(self, memo: dict[int, object]) -> object:
+                raise AssertionError("geometry assets must be detached before deepcopy")
+
+        shared_assets = NoDeepcopyAssets(
+            {"fem_domain_mesh_asset": {"mesh": {"nodes": [[0.0, 0.0, 0.0]]}}}
+        )
+        stage_ir = {
+            "geometry_assets": shared_assets,
+            "problem_meta": {"name": "stage"},
+        }
+
+        compacted = runtime_helper._compact_stage_ir(
+            stage_ir,
+            shared_geometry_assets=shared_assets,
+        )
+
+        self.assertIs(stage_ir["geometry_assets"], shared_assets)
+        self.assertIsNone(compacted["geometry_assets"])
+        compacted["problem_meta"]["name"] = "changed"
+        self.assertEqual(stage_ir["problem_meta"]["name"], "stage")
+
+    def test_compact_stage_ir_uses_non_mixed_mesh_fingerprint(self) -> None:
+        shared_assets = {
+            "fem_domain_mesh_asset": {
+                "mesh": {"topology_fingerprint": "sha256:canonical-tet"}
+            }
+        }
+        stage_assets = {
+            "fem_domain_mesh_asset": {
+                "mesh": {"topology_fingerprint": "sha256:canonical-tet"}
+            }
+        }
+        stage_ir = {"geometry_assets": stage_assets}
+
+        compacted = runtime_helper._compact_stage_ir(
+            stage_ir,
+            shared_geometry_assets=shared_assets,
+        )
+
+        self.assertIsNot(stage_assets, shared_assets)
+        self.assertIs(stage_ir["geometry_assets"], stage_assets)
+        self.assertIsNone(compacted["geometry_assets"])
 
     def test_helper_exports_sp4_overlay_without_real_geometry_assets(self) -> None:
         scenario = Path(

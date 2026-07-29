@@ -48,6 +48,7 @@ DYNAMICS_SCENARIOS = {
 RELAXATION_SCENARIOS = {
     name: SCENARIO_ROOT / f"{name}.py" for name in RELAXATION_POLICIES
 }
+TOPOLOGY_SCENARIOS = {"mesh_single_prism_layer"}
 SCENARIOS = {**DYNAMICS_SCENARIOS, **RELAXATION_SCENARIOS}
 
 
@@ -84,8 +85,8 @@ def _active_stage_id(stage: dict[str, object]) -> str:
     return stage["ir"]["problem_meta"]["runtime_metadata"]["active_stage_id"]
 
 
-def test_scenario_manifest_has_plain_dynamics_and_relaxation_scripts() -> None:
-    expected = {f"{scenario}.py" for scenario in SCENARIOS}
+def test_scenario_manifest_includes_dynamics_relaxation_and_topology_scripts() -> None:
+    expected = {f"{scenario}.py" for scenario in {*SCENARIOS, *TOPOLOGY_SCENARIOS}}
     actual = {
         path.name
         for path in SCENARIO_ROOT.glob("*.py")

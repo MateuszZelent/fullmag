@@ -365,6 +365,7 @@ def build_geometry_assets_for_request(
     mesh_workflow: dict[str, object] | None = None,
     object_regions: Sequence[dict[str, object]] | None = None,
     asset_cache: dict[str, dict[str, Any] | None] | None = None,
+    _copy_cached_assets: bool = True,
 ) -> dict[str, Any] | None:
     if discretization is None:
         return None
@@ -385,7 +386,7 @@ def build_geometry_assets_for_request(
     )
     if asset_cache is not None and asset_cache_key in asset_cache:
         cached = asset_cache[asset_cache_key]
-        return copy.deepcopy(cached)
+        return copy.deepcopy(cached) if _copy_cached_assets else cached
 
     assets: dict[str, Any] = {
         "fdm_grid_assets": [],
@@ -637,7 +638,9 @@ def build_geometry_assets_for_request(
         result = assets
 
     if asset_cache is not None:
-        asset_cache[asset_cache_key] = copy.deepcopy(result)
+        asset_cache[asset_cache_key] = (
+            copy.deepcopy(result) if _copy_cached_assets else result
+        )
 
     return result
 
@@ -1418,6 +1421,7 @@ class Problem:
         asset_cache: dict[str, dict[str, Any] | None] | None = None,
         include_geometry_assets: bool = True,
         study_pipeline: dict[str, object] | None = None,
+        _copy_cached_geometry_assets: bool = True,
     ) -> dict[str, object]:
         runtime = self.runtime.resolved(
             backend=requested_backend,
@@ -1508,6 +1512,7 @@ class Problem:
                 mesh_workflow=mesh_workflow,
                 object_regions=object_region_mesh_specs,
                 asset_cache=effective_asset_cache,
+                _copy_cached_assets=_copy_cached_geometry_assets,
             )
         magnets_ir = [magnet.to_ir() for magnet in self.magnets]
         magnets_ir = _materialize_preset_texture_initial_conditions(
