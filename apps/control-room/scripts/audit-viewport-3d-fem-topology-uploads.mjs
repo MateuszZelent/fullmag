@@ -714,14 +714,15 @@ function createSemanticTargetExplorerFixture() {
 function semanticFixturePart({ faceIndex, id, label, nodeStart, objectId = null, role }) {
   const surfaceFaces = tetraSurfaceFaces(nodeStart);
   const boundaryFaceStart = faceIndex * surfaceFaces.length;
+  const ownsVolumeElement = role !== "outer_boundary";
   return {
     boundary_face_count: surfaceFaces.length,
     boundary_face_indices: surfaceFaces.map((_, index) => boundaryFaceStart + index),
     boundary_face_start: boundaryFaceStart,
     bounds_max: [4, 1, 0.5],
     bounds_min: [-4, -1, -0.5],
-    element_count: 0,
-    element_start: 0,
+    element_count: ownsVolumeElement ? 1 : 0,
+    element_start: ownsVolumeElement ? faceIndex : 0,
     geometry_id: objectId,
     id,
     label,
@@ -756,14 +757,21 @@ function makeSemanticTargetTopologyBuffer() {
     ...tetraSurfaceFaces(8),
   ];
   const nodeCount = 12;
-  const elementCount = 0;
+  const elements = [
+    [0, 1, 2, 3],
+    [4, 5, 6, 7],
+    [8, 9, 10, 11],
+  ];
+  const elementCount = elements.length;
   const boundaryFaceCount = surfaceFaces.length;
-  const markerCount = boundaryFaceCount;
+  const elementMarkerCount = elementCount;
+  const boundaryMarkerCount = boundaryFaceCount;
   const byteLength =
     32 +
     nodeCount * 3 * Float64Array.BYTES_PER_ELEMENT +
+    elementCount * 4 * Uint32Array.BYTES_PER_ELEMENT +
     boundaryFaceCount * 3 * Uint32Array.BYTES_PER_ELEMENT +
-    markerCount * Uint32Array.BYTES_PER_ELEMENT * 2;
+    (elementMarkerCount + boundaryMarkerCount) * Uint32Array.BYTES_PER_ELEMENT;
   const buffer = new ArrayBuffer(byteLength);
   const view = new DataView(buffer);
   for (const [index, code] of [..."FMMT"].entries()) {
@@ -774,16 +782,18 @@ function makeSemanticTargetTopologyBuffer() {
   view.setUint32(8, nodeCount, true);
   view.setUint32(12, elementCount, true);
   view.setUint32(16, boundaryFaceCount, true);
-  view.setUint32(20, markerCount, true);
-  view.setUint32(24, markerCount, true);
+  view.setUint32(20, elementMarkerCount, true);
+  view.setUint32(24, boundaryMarkerCount, true);
   let offset = 32;
   new Float64Array(buffer, offset, positions.length).set(positions);
   offset += positions.length * Float64Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, elementCount * 4).set(elements.flat());
+  offset += elementCount * 4 * Uint32Array.BYTES_PER_ELEMENT;
   new Uint32Array(buffer, offset, boundaryFaceCount * 3).set(surfaceFaces.flat());
   offset += boundaryFaceCount * 3 * Uint32Array.BYTES_PER_ELEMENT;
-  new Uint32Array(buffer, offset, markerCount).fill(1);
-  offset += markerCount * Uint32Array.BYTES_PER_ELEMENT;
-  new Uint32Array(buffer, offset, markerCount).fill(1);
+  new Uint32Array(buffer, offset, elementMarkerCount).set([1, 2, 3]);
+  offset += elementMarkerCount * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, boundaryMarkerCount).fill(1);
   return buffer;
 }
 

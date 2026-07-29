@@ -8829,8 +8829,8 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         )
 
         per_object_recipes = {
-            "cylinder": PerObjectMeshRecipe(hmax=10e-9, hmin=2e-9),
-            "waveguide": PerObjectMeshRecipe(hmax=15e-9, hmin=3e-9),
+            "cylinder": PerObjectMeshRecipe(hmax=100e-9, hmin=80e-9),
+            "waveguide": PerObjectMeshRecipe(hmax=100e-9, hmin=80e-9),
         }
 
         study_universe = {
@@ -8845,7 +8845,7 @@ class FieldStackAcceptanceTests(unittest.TestCase):
             geometries=[cylinder, waveguide],
             hints=fm.FEM(order=1, hmax=120e-9),
             study_universe=study_universe,
-            per_object_recipes=None,
+            per_object_recipes=per_object_recipes,
         )
 
         self.assertGreater(mesh.n_nodes, 0)

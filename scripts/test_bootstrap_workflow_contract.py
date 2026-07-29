@@ -48,6 +48,8 @@ class BootstrapWorkflowContractTests(unittest.TestCase):
         self.assertIn('"content-range": `bytes ${start}-${end}/${body.byteLength}`', audit)
         self.assertIn('etag: \'"fem-topology-fixture"\'', audit)
         self.assertIn('status: 206', audit)
+        self.assertIn("const elementCount = elements.length;", audit)
+        self.assertIn("const elementMarkerCount = elementCount;", audit)
         self.assertNotIn(
             'const expectedNodeIds = new Set([\n    "model:airbox",',
             audit,
