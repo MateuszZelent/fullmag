@@ -10,7 +10,7 @@ from typing import Sequence
 
 from fullmag._progress import emit_progress
 from fullmag.model import BackendTarget, ExecutionMode, ExecutionPrecision
-from fullmag.runtime.loader import load_problem_from_script
+from fullmag.runtime.loader import apply_ir_runtime_device_selection, load_problem_from_script
 from fullmag.runtime.scene_document import (
     build_builder_from_scene_document,
     build_scene_document_from_builder,
@@ -196,13 +196,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         stages = []
-        device_override: str | None = None
+        script_device_override: str | None = None
         stage_start_time_s = 0.0
         for stage in loaded.stages or ():
             action_device = _change_device_action_device(stage.action)
-            stage_device_override = (
-                getattr(args, "runtime_device", None) or action_device or device_override
-            )
             stage_ir = stage.to_ir(
                 requested_backend=requested_backend,
                 execution_mode=execution_mode,
@@ -212,11 +209,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 asset_cache=asset_cache,
                 include_geometry_assets=not getattr(args, "skip_geometry_assets", False),
                 study_pipeline=study_pipeline,
-                runtime_device_override=stage_device_override,
+                runtime_device_override=getattr(args, "runtime_device", None),
                 stage_start_time_s=stage_start_time_s,
             )
+            authored_stage_device = action_device or script_device_override
+            if authored_stage_device is not None:
+                apply_ir_runtime_device_selection(stage_ir, authored_stage_device)
             if action_device is not None:
-                device_override = action_device
+                script_device_override = action_device
             stages.append(
                 {
                     "ir": _compact_stage_ir(

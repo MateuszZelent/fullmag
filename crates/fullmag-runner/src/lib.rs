@@ -1366,6 +1366,19 @@ fn require_supported_fem_topology(
     let report = build_report.ok_or_else(|| RunError {
         message: "fem_mixed_p1_runtime_certificate_required: shared-domain build report is missing; fallback=none".to_string(),
     })?;
+    if !report
+        .fallbacks_triggered
+        .as_ref()
+        .is_some_and(Vec::is_empty)
+        || report.degraded
+    {
+        return Err(RunError {
+            message: format!(
+                "fem_mixed_p1_runtime_build_report_rejected: fallbacks_triggered={:?}; degraded={}; required=fallbacks_triggered[]+degraded_false; fallback=none",
+                report.fallbacks_triggered, report.degraded
+            ),
+        });
+    }
     let certificate = report
         .mixed_layer_topology_certificate
         .as_ref()
@@ -1405,28 +1418,20 @@ fn require_supported_fem_topology(
             message: "fem_mixed_p1_runtime_provenance_stale: plan provenance does not match the exact mesh fingerprint/topology/precision; fallback=none".to_string(),
         });
     }
-    let requested_device = problem
-        .problem_meta
-        .runtime_metadata
-        .get("runtime_selection")
-        .and_then(|value| value.get("device"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("auto");
-    let expected_device = match requested_device {
+    let requested_device = crate::solver_runtime::selection::effective_fem_device_request(problem);
+    let expected_device = match requested_device.as_str() {
         "cpu" => fullmag_ir::ExecutionDevice::Cpu,
         "gpu" | "cuda" => fullmag_ir::ExecutionDevice::Gpu,
         _ => fullmag_ir::ExecutionDevice::Auto,
     };
     if provenance.requested_device != expected_device {
         return Err(RunError {
-            message: "fem_mixed_p1_runtime_provenance_stale: requested device does not match ProblemIR; fallback=none".to_string(),
+            message: "fem_mixed_p1_runtime_provenance_stale: effective device does not match plan provenance; fallback=none".to_string(),
         });
     }
-    if provenance.capability_status
-        != fullmag_ir::FemMixedTopologyCapabilityStatusIR::ProductionExecutable
-    {
+    if provenance.capability_status != fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented {
         return Err(RunError {
-            message: "fem_mixed_p1_runtime_provenance_stale: capability status must be production_executable for the qualified CPU mixed-P1 relaxation lane; fallback=none".to_string(),
+            message: "fem_mixed_p1_runtime_provenance_stale: capability status must be implemented until managed public runtime proof exists; fallback=none".to_string(),
         });
     }
     let supported_relaxation = relaxation_plan.is_some_and(|fem| {
@@ -4143,6 +4148,8 @@ mod tests {
         let fem = topology_guard_frequency_plan_mut(&mut plan);
         let mut report: fullmag_ir::FemSharedDomainBuildReportIR = serde_json::from_value(json!({
             "build_mode": "shared_domain",
+            "fallbacks_triggered": [],
+            "degraded": false,
             "mixed_layer_topology_certificate": certificate,
         }))
         .expect("minimal shared-domain report should deserialize");
@@ -4152,7 +4159,7 @@ mod tests {
             accepted_certificate_fingerprint: fingerprint,
             requested_device: fullmag_ir::ExecutionDevice::Cpu,
             precision: fem.precision,
-            capability_status: fullmag_ir::FemMixedTopologyCapabilityStatusIR::ProductionExecutable,
+            capability_status: fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented,
         });
         fem.mesh = mesh;
         fem.mesh_build_report = Some(report);
@@ -4214,6 +4221,8 @@ mod tests {
         fem.initial_magnetization = vec![[1.0, 0.0, 0.0]; fem.mesh.nodes.len()];
         let mut report: fullmag_ir::FemSharedDomainBuildReportIR = serde_json::from_value(json!({
             "build_mode": "shared_domain",
+            "fallbacks_triggered": [],
+            "degraded": false,
             "mixed_layer_topology_certificate": certificate,
         }))
         .expect("minimal shared-domain report should deserialize");
@@ -4223,7 +4232,7 @@ mod tests {
             accepted_certificate_fingerprint: fingerprint,
             requested_device: fullmag_ir::ExecutionDevice::Cpu,
             precision: fem.precision,
-            capability_status: fullmag_ir::FemMixedTopologyCapabilityStatusIR::ProductionExecutable,
+            capability_status: fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented,
         });
         fem.mesh_build_report = Some(report);
         (problem, plan)
@@ -4292,6 +4301,47 @@ mod tests {
     }
 
     #[test]
+    fn fem_topology_guard_rejects_valid_certificate_when_build_report_is_degraded() {
+        for case in ["report_fallback", "degraded"] {
+            let (problem, mut plan) = certified_mixed_cpu_relaxation_guard_fixture();
+            let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+                unreachable!()
+            };
+            let report = fem
+                .mesh_build_report
+                .as_mut()
+                .expect("mixed fixture must carry a build report");
+            match case {
+                "report_fallback" => {
+                    report.fallbacks_triggered =
+                        Some(vec!["mesh_size_field_simplified".to_string()]);
+                }
+                "degraded" => report.degraded = true,
+                _ => unreachable!(),
+            }
+            let certificate = report
+                .mixed_layer_topology_certificate
+                .as_ref()
+                .expect("mixed fixture must retain a valid certificate");
+            fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(
+                certificate,
+                &fem.mesh,
+            )
+            .expect("the regression must isolate enclosing build-report state");
+
+            let error = require_supported_fem_topology(&problem, &plan)
+                .expect_err("runner must reject a degraded mixed build report");
+            assert!(
+                error
+                    .message
+                    .contains("fem_mixed_p1_runtime_build_report_rejected"),
+                "case={case}: {}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
     fn fem_topology_guard_rejects_stale_certificate_and_provenance_bindings() {
         let (problem, mut stale_certificate) = certified_mixed_topology_guard_fixture();
         topology_guard_frequency_plan_mut(&mut stale_certificate)
@@ -4350,12 +4400,13 @@ mod tests {
             .requested_device = fullmag_ir::ExecutionDevice::Gpu;
         assert_eq!(
             topology_guard_error(&problem, &stale_device),
-            "fem_mixed_p1_runtime_provenance_stale: requested device does not match ProblemIR; fallback=none"
+            "fem_mixed_p1_runtime_provenance_stale: effective device does not match plan provenance; fallback=none"
         );
 
         for status in [
             fullmag_ir::FemMixedTopologyCapabilityStatusIR::Unsupported,
             fullmag_ir::FemMixedTopologyCapabilityStatusIR::SourceVisible,
+            fullmag_ir::FemMixedTopologyCapabilityStatusIR::ProductionExecutable,
             fullmag_ir::FemMixedTopologyCapabilityStatusIR::Validated,
         ] {
             let (_, mut promoted) = certified_mixed_topology_guard_fixture();
@@ -4369,7 +4420,7 @@ mod tests {
                 .capability_status = status;
             assert_eq!(
                 topology_guard_error(&problem, &promoted),
-                "fem_mixed_p1_runtime_provenance_stale: capability status must be production_executable for the qualified CPU mixed-P1 relaxation lane; fallback=none"
+                "fem_mixed_p1_runtime_provenance_stale: capability status must be implemented until managed public runtime proof exists; fallback=none"
             );
         }
     }
@@ -4500,6 +4551,40 @@ mod tests {
                 error.message
             );
         }
+    }
+
+    #[test]
+    fn fem_topology_guard_uses_the_same_effective_device_as_engine_resolution() {
+        let (mut problem, plan) = certified_mixed_cpu_relaxation_guard_fixture();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            json!({"device": "auto", "precision": "double"}),
+        );
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_device_override".to_string(),
+            json!({"device": "cpu", "source": "managed_launcher"}),
+        );
+
+        require_supported_fem_topology(&problem, &plan)
+            .expect("effective managed CPU request must cross the mixed topology guard");
+
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_device_override".to_string(),
+            json!({"device": "gpu", "source": "managed_launcher"}),
+        );
+        let error = require_supported_fem_topology(&problem, &plan)
+            .expect_err("effective managed GPU request must reject before native startup");
+        assert!(
+            error
+                .message
+                .contains("fem_mixed_p1_runtime_provenance_stale")
+                || error
+                    .message
+                    .contains("fem_mixed_p1_runtime_scope_rejected"),
+            "{}",
+            error.message
+        );
+        assert!(error.message.contains("fallback=none"));
     }
 
     #[test]

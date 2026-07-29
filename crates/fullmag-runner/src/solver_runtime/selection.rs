@@ -23,6 +23,17 @@ pub(crate) fn runtime_device(problem: &ProblemIR) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
+pub(crate) fn runtime_device_override(problem: &ProblemIR) -> Option<&str> {
+    problem
+        .problem_meta
+        .runtime_metadata
+        .get("runtime_device_override")
+        .and_then(Value::as_object)
+        .filter(|value| value.get("source").and_then(Value::as_str) == Some("managed_launcher"))
+        .and_then(|value| value.get("device"))
+        .and_then(Value::as_str)
+}
+
 pub(crate) fn runtime_precision(problem: &ProblemIR) -> &str {
     runtime_selection(problem)
         .and_then(|selection| selection.get("precision"))
@@ -73,15 +84,21 @@ impl FemSelectionEnvSnapshot {
 
 pub(crate) fn effective_fem_device_request(problem: &ProblemIR) -> String {
     let snapshot = FemSelectionEnvSnapshot::capture();
-    effective_fem_device_request_from_snapshot(runtime_device(problem), &snapshot)
+    effective_fem_device_request_from_snapshot(
+        runtime_device(problem),
+        runtime_device_override(problem),
+        &snapshot,
+    )
 }
 
 fn effective_fem_device_request_from_snapshot(
     script_device: Option<&str>,
+    managed_override: Option<&str>,
     snapshot: &FemSelectionEnvSnapshot,
 ) -> String {
     effective_fem_device_request_from_sources(
         script_device,
+        managed_override,
         snapshot.execution.as_deref(),
         snapshot.all_in_gpu_requested(),
     )
@@ -89,6 +106,7 @@ fn effective_fem_device_request_from_snapshot(
 
 pub(super) fn effective_fem_device_request_from_sources(
     script_device: Option<&str>,
+    managed_override: Option<&str>,
     execution_env: Option<&str>,
     all_in_gpu_requested: bool,
 ) -> String {
@@ -99,7 +117,10 @@ pub(super) fn effective_fem_device_request_from_sources(
         Some("cpu") => "cpu".to_string(),
         Some("gpu") | Some("cuda") | Some("all_in_gpu") => "gpu".to_string(),
         Some("auto") => "auto".to_string(),
-        None => script_device.unwrap_or("auto").replace("cuda", "gpu"),
+        None => managed_override
+            .or(script_device)
+            .unwrap_or("auto")
+            .replace("cuda", "gpu"),
         Some(other) => other.replace("cuda", "gpu"),
     }
 }
@@ -349,13 +370,14 @@ mod tests {
     fn fem_effective_request_collision_matrix_is_deterministic() {
         for script in ["cpu", "auto", "gpu"] {
             assert_eq!(
-                effective_fem_device_request_from_sources(Some(script), None, false),
+                effective_fem_device_request_from_sources(Some(script), None, None, false),
                 script
             );
             for execution_env in ["cpu", "auto", "gpu"] {
                 assert_eq!(
                     effective_fem_device_request_from_sources(
                         Some(script),
+                        None,
                         Some(execution_env),
                         false,
                     ),
@@ -365,6 +387,7 @@ mod tests {
                 assert_eq!(
                     effective_fem_device_request_from_sources(
                         Some(script),
+                        None,
                         Some(execution_env),
                         true,
                     ),
@@ -379,11 +402,28 @@ mod tests {
     fn fem_effective_request_is_derived_from_one_immutable_environment_snapshot() {
         let snapshot = FemSelectionEnvSnapshot::from_sources(Some("cpu"), Some("true"));
         assert_eq!(
-            effective_fem_device_request_from_snapshot(Some("auto"), &snapshot),
+            effective_fem_device_request_from_snapshot(Some("auto"), Some("cpu"), &snapshot),
             "gpu"
         );
         assert_eq!(snapshot.execution.as_deref(), Some("cpu"));
         assert_eq!(snapshot.all_in_gpu.as_deref(), Some("true"));
+    }
+
+    #[test]
+    fn managed_override_is_separate_from_script_and_below_live_environment_priority() {
+        assert_eq!(
+            effective_fem_device_request_from_sources(Some("auto"), Some("cpu"), None, false,),
+            "cpu",
+        );
+        assert_eq!(
+            effective_fem_device_request_from_sources(
+                Some("auto"),
+                Some("cpu"),
+                Some("gpu"),
+                false,
+            ),
+            "gpu",
+        );
     }
 
     #[test]

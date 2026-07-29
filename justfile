@@ -150,6 +150,28 @@ verify-fem-mixed-p1-capability-contract:
     python3 -m unittest scripts.test_validate_mixed_p1_capability_contract
     cargo test -p fullmag-runner --no-default-features capabilities::tests::
 
+verify-fem-mixed-prism-airbox-runtime:
+    bash -euo pipefail -c '\
+      canonical="tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py"; \
+      report_root=".fullmag/reports/fem-mixed-prism-airbox-runtime"; \
+      mkdir -p "$report_root/runs"; \
+      run_dir="$(mktemp -d "$report_root/runs/cpu.XXXXXX")"; \
+      temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/fullmag-mixed-prism-airbox-runtime.XXXXXX")"; \
+      cleanup() { rm -rf "$temp_dir"; }; \
+      trap cleanup EXIT INT TERM; \
+      bounded="$temp_dir/relax_projected_gradient_bb.max_steps_1.py"; \
+      python3 scripts/verify_fem_mixed_prism_airbox_runtime.py prepare \
+        "$canonical" "$bounded" --evidence "$run_dir/source.v1.json"; \
+      set -o pipefail; \
+      just fem-managed-headless cpu "$bounded" "$run_dir/artifacts" \
+        2>&1 | tee "$run_dir/runtime.log"; \
+      cp "$bounded" "$run_dir/bounded_scenario.py"; \
+      python3 scripts/verify_fem_mixed_prism_airbox_runtime.py validate \
+        "$canonical" "$run_dir/bounded_scenario.py" "$run_dir/artifacts" \
+        --runtime-log "$run_dir/runtime.log" \
+        --output "$run_dir/summary.v1.json"; \
+      echo "validated mixed prism-airbox runtime evidence: $run_dir/summary.v1.json"'
+
 verify-fem-mixed-p1-native-contract:
     docker compose --profile fem-gpu run --rm \
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \

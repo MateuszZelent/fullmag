@@ -1,8 +1,8 @@
 # FEM mixed prism/pyramid shared-domain mesh
 
-- Status: bounded FEM CPU/double mixed-P1 relaxation lane production-executable; GPU and wider scopes fail closed
+- Status: bounded FEM CPU/double mixed-P1 relaxation lane implemented in source/contracts; managed public-runtime proof pending; GPU and wider scopes fail closed
 - Owners: Fullmag core
-- Last updated: 2026-07-28
+- Last updated: 2026-07-29
 - Related ADRs: `docs/adr/0021-native-mixed-p1-fem-topology.md`
 - Related specs:
   - `docs/specs/capability-matrix-v0.md`
@@ -38,7 +38,9 @@ The first qualification target is deliberately narrow: one axis-aligned
 `Box`, P1, one conforming shared-domain airbox, uniform `Ms` and `Aex`, exchange,
 uniform Zeeman, Poisson Robin or Dirichlet demag, explicit FEM CPU double
 precision, strict execution, and PG-BB, NCG, or overdamped LLG relaxation.
-That exact certificate-bound tuple is `production_executable`, not `validated`.
+That exact certificate-bound tuple is currently `implemented`, not
+`production_executable` or `validated`, because no immutable managed public
+SP4 runtime report exists yet.
 GPU, `auto`, single/extended/hybrid execution, and wider tuples remain
 `unsupported`; no fallback is permitted.
 
@@ -204,7 +206,7 @@ on connectivity order, basis traces, signs, material masks, energy ownership,
 quadrature sufficiency, requested/resolved provenance, and rejection reasons.
 
 The target is double precision only. The bounded explicit CPU lane is
-`production_executable`; the GPU lane has no runtime claim and forced GPU
+`implemented` in source and operator contracts; the GPU lane has no runtime claim and forced GPU
 cannot fall back to CPU. Neither lane may call the legacy prism-to-tet
 compatibility splitter in strict mode.
 
@@ -227,7 +229,8 @@ hash and region/material realization. For the first workload it proves:
 9. relative CAD-versus-shared-domain volume error is at most `1e-8`;
 10. p05 SICN is at least `0.1`, or the report uses an honestly named
     scaled-Jacobian metric and does not label it SICN;
-11. strict execution reports `fallbacks_triggered=[]`.
+11. strict execution reports `fallbacks_triggered=[]` in both the certificate
+    and enclosing build report, and the build report has `degraded=false`.
 
 The certificate fails closed. A warning, inferred layer count, clipped cell,
 tet conversion, or unversioned connectivity does not satisfy it.
@@ -249,9 +252,29 @@ them without exposing Gmsh element IDs or algorithm names. Python-to-IR-to-UI-
 to-Python round-trip must preserve requested topology and exact layer count.
 
 The public Python API and its lowering preserve the requested prismatic
-topology, transition policy, and exact layer count. Existing tetrahedral
-lowering remains the only public executable path: a strict mixed-P1 request
-must reject, not pretend to execute, until the native operators land.
+topology, transition policy, and exact layer count. The bounded mixed-P1 CPU
+implementation exists, but public production status remains unclaimed until
+the exact managed SP4 run stores immutable execution evidence.
+
+The bounded precursor command is
+`just verify-fem-mixed-prism-airbox-runtime`. It reads the exact canonical SP4
+projected-gradient scenario, requires and replaces exactly one authored
+`max_steps=50_000` with `max_steps=1` in a generated temporary copy, and runs
+that copy through the existing managed FEM CPU headless route. Its validator
+requires authored `auto`, a separate managed CPU override, effective strict FEM
+CPU double execution, `fem_cpu_native`, no fallback, exact mixed certificate
+and topology identity, one executed step, and finite energies and torque. The
+recipe's existence is not runtime evidence: this note and the capability matrix
+remain `implemented` until the command actually passes and its immutable report
+is reviewed.
+
+The ordinary Python API suite uses `--skip-geometry-assets` to keep authored
+`auto`, managed CPU override, and base-plus-relaxation-stage propagation under
+fast always-on coverage. The standalone full real-asset helper export is an
+explicit slow opt-in selected with `FULLMAG_RUN_SLOW_REAL_ASSET_TESTS=1`; it is
+diagnostic, not the sole qualification proof. Authoritative exact-source,
+real-asset, bounded runtime coverage moved to the non-skipping managed `just`
+gate above.
 
 ### 4.2 ProblemIR representation and normalization
 
@@ -269,6 +292,13 @@ Validation keeps requested topology, sweep direction, and exact layer count
 separate from the realized certificate. Legacy tetrahedral input normalizes to
 the typed representation; no migration may reinterpret it as mixed-P1.
 
+`problem_meta.runtime_metadata.runtime_selection.device` remains the authored
+script request. A managed launcher records its explicit overlay separately as
+`runtime_device_override={"device":"cpu|gpu","source":"managed_launcher"}`.
+Planning and runtime engine resolution consume the effective overlay while
+session provenance continues to report the authored request; neither layer may
+rewrite the model-builder runtime map to make the overlay look authored.
+
 ### 4.3 Planner and capability matrix
 
 The target vocabulary is:
@@ -282,11 +312,12 @@ fem.cpu.exchange_demag.mixed_p1
 fem.gpu.exchange_demag.mixed_p1
 ```
 
-All six capabilities are `semantic_only` or `unsupported` in this slice. The
-first legal target is strict/extended FEM, CPU or GPU, double precision, the
-narrow workload in Section 1, and no fallback. `auto` may select a lane only
-after that lane advertises the exact complete capability set; it must preserve
-requested and resolved choices.
+The four mesh capabilities and bounded CPU operator capability are
+`implemented`; the GPU operator capability is `unsupported`, and GPU mesh
+transport is only `semantic_only`. The legal implementation target is strict
+FEM, explicit CPU, double precision, the narrow workload in Section 1, and no
+fallback. `auto` remains rejecting. Authored device intent, a managed-launcher
+override, and resolved execution must remain distinct provenance.
 
 Until separately qualified, planning rejects FEM/BEM demag, PBC/Floquet,
 DMI/STT/thermal/magnetoelastic terms, regional projections, eigen/frequency-
@@ -356,7 +387,7 @@ It freezes topology invariants, not incidental air-tet counts.
 
 ### 5.2 Operator checks
 
-The CPU executable slice is backed by the following operator contracts; GPU
+The CPU implemented slice is backed by the following operator contracts; GPU
 promotion and any future `validated` promotion require their own fresh evidence:
 
 - reference basis/gradient/Jacobian and quadrature tests for prism6, pyramid5,
@@ -400,7 +431,7 @@ No lower level implies a higher one.
 - [x] ProblemIR enums, validation, and legacy-tetra migration
 - [x] Fail-closed planner and machine-readable capabilities
 - [x] Variable-width mesh container and native ABI
-- [ ] FEM CPU mixed-element operators
+- [x] FEM CPU mixed-element operators
 - [ ] FEM GPU mixed-element operators
 - [x] FMMT v2, OpenAPI, generated client, and typed viewport transport
 - [ ] Managed runtime and physics validation

@@ -331,6 +331,7 @@ mod tests {
                     let expected_request =
                         crate::solver_runtime::selection::effective_fem_device_request_from_sources(
                             Some(script_device),
+                            None,
                             execution_env,
                             all_in_gpu,
                         );
@@ -352,5 +353,34 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn managed_cpu_override_resolves_cpu_without_fallback_while_script_stays_auto() {
+        let mut problem = fem_policy_problem("auto");
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_device_override".to_string(),
+            serde_json::json!({"device": "cpu", "source": "managed_launcher"}),
+        );
+        let effective = crate::solver_runtime::selection::effective_fem_device_request_from_sources(
+            crate::solver_runtime::selection::runtime_device(&problem),
+            crate::solver_runtime::selection::runtime_device_override(&problem),
+            None,
+            false,
+        );
+        let resolution = resolve_fem_engine_with_effective_request_and_availability(
+            &problem,
+            &effective,
+            &full_availability(),
+        )
+        .expect("managed CPU override must resolve the CPU engine");
+
+        assert_eq!(
+            crate::solver_runtime::selection::runtime_device(&problem),
+            Some("auto"),
+        );
+        assert_eq!(effective, "cpu");
+        assert_eq!(resolution.engine, FemEngine::CpuNative);
+        assert!(resolution.fallback.is_none());
     }
 }

@@ -1290,7 +1290,7 @@ fn mixed_topology_families(mesh: &MeshIR) -> Option<(Vec<&'static str>, Vec<&'st
     })
 }
 
-fn requested_runtime_device(problem: &ProblemIR) -> &str {
+fn authored_runtime_device(problem: &ProblemIR) -> &str {
     problem
         .problem_meta
         .runtime_metadata
@@ -1298,6 +1298,34 @@ fn requested_runtime_device(problem: &ProblemIR) -> &str {
         .and_then(|value| value.get("device"))
         .and_then(Value::as_str)
         .unwrap_or("auto")
+}
+
+fn effective_runtime_device(problem: &ProblemIR) -> &str {
+    problem
+        .problem_meta
+        .runtime_metadata
+        .get("runtime_device_override")
+        .and_then(|value| value.get("device"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| authored_runtime_device(problem))
+}
+
+fn validate_mixed_p1_build_report(
+    report: &fullmag_ir::FemSharedDomainBuildReportIR,
+    phase: &str,
+) -> Result<(), String> {
+    let explicit_no_fallback = report
+        .fallbacks_triggered
+        .as_ref()
+        .is_some_and(Vec::is_empty);
+    if explicit_no_fallback && !report.degraded {
+        Ok(())
+    } else {
+        Err(format!(
+            "fem_mixed_p1_build_report_rejected: phase={phase}; fallbacks_triggered={:?}; degraded={}; required=fallbacks_triggered[]+degraded_false; fallback=none",
+            report.fallbacks_triggered, report.degraded
+        ))
+    }
 }
 
 fn validate_mixed_p1_cpu_scope(
@@ -1390,7 +1418,7 @@ fn validate_mixed_p1_cpu_scope(
     let qualified = problem.backend_policy.requested_backend == fullmag_ir::BackendTarget::Fem
         && problem.validation_profile.execution_mode == fullmag_ir::ExecutionMode::Strict
         && problem.backend_policy.execution_precision == fullmag_ir::ExecutionPrecision::Double
-        && requested_runtime_device(problem) == "cpu"
+        && effective_runtime_device(problem) == "cpu"
         && fem_order == Some(1)
         && exact_single_box
         && problem.regions.len() == 1
@@ -1411,7 +1439,7 @@ fn validate_mixed_p1_cpu_scope(
         Err(format!(
             "fem_mixed_p1_scope_rejected: required=explicit_fem+explicit_cpu+strict+double+P1+one_axis_aligned_box+one_exact_layer+uniform_material+exchange+poisson_robin_or_dirichlet+PG_BB_or_NCG_or_LLG_overdamped; requested_backend={:?}; requested_device={}; requested_precision={:?}; execution_mode={:?}; fe_order={fem_order:?}; study={:?}; energy_terms={:?}; fallback=none",
             problem.backend_policy.requested_backend,
-            requested_runtime_device(problem),
+            effective_runtime_device(problem),
             problem.backend_policy.execution_precision,
             problem.validation_profile.execution_mode,
             problem.study,
@@ -1423,7 +1451,7 @@ fn validate_mixed_p1_cpu_scope(
 pub(crate) fn reject_unsupported_mixed_topology(
     problem: &ProblemIR,
     mesh: &MeshIR,
-    certificate: Option<&fullmag_ir::MixedLayerTopologyCertificateV1IR>,
+    build_report: Option<&fullmag_ir::FemSharedDomainBuildReportIR>,
 ) -> Result<(), String> {
     let Some((cell_families, facet_families)) = mixed_topology_families(mesh) else {
         return Ok(());
@@ -1444,12 +1472,19 @@ pub(crate) fn reject_unsupported_mixed_topology(
              supported_topology=tet4/tri3; fallback=none"
         ));
     }
-    let Some(certificate) = certificate else {
+    let Some(report) = build_report else {
         return Err(format!(
             "fem_mixed_p1_certificate_required: actual_topology={topology}; \
              required_capabilities=[mesh.topology.mixed_p1,mesh.swept.prism,\
              mesh.transition.pyramid_tet,mesh.exact_layer_count]; fallback=none; \
              select topology='free_tetrahedral' explicitly to use the qualified tetrahedral lane"
+        ));
+    };
+    validate_mixed_p1_build_report(report, "source")?;
+    let Some(certificate) = report.mixed_layer_topology_certificate.as_ref() else {
+        return Err(format!(
+            "fem_mixed_p1_certificate_required: actual_topology={topology}; \
+             accepted topology certificate is missing; fallback=none"
         ));
     };
     fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(certificate, mesh).map_err(
@@ -1470,14 +1505,7 @@ pub(crate) fn reject_auto_backend_mixed_fem_topology(problem: &ProblemIR) -> Res
 
     if let Some(asset) = assets.fem_domain_mesh_asset.as_ref() {
         let mesh = load_fem_domain_mesh_asset(asset)?;
-        reject_unsupported_mixed_topology(
-            problem,
-            &mesh,
-            asset
-                .build_report
-                .as_ref()
-                .and_then(|report| report.mixed_layer_topology_certificate.as_ref()),
-        )?;
+        reject_unsupported_mixed_topology(problem, &mesh, asset.build_report.as_ref())?;
     }
 
     for asset in &assets.fem_mesh_assets {
@@ -1505,14 +1533,7 @@ pub(crate) fn resolve_fem_domain_mesh_asset(
     };
     let mesh = load_fem_domain_mesh_asset(asset)?;
     validate_domain_object_region_identity(&mesh, problem, asset)?;
-    reject_unsupported_mixed_topology(
-        problem,
-        &mesh,
-        asset
-            .build_report
-            .as_ref()
-            .and_then(|report| report.mixed_layer_topology_certificate.as_ref()),
-    )?;
+    reject_unsupported_mixed_topology(problem, &mesh, asset.build_report.as_ref())?;
     let region_entries = shared_domain_region_entries_for_problem(&mesh, problem, asset);
     let analysis = analyze_shared_domain_mesh_with_entries(&mesh, region_entries)?;
     validate_packing_constraints(&analysis, &mesh.mesh_name, solver_supports_conformal)?;
@@ -1543,13 +1564,14 @@ pub(crate) fn resolve_fem_domain_mesh_asset(
                     reasons.join("; ")
                 )
             })?;
+        validate_mixed_p1_build_report(report, "packed")?;
         report.mixed_topology_provenance = Some(fullmag_ir::FemMixedTopologyProvenanceIR {
             requested_topology: fullmag_ir::FemMeshTopologyFamilyIR::MixedP1,
             resolved_topology: fullmag_ir::FemMeshTopologyFamilyIR::MixedP1,
             accepted_certificate_fingerprint: fingerprint,
             requested_device: fullmag_ir::ExecutionDevice::Cpu,
             precision: fullmag_ir::ExecutionPrecision::Double,
-            capability_status: fullmag_ir::FemMixedTopologyCapabilityStatusIR::ProductionExecutable,
+            capability_status: fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented,
         });
     }
     Ok(Some(ResolvedFemDomainMeshAsset {

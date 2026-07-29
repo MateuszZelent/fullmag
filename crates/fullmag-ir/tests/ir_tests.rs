@@ -3374,6 +3374,43 @@ fn runtime_selection_rejects_unimplemented_multi_gpu_requests() {
 }
 
 #[test]
+fn managed_runtime_device_override_has_a_separate_validated_identity() {
+    let mut problem = ProblemIR::bootstrap_example();
+    problem.problem_meta.runtime_metadata.insert(
+        "runtime_selection".into(),
+        serde_json::json!({"device": "auto", "execution_precision": "double"}),
+    );
+    problem.problem_meta.runtime_metadata.insert(
+        "runtime_device_override".into(),
+        serde_json::json!({"device": "cpu", "source": "managed_launcher"}),
+    );
+    problem
+        .validate()
+        .expect("a typed managed launcher override must preserve valid authored intent");
+
+    for invalid in [
+        serde_json::json!({"device": "auto", "source": "managed_launcher"}),
+        serde_json::json!({"device": "cpu", "source": "unknown"}),
+        serde_json::json!("cpu"),
+    ] {
+        let mut rejected = problem.clone();
+        rejected
+            .problem_meta
+            .runtime_metadata
+            .insert("runtime_device_override".into(), invalid);
+        let errors = rejected
+            .validate()
+            .expect_err("malformed launcher override must fail IR validation");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("runtime_device_override")),
+            "{errors:?}",
+        );
+    }
+}
+
+#[test]
 fn random_seeded_initial_magnetization_must_be_positive() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.magnets[0].initial_magnetization = Some(InitialMagnetizationIR::RandomSeeded { seed: 0 });

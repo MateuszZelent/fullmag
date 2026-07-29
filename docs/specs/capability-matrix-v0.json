@@ -1,6 +1,6 @@
 {
   "schema_version": "capability_matrix.v0",
-  "updated_at": "2026-07-28",
+  "updated_at": "2026-07-29",
   "status_vocabulary": {
     "unsupported": "The current lane has no legal executable realization for this feature.",
     "source_visible": "Source or planner scaffolding exists, but the lane is not a legal public executable path.",
@@ -38,11 +38,11 @@
       "lanes": {
         "fdm_cpu_reference": "unsupported",
         "fdm_gpu_production": "unsupported",
-        "fem_cpu_public": "production_executable",
+        "fem_cpu_public": "implemented",
         "fem_gpu_public": "semantic_only"
       },
       "validated_workloads": [],
-      "notes": "The certificate-bound explicit FEM CPU strict double P1 relaxation tuple is production executable. Planning validates the source certificate, packs a clone, rebinds and validates the final fingerprint, and runner/native guards reject every wider scope without fallback. GPU remains semantic-only.",
+      "notes": "The certificate-bound explicit FEM CPU strict double P1 relaxation tuple is implemented in source and contract tests. Planning validates the complete source report and certificate, packs a clone, rebinds and validates the final fingerprint, and runner/native guards reject every wider scope without fallback. Managed public-runtime evidence is still missing, so CPU is not production_executable; GPU remains semantic-only.",
       "validation_state": "unvalidated"
     },
     {
@@ -51,11 +51,11 @@
       "lanes": {
         "fdm_cpu_reference": "unsupported",
         "fdm_gpu_production": "unsupported",
-        "fem_cpu_public": "production_executable",
+        "fem_cpu_public": "implemented",
         "fem_gpu_public": "semantic_only"
       },
       "validated_workloads": [],
-      "notes": "Python authoring and native meshing preserve prism6 cells. The bounded explicit CPU lane executes the certified mesh without tetrahedral conversion; GPU remains unavailable.",
+      "notes": "Python authoring, native meshing, planner, runner, and native contract tests preserve prism6 cells without tetrahedral conversion. Managed public execution proof is still pending; GPU remains unavailable.",
       "validation_state": "unvalidated"
     },
     {
@@ -64,11 +64,11 @@
       "lanes": {
         "fdm_cpu_reference": "unsupported",
         "fdm_gpu_production": "unsupported",
-        "fem_cpu_public": "production_executable",
+        "fem_cpu_public": "implemented",
         "fem_gpu_public": "semantic_only"
       },
       "validated_workloads": [],
-      "notes": "The native mesher and certificate preserve a conforming pyramid5 transition and tet4 far-air region. Only the bounded explicit CPU lane executes it; wider scopes fail closed.",
+      "notes": "The native mesher and certificate preserve a conforming pyramid5 transition and tet4 far-air region through source and contract tests. Public managed execution is not yet proven; wider scopes fail closed.",
       "validation_state": "unvalidated"
     },
     {
@@ -77,11 +77,11 @@
       "lanes": {
         "fdm_cpu_reference": "unsupported",
         "fdm_gpu_production": "unsupported",
-        "fem_cpu_public": "production_executable",
+        "fem_cpu_public": "implemented",
         "fem_gpu_public": "semantic_only"
       },
       "validated_workloads": [],
-      "notes": "Authoring, ProblemIR, and the accepted mixed-layer certificate preserve one requested and realized layer and exactly two magnetic node planes. The bounded CPU lane is executable without fallback.",
+      "notes": "Authoring, ProblemIR, and the accepted mixed-layer certificate preserve one requested and realized layer and exactly two magnetic node planes. Source and contract tests exist, but managed public execution without fallback is not yet proven.",
       "validation_state": "unvalidated"
     },
     {
@@ -90,11 +90,11 @@
       "lanes": {
         "fdm_cpu_reference": "unsupported",
         "fdm_gpu_production": "unsupported",
-        "fem_cpu_public": "production_executable",
+        "fem_cpu_public": "implemented",
         "fem_gpu_public": "unsupported"
       },
       "validated_workloads": [],
-      "notes": "Production executable only for explicit FEM CPU strict double P1, one axis-aligned Box, one accepted exact layer, uniform material, exchange, optional uniform Zeeman, Poisson Robin or Dirichlet, and PG-BB, NCG, or overdamped LLG. Auto, GPU, single, extended, FEM-BEM, DMI, STT, DG0, PBC, time/eigen/frequency and wider geometry fail closed without fallback.",
+      "notes": "Implemented in source and operator contracts only for explicit FEM CPU strict double P1, one axis-aligned Box, one accepted exact layer, uniform material, exchange, optional uniform Zeeman, Poisson Robin or Dirichlet, and PG-BB, NCG, or overdamped LLG. Managed public-runtime proof and immutable evidence are missing, so this is not production_executable. Auto, GPU, single, extended, FEM-BEM, DMI, STT, DG0, PBC, time/eigen/frequency and wider geometry fail closed without fallback.",
       "validation_state": "unvalidated"
     },
     {

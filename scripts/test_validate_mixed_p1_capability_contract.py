@@ -40,6 +40,26 @@ class MixedP1CapabilityContractTest(unittest.TestCase):
         result = self._run(REPO_ROOT)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_repository_cpu_lane_is_not_promoted_without_public_runtime_evidence(self) -> None:
+        matrix = json.loads(
+            (REPO_ROOT / "docs/specs/capability-matrix-v0.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        by_id = {feature["id"]: feature for feature in matrix["features"]}
+        for capability_id in (
+            "mesh.topology.mixed_p1",
+            "mesh.swept.prism",
+            "mesh.transition.pyramid_tet",
+            "mesh.exact_layer_count",
+            "fem.cpu.exchange_demag.mixed_p1",
+        ):
+            self.assertEqual(
+                by_id[capability_id]["lanes"]["fem_cpu_public"],
+                "implemented",
+                capability_id,
+            )
+
     def test_rejects_cpu_operator_demotion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -58,7 +78,7 @@ class MixedP1CapabilityContractTest(unittest.TestCase):
             result = self._run(root)
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("must be production_executable", result.stderr)
+        self.assertIn("must be implemented", result.stderr)
 
     def test_rejects_markdown_cpu_operator_demotion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -67,7 +87,7 @@ class MixedP1CapabilityContractTest(unittest.TestCase):
             markdown = root / "docs/specs/capability-matrix-v0.md"
             markdown.write_text(
                 markdown.read_text(encoding="utf-8").replace(
-                    "| `fem.cpu.exchange_demag.mixed_p1` | `production_executable` | production_executable |",
+                    "| `fem.cpu.exchange_demag.mixed_p1` | `implemented` | implemented |",
                     "| `fem.cpu.exchange_demag.mixed_p1` | `unsupported` | source_visible |",
                     1,
                 ),
@@ -99,7 +119,7 @@ class MixedP1CapabilityContractTest(unittest.TestCase):
             root = Path(directory)
             self._copy_contract(root)
             markdown = root / "docs/specs/capability-matrix-v0.md"
-            row = "| `mesh.topology.mixed_p1` | CPU `production_executable`; GPU `semantic_only`; FDM `unsupported` | production_executable | duplicate | none |\n"
+            row = "| `mesh.topology.mixed_p1` | CPU `implemented`; GPU `semantic_only`; FDM `unsupported` | implemented | duplicate | none |\n"
             markdown.write_text(
                 markdown.read_text(encoding="utf-8") + row,
                 encoding="utf-8",

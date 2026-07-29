@@ -2209,16 +2209,11 @@ pub(crate) fn plan_fem(
     let mesh_build_report = resolved_domain_mesh_asset
         .as_ref()
         .and_then(|asset| asset.build_report.clone());
-    reject_unsupported_mixed_topology(
-        problem,
-        &mesh,
-        mesh_build_report
-            .as_ref()
-            .and_then(|report| report.mixed_layer_topology_certificate.as_ref()),
-    )
-    .map_err(|reason| PlanError {
-        reasons: vec![reason],
-    })?;
+    reject_unsupported_mixed_topology(problem, &mesh, mesh_build_report.as_ref()).map_err(
+        |reason| PlanError {
+            reasons: vec![reason],
+        },
+    )?;
     let n_nodes = mesh.nodes.len();
     let n_elements = mesh.cell_count();
     let mesh_name = mesh.mesh_name.clone();
@@ -3271,16 +3266,11 @@ pub(crate) fn plan_fem_eigen(
     let mesh_build_report = resolved_domain_mesh_asset
         .as_ref()
         .and_then(|asset| asset.build_report.clone());
-    reject_unsupported_mixed_topology(
-        problem,
-        &mesh,
-        mesh_build_report
-            .as_ref()
-            .and_then(|report| report.mixed_layer_topology_certificate.as_ref()),
-    )
-    .map_err(|reason| PlanError {
-        reasons: vec![reason],
-    })?;
+    reject_unsupported_mixed_topology(problem, &mesh, mesh_build_report.as_ref()).map_err(
+        |reason| PlanError {
+            reasons: vec![reason],
+        },
+    )?;
     let mesh_name = mesh.mesh_name.clone();
     let n_nodes = mesh.nodes.len();
     let n_elements = mesh.cell_count();

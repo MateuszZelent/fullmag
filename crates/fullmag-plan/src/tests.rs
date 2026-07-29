@@ -11433,6 +11433,8 @@ fn fem_planner_accepts_certified_mixed_p1_cpu_double_and_rebinds_packed_certific
         let report = fem
             .mesh_build_report
             .expect("qualified mixed P1 plan must preserve its build report");
+        assert_eq!(report.fallbacks_triggered.as_deref(), Some([].as_slice()));
+        assert!(!report.degraded);
         let certificate = report
             .mixed_layer_topology_certificate
             .expect("qualified mixed P1 plan must carry a final certificate");
@@ -11460,7 +11462,7 @@ fn fem_planner_accepts_certified_mixed_p1_cpu_double_and_rebinds_packed_certific
         );
         assert_eq!(
             provenance.capability_status,
-            fullmag_ir::FemMixedTopologyCapabilityStatusIR::ProductionExecutable
+            fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented
         );
         assert_eq!(
             source_fingerprint,
@@ -11472,6 +11474,99 @@ fn fem_planner_accepts_certified_mixed_p1_cpu_double_and_rebinds_packed_certific
                 .expect("source asset remains present")
                 .topology_fingerprint_v6(),
             "planning must pack a clone and never mutate the certified source asset",
+        );
+    }
+}
+
+#[test]
+fn fem_planner_uses_managed_override_without_erasing_authored_device_request() {
+    let mut ir = mixed_cpu_relaxation_ir(
+        fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+        fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+    );
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "auto", "precision": "double"}),
+    );
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_device_override".to_string(),
+        serde_json::json!({"device": "cpu", "source": "managed_launcher"}),
+    );
+
+    let planned = plan(&ir).expect("managed CPU override must feed the effective plan request");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("mixed relaxation must resolve to FEM")
+    };
+    let provenance = fem
+        .mesh_build_report
+        .as_ref()
+        .and_then(|report| report.mixed_topology_provenance.as_ref())
+        .expect("mixed plan must bind effective execution provenance");
+    assert_eq!(
+        ir.problem_meta.runtime_metadata["runtime_selection"]["device"], "auto",
+        "planning must not rewrite authored script intent",
+    );
+    assert_eq!(
+        ir.problem_meta.runtime_metadata["runtime_device_override"]["source"],
+        "managed_launcher",
+    );
+    assert_eq!(
+        provenance.requested_device,
+        fullmag_ir::ExecutionDevice::Cpu,
+        "plan provenance must bind the effective launcher request",
+    );
+}
+
+#[test]
+fn fem_planner_rejects_valid_mixed_certificate_when_build_report_is_degraded() {
+    for case in ["report_fallback", "degraded"] {
+        let mut ir = mixed_cpu_relaxation_ir(
+            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+        );
+        {
+            let report = ir
+                .geometry_assets
+                .as_mut()
+                .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+                .and_then(|asset| asset.build_report.as_mut())
+                .expect("mixed fixture must carry a build report");
+            match case {
+                "report_fallback" => {
+                    report.fallbacks_triggered =
+                        Some(vec!["mesh_size_field_simplified".to_string()]);
+                }
+                "degraded" => report.degraded = true,
+                _ => unreachable!(),
+            }
+        }
+        let report = ir
+            .geometry_assets
+            .as_ref()
+            .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+            .and_then(|asset| asset.build_report.as_ref())
+            .expect("mixed fixture must carry a build report");
+        let certificate = report
+            .mixed_layer_topology_certificate
+            .as_ref()
+            .expect("mixed fixture must retain a valid certificate");
+        let mesh = ir
+            .geometry_assets
+            .as_ref()
+            .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+            .and_then(|asset| asset.mesh.as_ref())
+            .expect("mixed fixture must retain its source mesh");
+        fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(certificate, mesh)
+            .expect("the regression must isolate enclosing build-report state");
+
+        let error = plan(&ir).expect_err("strict mixed planning must reject a degraded report");
+        assert!(
+            error
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("fem_mixed_p1_build_report_rejected")),
+            "case={case}: {:?}",
+            error.reasons
         );
     }
 }

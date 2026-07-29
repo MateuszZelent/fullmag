@@ -70,6 +70,21 @@ def apply_ir_runtime_device_override(ir: dict[str, object], device: str) -> None
     runtime_metadata = problem_meta.get("runtime_metadata")
     if not isinstance(runtime_metadata, dict):
         return
+    if device not in {"cpu", "gpu"}:
+        raise ValueError("managed runtime device override must be 'cpu' or 'gpu'")
+    runtime_metadata["runtime_device_override"] = {
+        "device": device,
+        "source": "managed_launcher",
+    }
+
+
+def apply_ir_runtime_device_selection(ir: dict[str, object], device: str) -> None:
+    problem_meta = ir.get("problem_meta")
+    if not isinstance(problem_meta, dict):
+        return
+    runtime_metadata = problem_meta.get("runtime_metadata")
+    if not isinstance(runtime_metadata, dict):
+        return
     for runtime in _runtime_metadata_runtime_maps(runtime_metadata):
         runtime["device"] = device
         if device == "cpu":

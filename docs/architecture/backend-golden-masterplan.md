@@ -308,12 +308,16 @@ DMI/STT/thermal/magnetoelastic, regional projections, eigen/frequency-domain,
 DG0/material interfaces, order>1, arbitrary OCC, multi-body i multilayer
 pozostają fail-closed do osobnej kwalifikacji.
 
-Obecny stan kwalifikuje jako `production_executable` wyłącznie jawny FEM
-CPU/strict/double P1 dla jednego osiowego Boxa i jednej certyfikowanej warstwy,
-z exchange, opcjonalnym jednorodnym Zeemanem, Poisson Robin/Dirichlet oraz
-PG-BB/NCG/overdamped LLG. Nie jest to jeszcze `validated`. GPU, auto
+Obecny stan jest `implemented` wyłącznie dla jawnego FEM CPU/strict/double P1,
+jednego osiowego Boxa i jednej certyfikowanej warstwy, z exchange, opcjonalnym
+jednorodnym Zeemanem, Poisson Robin/Dirichlet oraz PG-BB/NCG/overdamped LLG.
+Source i operator contract tests nie są dowodem publicznego managed runtime,
+więc `production_executable` i `validated` pozostają nieprzyznane do czasu
+świeżego publicznego uruchomienia SP4 z immutable reportem. GPU, auto
 device/backend, single, extended i wszystkie szersze kontrakty nadal są
-odrzucane przed alokacją operatorów bez fallbacku.
+odrzucane przed alokacją operatorów bez fallbacku. Strict wymaga pustych
+fallbacków zarówno w certyfikacie, jak i nadrzędnym build reporcie oraz
+`degraded=false`.
 Tetrahedralny FMMT v1 pozostaje wyłącznie readerem kompatybilności i nie może
 maskować ani obcinać komórek mieszanych.
 

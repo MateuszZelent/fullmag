@@ -46,6 +46,30 @@ processes. Independent final review: approved with 0 Critical/Important.
 Commits: `83b69feb`, `44ce8ef2`. The public mixed solver remains fail-closed
 until Task 4.3 exchange and Poisson operators are complete.
 
+Task 4.3 mixed CPU exchange/Poisson/relaxation implementation is source- and
+contract-complete but remains product status `implemented`. The first public
+unlock commit `bdb60758` did not qualify `production_executable`: independent
+review found missing enclosing build-report fallback/degradation checks,
+destructive managed-device overlay provenance, and no exact managed public SP4
+runtime report. Review remediation now requires explicit empty certificate and
+report fallback trails, `degraded=false`, separate authored and managed-launcher
+device requests, and one effective device source shared by runner topology and
+engine resolution. CPU promotion remains blocked until a fresh managed public
+SP4 run stores immutable topology fingerprint, CPU engine/device identity,
+empty fallback trail, solver telemetry, and artifacts. GPU and auto remain
+rejecting.
+
+The review-required public-runtime precursor is now named
+`just verify-fem-mixed-prism-airbox-runtime`. It generates a one-step temporary
+copy of the exact SP4 projected-gradient scenario and validates immutable
+managed CPU artifact identity without changing the authored source. Source and
+validator contract tests do not promote status. Fast Python coverage exports
+the base and relaxation-stage overlay without real assets; the standalone
+real-asset helper export is an explicit
+`FULLMAG_RUN_SLOW_REAL_ASSET_TESTS=1` diagnostic. The non-skipping managed
+recipe is the authoritative exact-source runtime gate. Task 4.3 remains
+`implemented` until that managed command itself passes with reviewed evidence.
+
 ## Global constraints
 
 - Native mixed topology is `prism6` in the magnet, `pyramid5` only in air transition, and `tet4` in far air; facets are `tri3 | quad4`.
