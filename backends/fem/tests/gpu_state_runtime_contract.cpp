@@ -62,6 +62,33 @@ std::string extract_function_body(const std::string &source, const std::string &
     return {};
 }
 
+void tetrahedral_mesh_geometry_is_required_only_by_its_gpu_consumers() {
+    fullmag::fem::Context ctx;
+    ctx.exchange.enabled = true;
+    ctx.demag.enabled = true;
+
+    check(
+        !fullmag::fem::gpu_state_requires_tetrahedral_mesh_geometry(ctx),
+        "exchange+Poisson GPU bootstrap must not require flat tetrahedral geometry");
+
+    ctx.dmi.interfacial_enabled = true;
+    check(
+        fullmag::fem::gpu_state_requires_tetrahedral_mesh_geometry(ctx),
+        "interfacial DMI must require tetrahedral GPU geometry");
+    ctx.dmi.interfacial_enabled = false;
+
+    ctx.dmi.bulk_enabled = true;
+    check(
+        fullmag::fem::gpu_state_requires_tetrahedral_mesh_geometry(ctx),
+        "bulk DMI must require tetrahedral GPU geometry");
+    ctx.dmi.bulk_enabled = false;
+
+    ctx.stt.zhang_li_enabled = true;
+    check(
+        fullmag::fem::gpu_state_requires_tetrahedral_mesh_geometry(ctx),
+        "Zhang-Li STT must require tetrahedral GPU geometry");
+}
+
 void gpu_state_bootstrap_is_owned_by_runtime_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string context_builder =
@@ -75,6 +102,12 @@ void gpu_state_bootstrap_is_owned_by_runtime_module() {
     const std::string build_context_from_plan = extract_function_body(
         context_builder,
         "bool build_context_from_plan(");
+    const std::string initialize_gpu_state = extract_function_body(
+        runtime,
+        "bool initialize_context_gpu_state(");
+    const std::string bootstrap_failure = extract_function_body(
+        runtime,
+        "bool gpu_bootstrap_failed(");
 
     check(
         build_context_from_plan.find("initialize_context_gpu_state(ctx, error)") !=
@@ -134,6 +167,14 @@ void gpu_state_bootstrap_is_owned_by_runtime_module() {
     check(
         runtime.find("gpu_state_upload_local_vector_fields_aos(") != std::string::npos,
         "gpu_state_runtime.cpp must upload local vector fields");
+    check(
+        bootstrap_failure.find("gpu_state_destroy(ctx.gpu_state.device)") !=
+                std::string::npos &&
+            bootstrap_failure.find("context_destroy_mfem(ctx)") != std::string::npos,
+        "GPU bootstrap rollback must centrally destroy FemGpuState and MFEM resources");
+    check(
+        initialize_gpu_state.find("context_destroy_mfem(ctx)") == std::string::npos,
+        "GPU bootstrap exchange/Poisson failures must use the central rollback helper");
     check(
         runtime_header.find("Initialize and upload native FEM GPU state runtime buffers") !=
             std::string::npos,
@@ -395,6 +436,7 @@ void no_cuda_bootstrap_initializes_host_resident_gpu_metadata() {
 } // namespace
 
 int main() {
+    tetrahedral_mesh_geometry_is_required_only_by_its_gpu_consumers();
     gpu_state_bootstrap_is_owned_by_runtime_module();
     gpu_state_audit04_memory_contracts_are_source_visible();
     no_cuda_bootstrap_initializes_host_resident_gpu_metadata();

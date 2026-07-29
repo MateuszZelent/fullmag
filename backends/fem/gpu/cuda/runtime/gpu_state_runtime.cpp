@@ -19,14 +19,21 @@
 
 namespace fullmag::fem {
 
+bool gpu_state_requires_tetrahedral_mesh_geometry(const Context &ctx)
+{
+    return ctx.dmi.interfacial_enabled || ctx.dmi.bulk_enabled ||
+        ctx.stt.zhang_li_enabled;
+}
+
 namespace {
 
-bool gpu_bootstrap_failed(Context &ctx) {
+bool gpu_bootstrap_failed(Context &ctx, std::string &error) {
+    const std::string preserved_error = error;
 #if FULLMAG_HAS_MFEM_STACK
     context_destroy_mfem(ctx);
-#else
-    (void)ctx;
 #endif
+    gpu_state_destroy(ctx.gpu_state.device);
+    error = preserved_error;
     return false;
 }
 
@@ -47,7 +54,7 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
             static_cast<uint64_t>(ctx.state.m_xyz.size()),
             ctx.transfer_audit.audit,
             error)) {
-        return gpu_bootstrap_failed(ctx);
+        return gpu_bootstrap_failed(ctx, error);
     }
 #if FULLMAG_HAS_CUDA_RUNTIME
     if (ctx.gpu_state.device.lifecycle.allocated) {
@@ -56,7 +63,7 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
                 *ctx.gpu_state.cuda.snapshot_pool,
                 ctx.gpu_state.device.lifecycle.node_count,
                 error)) {
-            return gpu_bootstrap_failed(ctx);
+            return gpu_bootstrap_failed(ctx, error);
         }
     }
 #endif
@@ -65,7 +72,7 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
         !ctx.gpu_state.device.lifecycle.allocated) {
         error =
             "strict FEM GPU demag requires an MFEM GPU device before FemGpuState demag buffers can be allocated";
-        return gpu_bootstrap_failed(ctx);
+        return gpu_bootstrap_failed(ctx, error);
     }
 #endif
     if (!gpu_state_upload_runtime_coefficients(
@@ -112,7 +119,7 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
             static_cast<uint64_t>(ctx.mesh.periodic_representative_nodes.size()),
             ctx.transfer_audit.audit,
             error)) {
-        return gpu_bootstrap_failed(ctx);
+        return gpu_bootstrap_failed(ctx, error);
     }
     if (ctx.magnetoelastic.enabled && !ctx.magnetoelastic.uniform_strain) {
         if (!gpu_state_upload_magnetoelastic_strain(
@@ -121,10 +128,11 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
                 static_cast<uint64_t>(ctx.magnetoelastic.strain_voigt.size()),
                 ctx.transfer_audit.audit,
                 error)) {
-            return gpu_bootstrap_failed(ctx);
+            return gpu_bootstrap_failed(ctx, error);
         }
     }
-    if (!gpu_state_upload_mesh_geometry(
+    if (gpu_state_requires_tetrahedral_mesh_geometry(ctx) &&
+        !gpu_state_upload_mesh_geometry(
             ctx.gpu_state.device,
             ctx.mesh.nodes_xyz.data(),
             static_cast<uint64_t>(ctx.mesh.nodes_xyz.size()),
@@ -134,16 +142,14 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
             static_cast<uint64_t>(ctx.mesh.magnetic_element_mask.size()),
             ctx.transfer_audit.audit,
             error)) {
-        return gpu_bootstrap_failed(ctx);
+        return gpu_bootstrap_failed(ctx, error);
     }
 #if FULLMAG_HAS_MFEM_STACK
     if (!context_upload_mfem_exchange_to_gpu_state(ctx, error)) {
-        context_destroy_mfem(ctx);
-        return false;
+        return gpu_bootstrap_failed(ctx, error);
     }
     if (!gpu_demag_poisson_initialize(ctx, error)) {
-        context_destroy_mfem(ctx);
-        return false;
+        return gpu_bootstrap_failed(ctx, error);
     }
 #endif
     if (!gpu_state_upload_effective_fields_aos(
@@ -155,7 +161,7 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
             static_cast<uint64_t>(ctx.effective_field.h_xyz.size()),
             ctx.transfer_audit.audit,
             error)) {
-        return gpu_bootstrap_failed(ctx);
+        return gpu_bootstrap_failed(ctx, error);
     }
     if (!gpu_state_upload_local_vector_fields_aos(
             ctx.gpu_state.device,
@@ -170,11 +176,11 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
             static_cast<uint64_t>(ctx.effective_field.h_xyz.size()),
             ctx.transfer_audit.audit,
             error)) {
-        return gpu_bootstrap_failed(ctx);
+        return gpu_bootstrap_failed(ctx, error);
     }
 #if FULLMAG_HAS_CUDA_RUNTIME
     if (!gpu_regional_field_drive_upload(ctx, error)) {
-        return gpu_bootstrap_failed(ctx);
+        return gpu_bootstrap_failed(ctx, error);
     }
 #endif
     return true;

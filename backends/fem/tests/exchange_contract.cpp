@@ -9,7 +9,14 @@
 #include "context.hpp"
 #include "core/fem_material_runtime.hpp"
 #include "cpu/mfem/interactions/exchange.hpp"
+#include "cpu/mfem/interactions/exchange_legacy_gpu_upload.hpp"
 #include "cpu/mfem/interactions/exchange_mass_projection.hpp"
+#include "gpu/cuda/state/gpu_state.hpp"
+#include "gpu/cuda/transfer/transfer_audit.hpp"
+
+#if FULLMAG_HAS_CUDA_RUNTIME
+#include "gpu/cuda/integrators/rk/rk_exchange_dispatch.hpp"
+#endif
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
@@ -951,6 +958,202 @@ void production_exchange_masks_air_in_conforming_mixed_domain()
     fullmag::fem::context_destroy_mfem(mixed_ctx);
 }
 
+#if FULLMAG_HAS_CUDA_RUNTIME
+void production_mixed_p1_exchange_executes_on_cuda_without_tetrahedral_geometry()
+{
+    constexpr double a_value = 1.7;
+    constexpr double ms_value = 4.0;
+    mfem::Mesh mesh = conforming_exchange_prism_pyramid_tet();
+    mfem::H1_FECollection fec(1, 3);
+    mfem::FiniteElementSpace fes(&mesh, &fec);
+    mfem::ConstantCoefficient a_coeff(a_value);
+    mfem::ConstantCoefficient ms_coeff(ms_value);
+    fullmag::fem::Context ctx;
+    initialize_production_exchange(ctx, mesh, fes, a_coeff, ms_coeff, {1u, 0u, 0u});
+
+    std::vector<double> initial_m(static_cast<size_t>(fes.GetNDofs()) * 3u, 0.0);
+    for (int node = 0; node < fes.GetNDofs(); ++node) {
+        const double raw_x = 1.0 + 0.07 * static_cast<double>(node);
+        const double raw_y = 0.2 + 0.013 * static_cast<double>(node * node);
+        const double raw_z = 0.4 - 0.021 * static_cast<double>(node);
+        const double norm = std::sqrt(raw_x * raw_x + raw_y * raw_y + raw_z * raw_z);
+        initial_m[static_cast<size_t>(node) * 3u] = raw_x / norm;
+        initial_m[static_cast<size_t>(node) * 3u + 1u] = raw_y / norm;
+        initial_m[static_cast<size_t>(node) * 3u + 2u] = raw_z / norm;
+    }
+
+    mfem::GridFunction ms_field(&fes);
+    ms_field.ProjectCoefficient(ms_coeff);
+    std::vector<double> expected_h(initial_m.size(), 0.0);
+    for (int component = 0; component < 3; ++component) {
+        mfem::GridFunction m_component(&fes);
+        m_component = 0.0;
+        for (int node = 0; node < mesh.GetNV(); ++node) {
+            mfem::Array<int> dofs;
+            fes.GetVertexDofs(node, dofs);
+            m_component[dofs[0]] = initial_m[static_cast<size_t>(node) * 3u +
+                static_cast<size_t>(component)];
+        }
+        mfem::Vector tmp(fes.GetNDofs());
+        mfem::Vector h_component(fes.GetNDofs());
+        std::vector<double> h_host;
+        check(
+            fullmag::fem::apply_exchange_component_mass_projection(
+                &ctx,
+                false,
+                *ctx.exchange.mfem.exchange_form,
+                m_component,
+                ms_field,
+                *ctx.exchange.mfem.inv_lumped_mass,
+                *ctx.exchange.mfem.mass_form,
+                false,
+                tmp,
+                h_component,
+                h_host,
+                nullptr),
+            "production MFEM lumped exchange reference must succeed");
+        for (int node = 0; node < mesh.GetNV(); ++node) {
+            mfem::Array<int> dofs;
+            fes.GetVertexDofs(node, dofs);
+            expected_h[static_cast<size_t>(node) * 3u + static_cast<size_t>(component)] =
+                h_host[static_cast<size_t>(dofs[0])];
+        }
+    }
+
+    std::string error;
+    check(
+        fullmag::fem::gpu_state_initialize(
+            ctx.gpu_state.device,
+            static_cast<uint64_t>(fes.GetNDofs()),
+            FULLMAG_FEM_INTEGRATOR_HEUN,
+            true,
+            false,
+            initial_m.data(),
+            static_cast<uint64_t>(initial_m.size()),
+            ctx.transfer_audit.audit,
+            error),
+        error.c_str());
+    check(
+        !ctx.gpu_state.device.mesh_geometry.uploaded,
+        "mixed-P1 exchange setup must begin without flat tetrahedral geometry");
+
+    ctx.mesh.node_volumes = ctx.integration_weights.mfem_lumped_mass;
+    ctx.mesh.magnetic_node_mask.resize(static_cast<size_t>(fes.GetNDofs()), 0u);
+    for (size_t node = 0; node < ctx.mesh.magnetic_node_mask.size(); ++node) {
+        ctx.mesh.magnetic_node_mask[node] = ctx.mesh.node_volumes[node] > 0.0 ? 1u : 0u;
+    }
+    check(
+        fullmag::fem::gpu_state_upload_runtime_coefficients(
+            ctx.gpu_state.device,
+            ctx.mesh.node_volumes.data(),
+            static_cast<uint64_t>(ctx.mesh.node_volumes.size()),
+            nullptr, 0u, ms_value,
+            nullptr, 0u, a_value,
+            nullptr, 0u, 0.02,
+            nullptr, 0u,
+            nullptr, 0u,
+            nullptr, 0u, 1.0,
+            nullptr, 0u, 0.0,
+            nullptr, 0u, 0.0,
+            nullptr, 0u,
+            nullptr, 0u,
+            nullptr, 0u,
+            nullptr, 0u,
+            nullptr, 0u,
+            ctx.mesh.magnetic_node_mask.data(),
+            static_cast<uint64_t>(ctx.mesh.magnetic_node_mask.size()),
+            nullptr, 0u,
+            nullptr, 0u,
+            ctx.transfer_audit.audit,
+            error),
+        error.c_str());
+    check(
+        fullmag::fem::upload_legacy_sparse_exchange_to_gpu_state(
+            ctx, ctx.exchange.mfem.exchange_form->SpMat(), error),
+        error.c_str());
+    check(ctx.gpu_state.device.legacy_exchange.uploaded, "mixed-P1 exchange CSR must upload");
+    check(ctx.gpu_state.device.mesh_metrics.uploaded, "mixed-P1 lumped mass must upload");
+    check(
+        ctx.gpu_state.device.legacy_exchange.rows == static_cast<uint64_t>(fes.GetNDofs()) &&
+            ctx.gpu_state.device.legacy_exchange.nnz > 0,
+        "mixed-P1 exchange device metadata must match the assembled MFEM CSR");
+    check(
+        ctx.gpu_state.device.legacy_exchange.device_bytes > 0 &&
+            ctx.gpu_state.device.mesh_metrics.device_bytes > 0,
+        "mixed-P1 exchange CSR and mass vectors must allocate device storage");
+
+    ctx.transfer_audit.audit.assert_no_hot_loop_host_sync = true;
+    ctx.transfer_audit.audit.assert_no_hot_loop_compute_sync = true;
+    const auto before_dispatch =
+        fullmag::fem::transfer_audit_snapshot(ctx.transfer_audit.audit);
+    {
+        fullmag::fem::TransferAuditScope hot_loop(
+            ctx.transfer_audit.audit,
+            fullmag::fem::TransferAuditScopeKind::HotLoop);
+        check(
+            fullmag::fem::gpu_rk_compute_legacy_sparse_exchange(
+                ctx.gpu_state.device,
+                ctx.gpu_state.device.magnetization.m,
+                nullptr,
+                error),
+            error.c_str());
+    }
+    const auto after_dispatch =
+        fullmag::fem::transfer_audit_snapshot(ctx.transfer_audit.audit);
+    check(
+        after_dispatch.h2d_bytes == before_dispatch.h2d_bytes &&
+            after_dispatch.d2h_bytes == before_dispatch.d2h_bytes &&
+            after_dispatch.hot_loop_compute_h2d_bytes ==
+                before_dispatch.hot_loop_compute_h2d_bytes &&
+            after_dispatch.hot_loop_compute_d2h_bytes ==
+                before_dispatch.hot_loop_compute_d2h_bytes &&
+            after_dispatch.hot_loop_compute_host_sync_count ==
+                before_dispatch.hot_loop_compute_host_sync_count &&
+            after_dispatch.hot_loop_exchange_h2d_bytes ==
+                before_dispatch.hot_loop_exchange_h2d_bytes &&
+            after_dispatch.hot_loop_exchange_d2h_bytes ==
+                before_dispatch.hot_loop_exchange_d2h_bytes &&
+            after_dispatch.hot_loop_exchange_host_sync_count ==
+                before_dispatch.hot_loop_exchange_host_sync_count,
+        "production CUDA exchange dispatch must not perform bulk hot-loop transfers or syncs");
+
+    std::vector<double> actual_h;
+    check(
+        fullmag::fem::gpu_state_download_component_aos(
+            ctx.gpu_state.device,
+            ctx.gpu_state.device.fields.h_ex,
+            actual_h,
+            ctx.transfer_audit.audit,
+            "mixed-P1 exchange test field",
+            error),
+        error.c_str());
+    const auto after_readback =
+        fullmag::fem::transfer_audit_snapshot(ctx.transfer_audit.audit);
+    check(
+        after_readback.d2h_bytes - after_dispatch.d2h_bytes ==
+                static_cast<uint64_t>(actual_h.size() * sizeof(double)) &&
+            after_readback.hot_loop_h2d_bytes == after_dispatch.hot_loop_h2d_bytes &&
+            after_readback.hot_loop_d2h_bytes == after_dispatch.hot_loop_d2h_bytes &&
+            after_readback.hot_loop_host_sync_count == after_dispatch.hot_loop_host_sync_count,
+        "sanctioned post-dispatch H_ex readback must remain outside the audited hot loop");
+    check(actual_h.size() == expected_h.size(), "CUDA and MFEM exchange fields must align");
+    for (size_t dof = 0; dof < expected_h.size(); ++dof) {
+        const double tolerance = 1.0e-11 * std::max(1.0, std::abs(expected_h[dof]));
+        check_close(
+            actual_h[dof],
+            expected_h[dof],
+            tolerance,
+            "production mixed-P1 CUDA exchange must match MFEM lumped projection");
+    }
+    check(
+        !ctx.gpu_state.device.mesh_geometry.uploaded,
+        "production CUDA CSR exchange dispatch must not depend on tetrahedral geometry");
+
+    fullmag::fem::gpu_state_destroy(ctx.gpu_state.device);
+    fullmag::fem::context_destroy_mfem(ctx);
+}
+#endif
+
 void production_prism_exchange_converges_with_independent_all_tet_reference()
 {
     constexpr double a_value = 1.7;
@@ -1439,6 +1642,9 @@ int main() {
 #if FULLMAG_HAS_MFEM_STACK
     production_exchange_supports_each_mixed_p1_cell_family();
     production_exchange_masks_air_in_conforming_mixed_domain();
+#if FULLMAG_HAS_CUDA_RUNTIME
+    production_mixed_p1_exchange_executes_on_cuda_without_tetrahedral_geometry();
+#endif
     production_prism_exchange_converges_with_independent_all_tet_reference();
     spatial_a_and_ms_exchange_pass_directional_derivative();
     exchange_mass_projection_header_documents_ms_weighted_consistent_projection();

@@ -11,8 +11,10 @@
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag_poisson_recovery.hpp"
 #include "cpu/mfem/runtime/mfem_context.hpp"
+#include "cpu/mfem/runtime/mfem_device.hpp"
 #include "cpu/mfem/runtime/mfem_mesh_builder.hpp"
 #include "cpu/mfem/runtime/step_metrics.hpp"
+#include "gpu/cuda/runtime/gpu_state_runtime.hpp"
 
 #include <mfem.hpp>
 
@@ -77,6 +79,76 @@ bool close_volume(double actual, double expected)
     const double scale = std::max(std::abs(actual), std::abs(expected));
     return std::abs(actual - expected) <=
         256.0 * std::numeric_limits<double>::epsilon() * scale;
+}
+
+bool component_pointers_are_null(const fullmag::fem::FemGpuComponentField &field)
+{
+    return field.x == nullptr && field.y == nullptr && field.z == nullptr;
+}
+
+bool all_gpu_state_owned_pointers_are_null(const fullmag::fem::FemGpuState &gpu)
+{
+    if (!component_pointers_are_null(gpu.magnetization.m) ||
+        !component_pointers_are_null(gpu.demag_poisson.poisson_gradient) ||
+        !component_pointers_are_null(gpu.local_interactions.vector) ||
+        !component_pointers_are_null(gpu.relaxation.projected_gradient_accepted_h_eff) ||
+        !component_pointers_are_null(gpu.relaxation.nonlinear_cg_direction) ||
+        !component_pointers_are_null(gpu.relaxation.nonlinear_cg_direction_backup)) {
+        return false;
+    }
+    for (const auto *field : {
+             &gpu.fields.h_ex, &gpu.fields.h_demag, &gpu.fields.h_ext,
+             &gpu.fields.h_drive, &gpu.fields.h_ani, &gpu.fields.h_cubic_ani,
+             &gpu.fields.h_dmi, &gpu.fields.h_bulk_dmi, &gpu.fields.h_oe_basis_per_ampere,
+             &gpu.fields.h_oe, &gpu.fields.h_therm, &gpu.fields.h_mel,
+             &gpu.fields.h_eff, &gpu.fields.regional_drive_basis,
+             &gpu.rk.m_backup, &gpu.rk.m_stage, &gpu.rk.error,
+             &gpu.rk.transaction_m, &gpu.rk.transaction_k0,
+             &gpu.rk.transaction_h_ex, &gpu.rk.transaction_h_demag,
+             &gpu.rk.transaction_h_drive, &gpu.rk.transaction_h_ani,
+             &gpu.rk.transaction_h_cubic_ani, &gpu.rk.transaction_h_dmi,
+             &gpu.rk.transaction_h_bulk_dmi, &gpu.rk.transaction_h_oe,
+             &gpu.rk.transaction_h_therm, &gpu.rk.transaction_h_mel,
+             &gpu.rk.transaction_h_eff,
+         }) {
+        if (!component_pointers_are_null(*field)) {
+            return false;
+        }
+    }
+    for (const auto &stage : gpu.rk.k) {
+        if (!component_pointers_are_null(stage)) {
+            return false;
+        }
+    }
+    return gpu.demag_poisson.poisson_rhs == nullptr &&
+        gpu.demag_poisson.poisson_solution == nullptr &&
+        gpu.demag_poisson.poisson_solution_full == nullptr &&
+        gpu.legacy_exchange.csr_row_offsets == nullptr &&
+        gpu.legacy_exchange.csr_col_indices == nullptr &&
+        gpu.legacy_exchange.csr_values == nullptr &&
+        gpu.fields.regional_drive_descs == nullptr &&
+        gpu.fields.regional_drive_point_times == nullptr &&
+        gpu.fields.regional_drive_point_values == nullptr &&
+        gpu.rk.transaction_poisson_solution == nullptr &&
+        gpu.rk.transaction_poisson_solution_full == nullptr &&
+        gpu.local_interactions.node_weight == nullptr &&
+        gpu.magnetoelastic.strain_voigt == nullptr &&
+        gpu.materials.ms == nullptr && gpu.materials.a == nullptr &&
+        gpu.materials.alpha == nullptr && gpu.materials.ku == nullptr &&
+        gpu.materials.ku2 == nullptr && gpu.materials.anisotropy_axis_x == nullptr &&
+        gpu.materials.anisotropy_axis_y == nullptr &&
+        gpu.materials.anisotropy_axis_z == nullptr && gpu.materials.dind == nullptr &&
+        gpu.materials.dbulk == nullptr && gpu.materials.kc1 == nullptr &&
+        gpu.materials.kc2 == nullptr && gpu.materials.kc3 == nullptr &&
+        gpu.mesh_geometry.nodes_xyz == nullptr && gpu.mesh_geometry.elements == nullptr &&
+        gpu.mesh_geometry.magnetic_element_mask == nullptr &&
+        gpu.mesh_metrics.node_volumes == nullptr && gpu.mesh_metrics.lumped_mass == nullptr &&
+        gpu.mesh_metrics.inv_lumped_mass == nullptr &&
+        gpu.mesh_regions.magnetic_node_mask == nullptr &&
+        gpu.mesh_regions.periodic_reduced_node == nullptr &&
+        gpu.mesh_regions.periodic_representative_nodes == nullptr &&
+        gpu.reductions.scalar_workspace == nullptr && gpu.reductions.scalar_result == nullptr &&
+        gpu.reductions.host_scalar_result == nullptr && gpu.reductions.temp_storage == nullptr;
 }
 
 void expect_reject(const FemMeshRuntimeState &source, const char *needle)
@@ -1121,6 +1193,61 @@ void repeated_post_device_fes_failure_rolls_back_runtime_state()
     }
 }
 
+void post_allocation_gpu_bootstrap_failure_rolls_back_every_owner()
+{
+    const char *requested_device = std::getenv("FULLMAG_MIXED_P1_ROLLBACK_DEVICE");
+    if (requested_device == nullptr || std::string(requested_device) != "cuda") {
+        return;
+    }
+#if FULLMAG_HAS_CUDA_RUNTIME
+    fullmag::fem::Context context{};
+    context.mesh = conforming_prism_pyramid_tet();
+    context.mesh.magnetic_element_mask = {1u, 0u, 0u};
+    context.mesh.magnetic_node_mask = {1u, 1u, 1u, 1u, 1u, 1u, 0u, 0u};
+    initialize_uniform_material(context);
+    context.dmi.interfacial_enabled = true;
+
+    std::string error;
+    check(fullmag::fem::initialize_material_runtime(context, error), error.c_str());
+    check(fullmag::fem::context_initialize_mfem(context, error), error.c_str());
+    fullmag::fem::context_populate_device_info(context);
+    check(context.mfem_context.ready && context.mfem_context.mesh != nullptr &&
+              context.mfem_context.fes != nullptr &&
+              context.exchange.mfem.exchange_form != nullptr &&
+              context.exchange.mfem.mass_form != nullptr,
+          "rollback injection requires allocated MFEM exchange resources");
+    check(context.mfem_device.device_info_cache.is_gpu_enabled != 0,
+          "rollback injection requires a real MFEM CUDA device");
+
+    error.clear();
+    check(!fullmag::fem::initialize_context_gpu_state(context, error),
+          "mixed connectivity must fail the DMI tetrahedral geometry upload after allocation");
+    check(error.find("requires tetrahedral element connectivity") != std::string::npos,
+          error.c_str());
+    check(context.transfer_audit.audit.counters.h2d_bytes > 0,
+          "post-allocation rollback fixture must execute real CUDA uploads before failure");
+    check(!context.gpu_state.device.lifecycle.initialized &&
+              !context.gpu_state.device.lifecycle.allocated &&
+              context.gpu_state.device.lifecycle.device_bytes == 0 &&
+              context.gpu_state.device.lifecycle.reduction_workspace_bytes == 0,
+          "failed GPU bootstrap must reset FemGpuState lifecycle and byte accounting");
+    check(all_gpu_state_owned_pointers_are_null(context.gpu_state.device),
+          "failed GPU bootstrap must null every FemGpuState-owned allocation");
+    check(!context.mfem_context.ready && !context.exchange.mfem.ready &&
+              context.mfem_context.mesh == nullptr && context.mfem_context.fec == nullptr &&
+              context.mfem_context.fes == nullptr && context.mfem_context.gf_mx == nullptr &&
+              context.mfem_context.gf_my == nullptr && context.mfem_context.gf_mz == nullptr &&
+              context.mfem_context.gf_a == nullptr && context.mfem_context.gf_ms == nullptr &&
+              context.exchange.mfem.exchange_form == nullptr &&
+              context.exchange.mfem.mass_form == nullptr &&
+              context.gpu_state.cuda.snapshot_pool == nullptr &&
+              context.gpu_state.cuda.compute_stream == nullptr &&
+              context.gpu_state.cuda.io_stream == nullptr &&
+              context.gpu_state.cuda.compute_event == nullptr,
+          "failed GPU bootstrap must release MFEM, snapshot, stream, and event resources");
+#endif
+}
+
 } // namespace
 
 int main()
@@ -1139,6 +1266,7 @@ int main()
     malformed_face_ownership_and_marker_inputs_fail_closed();
     repeated_incomplete_facets_fail_before_runtime_publication();
     repeated_post_device_fes_failure_rolls_back_runtime_state();
+    post_allocation_gpu_bootstrap_failure_rolls_back_every_owner();
     mfem_mass_weights_cover_tet_prism_and_mixed_magnetic_domains();
     distorted_prism_mass_weights_match_independent_mfem_oracle();
     mixed_core_measure_over_arity_is_not_published_as_runtime_node_volume();

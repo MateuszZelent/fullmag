@@ -46,6 +46,10 @@ int main()
         read_text_file(root / "gpu" / "cuda" / "transfer" / "transfer_audit.hpp");
     const std::string transfer_impl =
         read_text_file(root / "gpu" / "cuda" / "transfer" / "transfer_audit.cpp");
+    const std::string exchange_upload = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "exchange_legacy_gpu_upload.cpp");
+    const std::string exchange_hot_path = read_text_file(
+        root / "gpu" / "cuda" / "integrators" / "rk" / "rk_exchange_dispatch.cu");
     check(
         api.find("env_flag(\"FULLMAG_FEM_ASSERT_NO_HOT_LOOP_HOST_SYNC\")") ==
             std::string::npos,
@@ -127,6 +131,17 @@ int main()
     check(
         context_header.find("TransferAudit transfer_audit") == std::string::npos,
         "Context must not own a flat TransferAudit field");
+    check(
+        exchange_upload.find("gpu_state_upload_exchange_legacy_sparse(") !=
+                std::string::npos &&
+            exchange_upload.find("TransferAuditScopeKind::HotLoop") ==
+                std::string::npos,
+        "MFEM CSR exchange upload must remain an initialization transfer, not a hot-loop scope");
+    check(
+        exchange_hot_path.find("mesh_geometry") == std::string::npos &&
+            exchange_hot_path.find("cell_nodes") == std::string::npos &&
+            exchange_hot_path.find("n_elements") == std::string::npos,
+        "GPU exchange hot path must consume sparse state without element-wise geometry loops");
 
     unsetenv("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_HOST_SYNC");
     unsetenv("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC");

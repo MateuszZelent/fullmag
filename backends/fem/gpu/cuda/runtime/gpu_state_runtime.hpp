@@ -21,6 +21,12 @@ namespace fullmag::fem {
 struct Context;
 
 /*
+ * Return whether enabled GPU physics consumes the flat tetrahedral geometry
+ * buffer. Exchange and Poisson demag consume assembled operators instead.
+ */
+bool gpu_state_requires_tetrahedral_mesh_geometry(const Context &ctx);
+
+/*
  * Runtime metadata for the legacy sparse GPU exchange path.
  *
  * MFEM exchange assembly records sparse operator dimensions and lumped-mass
