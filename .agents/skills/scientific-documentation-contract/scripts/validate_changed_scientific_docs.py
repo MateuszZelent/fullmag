@@ -44,6 +44,24 @@ def _page_for(manifest: str) -> str:
     return manifest.removesuffix(".source-map.json") + ".md"
 
 
+def _validate_manifests(repo: Path, head: str, manifests: set[str]) -> list[str]:
+    errors: list[str] = []
+    for path in sorted(manifests):
+        raw = _read(repo, head, path)
+        try:
+            manifest = json.loads((raw or b"").decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            errors.append(f"{path}: invalid JSON: {exc}")
+            continue
+        expected_page = _page_for(path)
+        document = manifest.get("document") if isinstance(manifest, dict) else None
+        if not isinstance(document, dict) or document.get("path") != expected_page:
+            errors.append(f"{path}: document.path must equal adjacent page {expected_page}")
+        result = validate_manifest(manifest, repo)
+        errors.extend(f"{path}: {error}" for error in result.errors)
+    return errors
+
+
 def validate_changed(repo: Path, base: str, head: str) -> list[str]:
     diff = _git(repo, "diff", "--name-only", "-z", f"{base}...{head}", "--", *SCIENTIFIC_ROOTS)
     if diff.returncode != 0:
@@ -68,28 +86,37 @@ def validate_changed(repo: Path, base: str, head: str) -> list[str]:
                     errors.append(f"sidecar manifest has no matching page: {path}")
                 else:
                     manifests.add(path)
+    return errors + _validate_manifests(repo, head, manifests)
 
-    for path in sorted(manifests):
-        raw = _read(repo, head, path)
-        try:
-            manifest = json.loads((raw or b"").decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            errors.append(f"{path}: invalid JSON: {exc}")
-            continue
-        result = validate_manifest(manifest, repo)
-        errors.extend(f"{path}: {error}" for error in result.errors)
-    return errors
+
+def validate_all(repo: Path, head: str) -> list[str]:
+    listing = _git(repo, "ls-tree", "-r", "--name-only", "-z", head, "--", *SCIENTIFIC_ROOTS)
+    if listing.returncode != 0:
+        return [f"cannot list scientific documentation at {head}: {listing.stderr.decode(errors='replace').strip()}"]
+    paths = {item.decode("utf-8") for item in listing.stdout.split(b"\0") if item}
+    manifests = {path for path in paths if path.endswith(".source-map.json")}
+    errors = [
+        f"sidecar manifest has no matching page: {manifest}"
+        for manifest in sorted(manifests)
+        if _page_for(manifest) not in paths
+    ]
+    return errors + _validate_manifests(repo, head, manifests)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Require and validate source maps for changed FullMag scientific pages."
     )
-    parser.add_argument("--base", required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--base")
+    mode.add_argument("--all", action="store_true")
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     args = parser.parse_args()
-    errors = validate_changed(args.repo_root.resolve(), args.base, args.head)
+    if args.all:
+        errors = validate_all(args.repo_root.resolve(), args.head)
+    else:
+        errors = validate_changed(args.repo_root.resolve(), args.base, args.head)
     for error in errors:
         print(f"ERROR: {error}")
     return 1 if errors else 0
