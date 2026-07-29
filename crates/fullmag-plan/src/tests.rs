@@ -11398,7 +11398,10 @@ fn python_mixed_certificate_asset_for_layers(layer_count: u32) -> fullmag_ir::Fe
         3 => include_str!(
             "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_layers_3_python_golden.json"
         ),
-        _ => panic!("layered Python fixture exists only for layer counts 2 and 3"),
+        4 => include_str!(
+            "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_layers_4_python_golden.json"
+        ),
+        _ => panic!("layered Python fixture exists only for layer counts 2 through 4"),
     })
     .expect("layered mixed topology fixture must be valid JSON");
     let mesh: fullmag_ir::MeshIR = serde_json::from_value(payload["mesh"].clone())
@@ -11573,48 +11576,108 @@ fn fem_planner_accepts_certified_mixed_p1_cpu_double_and_rebinds_packed_certific
 }
 
 #[test]
-fn fem_planner_accepts_python_certified_exact_two_and_three_layer_topologies() {
-    for layer_count in [2, 3] {
+fn fem_planner_accepts_certified_cpu_and_gpu_exact_layer_matrix() {
+    for device in ["cpu", "gpu"] {
+        for layer_count in [1, 2, 3] {
+            let mut ir = mixed_cpu_relaxation_ir(
+                fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+                fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+            );
+            ir.problem_meta.runtime_metadata.insert(
+                "runtime_selection".to_string(),
+                serde_json::json!({"device": device, "precision": "double"}),
+            );
+            let asset = if layer_count == 1 {
+                valid_mixed_certificate_asset()
+            } else {
+                python_mixed_certificate_asset_for_layers(layer_count)
+            };
+            asset
+                .validate()
+                .expect("certified stacked prism fixture must bind to its certificate");
+            ir.geometry_assets
+                .as_mut()
+                .expect("geometry assets")
+                .fem_domain_mesh_asset = Some(asset);
+
+            let planned = plan(&ir).unwrap_or_else(|error| {
+                panic!(
+                    "qualified {device} exact layer {layer_count} mixed P1 relaxation must plan: {error:?}"
+                )
+            });
+            let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+                panic!("qualified mixed P1 relaxation must resolve to FEM");
+            };
+            let certificate = fem
+                .mesh_build_report
+                .as_ref()
+                .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
+                .expect("qualified multi-layer plan must retain its certificate");
+            assert_eq!(certificate.requested_layer_count, layer_count);
+            assert_eq!(certificate.realized_layer_count, layer_count);
+            assert_eq!(
+                certificate.magnetic_plane_coordinates_m.len(),
+                layer_count as usize + 1
+            );
+            assert_eq!(
+                fem.mesh
+                    .cells
+                    .types
+                    .iter()
+                    .filter(|family| **family == fullmag_ir::FemCellTypeIR::Prism6)
+                    .count(),
+                2 * layer_count as usize,
+                "fixture must contain genuine stacked prism topology",
+            );
+            fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(
+                certificate,
+                &fem.mesh,
+            )
+            .expect("packed multi-layer certificate must remain bound to the mesh");
+            let provenance = fem
+                .mesh_build_report
+                .as_ref()
+                .and_then(|report| report.mixed_topology_provenance.as_ref())
+                .expect("qualified matrix entry must retain topology provenance");
+            assert_eq!(
+                provenance.requested_device,
+                if device == "cpu" {
+                    fullmag_ir::ExecutionDevice::Cpu
+                } else {
+                    fullmag_ir::ExecutionDevice::Gpu
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn fem_planner_rejects_correctly_bound_exact_four_layer_cpu_and_gpu_before_backend() {
+    for device in ["cpu", "gpu"] {
         let mut ir = mixed_cpu_relaxation_ir(
             fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
             fullmag_ir::RequestedFemDemagIR::PoissonRobin,
         );
-        let asset = python_mixed_certificate_asset_for_layers(layer_count);
+        ir.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({"device": device, "precision": "double"}),
+        );
+        let asset = python_mixed_certificate_asset_for_layers(4);
         asset
             .validate()
-            .expect("Python-emitted stacked prism fixture must bind to its certificate");
+            .expect("the L=4 rejection fixture must be correctly certificate-bound");
         ir.geometry_assets
             .as_mut()
             .expect("geometry assets")
             .fem_domain_mesh_asset = Some(asset);
 
-        let planned = plan(&ir).expect("qualified exact multi-layer mixed P1 relaxation must plan");
-        let BackendPlanIR::Fem(fem) = planned.backend_plan else {
-            panic!("qualified mixed P1 relaxation must resolve to FEM");
-        };
-        let certificate = fem
-            .mesh_build_report
-            .as_ref()
-            .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
-            .expect("qualified multi-layer plan must retain its certificate");
-        assert_eq!(certificate.requested_layer_count, layer_count);
-        assert_eq!(certificate.realized_layer_count, layer_count);
-        assert_eq!(
-            certificate.magnetic_plane_coordinates_m.len(),
-            layer_count as usize + 1
-        );
-        assert_eq!(
-            fem.mesh
-                .cells
-                .types
-                .iter()
-                .filter(|family| **family == fullmag_ir::FemCellTypeIR::Prism6)
-                .count(),
-            2 * layer_count as usize,
-            "fixture must contain genuine stacked prism topology",
-        );
-        fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(certificate, &fem.mesh)
-            .expect("packed multi-layer certificate must remain bound to the mesh");
+        let reason = plan(&ir)
+            .expect_err("exact L=4 must reject before backend selection")
+            .reasons
+            .join("\n");
+        assert!(reason.contains("fem_mixed_p1_scope_rejected"), "{reason}");
+        assert!(reason.contains("exact_1_to_3_layers"), "{reason}");
+        assert!(reason.contains("fallback=none"), "{reason}");
     }
 }
 

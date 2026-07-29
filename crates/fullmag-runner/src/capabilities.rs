@@ -181,7 +181,7 @@ fn mixed_p1_feature_capabilities(
     const FDM_REASON: &str =
         "Mixed-P1 shared-domain topology is FEM-only; FDM retains Cartesian cells.";
     const OPERATOR_SCOPE: &str =
-        "double; one axis-aligned P1 Box; one conforming shared-domain airbox; uniform Ms/Aex; exchange; uniform Zeeman; Poisson Robin|Dirichlet; PG-BB|NCG|overdamped LLG; no fallback";
+        "double; one axis-aligned P1 Box; one conforming shared-domain airbox; requested_layers=realized_layers={1,2,3}; magnetic_node_planes=requested_layers+1; uniform Ms/Aex; exchange; uniform Zeeman; Poisson Robin|Dirichlet; PG-BB|NCG|overdamped LLG; no fallback";
 
     let mesh_status = match fem_engine {
         Some(FemEngine::CpuNative | FemEngine::NativeGpu) => FeatureCapabilityStatus::Implemented,
@@ -207,7 +207,7 @@ fn mixed_p1_feature_capabilities(
             feature_capability(
                 mesh_status,
                 mesh_reason,
-                "one magnetic prism6 layer; no prism-to-tet conversion",
+                "requested_layers=realized_layers={1,2,3}; magnetic_node_planes=requested_layers+1; magnetic_cells=prism6; no prism-to-tet conversion",
             ),
         ),
         (
@@ -223,7 +223,7 @@ fn mixed_p1_feature_capabilities(
             feature_capability(
                 mesh_status,
                 mesh_reason,
-                "layers=1; exactly two magnetic node planes; accepted topology-bound certificate required",
+                "requested_layers=realized_layers={1,2,3}; magnetic_node_planes=requested_layers+1; accepted topology-bound certificate required",
             ),
         ),
     ]);
@@ -559,6 +559,22 @@ mod tests {
                 .iter()
                 .any(|term| term == feature_id)
         }));
+        assert_eq!(
+            capabilities.feature_capabilities["mesh.swept.prism"].scope,
+            "requested_layers=realized_layers={1,2,3}; magnetic_node_planes=requested_layers+1; magnetic_cells=prism6; no prism-to-tet conversion",
+        );
+        assert_eq!(
+            capabilities.feature_capabilities["mesh.exact_layer_count"].scope,
+            "requested_layers=realized_layers={1,2,3}; magnetic_node_planes=requested_layers+1; accepted topology-bound certificate required",
+        );
+        let cpu_operator = &capabilities.feature_capabilities["fem.cpu.exchange_demag.mixed_p1"];
+        assert_eq!(cpu_operator.status, FeatureCapabilityStatus::Implemented);
+        assert!(cpu_operator
+            .scope
+            .contains("requested_layers=realized_layers={1,2,3}"));
+        assert!(cpu_operator
+            .scope
+            .contains("magnetic_node_planes=requested_layers+1"));
     }
 
     #[test]
@@ -582,6 +598,18 @@ mod tests {
                 Some(FeatureCapabilityStatus::Implemented),
             );
         }
+        assert_eq!(
+            capabilities.feature_capabilities["mesh.exact_layer_count"].scope,
+            "requested_layers=realized_layers={1,2,3}; magnetic_node_planes=requested_layers+1; accepted topology-bound certificate required",
+        );
+        let gpu_operator = &capabilities.feature_capabilities["fem.gpu.exchange_demag.mixed_p1"];
+        assert_eq!(gpu_operator.status, FeatureCapabilityStatus::Implemented);
+        assert!(gpu_operator
+            .scope
+            .contains("requested_layers=realized_layers={1,2,3}"));
+        assert!(gpu_operator
+            .scope
+            .contains("magnetic_node_planes=requested_layers+1"));
     }
 
     #[test]

@@ -444,15 +444,17 @@ axis-aligned Box requests a swept prism strategy and exact layer count without
 exposing Gmsh element IDs or algorithm names. Python-to-IR-to-UI-to-Python
 round-trip preserves requested topology and exact layer count.
 
-The complete bounded controls changed by this capability are:
+The public `GeometryMeshHandle.thin_film` parameters exercised by the canonical
+example below are:
 
 | Python parameter | Type | Default | SI unit | Validation domain | Meaning | Backend support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| `GeometryMeshHandle.thin_film.layers` | `int` | `1` | $1$ | exact mixed-P1 execution accepts only `1`, `2`, or `3`; other positive values remain authorable only outside this lane and are rejected by its capability gate | prism-cell layers through the same physical film | FEM CPU/GPU only | `mesh_workflow.per_geometry[].through_thickness_elements` |
-| `GeometryMeshHandle.thin_film.topology` | `"tetrahedral" \| "prismatic" \| None` | `None` | $1$ | mixed-P1 requires `"prismatic"` | requested cell topology family | FEM CPU/GPU only | `mesh_workflow.per_geometry[].topology` |
-| `GeometryMeshHandle.thin_film.exact_layers` | `bool \| None` | `None` | $1$ | strict prismatic execution resolves `None` to `True` and rejects `False` | require requested and realized layer equality | FEM CPU/GPU only | `mesh_workflow.per_geometry[].exact_layer_count` |
-| `GeometryMeshHandle.thin_film.transition` | `"pyramid_to_tetrahedra" \| "reject" \| None` | `None` | $1$ | mixed shared-domain execution requires `"pyramid_to_tetrahedra"` | conforming air transition policy | FEM CPU/GPU only | `mesh_workflow.per_geometry[].transition_policy` |
-| `GeometryMeshHandle.thin_film.order` | `int \| None` | `None` | $1$ | prismatic execution accepts only `None` or `1` and resolves to P1 | finite-element order | FEM CPU/GPU only | `mesh_workflow.per_geometry[].order` |
+| `GeometryMeshHandle.thin_film.maximum_element_size` | `float \| "auto" \| None` | `None` | $\mathrm m$ | finite positive length, `"auto"`, or `None`; the bounded example supplies `3e-9` | authored upper target for the magnetic source-face mesh; the certified mesher may deterministically refine below it to preserve quality | FEM CPU/GPU only | `problem_meta.runtime_metadata.mesh_workflow.per_geometry[].maximum_element_size` and compatibility alias `.hmax` |
+| `GeometryMeshHandle.thin_film.layers` | `int` | `1` | $1$ | exact mixed-P1 execution accepts only `1`, `2`, or `3`; other positive values remain authorable only outside this lane and are rejected by its capability gate | prism-cell layers through the same physical film | FEM CPU/GPU only | `problem_meta.runtime_metadata.mesh_workflow.per_geometry[].through_thickness_elements` |
+| `GeometryMeshHandle.thin_film.topology` | `"tetrahedral" \| "prismatic" \| None` | `None` | $1$ | mixed-P1 requires `"prismatic"` | requested cell topology family | FEM CPU/GPU only | `problem_meta.runtime_metadata.mesh_workflow.per_geometry[].topology` |
+| `GeometryMeshHandle.thin_film.exact_layers` | `bool \| None` | `None` | $1$ | strict prismatic execution resolves `None` to `True` and rejects `False` | require requested and realized layer equality | FEM CPU/GPU only | `problem_meta.runtime_metadata.mesh_workflow.per_geometry[].exact_layer_count` |
+| `GeometryMeshHandle.thin_film.transition` | `"pyramid_to_tetrahedra" \| "reject" \| None` | `None` | $1$ | mixed shared-domain execution requires `"pyramid_to_tetrahedra"` | conforming air transition policy | FEM CPU/GPU only | `problem_meta.runtime_metadata.mesh_workflow.per_geometry[].transition_policy` |
+| `GeometryMeshHandle.thin_film.order` | `int \| None` | `None` | $1$ | prismatic execution accepts only `None` or `1` and resolves to P1 | finite-element order | FEM CPU/GPU only | `problem_meta.runtime_metadata.mesh_workflow.per_geometry[].order` |
 
 ```python
 # %% Author one strict mixed-P1 film.
@@ -467,6 +469,10 @@ film = study.geometry(
     fm.Box(size=(24e-9, 12e-9, 1e-9), name="magnet"),
     name="magnet",
 )
+film.Ms = 800e3
+film.Aex = 13e-12
+film.alpha = 0.1
+film.m = fm.texture.uniform(1, 0, 0)
 film.mesh.thin_film(
     maximum_element_size=3e-9,
     layers=3,
@@ -475,6 +481,7 @@ film.mesh.thin_film(
     transition="pyramid_to_tetrahedra",
     order=1,
 )
+study.relax(algorithm="projected_gradient_bb", max_steps=1)
 ```
 
 The public Python API and its lowering preserve the requested prismatic
@@ -522,10 +529,17 @@ mesh topology family: mixed_p1
 exact layer count: positive integer
 ```
 
-For the example above, the canonical requested fragment is:
+For the example above, current Python lowering emits the following complete
+canonical `problem_meta.runtime_metadata.mesh_workflow.per_geometry[0]` entry.
+It is one named subobject of `ProblemIR`, not a complete `ProblemIR` document:
 
 ```json
 {
+  "geometry": "magnet",
+  "mode": "custom",
+  "hmax": 3e-9,
+  "maximum_element_size": 3e-9,
+  "order": 1,
   "mesh_strategy": "swept_prism",
   "through_thickness_elements": 3,
   "through_thickness_distribution": "fixed",
@@ -534,10 +548,16 @@ For the example above, the canonical requested fragment is:
   "sweep_direction": "auto",
   "element_family": "prism",
   "transition_policy": "pyramid_to_tetrahedra",
-  "exact_layer_count": true,
-  "order": 1
+  "exact_layer_count": true
 }
 ```
+
+`packages/fullmag-py/tests/test_api.py` symbol
+`test_mixed_p1_publication_example_lowers_complete_mesh_entry_to_problem_ir`
+executes this authoring path without geometry realization and compares the full
+entry above against current `Problem.to_ir(include_geometry_assets=False)`
+output. This prevents the publication fragment from drifting into a
+hand-shaped lookalike.
 
 Gmsh numeric element IDs are import details and must not enter the public IR.
 Validation keeps requested topology, sweep direction, and exact layer count
@@ -781,6 +801,7 @@ No lower level implies a higher one.
 | Claim | Path | Stable symbol | Responsibility | Lane | Tests/evidence status |
 |---|---|---|---|---|---|
 | Public exact-layer authoring | `packages/fullmag-py/src/fullmag/world.py` | `thin_film` | validates and lowers prismatic thin-film intent | FEM CPU/GPU | Python round-trip and real-mesh tests |
+| Published Python-to-IR example | `packages/fullmag-py/tests/test_api.py` | `test_mixed_p1_publication_example_lowers_complete_mesh_entry_to_problem_ir` | executes the documented authoring path and compares the complete per-geometry mesh entry | FEM CPU/GPU shared contract | focused executable lowering test |
 | Shared-domain prism realization | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `generate_swept_box_mesh` | generates exact stacked prisms and conforming air | FEM CPU/GPU | Gmsh 4.15.2 topology/certificate tests |
 | Certificate generation | `packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py` | `_attach_mixed_layer_topology_certificate` | recomputes and binds realized topology evidence | FEM CPU/GPU | Python/Rust cross-language validation |
 | Planner legality | `crates/fullmag-plan/src/mesh.rs` | `validate_mixed_p1_execution_scope` | enforces exact bounded relaxation tuples | FEM CPU/GPU | planner accept/reject matrix |

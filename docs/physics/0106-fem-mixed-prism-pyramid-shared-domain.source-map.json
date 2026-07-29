@@ -100,6 +100,7 @@
   ],
   "sources": [
     {"id": "python-authoring", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "thin_film", "responsibility": "Validate and lower public prismatic thin-film intent."},
+    {"id": "python-ir-publication-test", "path": "packages/fullmag-py/tests/test_api.py", "symbol": "test_mixed_p1_publication_example_lowers_complete_mesh_entry_to_problem_ir", "responsibility": "Execute the published Python authoring path and compare its complete per-geometry mesh entry with current ProblemIR lowering."},
     {"id": "mesher", "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py", "symbol": "generate_swept_box_mesh", "responsibility": "Generate exact stacked magnetic prisms and the conforming shared air domain."},
     {"id": "certificate", "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py", "symbol": "_attach_mixed_layer_topology_certificate", "responsibility": "Recompute and bind exact-layer and shared-domain evidence."},
     {"id": "planner", "path": "crates/fullmag-plan/src/mesh.rs", "symbol": "validate_mixed_p1_execution_scope", "responsibility": "Enforce the bounded exact-layer relaxation legality matrix."},
