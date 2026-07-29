@@ -110,7 +110,7 @@ def _topology_metadata() -> dict[str, object]:
         "mesh": {
             "topology_fingerprint": fingerprint,
             "node_count": 12,
-            "element_count": 14,
+            "element_count": 442934,
             "mesh_build_report": {
                 "build_mode": "single_geometry_geo_mixed",
                 "fallbacks_triggered": [],
@@ -488,6 +488,81 @@ def test_topology_collector_migrates_a_legacy_ledger_header(tmp_path: Path) -> N
                 "mixed_layer_topology_certificate"
             ].update({"expected_shared_domain_volume_m3": 4.0e-20}),
             "shared-domain volume differs from runtime metadata",
+        ),
+        (
+            lambda metadata: metadata["mesh"]["mesh_build_report"][
+                "mixed_layer_topology_certificate"
+            ]["cell_family_counts_by_marker"].update({"2": {"tet4": 1}}),
+            "exactly markers 0 and 1",
+        ),
+        (
+            lambda metadata: metadata["mesh"]["mesh_build_report"][
+                "mixed_layer_topology_certificate"
+            ]["cell_family_counts_by_part"]["transition_air"].update(
+                {"tet4": 369422}
+            ),
+            "marker and mesh-part counts differ",
+        ),
+        (
+            lambda metadata: (
+                metadata["mesh"]["mesh_build_report"][
+                    "mixed_layer_topology_certificate"
+                ]["cell_family_counts_by_part"]["far_air"].update(
+                    {"pyramid5": 1}
+                ),
+                metadata["mesh"]["mesh_build_report"][
+                    "mixed_layer_topology_certificate"
+                ]["cell_family_counts_by_marker"]["0"].update(
+                    {"pyramid5": 853}
+                ),
+            ),
+            "far_air must contain tet4 only",
+        ),
+        (
+            lambda metadata: (
+                metadata["mesh"]["mesh_build_report"][
+                    "mixed_layer_topology_certificate"
+                ]["cell_family_counts_by_part"]["transition_air"].update(
+                    {"prism6": 1}
+                ),
+                metadata["mesh"]["mesh_build_report"][
+                    "mixed_layer_topology_certificate"
+                ]["cell_family_counts_by_marker"]["0"].update(
+                    {"prism6": 1}
+                ),
+            ),
+            "transition_air must contain pyramid5 and tet4 only",
+        ),
+        (
+            lambda metadata: (
+                metadata["mesh"]["mesh_build_report"][
+                    "mixed_layer_topology_certificate"
+                ]["cell_family_counts_by_part"]["transition_air"].pop(
+                    "pyramid5"
+                ),
+                metadata["mesh"]["mesh_build_report"][
+                    "mixed_layer_topology_certificate"
+                ]["cell_family_counts_by_marker"]["0"].pop("pyramid5"),
+            ),
+            "transition_air must contain pyramid5 and tet4 only",
+        ),
+        (
+            lambda metadata: metadata["mesh"]["mesh_build_report"][
+                "mixed_layer_topology_certificate"
+            ]["scaled_jacobian_p05_by_family"].pop("tet4"),
+            "p05 must cover prism6, pyramid5, and tet4",
+        ),
+        (
+            lambda metadata: metadata["mesh"]["mesh_build_report"][
+                "mixed_layer_topology_certificate"
+            ]["scaled_jacobian_p05_by_family"].update({"hex8": 0.5}),
+            "p05 must cover prism6, pyramid5, and tet4",
+        ),
+        (
+            lambda metadata: metadata["mesh"].update(
+                {"element_count": metadata["mesh"]["element_count"] + 1}
+            ),
+            "mesh element_count differs from certificate",
         ),
     ],
 )

@@ -9149,7 +9149,7 @@ class ProblemApiTests(unittest.TestCase):
         compacted["problem_meta"]["name"] = "changed"
         self.assertEqual(stage_ir["problem_meta"]["name"], "stage")
 
-    def test_compact_stage_ir_uses_non_mixed_mesh_fingerprint(self) -> None:
+    def test_compact_stage_ir_compacts_semantically_identical_assets(self) -> None:
         shared_assets = {
             "fem_domain_mesh_asset": {
                 "mesh": {"topology_fingerprint": "sha256:canonical-tet"}
@@ -9170,6 +9170,33 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIsNot(stage_assets, shared_assets)
         self.assertIs(stage_ir["geometry_assets"], stage_assets)
         self.assertIsNone(compacted["geometry_assets"])
+
+    def test_compact_stage_ir_preserves_same_fingerprint_assets_with_different_markers(self) -> None:
+        shared_assets = {
+            "fem_domain_mesh_asset": {
+                "mesh": {"topology_fingerprint": "sha256:shared-topology"},
+                "region_markers": [{"geometry": "film", "marker": 1}],
+                "object_region_markers": [],
+                "build_report": {"degraded": False, "fallbacks_triggered": []},
+            }
+        }
+        stage_assets = copy.deepcopy(shared_assets)
+        stage_assets["fem_domain_mesh_asset"]["region_markers"] = [
+            {"geometry": "film", "marker": 7}
+        ]
+        stage_ir = {"geometry_assets": stage_assets}
+
+        compacted = runtime_helper._compact_stage_ir(
+            stage_ir,
+            shared_geometry_assets=shared_assets,
+        )
+
+        self.assertEqual(compacted["geometry_assets"], stage_assets)
+        self.assertIsNot(compacted["geometry_assets"], stage_assets)
+        self.assertEqual(
+            compacted["geometry_assets"]["fem_domain_mesh_asset"]["region_markers"],
+            [{"geometry": "film", "marker": 7}],
+        )
 
     def test_helper_exports_sp4_overlay_without_real_geometry_assets(self) -> None:
         scenario = Path(

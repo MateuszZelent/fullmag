@@ -427,6 +427,47 @@ def _mixed_topology_certificate_values(
     parsed_magnetic_counts = parsed.cell_family_counts_by_marker.get("1", {})
     if set(parsed_magnetic_counts) != {"prism6"} or parsed_magnetic_counts.get("prism6", 0) <= 0:
         raise CollectionError("topology smoke requires prism6-only magnetic cells")
+    counts_by_marker = parsed.cell_family_counts_by_marker
+    counts_by_part = parsed.cell_family_counts_by_part
+    if set(counts_by_marker) != {"0", "1"}:
+        raise CollectionError("topology smoke requires exactly markers 0 and 1")
+    if set(counts_by_part) != {"magnetic", "transition_air", "far_air"}:
+        raise CollectionError(
+            "topology smoke requires magnetic, transition_air, and far_air mesh parts"
+        )
+    if counts_by_part["magnetic"] != parsed_magnetic_counts:
+        raise CollectionError("mixed topology marker and mesh-part counts differ")
+    far_air_counts = counts_by_part["far_air"]
+    if set(far_air_counts) != {"tet4"} or far_air_counts.get("tet4", 0) <= 0:
+        raise CollectionError("mixed topology far_air must contain tet4 only")
+    transition_air_counts = counts_by_part["transition_air"]
+    if set(transition_air_counts) != {"pyramid5", "tet4"} or any(
+        transition_air_counts.get(family, 0) <= 0 for family in ("pyramid5", "tet4")
+    ):
+        raise CollectionError(
+            "mixed topology transition_air must contain pyramid5 and tet4 only"
+        )
+    expected_air_counts = {
+        "pyramid5": transition_air_counts["pyramid5"],
+        "tet4": transition_air_counts["tet4"] + far_air_counts["tet4"],
+    }
+    if counts_by_marker["0"] != expected_air_counts:
+        raise CollectionError("mixed topology marker and mesh-part counts differ")
+    required_families = {"prism6", "pyramid5", "tet4"}
+    if set(parsed.scaled_jacobian_p05_by_family) != required_families:
+        raise CollectionError(
+            "mixed topology p05 must cover prism6, pyramid5, and tet4"
+        )
+    element_count = mesh.get("element_count")
+    certificate_element_count = sum(
+        count for families in counts_by_marker.values() for count in families.values()
+    )
+    if (
+        isinstance(element_count, bool)
+        or not isinstance(element_count, int)
+        or element_count != certificate_element_count
+    ):
+        raise CollectionError("mesh element_count differs from certificate")
     if not isinstance(runtime_metadata, dict):
         raise CollectionError("topology smoke runtime metadata is malformed")
     domain_frame = runtime_metadata.get("domain_frame")

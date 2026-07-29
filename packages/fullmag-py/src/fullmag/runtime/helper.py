@@ -366,7 +366,7 @@ def _compact_stage_ir(
     shared_geometry_assets: object,
 ) -> dict[str, object]:
     detached = dict(ir)
-    if _geometry_assets_share_identity_or_fingerprint(
+    if _geometry_assets_semantically_equal(
         detached.get("geometry_assets"),
         shared_geometry_assets,
     ):
@@ -392,36 +392,24 @@ def _prepare_run_config_geometry_assets(
     return copy.deepcopy(detached_root), shared_geometry_assets
 
 
-def _geometry_assets_share_identity_or_fingerprint(
-    geometry_assets: object,
-    shared_geometry_assets: object,
-) -> bool:
-    if geometry_assets is shared_geometry_assets:
+def _geometry_assets_semantically_equal(left: object, right: object) -> bool:
+    if left is right:
         return True
-    fingerprint = _geometry_assets_topology_fingerprint(geometry_assets)
-    return (
-        fingerprint is not None
-        and fingerprint == _geometry_assets_topology_fingerprint(shared_geometry_assets)
-    )
-
-
-def _geometry_assets_topology_fingerprint(geometry_assets: object) -> str | None:
-    if not isinstance(geometry_assets, dict):
-        return None
-    domain_asset = geometry_assets.get("fem_domain_mesh_asset")
-    if not isinstance(domain_asset, dict):
-        return None
-    mesh = domain_asset.get("mesh")
-    if not isinstance(mesh, dict):
-        return None
-    fingerprint = mesh.get("topology_fingerprint")
-    if isinstance(fingerprint, str):
-        return fingerprint
-    certificate = mesh.get("mixed_layer_topology_certificate")
-    if not isinstance(certificate, dict):
-        return None
-    fingerprint = certificate.get("topology_fingerprint")
-    return fingerprint if isinstance(fingerprint, str) else None
+    if isinstance(left, dict) and isinstance(right, dict):
+        return left.keys() == right.keys() and all(
+            _geometry_assets_semantically_equal(left[key], right[key])
+            for key in left
+        )
+    if isinstance(left, list) and isinstance(right, list):
+        return len(left) == len(right) and all(
+            _geometry_assets_semantically_equal(left_value, right_value)
+            for left_value, right_value in zip(left, right, strict=True)
+        )
+    if type(left) is not type(right):
+        return False
+    if left is None or isinstance(left, (bool, int, float, str)):
+        return left == right
+    return False
 
 
 def _change_device_action_device(action: dict[str, object] | None) -> str | None:
