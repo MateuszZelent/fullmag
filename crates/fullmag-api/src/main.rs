@@ -1500,6 +1500,7 @@ fn parse_texture_projection_mode(value: &str) -> TextureProjectionMode {
 
 #[tokio::main]
 async fn main() {
+    fullmag_build_info::print_startup_stamp();
     if std::env::args().any(|arg| arg == "--print-openapi-v2") {
         println!(
             "{}",

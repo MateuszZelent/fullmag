@@ -18,6 +18,7 @@ axum.workspace = true
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 futures-core = "0.3"
+fullmag-build-info.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"

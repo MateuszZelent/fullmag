@@ -38,18 +38,18 @@ film.Aex = 1.3e-11
 film.alpha = 0.02
 film.m = fm.init.UniformMagnetization((1.0, 0.1, 0.0))
 film.mesh.thin_film(
-    minimum_element_size=1e-9,
+    minimum_element_size=3e-9,
     maximum_element_size=3e-9,
     layers=1,
     topology="prismatic",
     exact_layers=True,
     transition="pyramid_to_tetrahedra",
-    edge_maximum_element_size=1.5e-9,
-    edge_thickness=12e-9,
-    edge_transition_distance=24e-9,
-    corner_maximum_element_size=1e-9,
-    corner_extent=6e-9,
-    corner_transition_distance=12e-9,
+    # edge_maximum_element_size=1.5e-9,
+    # edge_thickness=12e-9,
+    # edge_transition_distance=24e-9,
+    # corner_maximum_element_size=1e-9,
+    # corner_extent=6e-9,
+    # corner_transition_distance=12e-9,
     order=1,
 )
 

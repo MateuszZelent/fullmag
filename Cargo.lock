@@ -1133,6 +1133,7 @@ dependencies = [
  "chrono",
  "fontdue",
  "fullmag-authoring",
+ "fullmag-build-info",
  "fullmag-ir",
  "fullmag-plan",
  "fullmag-quantities",
@@ -1177,11 +1178,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fullmag-build-info"
+version = "0.1.0"
+
+[[package]]
 name = "fullmag-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "fullmag-build-info",
  "fullmag-engine",
  "fullmag-ir",
  "fullmag-plan",

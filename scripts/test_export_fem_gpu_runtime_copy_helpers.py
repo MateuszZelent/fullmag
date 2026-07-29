@@ -460,7 +460,9 @@ def test_export_script_restores_staging_owner_when_container_build_fails() -> No
 
 def test_export_script_serializes_runtime_bundle_mutation_with_flock() -> None:
     script = EXPORT_SCRIPT.read_text(encoding="utf-8")
-    lock_index = script.find('RUNTIME_LOCK="${RUNTIME_PARENT}/.fem-gpu-host.export.lock"')
+    lock_index = script.find(
+        'RUNTIME_LOCK="${RUNTIME_PARENT}/.fem-gpu-host.export.lock"'
+    )
     flock_index = script.find('flock 9')
     compose_index = script.find(
         'build_managed_fem_image "${docker_build_ref}" "${docker_compatibility_ref}"'
@@ -638,6 +640,7 @@ def test_export_script_publishes_only_a_validated_hash_addressed_bundle() -> Non
     assert 'python3 scripts/validate_managed_fem_runtime_bundle.py' in script
     assert '--runtime-root "${STAGING_ROOT}"' in script
     assert 'mv "${STAGING_ROOT}" "${variant_root}"' in script
+    assert 'tar -C "${variant_root}" -cf "${persistent_staging_archive}" .' in script
     assert 'refusing to replace non-symlink active runtime' in script
     assert 'rm -f "${RUNTIME_ROOT}/manifest.json"' not in script
     assert 'trap cleanup_failed_export EXIT' in script
@@ -979,7 +982,8 @@ def test_export_uses_hash_addressed_variants_and_atomic_active_alias() -> None:
     assert 'manifest_sha256="$(sha256sum "${STAGING_ROOT}/manifest.json"' in exporter
     assert 'variant_root="${VARIANTS_ROOT}/${FULLMAG_FEM_RUNTIME_VARIANT}-${manifest_sha256}"' in exporter
     assert 'alias_target="fem-gpu-variants/' in exporter
-    assert 'ln -sfn "${alias_target}" "${next_alias}"' in exporter
+    assert 'ln -sfn "${alias_target}" "${repo_next_alias}"' in exporter
+    assert 'PERSISTENT_LATEST_ARCHIVE=' in exporter
     assert '--allow-unaddressed-staging' in exporter
     assert '--runtime-root "${variant_root}" --compare-exact "${STAGING_ROOT}"' in exporter
     assert "validate-fem-gpu-runtime-variant" in justfile
@@ -989,6 +993,76 @@ def test_export_uses_hash_addressed_variants_and_atomic_active_alias() -> None:
     assert '--compare-exact "$exact_copy"' in justfile
     assert 'mv "$active" "$backup"' in justfile
     assert "restore-active-fem-gpu-runtime-directory-backup" in justfile
+
+
+def test_export_defaults_to_exact_persistent_build_root() -> None:
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    assert (
+        'readonly FULLMAG_NATIVE_BUILD_STORAGE_ROOT="/zfn2/mateuszz/git/fullmag"'
+        in exporter
+    )
+    assert 'readonly FULLMAG_BUILD_ROOT="${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}"' in exporter
+    assert (
+        'readonly FULLMAG_CONTAINER_TARGET_ROOT='
+        '"${FULLMAG_NATIVE_MOUNT_VIEW}/managed-fem-runtime"'
+        in exporter
+    )
+    assert 'readonly FULLMAG_CONTAINER_TARGET_DIR=' in exporter
+    assert 'findmnt -n -o FSTYPE --target "${FULLMAG_CONTAINER_TARGET_DIR}"' in exporter
+    assert 'findmnt -n -o SOURCE --target "${FULLMAG_CONTAINER_TARGET_DIR}"' in exporter
+    assert '-v "${FULLMAG_CONTAINER_TARGET_DIR}:/workspace/target"' in exporter
+    assert 'fullmag-managed-fem-runtime-build:/workspace/target' not in exporter
+
+
+def test_export_publishes_durable_copy_before_switching_aliases() -> None:
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    archive_index = exporter.index('tar -C "${variant_root}"')
+    latest_index = exporter.index('mv -f "${persistent_staging_archive}"')
+    repo_alias_index = exporter.index('mv -Tf "${repo_next_alias}"')
+    assert archive_index < latest_index < repo_alias_index
+
+
+def test_export_validates_persistent_archive_before_switching_repo_alias() -> None:
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    archive_index = exporter.index('tar -C "${variant_root}"')
+    validate_index = exporter.index(
+        'validate_persistent_runtime_archive "${persistent_archive}" "${variant_root}"'
+    )
+    alias_index = exporter.index('mv -Tf "${repo_next_alias}"')
+    assert archive_index < validate_index < alias_index
+
+
+def test_fullmag_fem_launch_always_ensures_managed_runtime_unless_forced() -> None:
+    justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+    fullmag_recipe = justfile.split('fullmag opt_1=""', 1)[1].split(
+        "\nrun-fdm-cpu-smoke:", 1
+    )[0]
+
+    assert (
+        'if [ "$force" = "true" ]; then just rebuild-fem-runtime; '
+        'else just ensure-managed-fem-runtime; fi;'
+    ) in fullmag_recipe
+    assert 'if [ "$build" = "false" ]' not in fullmag_recipe
+
+
+def test_ensure_managed_runtime_rebuilds_an_invalid_bundle() -> None:
+    justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+    ensure_recipe = justfile.split("ensure-managed-fem-runtime:", 1)[1].split(
+        "\ninspect-managed-fem-frequency-domain-deps:", 1
+    )[0]
+
+    assert "Managed FEM runtime bundle is invalid; restoring the persistent build first." in ensure_recipe
+    assert "bash scripts/restore_persistent_fem_runtime.sh || just rebuild-fem-runtime" in ensure_recipe
+
+
+def test_make_install_cli_uses_external_cargo_target_variable() -> None:
+    makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+
+    assert 'FULLMAG_CARGO_TARGET_DIR' in makefile
+    assert 'CARGO_TARGET_DIR=.fullmag/target' not in makefile
 
 
 def test_exported_readme_describes_published_variant_and_active_alias() -> None:

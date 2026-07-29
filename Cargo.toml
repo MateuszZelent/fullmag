@@ -4,6 +4,7 @@ members = [
   "crates/fullmag-authoring",
   "crates/fullmag-api",
   "crates/fullmag-bench",
+  "crates/fullmag-build-info",
   "crates/fullmag-cli",
   "crates/fullmag-engine",
   "crates/fullmag-fdm-demag",
@@ -27,6 +28,7 @@ publish = false
 anyhow = "1.0"
 axum = { version = "0.7", features = ["ws"] }
 clap = { version = "4.5", features = ["derive"] }
+fullmag-build-info = { path = "crates/fullmag-build-info" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
 tauri = { version = "2.11.1", features = ["devtools"] }

@@ -34,6 +34,7 @@ use step_utils::*;
 use types::*;
 
 fn main() -> Result<()> {
+    fullmag_build_info::print_startup_stamp();
     let raw_args = std::env::args_os().collect::<Vec<_>>();
     if is_script_mode(&raw_args) {
         return orchestrator::run_script_mode(raw_args);

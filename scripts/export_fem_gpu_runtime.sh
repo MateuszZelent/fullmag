@@ -12,7 +12,9 @@ RUNTIME_LOCK="${RUNTIME_PARENT}/.fem-gpu-host.export.lock"
 docker_build_ref=""
 docker_compatibility_ref="fullmag/fem-gpu:local"
 docker_build_ref_marker=""
-mkdir -p "${RUNTIME_PARENT}"
+persistent_staging_archive=""
+persistent_validation_root=""
+mkdir -p "${RUNTIME_PARENT}" "${VARIANTS_ROOT}"
 exec 9>"${RUNTIME_LOCK}"
 if ! flock -n 9; then
   echo "[export_fem_gpu_runtime] waiting for existing runtime export to finish"
@@ -26,6 +28,12 @@ cleanup_failed_export() {
   fi
   if [ -n "${docker_build_ref_marker}" ]; then
     rmdir -- "${docker_build_ref_marker}" 2>/dev/null || true
+  fi
+  if [ -n "${persistent_staging_archive}" ]; then
+    rm -f -- "${persistent_staging_archive}"
+  fi
+  if [ -n "${persistent_validation_root}" ]; then
+    rm -rf -- "${persistent_validation_root}"
   fi
   rm -rf -- "${STAGING_ROOT}"
   exit "${status}"
@@ -91,6 +99,9 @@ readonly FULLMAG_NATIVE_BUILD_STORAGE_ROOT="/zfn2/mateuszz/git/fullmag"
 readonly FULLMAG_NATIVE_BUILD_IMAGE="/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4"
 readonly FULLMAG_NATIVE_MOUNT_VIEW="/mnt/fullmag-zfn2-native"
 readonly FULLMAG_CONTAINER_TARGET_ROOT="${FULLMAG_NATIVE_MOUNT_VIEW}/managed-fem-runtime"
+readonly FULLMAG_BUILD_ROOT="${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}"
+readonly PERSISTENT_RUNTIME_PARENT="${FULLMAG_BUILD_ROOT}/runtimes"
+readonly PERSISTENT_LATEST_ARCHIVE="${PERSISTENT_RUNTIME_PARENT}/fem-gpu-host-latest.tar"
 readonly FULLMAG_WORKTREE_TARGET_SLUG="$(basename "${REPO_ROOT}" | sed 's/[^A-Za-z0-9._-]/-/g')"
 readonly FULLMAG_WORKTREE_TARGET_DIGEST="$(printf '%s' "${REPO_ROOT}" | sha256sum | cut -c1-64)"
 readonly FULLMAG_WORKTREE_TARGET_ID="${FULLMAG_WORKTREE_TARGET_SLUG}-${FULLMAG_WORKTREE_TARGET_DIGEST}"
@@ -108,6 +119,11 @@ case "${FULLMAG_ENABLE_NVTX}" in
   *) echo "[export_fem_gpu_runtime] FULLMAG_ENABLE_NVTX must be 0 or 1" >&2; exit 2 ;;
 esac
 validate_container_target_dir
+if [ ! -d "${FULLMAG_BUILD_ROOT}" ] || [ ! -w "${FULLMAG_BUILD_ROOT}" ]; then
+  echo "[export_fem_gpu_runtime] persistent build root is missing or not writable: ${FULLMAG_BUILD_ROOT}" >&2
+  exit 2
+fi
+mkdir -p "${PERSISTENT_RUNTIME_PARENT}"
 export FULLMAG_CUDA_ARCHITECTURES
 export FULLMAG_HYPRE_GPU_ARCHITECTURES
 export FULLMAG_HYPRE_MEMORY_VARIANT
@@ -839,24 +855,41 @@ This export publishes an immutable hash-addressed variant and atomically selects
 \`${RUNTIME_ROOT}\` active-runtime alias used by the host launcher.
 EOF
 
+validate_persistent_runtime_archive() {
+  local archive="$1"
+  local expected_root="$2"
+  persistent_validation_root="$(mktemp -d "${TMPDIR:-/tmp}/fullmag-fem-runtime-archive.XXXXXXXX")"
+  if ! tar -C "${persistent_validation_root}" -xf "${archive}" || \
+     ! python3 scripts/validate_managed_fem_runtime_bundle.py \
+       --runtime-root "${persistent_validation_root}" --allow-unaddressed-staging || \
+     ! python3 scripts/validate_managed_fem_runtime_bundle.py \
+       --runtime-root "${persistent_validation_root}" \
+       --compare-exact "${expected_root}"; then
+    rm -rf -- "${persistent_validation_root}"
+    persistent_validation_root=""
+    return 1
+  fi
+  rm -rf -- "${persistent_validation_root}"
+  persistent_validation_root=""
+}
+
 publish_runtime_bundle() {
   local manifest_sha256
   manifest_sha256="$(sha256sum "${STAGING_ROOT}/manifest.json" | awk '{print $1}')"
   local variant_root="${VARIANTS_ROOT}/${FULLMAG_FEM_RUNTIME_VARIANT}-${manifest_sha256}"
   local alias_target="fem-gpu-variants/$(basename "${variant_root}")"
-  local next_alias="${RUNTIME_PARENT}/.fem-gpu-host.next.$$"
+  local repo_next_alias="${RUNTIME_PARENT}/.fem-gpu-host.next.$$"
+  local persistent_archive="${PERSISTENT_RUNTIME_PARENT}/$(basename "${variant_root}").tar"
   python3 scripts/validate_managed_fem_runtime_bundle.py \
     --runtime-root "${STAGING_ROOT}" \
     --allow-unaddressed-staging \
     --require-native-cubin fullmag_fem=sm_89 \
     --require-native-cubin hypre=sm_89 \
     --require-compute-capability "${FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY}"
-  mkdir -p "${VARIANTS_ROOT}"
   if [ -e "${variant_root}" ]; then
     python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root "${variant_root}"
     python3 scripts/validate_managed_fem_runtime_bundle.py \
       --runtime-root "${variant_root}" --compare-exact "${STAGING_ROOT}"
-    rm -rf -- "${STAGING_ROOT}"
   else
     mv "${STAGING_ROOT}" "${variant_root}"
   fi
@@ -865,8 +898,26 @@ publish_runtime_bundle() {
     echo "Select an already preserved schema-v2 variant first." >&2
     return 2
   fi
-  ln -sfn "${alias_target}" "${next_alias}"
-  mv -Tf "${next_alias}" "${RUNTIME_ROOT}"
+  persistent_staging_archive="${persistent_archive}.staging.$$"
+  tar -C "${variant_root}" -cf "${persistent_staging_archive}" .
+  if [ ! -e "${persistent_archive}" ]; then
+    mv "${persistent_staging_archive}" "${persistent_archive}"
+  else
+    rm -f -- "${persistent_staging_archive}"
+  fi
+  persistent_staging_archive=""
+  validate_persistent_runtime_archive "${persistent_archive}" "${variant_root}"
+  persistent_staging_archive="${PERSISTENT_LATEST_ARCHIVE}.staging.$$"
+  cp -- "${persistent_archive}" "${persistent_staging_archive}"
+  if ! cmp -s "${persistent_archive}" "${persistent_staging_archive}"; then
+    echo "[export_fem_gpu_runtime] durable latest archive copy differs from immutable archive" >&2
+    return 2
+  fi
+  mv -f "${persistent_staging_archive}" "${PERSISTENT_LATEST_ARCHIVE}"
+  persistent_staging_archive=""
+  ln -sfn "${alias_target}" "${repo_next_alias}"
+  mv -Tf "${repo_next_alias}" "${RUNTIME_ROOT}"
+  rm -rf -- "${STAGING_ROOT}"
 }
 
 publish_runtime_bundle

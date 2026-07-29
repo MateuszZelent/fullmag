@@ -3277,19 +3277,7 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
         elif [ ! -f "{{local_web_root}}/index.html" ] && [ ! -f "{{control_room_static_out}}/index.html" ]; then echo "Static control room is missing; run with build=True or force=True once." >&2; exit 2; fi; \
       fi; \
       if [ "$backend" = "fem" ]; then \
-        if [ "$force" = "true" ]; then just rebuild-fem-runtime; \
-        elif [ "$build" = "true" ]; then just ensure-managed-fem-runtime; \
-        elif [ ! -x "{{gpu_runtime_bin}}" ]; then echo "Managed FEM runtime is missing; run with build=True or force=True once." >&2; exit 2; fi; \
-        if [ "$build" = "false" ]; then \
-          if [ ! -f "{{gpu_runtime_manifest}}" ]; then echo "Managed FEM runtime manifest is missing; run with build=True or force=True once." >&2; exit 2; fi; \
-          stale_source="$(find crates/fullmag-api crates/fullmag-authoring crates/fullmag-cli crates/fullmag-runner crates/fullmag-quantities crates/fullmag-plan crates/fullmag-ir crates/fullmag-engine crates/fullmag-session crates/fullmag-fdm-demag crates/fullmag-fdm-sys crates/fullmag-fem-sys native/CMakeLists.txt native/include backends/fem backends/fdm docker/fem-gpu/Dockerfile compose.yaml scripts/export_fem_gpu_runtime.sh scripts/lib/runtime_bundle_copy.sh Cargo.toml Cargo.lock rust-toolchain.toml \( -path \"*/.fullmag\" -o -path \"*/__pycache__\" \) -prune -o -type f ! -name \"*.pyc\" -newer '{{gpu_runtime_manifest}}' -print -quit 2>/dev/null)"; \
-          if [ -n "$stale_source" ]; then \
-            echo "Managed FEM runtime bundle is stale; newer runtime source detected: $stale_source" >&2; \
-            echo "Run: just fullmag build=True fem $device $script" >&2; \
-            echo "Or force a clean runtime export: just fullmag force=True fem $device $script" >&2; \
-            exit 2; \
-          fi; \
-        fi; \
+        if [ "$force" = "true" ]; then just rebuild-fem-runtime; else just ensure-managed-fem-runtime; fi; \
         bin="{{gpu_runtime_bin}}"; path_prefix=""; \
       else \
         if [ "$force" = "true" ]; then just build fullmag; \
@@ -3762,8 +3750,12 @@ run-nanoflower-interactive-quadro-gpu:
 
 ensure-managed-fem-runtime:
     if [ ! -x '{{gpu_runtime_bin}}' ] || [ ! -f '{{gpu_runtime_manifest}}' ]; then \
-        echo "Managed FEM runtime bundle is missing or incomplete; rebuilding it now." >&2; \
-        just rebuild-fem-runtime; \
+        echo "Managed FEM runtime bundle is missing or incomplete; restoring the persistent build first." >&2; \
+        bash scripts/restore_persistent_fem_runtime.sh || just rebuild-fem-runtime; \
+    fi
+    if ! python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root .fullmag/runtimes/fem-gpu-host >/dev/null 2>&1; then \
+        echo "Managed FEM runtime bundle is invalid; restoring the persistent build first." >&2; \
+        bash scripts/restore_persistent_fem_runtime.sh || just rebuild-fem-runtime; \
     fi
     stale_source="$(find crates/fullmag-api crates/fullmag-authoring crates/fullmag-cli crates/fullmag-runner crates/fullmag-quantities crates/fullmag-plan crates/fullmag-ir crates/fullmag-engine crates/fullmag-session crates/fullmag-fdm-demag crates/fullmag-fdm-sys crates/fullmag-fem-sys native/CMakeLists.txt native/include backends/fem backends/fdm docker/fem-gpu/Dockerfile compose.yaml scripts/export_fem_gpu_runtime.sh scripts/build_managed_fem_runtime_manifest.py scripts/inspect_cuda_architectures.py scripts/lib/runtime_bundle_copy.sh Cargo.toml Cargo.lock rust-toolchain.toml \( -path \"*/.fullmag\" -o -path \"*/__pycache__\" \) -prune -o -type f ! -name \"*.pyc\" -newer '{{gpu_runtime_manifest}}' -print -quit 2>/dev/null)"; \
     if [ -n "$stale_source" ]; then \
