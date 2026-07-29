@@ -7,11 +7,15 @@ on:
     paths:
       - "public_docs/site/**"
       - "public_docs/fullmag_profesjonalna_dokumentacja_architektura.md"
+      - "docs/physics/**"
+      - ".agents/skills/scientific-documentation-contract/**"
       - ".github/workflows/documentation.yml"
   pull_request:
     paths:
       - "public_docs/site/**"
       - "public_docs/fullmag_profesjonalna_dokumentacja_architektura.md"
+      - "docs/physics/**"
+      - ".agents/skills/scientific-documentation-contract/**"
       - ".github/workflows/documentation.yml"
   workflow_dispatch:
 
@@ -25,20 +29,70 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
+      - name: Test scientific documentation validators
+        run: >-
+          python -m unittest discover
+          -s .agents/skills/scientific-documentation-contract/scripts
+          -p 'test_*.py' -v
+
+      - name: Resolve scientific documentation diff base
+        id: docs-diff
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          elif [[ "${{ github.event.before }}" =~ ^[0-9a-f]{40}$ ]] && [[ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
+            base="${{ github.event.before }}"
+          else
+            base="$(git rev-parse HEAD^)"
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+
+      - name: Require source maps for changed scientific pages
+        run: >-
+          python .agents/skills/scientific-documentation-contract/scripts/validate_changed_scientific_docs.py
+          --base "${{ steps.docs-diff.outputs.base }}"
+          --head HEAD
+          --repo-root .
+
       - name: Install public documentation dependencies
-        run: python -m pip install -r public_docs/site/requirements.txt
+        run: |
+          python -m pip install -r public_docs/site/requirements.txt
+          python -m pip install ./packages/fullmag-py
 
       - name: Check public and internal documentation boundary
         run: python scripts/check_public_docs_boundary.py
+
+      - name: Validate scientific documentation source contracts
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' manifest; do
+            python .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
+              "$manifest" --repo-root .
+          done < <(find public_docs/site/physics -name '*.source-map.json' -print0)
+
+      - name: Execute documented Exchange Python-to-ProblemIR example
+        env:
+          PYTHONPATH: packages/fullmag-py/src
+        run: >-
+          python -m unittest discover
+          -s packages/fullmag-py/tests
+          -p 'test_public_exchange_documentation.py' -v
 
       - name: Build public documentation strictly
         env:
@@ -46,6 +100,16 @@ jobs:
         run: >-
           sphinx-build -b html -W -n --keep-going
           public_docs/site public_docs/site/_build/html
+
+      - name: Validate rendered scientific documentation
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' manifest; do
+            relative="${manifest#public_docs/site/}"
+            rendered="public_docs/site/_build/html/${relative%.source-map.json}.html"
+            python .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
+              "$manifest" --repo-root . --rendered-html "$rendered"
+          done < <(find public_docs/site/physics -name '*.source-map.json' -print0)
 
       - name: Upload pull request preview artifact
         uses: actions/upload-artifact@v4

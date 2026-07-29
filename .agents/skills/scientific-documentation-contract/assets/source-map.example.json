@@ -1,0 +1,13 @@
+{
+  "document": {"path": "public_docs/site/physics/example.md"},
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "documented"},
+    {"solver": "FEM", "device": "GPU", "status": "unsupported", "reason": "Evidence-based reason."},
+    {"solver": "FDM", "device": "CPU", "status": "documented"},
+    {"solver": "FDM", "device": "GPU", "status": "documented"}
+  ],
+  "equations": [{"id": "eq-example", "symbols": ["A"], "sources": ["source-example"]}],
+  "symbols": [{"id": "A", "latex": "A", "meaning": "Exchange stiffness", "si_unit": "\\mathrm{J\\,m^{-1}}"}],
+  "sources": [{"id": "source-example", "path": "packages/example.py", "symbol": "lower_example", "responsibility": "Lower the public object."}],
+  "public_api": {"parameters": [{"python": "Example.A", "type": "float", "default": "required", "si_unit": "\\mathrm{J\\,m^{-1}}", "validation": "A > 0", "meaning": "Exchange stiffness", "backend_support": "FEM/FDM CPU/GPU", "problem_ir": "interactions[].A"}]}
+}

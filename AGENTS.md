@@ -201,6 +201,7 @@ Prefer single-file or single-test runs during iteration. Full suites are for the
 
 When the user corrects your approach, append a one-line rule here before ending the session. Write it concretely ("Always use X for Y"), never abstractly ("be careful with Y"). If an existing line already covers the correction, tighten it instead of adding a new one. Remove lines when the underlying issue goes away (model upgrades, refactors, process changes).
 
+- Sphinx MathJax inline HTML legitimately serializes delimiters such as `\(...\)` inside `.math` elements; enforce MyST `$...$` in source, but never reject those delimiters globally in rendered HTML.
 - Always use `fm-` prefix for all CSS class names in `apps/control-room`, including shell-level layout classes. No unprefixed classes.
 - The CSS design system is token-first: `--fm-*` custom properties are the source of truth. Tailwind provides the utility layer. shadcn/ui provides accessible pre-built components. All three coexist — tokens define the visual language, Tailwind provides utilities, shadcn provides components.
 - Keep `apps/control-room` on Next.js 16 unless the user explicitly approves a version change.
@@ -385,6 +386,14 @@ If two layers disagree, the higher layer wins and the lower layer must be repair
 ## 6. Golden rule: physics before implementation
 
 Before implementing any new physics or numerical feature, create or update a publication-style note in `docs/physics/`.
+
+For every creation, modification, review, restructuring, or publication of physics,
+solver, backend, interaction, numerical-method, Python-API, or `ProblemIR`
+documentation, agents **MUST use `scientific-documentation-contract`**. Its
+hierarchy, LaTeX/MathJax, complete parameter-table, Python-to-`ProblemIR`,
+path-plus-symbol source mapping, backend separation, bibliography, source-index,
+and automated validation gates are mandatory; publication documentation cannot
+defer them to follow-up work.
 
 Every such note must include:
 
