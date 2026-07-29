@@ -731,6 +731,8 @@ fn sorted_face(face: [u32; 3]) -> [u32; 3] {
 
 pub const FEM_MESH_TOPOLOGY_FINGERPRINT_V2_DOMAIN: &[u8] =
     b"fullmag:fem-mesh-topology-fingerprint:v2";
+pub const FEM_MESH_TOPOLOGY_FINGERPRINT_V3_DOMAIN: &[u8] =
+    b"fullmag:fem-mesh-topology-fingerprint:v3";
 
 pub fn fem_mesh_topology_fingerprint_v2(
     nodes: &[[f64; 3]],
@@ -793,6 +795,184 @@ pub fn fem_mesh_topology_fingerprint_v2(
     hasher.update(FEM_MESH_TOPOLOGY_FINGERPRINT_V2_DOMAIN);
     hasher.update(encoded);
     format!("sha256:{:x}", hasher.finalize())
+}
+
+struct FemMeshTopologyFingerprintV3Writer {
+    hasher: Sha256,
+}
+
+impl FemMeshTopologyFingerprintV3Writer {
+    fn new() -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(FEM_MESH_TOPOLOGY_FINGERPRINT_V3_DOMAIN);
+        Self { hasher }
+    }
+
+    fn u8(&mut self, value: u8) {
+        self.hasher.update([value]);
+    }
+
+    fn u32(&mut self, value: u32) {
+        self.hasher.update(value.to_le_bytes());
+    }
+
+    fn u64(&mut self, value: u64) {
+        self.hasher.update(value.to_le_bytes());
+    }
+
+    fn f64(&mut self, value: f64) -> Result<(), String> {
+        if !value.is_finite() {
+            return Err("topology fingerprint v3 requires finite f64 values".to_string());
+        }
+        self.u64(value.to_bits());
+        Ok(())
+    }
+
+    fn string(&mut self, value: &str) {
+        self.u64(value.len() as u64);
+        self.hasher.update(value.as_bytes());
+    }
+
+    fn option<T>(
+        &mut self,
+        value: Option<&T>,
+        write: impl FnOnce(&mut Self, &T) -> Result<(), String>,
+    ) -> Result<(), String> {
+        match value {
+            None => self.u8(0),
+            Some(value) => {
+                self.u8(1);
+                write(self, value)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> String {
+        format!("sha256:{:x}", self.hasher.finalize())
+    }
+}
+
+pub fn fem_mesh_topology_fingerprint_v3(
+    nodes: &[[f64; 3]],
+    cells: &FemConnectivityIR,
+    element_markers: &[u32],
+    facets: &FemFacetConnectivityIR,
+    boundary_markers: &[u32],
+    periodic_boundary_pairs: &[MeshPeriodicBoundaryPairIR],
+    periodic_node_pairs: &[MeshPeriodicNodePairIR],
+) -> Result<String, String> {
+    let mut writer = FemMeshTopologyFingerprintV3Writer::new();
+    writer.u64(nodes.len() as u64);
+    for node in nodes {
+        for coordinate in node {
+            writer.f64(*coordinate)?;
+        }
+    }
+    writer.u64(cells.types.len() as u64);
+    for cell_type in &cells.types {
+        writer.u8(match cell_type {
+            FemCellTypeIR::Tet4 => 1,
+            FemCellTypeIR::Prism6 => 2,
+            FemCellTypeIR::Pyramid5 => 3,
+            FemCellTypeIR::Hex8 => 4,
+        });
+    }
+    writer.u64(cells.offsets.len() as u64);
+    for value in &cells.offsets {
+        writer.u32(*value);
+    }
+    writer.u64(cells.nodes.len() as u64);
+    for value in &cells.nodes {
+        writer.u32(*value);
+    }
+    writer.u64(cells.global_ordinals.len() as u64);
+    for value in &cells.global_ordinals {
+        writer.u64(*value);
+    }
+    writer.u64(cells.mesh_parts.len() as u64);
+    for part in &cells.mesh_parts {
+        writer.u8(match part {
+            FemCellMeshPartIR::Magnetic => 1,
+            FemCellMeshPartIR::TransitionAir => 2,
+            FemCellMeshPartIR::FarAir => 3,
+        });
+    }
+    writer.u64(element_markers.len() as u64);
+    for value in element_markers {
+        writer.u32(*value);
+    }
+    writer.u64(facets.types.len() as u64);
+    for facet_type in &facets.types {
+        writer.u8(match facet_type {
+            FemFacetTypeIR::Tri3 => 1,
+            FemFacetTypeIR::Quad4 => 2,
+        });
+    }
+    writer.u64(facets.roles.len() as u64);
+    for role in &facets.roles {
+        writer.u8(match role {
+            FemFacetRoleIR::Exterior => 1,
+            FemFacetRoleIR::MaterialInterface => 2,
+            FemFacetRoleIR::PeriodicSeam => 3,
+        });
+    }
+    writer.u64(facets.offsets.len() as u64);
+    for value in &facets.offsets {
+        writer.u32(*value);
+    }
+    writer.u64(facets.nodes.len() as u64);
+    for value in &facets.nodes {
+        writer.u32(*value);
+    }
+    writer.u64(facets.global_ordinals.len() as u64);
+    for value in &facets.global_ordinals {
+        writer.u64(*value);
+    }
+    writer.u64(boundary_markers.len() as u64);
+    for value in boundary_markers {
+        writer.u32(*value);
+    }
+    writer.u64(periodic_boundary_pairs.len() as u64);
+    for pair in periodic_boundary_pairs {
+        writer.string(&pair.pair_id);
+        writer.option(pair.source_marker.as_ref(), |writer, value| {
+            writer.string(value);
+            Ok(())
+        })?;
+        writer.option(pair.destination_marker.as_ref(), |writer, value| {
+            writer.string(value);
+            Ok(())
+        })?;
+        writer.u32(pair.marker_a);
+        writer.u32(pair.marker_b);
+        writer.option(pair.translation.as_ref(), |writer, values| {
+            for value in values {
+                writer.f64(*value)?;
+            }
+            Ok(())
+        })?;
+        writer.option(pair.tolerance.as_ref(), |writer, value| writer.f64(*value))?;
+        writer.option(pair.axis_hint.as_ref(), |writer, value| {
+            writer.string(value);
+            Ok(())
+        })?;
+        writer.option(pair.orientation.as_ref(), |writer, value| {
+            writer.string(value);
+            Ok(())
+        })?;
+        writer.option(pair.pairing_policy.as_ref(), |writer, value| {
+            writer.string(value);
+            Ok(())
+        })?;
+    }
+    writer.u64(periodic_node_pairs.len() as u64);
+    for pair in periodic_node_pairs {
+        writer.string(&pair.pair_id);
+        writer.u32(pair.node_a);
+        writer.u32(pair.node_b);
+    }
+    Ok(writer.finish())
 }
 
 fn mesh_topology_fingerprint(mesh: &MeshIR) -> String {
@@ -1311,6 +1491,33 @@ impl MeshIR {
     /// Return the topology identity consumed by periodic certificate v6.
     pub fn topology_fingerprint_v6(&self) -> String {
         mesh_topology_fingerprint(self)
+    }
+
+    /// Return the language-neutral topology identity used by mixed certificates v3.
+    pub fn mixed_topology_fingerprint_v3(&self) -> Result<String, String> {
+        fem_mesh_topology_fingerprint_v3(
+            &self.nodes,
+            &self.cells,
+            &self.element_markers,
+            &self.facets,
+            &self.boundary_markers,
+            &self.periodic_boundary_pairs,
+            &self.periodic_node_pairs,
+        )
+    }
+
+    /// Dispatch a mixed-certificate fingerprint without changing periodic v6 identity.
+    pub fn mixed_topology_fingerprint_for_version(
+        &self,
+        version: &str,
+    ) -> Result<String, String> {
+        match version {
+            "v2" => Ok(self.topology_fingerprint_v6()),
+            "v3" => self.mixed_topology_fingerprint_v3(),
+            other => Err(format!(
+                "unsupported mixed topology fingerprint version {other}"
+            )),
+        }
     }
 
     /// Build the v6 mirrored-periodic certificate from explicit mesh topology.
@@ -2448,6 +2655,109 @@ pub(crate) fn cell_jacobian_determinants(
 #[cfg(test)]
 mod mesh_validation_tests {
     use super::*;
+
+    fn topology_fingerprint_v3_cross_language_fixture() -> MeshIR {
+        let mut nodes = vec![
+            [0.0, -0.0, 1.0e-7],
+            [1.0e-5, 3.0e-9, 1.0e20],
+            [f64::from_bits(0x3fd5_5555_5555_5555), 1.0, 2.0],
+        ];
+        nodes.extend((3..23).map(|index| [f64::from(index), 0.0, 0.0]));
+        MeshIR {
+            mesh_name: "excluded-name".to_string(),
+            nodes,
+            cells: FemConnectivityIR {
+                types: vec![
+                    FemCellTypeIR::Tet4,
+                    FemCellTypeIR::Prism6,
+                    FemCellTypeIR::Pyramid5,
+                    FemCellTypeIR::Hex8,
+                ],
+                offsets: vec![0, 4, 10, 15, 23],
+                nodes: (0..23).collect(),
+                global_ordinals: vec![9, 8, 7, 6],
+                mesh_parts: vec![
+                    FemCellMeshPartIR::Magnetic,
+                    FemCellMeshPartIR::TransitionAir,
+                    FemCellMeshPartIR::FarAir,
+                    FemCellMeshPartIR::Magnetic,
+                ],
+            },
+            element_markers: vec![1, 0, 0, 4],
+            facets: FemFacetConnectivityIR {
+                types: vec![FemFacetTypeIR::Tri3, FemFacetTypeIR::Quad4, FemFacetTypeIR::Tri3],
+                roles: vec![
+                    FemFacetRoleIR::Exterior,
+                    FemFacetRoleIR::MaterialInterface,
+                    FemFacetRoleIR::PeriodicSeam,
+                ],
+                offsets: vec![0, 3, 7, 10],
+                nodes: (0..10).collect(),
+                global_ordinals: vec![3, 2, 1],
+            },
+            boundary_markers: vec![2, 3, 4],
+            periodic_boundary_pairs: vec![
+                MeshPeriodicBoundaryPairIR {
+                    pair_id: String::new(),
+                    source_marker: None,
+                    destination_marker: Some(String::new()),
+                    marker_a: 2,
+                    marker_b: 3,
+                    translation: Some([1.0e-7, -0.0, 1.0e20]),
+                    tolerance: Some(3.0e-9),
+                    axis_hint: Some("é".to_string()),
+                    orientation: Some("prefix".to_string()),
+                    pairing_policy: Some("prefix-long".to_string()),
+                },
+                MeshPeriodicBoundaryPairIR {
+                    pair_id: "é".to_string(),
+                    source_marker: Some("a".to_string()),
+                    destination_marker: Some("ab".to_string()),
+                    marker_a: 4,
+                    marker_b: 5,
+                    translation: None,
+                    tolerance: None,
+                    axis_hint: Some(String::new()),
+                    orientation: None,
+                    pairing_policy: Some(String::new()),
+                },
+            ],
+            periodic_node_pairs: vec![
+                MeshPeriodicNodePairIR {
+                    pair_id: String::new(),
+                    node_a: 0,
+                    node_b: 1,
+                },
+                MeshPeriodicNodePairIR {
+                    pair_id: "é".to_string(),
+                    node_a: 2,
+                    node_b: 3,
+                },
+            ],
+            per_domain_quality: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn topology_fingerprint_v3_matches_frozen_python_si_fixture() {
+        let mesh = topology_fingerprint_v3_cross_language_fixture();
+        assert_eq!(
+            mesh.mixed_topology_fingerprint_v3().unwrap(),
+            "sha256:5728d7f6f11efc6f3d4ce4c5b098e3ea76866fd49a31088cf6692652d22c0ff6"
+        );
+    }
+
+    #[test]
+    fn topology_fingerprint_v3_rejects_nonfinite_and_preserves_signed_zero() {
+        let mesh = topology_fingerprint_v3_cross_language_fixture();
+        let baseline = mesh.mixed_topology_fingerprint_v3().unwrap();
+        let mut positive_zero = mesh.clone();
+        positive_zero.nodes[0][1] = 0.0;
+        assert_ne!(positive_zero.mixed_topology_fingerprint_v3().unwrap(), baseline);
+        let mut nonfinite = mesh;
+        nonfinite.periodic_boundary_pairs[0].tolerance = Some(f64::INFINITY);
+        assert!(nonfinite.mixed_topology_fingerprint_v3().is_err());
+    }
 
     #[test]
     fn connectivity_round_trip_preserves_mesh_parts_and_rejects_unknown_parts() {

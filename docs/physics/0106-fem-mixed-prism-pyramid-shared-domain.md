@@ -235,6 +235,73 @@ hash and region/material realization. For the first workload it proves:
 The certificate fails closed. A warning, inferred layer count, clipped cell,
 tet conversion, or unversioned connectivity does not satisfy it.
 
+#### 3.4.1 Language-neutral topology fingerprint v3
+
+Accepted mixed-layer certificates emitted after this migration bind to topology
+fingerprint `v3`. Version 3 hashes one language-neutral typed binary stream;
+it never hashes Python, Rust, JSON, MessagePack, or FMMT serialization bytes.
+The SHA-256 domain bytes are exactly
+`fullmag:fem-mesh-topology-fingerprint:v3`, with no implicit NUL, newline, or
+length prefix. The following payload follows those domain bytes in fixed order:
+
+1. nodes;
+2. cell types, offsets, connectivity, global ordinals, and mesh parts;
+3. element markers;
+4. facet types, roles, offsets, connectivity, and global ordinals;
+5. boundary markers;
+6. periodic boundary pairs in authored list order;
+7. periodic node pairs in authored list order.
+
+Every sequence begins with an unsigned 64-bit element count in little-endian
+order. Connectivity indices, offsets, and markers are unsigned 32-bit
+little-endian integers; global ordinals are unsigned 64-bit little-endian
+integers. Each node and each present periodic translation is a fixed tuple of
+exactly three binary64 values and therefore has no nested sequence count.
+UTF-8 strings begin with their unsigned 64-bit byte length, so empty,
+non-ASCII, and prefix-related values remain distinct. Optional fields begin
+with exactly one byte (`0` absent, `1` present); any other tag is invalid.
+Present empty strings remain distinct from absent strings.
+
+Node coordinates, periodic translations, and periodic tolerances are encoded
+as the exact IEEE-754 binary64 bit pattern written as an unsigned 64-bit
+little-endian integer. Non-finite values reject before hashing. Signed zero is
+preserved: `+0.0` and `-0.0` have different fingerprints because v3 binds to
+the exact transported topology data rather than numerically normalizing it.
+
+Stable enum tags are exactly one unsigned byte each:
+
+| Field | Value | Tag |
+|---|---|---:|
+| cell type | `tet4`, `prism6`, `pyramid5`, `hex8` | `1`, `2`, `3`, `4` |
+| cell mesh part | `magnetic`, `transition_air`, `far_air` | `1`, `2`, `3` |
+| facet type | `tri3`, `quad4` | `1`, `2` |
+| facet role | `exterior`, `material_interface`, `periodic_seam` | `1`, `2`, `3` |
+
+Each periodic boundary pair encodes, in order: `pair_id`, optional
+`source_marker`, optional `destination_marker`, `marker_a`, `marker_b`, optional
+three-component `translation`, optional canonical `tolerance` (Python accepts
+the legacy input alias `tolerance_m` but hashes the normalized field), optional
+`axis_hint`, optional `orientation`, and optional `pairing_policy`. Each periodic
+node pair encodes `pair_id`, `node_a`, and `node_b`. Pair and node-pair list
+order is significant, exactly as in fingerprint v2.
+
+`mesh_name`, quality reports, per-domain quality, realization reports, material
+fields, and the certificate itself remain excluded, matching v2 topology
+scope. Changing any included value, sequence order, option presence, enum tag,
+or signed-zero bit changes v3. Changing an excluded diagnostic does not.
+
+Rust consumers dispatch by `topology_fingerprint_version`: legacy accepted v2
+certificates remain validated with the frozen JSON-v2 algorithm, v3 uses the
+binary contract above, and unknown versions (including v4) reject. Ingestion
+and validation must never repair, upgrade, overwrite, or rebind a stale
+transported certificate fingerprint to the received mesh. A trusted
+topology-producing transformation, such as planner packing that changes ordered
+topology, may mint a replacement fingerprint in the source certificate's
+version only after the source certificate validates and the output evidence and
+provenance are recomputed and revalidated. Python emits v3 for newly
+realized/rebuilt mixed-layer certificates. The JSON/OpenAPI field shape stays a
+string version plus a `sha256:` value; only the version value and digest change.
+
 ### 3.5 Hybrid
 
 Unsupported. A future hybrid workflow requires explicit projection and
@@ -291,6 +358,16 @@ Gmsh numeric element IDs are import details and must not enter the public IR.
 Validation keeps requested topology, sweep direction, and exact layer count
 separate from the realized certificate. Legacy tetrahedral input normalizes to
 the typed representation; no migration may reinterpret it as mixed-P1.
+
+The realized mixed-layer certificate in `ProblemIR` and build-report provenance
+emits `topology_fingerprint_version="v3"`. This is a provenance migration, not
+a physics or authoring change. Loaders preserve and validate legacy v2, emit v3
+for newly realized or rebuilt certificates, reject unknown versions, and do not
+rewrite a stale digest. The global periodic-certificate v6 topology identity is
+not migrated: mixed-certificate validation, planning, packing, runtime, and
+provenance use explicit v2/v3 dispatch without changing unrelated periodic,
+artifact, or API fingerprints. Python and UI round-trip fields are otherwise
+unchanged.
 
 `problem_meta.runtime_metadata.runtime_selection.device` remains the authored
 script request. A managed launcher records its explicit overlay separately as
@@ -408,6 +485,12 @@ promotion and any future `validated` promotion require their own fresh evidence:
 - FMMT v2 encode/decode, range, marker, and stale-revision tests;
 - control-room mesh inspection and WebGL browser smoke;
 - artifact schema and certificate tamper/staleness tests;
+- frozen Python/Rust fingerprint-v3 vectors spanning SI scales (`1e-7`,
+  `1e-5`, `3e-9`, `1e20`), arbitrary finite round-trip floats, signed zero,
+  all enum tags, non-ASCII/empty/prefix strings, absent versus present-empty
+  options, every periodic field, list reordering, excluded-field stability,
+  tamper rejection, legacy-v2 acceptance, plan packing, runner validation, and
+  unknown-version rejection;
 - managed container runtime gates for FEM CPU and strict FEM GPU.
 
 ### 5.4 Promotion levels
@@ -426,6 +509,7 @@ No lower level implies a higher one.
 - [x] Canonical physical/numerical target and units
 - [x] First-slice legality and fail-closed unsupported matrix
 - [x] Exact-layer/shared-domain certificate target
+- [x] Language-neutral topology fingerprint v3 contract and v2 migration rule
 - [x] Frozen Gmsh 4.15.2 feasibility fixture
 - [x] Python API and round-trip preserve requested mixed topology
 - [x] ProblemIR enums, validation, and legacy-tetra migration

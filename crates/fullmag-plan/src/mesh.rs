@@ -1544,7 +1544,6 @@ pub(crate) fn resolve_fem_domain_mesh_asset(
     let (mesh, object_segments, mesh_parts) = pack_mesh_by_analysis(&mesh, &analysis)?;
     let mut build_report = asset.build_report.clone();
     if source_certificate.is_some() {
-        let fingerprint = mesh.topology_fingerprint_v6();
         let report = build_report.as_mut().ok_or_else(|| {
             "fem_mixed_p1_certificate_required: shared-domain build report is missing; fallback=none"
                 .to_string()
@@ -1555,6 +1554,11 @@ pub(crate) fn resolve_fem_domain_mesh_asset(
             .ok_or_else(|| {
                 "fem_mixed_p1_certificate_required: accepted topology certificate is missing; fallback=none"
                     .to_string()
+            })?;
+        let fingerprint = mesh
+            .mixed_topology_fingerprint_for_version(&certificate.topology_fingerprint_version)
+            .map_err(|error| {
+                format!("fem_mixed_p1_packed_certificate_rejected: {error}; fallback=none")
             })?;
         certificate.topology_fingerprint = fingerprint.clone();
         fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(certificate, &mesh)

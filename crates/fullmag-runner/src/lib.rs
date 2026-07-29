@@ -1385,7 +1385,13 @@ fn require_supported_fem_topology(
         .ok_or_else(|| RunError {
             message: "fem_mixed_p1_runtime_certificate_required: accepted topology certificate is missing; fallback=none".to_string(),
         })?;
-    let fingerprint = mesh.topology_fingerprint_v6();
+    let fingerprint = mesh
+        .mixed_topology_fingerprint_for_version(&certificate.topology_fingerprint_version)
+        .map_err(|error| RunError {
+            message: format!(
+                "fem_mixed_p1_runtime_certificate_rejected: {error}; fallback=none"
+            ),
+        })?;
     if certificate.topology_fingerprint != fingerprint {
         return Err(RunError {
             message: format!(
@@ -4492,6 +4498,29 @@ mod tests {
         let (problem, plan) = certified_mixed_cpu_relaxation_guard_fixture();
         require_supported_fem_topology(&problem, &plan)
             .expect("bound CPU-double mixed P1 relaxation must cross the runner guard");
+
+        let mut v3_plan = plan.clone();
+        let BackendPlanIR::Fem(v3_fem) = &mut v3_plan.backend_plan else {
+            unreachable!()
+        };
+        let v3_fingerprint = v3_fem.mesh.mixed_topology_fingerprint_v3().unwrap();
+        let v3_report = v3_fem
+            .mesh_build_report
+            .as_mut()
+            .expect("mixed fixture must carry a build report");
+        let v3_certificate = v3_report
+            .mixed_layer_topology_certificate
+            .as_mut()
+            .expect("mixed fixture must carry a certificate");
+        v3_certificate.topology_fingerprint_version = "v3".to_string();
+        v3_certificate.topology_fingerprint = v3_fingerprint.clone();
+        v3_report
+            .mixed_topology_provenance
+            .as_mut()
+            .expect("mixed fixture must carry provenance")
+            .accepted_certificate_fingerprint = v3_fingerprint;
+        require_supported_fem_topology(&problem, &v3_plan)
+            .expect("bound v3 CPU-double mixed P1 relaxation must cross the runner guard");
 
         for case in [
             "gpu",

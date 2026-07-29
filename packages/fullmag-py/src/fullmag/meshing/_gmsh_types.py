@@ -6,7 +6,9 @@ import hashlib
 import itertools
 import json
 import math
+import operator
 from pathlib import Path
+import struct
 from typing import Any
 
 import numpy as np
@@ -767,8 +769,10 @@ class MixedLayerTopologyCertificate:
         ):
             if getattr(self, name) != 0:
                 raise ValueError(f"mixed layer topology certificate {name} must be zero")
-        if self.topology_fingerprint_version != "v2":
-            raise ValueError("mixed layer topology certificate requires topology fingerprint v2")
+        if self.topology_fingerprint_version not in {"v2", "v3"}:
+            raise ValueError(
+                "mixed layer topology certificate requires topology fingerprint v2 or v3"
+            )
         if (
             not self.topology_fingerprint.startswith("sha256:")
             or len(self.topology_fingerprint) != len("sha256:") + 64
@@ -1066,7 +1070,14 @@ class MeshData:
         certificate = self.mixed_layer_topology_certificate
         if certificate is None:
             return
-        expected = self.topology_fingerprint_v2()
+        if certificate.topology_fingerprint_version == "v2":
+            expected = self.topology_fingerprint_v2()
+        elif certificate.topology_fingerprint_version == "v3":
+            expected = self.topology_fingerprint_v3()
+        else:
+            raise ValueError(
+                "mixed layer topology certificate has an unsupported topology fingerprint version"
+            )
         if certificate.topology_fingerprint != expected:
             raise ValueError(
                 "mixed layer topology certificate topology fingerprint is stale: "
@@ -1171,6 +1182,130 @@ class MeshData:
             b"fullmag:fem-mesh-topology-fingerprint:v2" + encoded
         ).hexdigest()
         return f"sha256:{digest}"
+
+    def topology_fingerprint_v3(self) -> str:
+        encoded = bytearray(b"fullmag:fem-mesh-topology-fingerprint:v3")
+
+        def u8(value: int) -> None:
+            encoded.extend(struct.pack("<B", value))
+
+        def u32(value: object) -> None:
+            try:
+                integer = operator.index(value)  # type: ignore[arg-type]
+            except TypeError as error:
+                raise TypeError("topology fingerprint v3 u32 field must be an integer") from error
+            if isinstance(value, bool) or integer < 0 or integer > 0xFFFF_FFFF:
+                raise ValueError("topology fingerprint v3 u32 value is out of range")
+            encoded.extend(struct.pack("<I", integer))
+
+        def u64(value: object) -> None:
+            try:
+                integer = operator.index(value)  # type: ignore[arg-type]
+            except TypeError as error:
+                raise TypeError("topology fingerprint v3 u64 field must be an integer") from error
+            if isinstance(value, bool) or integer < 0 or integer > 0xFFFF_FFFF_FFFF_FFFF:
+                raise ValueError("topology fingerprint v3 u64 value is out of range")
+            encoded.extend(struct.pack("<Q", integer))
+
+        def f64(value: object) -> None:
+            number = float(value)
+            if not math.isfinite(number):
+                raise ValueError("topology fingerprint v3 requires finite f64 values")
+            bits = struct.unpack("<Q", struct.pack("<d", number))[0]
+            u64(bits)
+
+        def string(value: object) -> None:
+            if not isinstance(value, str):
+                raise TypeError("topology fingerprint v3 string field must be a string")
+            data = value.encode("utf-8")
+            u64(len(data))
+            encoded.extend(data)
+
+        def sequence(values: object, write_item: Any) -> None:
+            items = list(values)  # type: ignore[arg-type]
+            u64(len(items))
+            for item in items:
+                write_item(item)
+
+        def optional(value: object, write_value: Any) -> None:
+            if value is None:
+                u8(0)
+            else:
+                u8(1)
+                write_value(value)
+
+        def f64x3(values: object) -> None:
+            items = list(values)  # type: ignore[arg-type]
+            if len(items) != 3:
+                raise ValueError("topology fingerprint v3 vector must have three components")
+            for item in items:
+                f64(item)
+
+        def enum(mapping: dict[str, int], value: object) -> None:
+            if not isinstance(value, str):
+                raise TypeError("topology fingerprint v3 enum field must be a string")
+            try:
+                tag = mapping[value]
+            except KeyError as error:
+                raise ValueError(
+                    f"topology fingerprint v3 has unsupported enum value {value!r}"
+                ) from error
+            u8(tag)
+
+        sequence(self.nodes, f64x3)
+        sequence(
+            self.cell_types,
+            lambda value: enum({"tet4": 1, "prism6": 2, "pyramid5": 3, "hex8": 4}, value),
+        )
+        sequence(self.cell_offsets, u32)
+        sequence(self.cell_nodes, u32)
+        sequence(self.cell_global_ordinals, u64)
+        sequence(
+            self.cell_mesh_parts,
+            lambda value: enum({"magnetic": 1, "transition_air": 2, "far_air": 3}, value),
+        )
+        sequence(self.element_markers, u32)
+        sequence(self.facet_types, lambda value: enum({"tri3": 1, "quad4": 2}, value))
+        sequence(
+            self.facet_roles,
+            lambda value: enum(
+                {"exterior": 1, "material_interface": 2, "periodic_seam": 3}, value
+            ),
+        )
+        sequence(self.facet_offsets, u32)
+        sequence(self.facet_nodes, u32)
+        sequence(self.facet_global_ordinals, u64)
+        sequence(self.boundary_markers, u32)
+
+        def periodic_boundary_pair(pair: object) -> None:
+            if not isinstance(pair, dict):
+                raise TypeError("topology fingerprint v3 periodic boundary pair must be an object")
+            string(pair.get("pair_id"))
+            optional(pair.get("source_marker"), string)
+            optional(pair.get("destination_marker"), string)
+            u32(pair.get("marker_a", 0))
+            u32(pair.get("marker_b", 0))
+            translation = pair.get("translation")
+            optional(translation, f64x3)
+            tolerance = pair.get("tolerance")
+            if tolerance is None:
+                tolerance = pair.get("tolerance_m")
+            optional(tolerance, f64)
+            optional(pair.get("axis_hint"), string)
+            optional(pair.get("orientation"), string)
+            optional(pair.get("pairing_policy"), string)
+
+        sequence(self.periodic_boundary_pairs, periodic_boundary_pair)
+
+        def periodic_node_pair(pair: object) -> None:
+            if not isinstance(pair, dict):
+                raise TypeError("topology fingerprint v3 periodic node pair must be an object")
+            string(pair.get("pair_id"))
+            u32(pair.get("node_a"))
+            u32(pair.get("node_b"))
+
+        sequence(self.periodic_node_pairs, periodic_node_pair)
+        return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
     @classmethod
     def from_legacy_tet4(
@@ -2522,7 +2657,8 @@ def _rebuild_mixed_layer_topology_certificate(
     certificate = replace(
         template,
         realized_layer_count=len(evidence["magnetic_plane_coordinates_m"]) - 1,
-        topology_fingerprint=mesh.topology_fingerprint_v2(),
+        topology_fingerprint_version="v3",
+        topology_fingerprint=mesh.topology_fingerprint_v3(),
         magnetic_bounds_min_m=magnetic_bounds_min_m,
         magnetic_bounds_max_m=magnetic_bounds_max_m,
         airbox_bounds_min_m=airbox_bounds_min_m,

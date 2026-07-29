@@ -11070,7 +11070,9 @@ fn fem_minimal_test_ir() -> ProblemIR {
     ir
 }
 
-fn valid_mixed_certificate_asset() -> fullmag_ir::FemDomainMeshAssetIR {
+fn valid_mixed_certificate_asset_for_version(
+    fingerprint_version: &str,
+) -> fullmag_ir::FemDomainMeshAssetIR {
     use fullmag_ir::{
         FemCellMeshPartIR, FemCellTypeIR, FemConnectivityIR, FemFacetConnectivityIR,
         FemFacetRoleIR, FemFacetTypeIR, MeshIR,
@@ -11279,7 +11281,9 @@ fn valid_mixed_certificate_asset() -> fullmag_ir::FemDomainMeshAssetIR {
     }
     mesh.facets.offsets = offsets;
     mesh.facets.global_ordinals = (0..mesh.facets.types.len() as u64).collect();
-    let fingerprint = mesh.topology_fingerprint_v6();
+    let fingerprint = mesh
+        .mixed_topology_fingerprint_for_version(fingerprint_version)
+        .unwrap();
     let mut certificate: serde_json::Value = serde_json::from_str(
         r#"{
             "schema_version":"mixed_layer_topology_certificate.v1","certificate_status":"accepted",
@@ -11303,7 +11307,7 @@ fn valid_mixed_certificate_asset() -> fullmag_ir::FemDomainMeshAssetIR {
             "shared_domain_volume_m3":64.0,"expected_shared_domain_volume_m3":64.0,
             "shared_domain_relative_volume_error":0.0,"marker_coverage_complete":true,
             "nonconforming_face_count":0,"orphan_face_count":0,"nonmanifold_face_count":0,
-            "coincident_interface_face_count":0,"topology_fingerprint_version":"v2",
+            "coincident_interface_face_count":0,"topology_fingerprint_version":"v3",
             "topology_fingerprint":"placeholder","gmsh_version":"4.15.2",
             "strategy":"shared_geo_extrusion_partitioned_pyramid_tet.v2","effective_gmsh_thread_count":1,
             "deterministic_inputs":{"algorithm_2d":6,"algorithm_3d":1,"element_order":1,"gmsh_version":"4.15.2","random_factor":0.0,"thread_count":1,"transition_partition":"cartesian_3x3x3_minus_magnetic_center","transition_volume_count":26,"pyramid_apex_optimizer":"bounded_per_apex_outward_scale_line_search","pyramid_apex_scale_step":0.001,"pyramid_apex_scale_max":1.25,"scaled_jacobian_p05_min":0.1},
@@ -11311,6 +11315,7 @@ fn valid_mixed_certificate_asset() -> fullmag_ir::FemDomainMeshAssetIR {
         }"#,
     )
     .unwrap();
+    certificate["topology_fingerprint_version"] = serde_json::json!(fingerprint_version);
     certificate["topology_fingerprint"] = serde_json::json!(fingerprint);
     let certificate = serde_json::from_value(certificate).unwrap();
     let region_markers = vec![fullmag_ir::FemDomainRegionMarkerIR {
@@ -11345,6 +11350,10 @@ fn valid_mixed_certificate_asset() -> fullmag_ir::FemDomainMeshAssetIR {
             mixed_topology_provenance: None,
         }),
     }
+}
+
+fn valid_mixed_certificate_asset() -> fullmag_ir::FemDomainMeshAssetIR {
+    valid_mixed_certificate_asset_for_version("v3")
 }
 
 fn mixed_cpu_relaxation_ir(
@@ -11412,7 +11421,7 @@ fn fem_planner_accepts_certified_mixed_p1_cpu_double_and_rebinds_packed_certific
             .mesh
             .as_ref()
             .expect("fixture must carry an inline mesh");
-        let source_fingerprint = source_mesh.topology_fingerprint_v6();
+        let source_fingerprint = source_mesh.mixed_topology_fingerprint_v3().unwrap();
         let analysis = crate::mesh::analyze_shared_domain_mesh(source_mesh, &asset.region_markers)
             .expect("valid mixed fixture must be analyzable");
         let (packed_mesh, _, _) = crate::mesh::pack_mesh_by_analysis(source_mesh, &analysis)
@@ -11428,7 +11437,7 @@ fn fem_planner_accepts_certified_mixed_p1_cpu_double_and_rebinds_packed_certific
         let BackendPlanIR::Fem(fem) = planned.backend_plan else {
             panic!("qualified mixed P1 relaxation must resolve to FEM");
         };
-        let final_fingerprint = fem.mesh.topology_fingerprint_v6();
+        let final_fingerprint = fem.mesh.mixed_topology_fingerprint_v3().unwrap();
         assert_ne!(source_fingerprint, final_fingerprint);
         let report = fem
             .mesh_build_report
@@ -11472,10 +11481,35 @@ fn fem_planner_accepts_certified_mixed_p1_cpu_double_and_rebinds_packed_certific
                 .and_then(|asset| asset.mesh.as_ref())
                 .as_ref()
                 .expect("source asset remains present")
-                .topology_fingerprint_v6(),
+                .mixed_topology_fingerprint_v3()
+                .unwrap(),
             "planning must pack a clone and never mutate the certified source asset",
         );
     }
+}
+
+#[test]
+fn fem_planner_preserves_legacy_v2_when_rebinding_packed_certificate() {
+    let mut ir = mixed_cpu_relaxation_ir(
+        fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+        fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+    );
+    ir.geometry_assets
+        .as_mut()
+        .unwrap()
+        .fem_domain_mesh_asset = Some(valid_mixed_certificate_asset_for_version("v2"));
+
+    let planned = plan(&ir).expect("legacy v2 mixed certificate must remain plannable");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("mixed relaxation must resolve to FEM")
+    };
+    let certificate = fem
+        .mesh_build_report
+        .as_ref()
+        .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
+        .expect("packed plan must retain a certificate");
+    assert_eq!(certificate.topology_fingerprint_version, "v2");
+    assert_eq!(certificate.topology_fingerprint, fem.mesh.topology_fingerprint_v6());
 }
 
 #[test]

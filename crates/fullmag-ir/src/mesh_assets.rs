@@ -616,6 +616,24 @@ mod mesh_asset_validation_tests {
     }
 
     #[test]
+    fn mixed_certificate_v3_validates_full_asset_and_unknown_v4_fails_closed() {
+        let mut payload = mixed_certificate_asset_value();
+        let mesh: MeshIR = serde_json::from_value(payload["mesh"].clone()).unwrap();
+        let fingerprint = mesh.mixed_topology_fingerprint_v3().unwrap();
+        let certificate = &mut payload["build_report"]["mixed_layer_topology_certificate"];
+        certificate["topology_fingerprint_version"] = serde_json::json!("v3");
+        certificate["topology_fingerprint"] = serde_json::json!(fingerprint);
+        let asset: FemDomainMeshAssetIR = serde_json::from_value(payload.clone()).unwrap();
+        assert!(asset.validate().is_ok());
+
+        payload["build_report"]["mixed_layer_topology_certificate"]
+            ["topology_fingerprint_version"] = serde_json::json!("v4");
+        let unknown: FemDomainMeshAssetIR = serde_json::from_value(payload).unwrap();
+        let errors = unknown.validate().expect_err("unknown v4 must fail closed");
+        assert!(errors.iter().any(|error| error.contains("v2 or v3")));
+    }
+
+    #[test]
     fn mixed_certificate_rejects_wrong_schema_status_and_fallbacks() {
         for (field, value) in [
             (
@@ -1542,11 +1560,11 @@ impl MixedLayerTopologyCertificateV1IR {
                     .to_string(),
             );
         }
-        if self.topology_fingerprint_version != "v2"
+        if !matches!(self.topology_fingerprint_version.as_str(), "v2" | "v3")
             || !is_sha256_fingerprint(&self.topology_fingerprint)
         {
             errors.push(
-                "mixed layer topology certificate requires a valid v2 sha256 fingerprint"
+                "mixed layer topology certificate requires a valid v2 or v3 sha256 fingerprint"
                     .to_string(),
             );
         }
@@ -2581,12 +2599,18 @@ pub fn validate_mixed_layer_topology_certificate_against_mesh(
     mesh: &MeshIR,
 ) -> Result<(), Vec<String>> {
     let mut errors = certificate.validate().err().unwrap_or_default();
-    if certificate.topology_fingerprint != mesh.topology_fingerprint_v6() {
-        errors.push("mixed layer topology certificate fingerprint is stale".to_string());
-    } else if let Err(evidence_errors) =
-        validate_mixed_certificate_evidence_against_mesh(certificate, mesh)
-    {
-        errors.extend(evidence_errors);
+    match mesh.mixed_topology_fingerprint_for_version(&certificate.topology_fingerprint_version) {
+        Ok(fingerprint) if certificate.topology_fingerprint != fingerprint => {
+            errors.push("mixed layer topology certificate fingerprint is stale".to_string());
+        }
+        Ok(_) => {
+            if let Err(evidence_errors) =
+                validate_mixed_certificate_evidence_against_mesh(certificate, mesh)
+            {
+                errors.extend(evidence_errors);
+            }
+        }
+        Err(error) => errors.push(error),
     }
     if errors.is_empty() {
         Ok(())
@@ -2801,10 +2825,18 @@ impl FemDomainMeshAssetIR {
                                 .to_string(),
                         );
                     }
-                    if provenance.accepted_certificate_fingerprint
-                        != mesh.topology_fingerprint_v6()
-                    {
-                        accepted_fingerprint_is_stale = true;
+                    if let Some(certificate) = certificate {
+                        match mesh.mixed_topology_fingerprint_for_version(
+                            &certificate.topology_fingerprint_version,
+                        ) {
+                            Ok(fingerprint)
+                                if provenance.accepted_certificate_fingerprint != fingerprint =>
+                            {
+                                accepted_fingerprint_is_stale = true;
+                            }
+                            Ok(_) => {}
+                            Err(error) => errors.push(error),
+                        }
                     }
                 }
                 None => errors.push(

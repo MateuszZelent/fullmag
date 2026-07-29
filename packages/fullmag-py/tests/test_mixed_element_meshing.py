@@ -24,6 +24,7 @@ from fullmag.meshing._gmsh_occ import generate_shared_domain_mesh_via_occ
 from fullmag.meshing._gmsh_types import (
     MeshData,
     MeshOptions,
+    MixedLayerTopologyCertificate,
     _cell_jacobian_determinants,
     _mixed_same_side_two_owner_face_count,
 )
@@ -1359,7 +1360,7 @@ def test_shared_domain_topology_fingerprint_is_deterministic() -> None:
     second_certificate = second.mixed_layer_topology_certificate
     assert first_certificate is not None
     assert second_certificate is not None
-    assert first_certificate.topology_fingerprint_version == "v2"
+    assert first_certificate.topology_fingerprint_version == "v3"
     assert first_certificate.topology_fingerprint.startswith("sha256:")
     assert first_certificate.topology_fingerprint == second_certificate.topology_fingerprint
 
@@ -2002,6 +2003,208 @@ def test_topology_fingerprint_v2_matches_the_frozen_cross_language_fixture() -> 
     assert mesh.topology_fingerprint_v2() == (
         "sha256:2071f6b9a2bf468fc82296f34744b07475315a5f0d26c5b06e52b54064f474e2"
     )
+
+
+def _topology_fingerprint_v3_cross_language_fixture() -> MeshData:
+    mesh = MeshData(
+        nodes=np.asarray(
+            [
+                [0.0, -0.0, 1.0e-7],
+                [1.0e-5, 3.0e-9, 1.0e20],
+                [float.fromhex("0x1.5555555555555p-2"), 1.0, 2.0],
+                *[[float(index), 0.0, 0.0] for index in range(3, 23)],
+            ]
+        ),
+        cell_types=np.asarray(["tet4"]),
+        cell_offsets=np.asarray([0, 4]),
+        cell_nodes=np.asarray([0, 1, 2, 3]),
+        cell_global_ordinals=np.asarray([0]),
+        cell_mesh_parts=np.asarray(["magnetic"]),
+        element_markers=np.asarray([1]),
+        facet_types=np.asarray([], dtype=np.str_),
+        facet_roles=np.asarray([], dtype=np.str_),
+        facet_offsets=np.asarray([0]),
+        facet_nodes=np.asarray([], dtype=np.int64),
+        facet_global_ordinals=np.asarray([], dtype=np.int64),
+        boundary_markers=np.asarray([], dtype=np.int64),
+    )
+    object.__setattr__(mesh, "cell_types", np.asarray(["tet4", "prism6", "pyramid5", "hex8"]))
+    object.__setattr__(mesh, "cell_offsets", np.asarray([0, 4, 10, 15, 23]))
+    object.__setattr__(mesh, "cell_nodes", np.arange(23, dtype=np.int32))
+    object.__setattr__(mesh, "cell_global_ordinals", np.asarray([9, 8, 7, 6]))
+    object.__setattr__(
+        mesh,
+        "cell_mesh_parts",
+        np.asarray(["magnetic", "transition_air", "far_air", "magnetic"]),
+    )
+    object.__setattr__(mesh, "element_markers", np.asarray([1, 0, 0, 4]))
+    object.__setattr__(mesh, "facet_types", np.asarray(["tri3", "quad4", "tri3"]))
+    object.__setattr__(
+        mesh,
+        "facet_roles",
+        np.asarray(["exterior", "material_interface", "periodic_seam"]),
+    )
+    object.__setattr__(mesh, "facet_offsets", np.asarray([0, 3, 7, 10]))
+    object.__setattr__(mesh, "facet_nodes", np.arange(10, dtype=np.int32))
+    object.__setattr__(mesh, "facet_global_ordinals", np.asarray([3, 2, 1]))
+    object.__setattr__(mesh, "boundary_markers", np.asarray([2, 3, 4]))
+    object.__setattr__(
+        mesh,
+        "periodic_boundary_pairs",
+        [
+            {
+                "pair_id": "",
+                "source_marker": None,
+                "destination_marker": "",
+                "marker_a": 2,
+                "marker_b": 3,
+                "translation": [1.0e-7, -0.0, 1.0e20],
+                "tolerance_m": 3.0e-9,
+                "axis_hint": "é",
+                "orientation": "prefix",
+                "pairing_policy": "prefix-long",
+            },
+            {
+                "pair_id": "é",
+                "source_marker": "a",
+                "destination_marker": "ab",
+                "marker_a": 4,
+                "marker_b": 5,
+                "translation": None,
+                "tolerance": None,
+                "axis_hint": "",
+                "orientation": None,
+                "pairing_policy": "",
+            },
+        ],
+    )
+    object.__setattr__(
+        mesh,
+        "periodic_node_pairs",
+        [{"pair_id": "", "node_a": 0, "node_b": 1}, {"pair_id": "é", "node_a": 2, "node_b": 3}],
+    )
+    return mesh
+
+
+def test_topology_fingerprint_v3_matches_the_frozen_cross_language_fixture() -> None:
+    mesh = _topology_fingerprint_v3_cross_language_fixture()
+
+    assert mesh.topology_fingerprint_v3() == (
+        "sha256:5728d7f6f11efc6f3d4ce4c5b098e3ea76866fd49a31088cf6692652d22c0ff6"
+    )
+
+
+def test_topology_fingerprint_v3_distinguishes_order_presence_and_signed_zero() -> None:
+    mesh = _topology_fingerprint_v3_cross_language_fixture()
+    baseline = mesh.topology_fingerprint_v3()
+
+    object.__setattr__(mesh, "periodic_boundary_pairs", list(reversed(mesh.periodic_boundary_pairs)))
+    assert mesh.topology_fingerprint_v3() != baseline
+    object.__setattr__(mesh, "periodic_boundary_pairs", [])
+    absent = mesh.topology_fingerprint_v3()
+    object.__setattr__(mesh, "periodic_boundary_pairs", [{"pair_id": "", "marker_a": 0, "marker_b": 0, "axis_hint": ""}])
+    assert mesh.topology_fingerprint_v3() != absent
+    object.__setattr__(mesh, "nodes", np.asarray([[0.0, 0.0, 0.0]]))
+    positive_zero = mesh.topology_fingerprint_v3()
+    object.__setattr__(mesh, "nodes", np.asarray([[-0.0, 0.0, 0.0]]))
+    assert mesh.topology_fingerprint_v3() != positive_zero
+
+
+def test_topology_fingerprint_v3_rejects_nonfinite_and_excludes_diagnostics() -> None:
+    mesh = _topology_fingerprint_v3_cross_language_fixture()
+    baseline = mesh.topology_fingerprint_v3()
+    object.__setattr__(mesh, "quality", Mock())
+    object.__setattr__(mesh, "per_domain_quality", {7: Mock()})
+    object.__setattr__(mesh, "realization_report", Mock())
+    assert mesh.topology_fingerprint_v3() == baseline
+    object.__setattr__(mesh, "nodes", np.asarray([[float("inf"), 0.0, 0.0]]))
+    with pytest.raises(ValueError, match="finite"):
+        mesh.topology_fingerprint_v3()
+
+
+def test_topology_fingerprint_v3_normalizes_tolerance_alias_and_rejects_nonfinite_periodic_data() -> None:
+    alias = _topology_fingerprint_v3_cross_language_fixture()
+    normalized = _topology_fingerprint_v3_cross_language_fixture()
+    normalized.periodic_boundary_pairs[0]["tolerance"] = normalized.periodic_boundary_pairs[0].pop(
+        "tolerance_m"
+    )
+    assert alias.topology_fingerprint_v3() == normalized.topology_fingerprint_v3()
+
+    alias.periodic_boundary_pairs[0]["translation"] = [float("nan"), 0.0, 0.0]
+    with pytest.raises(ValueError, match="finite"):
+        alias.topology_fingerprint_v3()
+    normalized.periodic_boundary_pairs[0]["tolerance"] = float("inf")
+    with pytest.raises(ValueError, match="finite"):
+        normalized.topology_fingerprint_v3()
+
+
+def test_mixed_layer_topology_certificate_rejects_unknown_v4_fingerprint() -> None:
+    golden_path = (
+        Path(__file__).resolve().parents[3]
+        / "crates/fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+    )
+    payload = json.loads(golden_path.read_text(encoding="utf-8"))["certificate"]
+    for name in (
+        "magnetic_plane_coordinates_m",
+        "magnetic_bounds_min_m",
+        "magnetic_bounds_max_m",
+        "airbox_bounds_min_m",
+        "airbox_bounds_max_m",
+    ):
+        payload[name] = [float(value) for value in payload[name]]
+    for name in (
+        "plane_tolerance_m",
+        "transition_shell_thickness_m",
+        "magnetic_bounds_relative_error",
+        "airbox_bounds_relative_error",
+        "magnetic_volume_m3",
+        "expected_magnetic_volume_m3",
+        "magnetic_relative_volume_error",
+        "air_volume_m3",
+        "shared_domain_volume_m3",
+        "expected_shared_domain_volume_m3",
+        "shared_domain_relative_volume_error",
+    ):
+        payload[name] = float(payload[name])
+    for name in (
+        "jacobian_minima_m3_by_family",
+        "scaled_jacobian_minima_by_family",
+        "scaled_jacobian_p05_by_family",
+    ):
+        payload[name] = {key: float(value) for key, value in payload[name].items()}
+    MixedLayerTopologyCertificate.from_dict(payload)
+    payload["topology_fingerprint_version"] = "v4"
+    with pytest.raises(ValueError, match="v2 or v3"):
+        MixedLayerTopologyCertificate.from_dict(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("nodes", np.asarray([[9.0, 8.0, 7.0]])),
+        ("cell_types", np.asarray(["hex8"])),
+        ("cell_offsets", np.asarray([0, 8])),
+        ("cell_nodes", np.asarray([22, 21, 20], dtype=np.int32)),
+        ("cell_global_ordinals", np.asarray([99])),
+        ("cell_mesh_parts", np.asarray(["far_air"])),
+        ("element_markers", np.asarray([99])),
+        ("facet_types", np.asarray(["quad4"])),
+        ("facet_roles", np.asarray(["periodic_seam"])),
+        ("facet_offsets", np.asarray([0, 4])),
+        ("facet_nodes", np.asarray([9, 8, 7, 6], dtype=np.int32)),
+        ("facet_global_ordinals", np.asarray([99])),
+        ("boundary_markers", np.asarray([99])),
+        ("periodic_boundary_pairs", []),
+        ("periodic_node_pairs", []),
+    ],
+)
+def test_topology_fingerprint_v3_tamper_matrix_is_fail_closed(
+    field: str, replacement: object
+) -> None:
+    mesh = _topology_fingerprint_v3_cross_language_fixture()
+    baseline = mesh.topology_fingerprint_v3()
+    object.__setattr__(mesh, field, replacement)
+    assert mesh.topology_fingerprint_v3() != baseline
 
 
 def test_mixed_remesh_inline_payload_preserves_parts_and_certificate() -> None:

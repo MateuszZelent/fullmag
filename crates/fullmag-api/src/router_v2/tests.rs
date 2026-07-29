@@ -6503,9 +6503,11 @@ async fn mesh_quality_gates_publishes_revision_bound_mixed_certificate_evidence(
         .expect("mixed certificate fixture should parse");
         let mesh_ir: fullmag_ir::MeshIR = serde_json::from_value(fixture["mesh"].clone())
             .expect("mixed mesh fixture should deserialize");
-        let certificate: fullmag_ir::MixedLayerTopologyCertificateV1IR =
+        let mut certificate: fullmag_ir::MixedLayerTopologyCertificateV1IR =
             serde_json::from_value(fixture["certificate"].clone())
                 .expect("mixed certificate fixture should deserialize");
+        certificate.topology_fingerprint_version = "v3".to_string();
+        certificate.topology_fingerprint = mesh_ir.mixed_topology_fingerprint_v3().unwrap();
         let report: fullmag_ir::FemSharedDomainBuildReportIR =
             serde_json::from_value(serde_json::json!({
                 "build_mode": "shared_domain",
@@ -6569,6 +6571,70 @@ async fn mesh_quality_gates_publishes_revision_bound_mixed_certificate_evidence(
     assert_eq!(prism["passed"], true);
     assert_eq!(prism["positive_jacobian"], true);
     assert!(prism["minimum_jacobian_m3"].as_f64().unwrap() > 0.0);
+}
+
+#[tokio::test]
+async fn mesh_quality_gates_preserves_legacy_v2_mixed_certificate_evidence() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+        ))
+        .expect("mixed certificate fixture should parse");
+        let mesh_ir: fullmag_ir::MeshIR = serde_json::from_value(fixture["mesh"].clone())
+            .expect("mixed mesh fixture should deserialize");
+        let certificate: fullmag_ir::MixedLayerTopologyCertificateV1IR =
+            serde_json::from_value(fixture["certificate"].clone())
+                .expect("mixed certificate fixture should deserialize");
+        assert_eq!(certificate.topology_fingerprint_version, "v2");
+        let report: fullmag_ir::FemSharedDomainBuildReportIR =
+            serde_json::from_value(serde_json::json!({
+                "build_mode": "shared_domain",
+                "fallbacks_triggered": [],
+                "mixed_layer_topology_certificate": certificate
+            }))
+            .expect("mixed build report should deserialize");
+        snapshot.fem_mesh = Some(FemMeshPayload {
+            mesh_name: mesh_ir.mesh_name,
+            mesh_id: "mixed-quality:v2".to_string(),
+            nodes: mesh_ir.nodes,
+            cells: mesh_ir.cells,
+            element_markers: mesh_ir.element_markers,
+            facets: mesh_ir.facets,
+            boundary_markers: mesh_ir.boundary_markers,
+            periodic_boundary_pairs: mesh_ir.periodic_boundary_pairs,
+            periodic_node_pairs: mesh_ir.periodic_node_pairs,
+            object_segments: Vec::new(),
+            mesh_parts: Vec::new(),
+            domain_mesh_mode: Some("shared_domain".to_string()),
+            domain_frame: None,
+            generation_id: Some("mixed-quality-v2-generation".to_string()),
+            per_domain_quality: Default::default(),
+            build_report: Some(report),
+        });
+        snapshot.mesh_workspace = Some(serde_json::json!({}));
+        snapshot.mesh_revision = 92;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/quality-gates")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let evidence = &body_json(response).await["mixed_certificate"];
+    assert_eq!(evidence["status"], "valid");
+    assert_eq!(evidence["mesh_revision"], 92);
+    assert_eq!(
+        evidence["topology_fingerprint"],
+        evidence["certificate_fingerprint"]
+    );
 }
 
 #[tokio::test]

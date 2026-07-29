@@ -1376,7 +1376,7 @@ fn mixed_certificate_quality_evidence(
         );
     };
     let mesh_ir = periodic_mesh_ir(mesh);
-    let topology_fingerprint = mesh_ir.topology_fingerprint_v6();
+    let mut topology_fingerprint = mesh_ir.topology_fingerprint_v6();
     let Some(certificate) = mesh
         .build_report
         .as_ref()
@@ -1393,6 +1393,23 @@ fn mixed_certificate_quality_evidence(
     let certificate_fingerprint = certificate.topology_fingerprint.clone();
     let certificate_schema_version = Some(certificate.schema_version.clone());
     let certificate_status = Some(certificate.certificate_status.clone());
+    topology_fingerprint = match mesh_ir
+        .mixed_topology_fingerprint_for_version(&certificate.topology_fingerprint_version)
+    {
+        Ok(fingerprint) => fingerprint,
+        Err(error) => {
+            return MeshMixedCertificateQualityEvidenceResource {
+                status: MeshMixedCertificateQualityEvidenceStatus::Rejected,
+                mesh_revision: snapshot.mesh_revision,
+                topology_fingerprint: None,
+                certificate_fingerprint: Some(certificate_fingerprint),
+                certificate_schema_version,
+                certificate_status,
+                reason: Some(error),
+                family_gates: Vec::new(),
+            };
+        }
+    };
     if certificate_fingerprint != topology_fingerprint {
         return MeshMixedCertificateQualityEvidenceResource {
             status: MeshMixedCertificateQualityEvidenceStatus::Stale,
