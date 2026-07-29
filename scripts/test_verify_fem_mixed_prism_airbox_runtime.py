@@ -396,6 +396,28 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                 cpu_summary["final_energy_terms_j"]["E_ex"],  # type: ignore[index]
             )
 
+    def test_validate_accepts_canonically_omitted_empty_ignored_terms(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, bounded, artifacts, runtime_log, manifest, metadata = (
+                self._write_valid_bundle(root, "cpu")
+            )
+            metadata["execution_provenance"].pop("ignored_terms")  # type: ignore[index]
+            (artifacts / "metadata.json").write_text(
+                json.dumps(metadata), encoding="utf-8"
+            )
+
+            summary = validate_runtime_artifacts(
+                source,
+                bounded,
+                artifacts,
+                device="cpu",
+                runtime_log=runtime_log,
+                runtime_manifest=manifest,
+            )
+
+            self.assertEqual(summary["execution_engine"], "fem_cpu_native")
+
     def test_validate_rejects_incomplete_certificate_coverage_and_air_families(self) -> None:
         mutations = (
             (
@@ -605,6 +627,7 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
             "effective_device",
             "engine",
             "resolved_fallback",
+            "ignored_terms",
             "report_fallback",
             "degraded",
             "global_topology_fingerprint",
@@ -639,6 +662,8 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                     provenance["execution_engine"] = "fem_native_gpu"
                 elif case == "resolved_fallback":
                     provenance["resolved_fallback"] = {"occurred": True}
+                elif case == "ignored_terms":
+                    provenance["ignored_terms"] = ["exchange"]
                 elif case == "report_fallback":
                     report["fallbacks_triggered"] = ["tet_conversion"]
                 elif case == "degraded":

@@ -724,7 +724,7 @@ def validate_runtime_artifacts(
         raise ContractError("lossy_fallback_used must be explicitly false")
     if execution.get("resolved_fallback") is not None:
         raise ContractError("resolved_fallback must be absent")
-    if execution.get("ignored_terms") != []:
+    if execution.get("ignored_terms", []) != []:
         raise ContractError("ignored_terms must be exactly empty")
 
     topology_fingerprint, certificate = _validate_mixed_certificate(metadata, device)
