@@ -9,7 +9,7 @@ class BootstrapWorkflowContractTests(unittest.TestCase):
     def test_ci_installs_native_tools_before_contract_checks(self) -> None:
         workflow = (ROOT / ".github/workflows/bootstrap.yml").read_text()
 
-        self.assertIn("sudo apt-get install -y ripgrep", workflow)
+        self.assertEqual(workflow.count("sudo apt-get install -y ripgrep"), 2)
         self.assertIn("sudo apt-get install -y libglu1-mesa", workflow)
         self.assertIn('test "$(rg --version | head -n 1)" = "ripgrep 13.0.0"', workflow)
 
