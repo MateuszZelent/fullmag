@@ -1,0 +1,90 @@
+{
+  "document": {
+    "path": "public_docs/site/physics/exchange.md",
+    "title": "Exchange interaction",
+    "interaction": "bulk exchange"
+  },
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Double-precision reference lane; not the production FDM runtime."},
+    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "FP64 and FP32 standard kernels; T0/T1 are FP64-only and require current device qualification."},
+    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "MFEM legacy sparse assembly with lumped or consistent-mass projection."},
+    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "FP64 CUDA CSR application after host MFEM assembly; current mixed-P1 device qualification remains open."}
+  ],
+  "sources": [
+    {"id": "python-exchange", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class Exchange", "responsibility": "Public Exchange term and canonical lowering."},
+    {"id": "python-material", "path": "packages/fullmag-py/src/fullmag/model/structure.py", "symbol": "class Material", "responsibility": "Material A and Ms validation and lowering into ProblemIR."},
+    {"id": "planner-output-validation", "path": "crates/fullmag-plan/src/validate.rs", "symbol": "validate_executable_outputs", "responsibility": "Fail-closed Exchange output validation."},
+    {"id": "fdm-cpu-field", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "exchange_field_add_into_soa", "responsibility": "Persistent FDM CPU exchange stencil."},
+    {"id": "fdm-cpu-reference", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "cell_exchange_field", "responsibility": "Allocating heterogeneous FDM reference accessor."},
+    {"id": "fdm-gpu-fp64", "path": "backends/fdm/gpu/cuda/interactions/exchange_fp64.cu", "symbol": "exchange_field_fp64_kernel", "responsibility": "Standard FP64 FDM CUDA exchange field."},
+    {"id": "fdm-gpu-fp32", "path": "backends/fdm/gpu/cuda/interactions/exchange_fp32.cu", "symbol": "exchange_field_fp32_kernel", "responsibility": "Standard FP32 FDM CUDA exchange field."},
+    {"id": "fdm-gpu-t0", "path": "backends/fdm/gpu/cuda/interactions/exchange_t0_fp64.cu", "symbol": "exchange_field_t0_fp64_kernel", "responsibility": "FP64 T0 sub-cell exchange field."},
+    {"id": "fdm-gpu-t1", "path": "backends/fdm/gpu/cuda/interactions/exchange_t1_fp64.cu", "symbol": "exchange_field_t1_fp64_kernel", "responsibility": "FP64 T1 sub-cell exchange field."},
+    {"id": "fdm-gpu-energy", "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu", "symbol": "reduce_exchange_energy_dispatch", "responsibility": "FDM CUDA exchange-energy reduction."},
+    {"id": "fem-cpu-operator", "path": "backends/fem/cpu/mfem/interactions/exchange_operator.cpp", "symbol": "initialize_exchange_operator_mfem", "responsibility": "MFEM exchange stiffness assembly."},
+    {"id": "fem-cpu-field", "path": "backends/fem/cpu/mfem/interactions/exchange_field.cpp", "symbol": "compute_exchange_for_magnetization", "responsibility": "FEM CPU exchange field and energy evaluation."},
+    {"id": "fem-cpu-mass", "path": "backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp", "symbol": "apply_exchange_component_mass_projection", "responsibility": "FEM CPU consistent-mass projection."},
+    {"id": "fem-gpu-field", "path": "backends/fem/gpu/cuda/exchange/exchange_kernels.cu", "symbol": "legacy_sparse_exchange_kernel", "responsibility": "FEM CUDA sparse exchange application."},
+    {"id": "fem-gpu-rk", "path": "backends/fem/gpu/cuda/integrators/rk/rk_exchange_dispatch.cu", "symbol": "gpu_rk_compute_legacy_sparse_exchange", "responsibility": "Device-resident RK-stage Exchange dispatch."}
+  ],
+  "symbols": [
+    {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization $\\mathbf M/M_s$", "si_unit": "$1$"},
+    {"id": "m-component", "latex": "$m_q$", "meaning": "Cartesian component of $\\mathbf m$", "si_unit": "$1$"},
+    {"id": "A", "latex": "$A(\\mathbf x)$", "meaning": "bulk exchange stiffness", "si_unit": "$\\mathrm{J\\,m^{-1}}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "Eex", "latex": "$E_{\\mathrm{ex}}$", "meaning": "exchange energy", "si_unit": "$\\mathrm{J}$"},
+    {"id": "Hex", "latex": "$\\mathbf H_{\\mathrm{ex}}$", "meaning": "exchange effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Omega", "latex": "$\\Omega_m$", "meaning": "magnetic integration domain", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "boundary", "latex": "$\\partial\\Omega_m$", "meaning": "magnetic integration boundary", "si_unit": "$\\mathrm{m^2}$"},
+    {"id": "normal", "latex": "$\\mathbf n$", "meaning": "outward unit normal", "si_unit": "$1$"},
+    {"id": "eta", "latex": "$\\boldsymbol\\eta$", "meaning": "admissible magnetization variation", "si_unit": "$1$"},
+    {"id": "indices", "latex": "$i,j$", "meaning": "discrete cell or node indices", "si_unit": "$1$"},
+    {"id": "neighbors", "latex": "$N_6(i)$", "meaning": "six Cartesian neighbors of FDM cell $i$", "si_unit": "$1$"},
+    {"id": "region", "latex": "$r_i$", "meaning": "material-region index of cell $i$", "si_unit": "$1$"},
+    {"id": "pair-a", "latex": "$A_{r_ir_j}$", "meaning": "realized exchange coefficient of FDM link $i\\!\\leftrightarrow\\!j$", "si_unit": "$\\mathrm{J\\,m^{-1}}$"},
+    {"id": "spacing", "latex": "$\\Delta_{ij}$", "meaning": "center-to-center grid spacing along link $i\\!\\leftrightarrow\\!j$", "si_unit": "$\\mathrm{m}$"},
+    {"id": "cell-volume", "latex": "$V_i$", "meaning": "FDM cell volume", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "volume-fraction", "latex": "$\\varphi_i$", "meaning": "magnetic volume fraction of cell $i$", "si_unit": "$1$"},
+    {"id": "face-fraction", "latex": "$f_{i\\to j}$", "meaning": "directed magnetic face fraction", "si_unit": "$1$"},
+    {"id": "boundary-distance", "latex": "$\\delta_{i,d}$", "meaning": "T1 boundary distance correction on side $d$", "si_unit": "$\\mathrm{m}$"},
+    {"id": "delta-min", "latex": "$\\delta_{\\min}$", "meaning": "positive lower bound applied to T1 boundary distances", "si_unit": "$\\mathrm{m}$"},
+    {"id": "phi-floor", "latex": "$\\varphi_{\\mathrm{floor}}$", "meaning": "positive lower bound applied to magnetic volume fraction", "si_unit": "$1$"},
+    {"id": "basis", "latex": "$\\phi_i$", "meaning": "scalar FEM basis function", "si_unit": "$1$"},
+    {"id": "stiffness", "latex": "$K_A$", "meaning": "exchange stiffness matrix", "si_unit": "$\\mathrm{J}$"},
+    {"id": "mass", "latex": "$M_V$", "meaning": "geometric FEM mass matrix", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "weighted-mass", "latex": "$M_{M_s}$", "meaning": "saturation-weighted FEM mass matrix", "si_unit": "$\\mathrm{A\\,m^2}$"},
+    {"id": "projected-residual", "latex": "$\\mathbf q$", "meaning": "consistent-mass projected exchange residual", "si_unit": "$\\mathrm{T}$"},
+    {"id": "lumped-volume", "latex": "$V_i^{\\mathrm{lump}}$", "meaning": "lumped nodal FEM volume", "si_unit": "$\\mathrm{m^3}$"}
+  ],
+  "equations": [
+    {"id": "eq-exchange-energy", "symbols": ["m", "A", "Eex", "Omega"], "sources": ["python-exchange", "fem-cpu-operator"]},
+    {"id": "eq-exchange-effective-field-definition", "symbols": ["m", "Ms", "A", "mu0", "Hex"], "sources": ["fem-cpu-field"]},
+    {"id": "eq-exchange-constant-a", "symbols": ["m", "Ms", "A", "mu0", "Hex"], "sources": ["fdm-cpu-field"]},
+    {"id": "eq-exchange-directional-derivative", "symbols": ["m", "Ms", "A", "mu0", "Eex", "Hex", "Omega"], "sources": ["fem-cpu-field"]},
+    {"id": "eq-exchange-neumann", "symbols": ["m", "A", "boundary"], "sources": ["fem-cpu-operator", "fdm-cpu-field"]},
+    {"id": "eq-fdm-cpu-exchange-field", "symbols": ["m", "Ms", "A", "mu0", "Hex"], "sources": ["fdm-cpu-field"]},
+    {"id": "eq-fdm-cpu-heterogeneous-link", "symbols": ["m", "Ms", "A", "mu0", "Hex"], "sources": ["fdm-cpu-reference"]},
+    {"id": "eq-fdm-gpu-exchange-field", "symbols": ["m", "Ms", "A", "mu0", "Hex"], "sources": ["fdm-gpu-fp64", "fdm-gpu-fp32"]},
+    {"id": "eq-fdm-gpu-exchange-energy", "symbols": ["m", "A", "Eex"], "sources": ["fdm-gpu-energy"]},
+    {"id": "eq-fdm-gpu-t0-field", "symbols": ["m", "Ms", "A", "mu0", "Hex"], "sources": ["fdm-gpu-t0"]},
+    {"id": "eq-fdm-gpu-t1-field", "symbols": ["m", "Ms", "A", "mu0", "Hex"], "sources": ["fdm-gpu-t1"]},
+    {"id": "eq-fem-exchange-stiffness", "symbols": ["A", "Omega"], "sources": ["fem-cpu-operator"]},
+    {"id": "eq-fem-cpu-lumped-field", "symbols": ["m", "Ms", "mu0", "Hex"], "sources": ["fem-cpu-field"]},
+    {"id": "eq-fem-cpu-consistent-field", "symbols": ["m", "Ms", "mu0", "Hex", "Omega"], "sources": ["fem-cpu-mass"]},
+    {"id": "eq-fem-gpu-lumped-field", "symbols": ["m", "Ms", "mu0", "Hex"], "sources": ["fem-gpu-field", "fem-gpu-rk"]},
+    {"id": "eq-fem-gpu-exchange-energy", "symbols": ["m", "Eex"], "sources": ["fem-gpu-field"]}
+  ],
+  "public_api": {
+    "constructors": ["fullmag.Exchange", "fullmag.Material"],
+    "parameters": [
+      {"python": "Material.name", "type": "str", "default": "required", "si_unit": "$1$", "validation": "non-empty", "meaning": "Material identity referenced by magnets.", "backend_support": "all lanes", "problem_ir": "materials[].name"},
+      {"python": "Material.Ms", "type": "float", "default": "required", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "finite and > 0", "meaning": "Saturation magnetization; exchange field scales through $1/M_s$.", "backend_support": "all lanes; spatial realization differs", "problem_ir": "materials[].saturation_magnetisation"},
+      {"python": "Material.A", "type": "float", "default": "required", "si_unit": "$\\mathrm{J\\,m^{-1}}$", "validation": "finite and > 0; unusual-SI warning outside [1e-14, 1e-8]", "meaning": "Bulk exchange stiffness; no silent unit conversion.", "backend_support": "all lanes; heterogeneous realization differs", "problem_ir": "materials[].exchange_stiffness"},
+      {"python": "Material.alpha", "type": "float", "default": "required", "si_unit": "$1$", "validation": "finite and >= 0", "meaning": "Gilbert damping; affects LLG evolution, not the exchange field definition.", "backend_support": "all time-domain lanes", "problem_ir": "materials[].damping"},
+      {"python": "Material.Ms_field", "type": "list[float]", "default": "None", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "mesh cardinality and lane legality validated downstream", "meaning": "Optional spatial values overriding scalar `Ms`.", "backend_support": "FEM lanes and allocating FDM CPU reference; persistent FDM SoA/native CUDA do not realize it", "problem_ir": "materials[].ms_field"},
+      {"python": "Material.A_field", "type": "list[float]", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-1}}$", "validation": "mesh cardinality and lane legality validated downstream", "meaning": "Optional spatial values overriding scalar `A`; not an FDM pair-coefficient LUT.", "backend_support": "FEM lanes and allocating FDM CPU reference; persistent FDM SoA/native CUDA do not realize it", "problem_ir": "materials[].a_field"}
+    ]
+  }
+}

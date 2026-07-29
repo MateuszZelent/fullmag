@@ -10,7 +10,7 @@ author = "FullMag contributors"
 release = os.environ.get("FULLMAG_DOCS_VERSION", "latest")
 version = release
 
-extensions = ["myst_parser"]
+extensions = ["myst_parser", "sphinx_copybutton"]
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "internal", "generated", "README.md"]
 source_suffix = {".md": "markdown", ".rst": "restructuredtext"}
@@ -23,6 +23,9 @@ myst_enable_extensions = [
     "substitution",
 ]
 myst_heading_anchors = 3
+
+copybutton_prompt_text = r">>> |\.\.\. |\$ "
+copybutton_prompt_is_regexp = True
 
 html_theme = "sphinx_clarity_theme"
 html_title = "FullMag public documentation"

@@ -21,20 +21,20 @@ and for the newest mixed-element FEM CUDA path.
 ## Physical problem
 
 The exchange interaction penalizes spatial variation of the reduced magnetization
-\(\mathbf m=\mathbf M/M_s\). In the bulk micromagnetic model used by FullMag, the exchange
-stiffness \(A>0\) favors parallel neighboring magnetization and contributes both an energy
-\(E_{\mathrm{ex}}\) and an effective field \(\mathbf H_{\mathrm{ex}}\). The physical contract is
+$\mathbf m=\mathbf M/M_s$. In the bulk micromagnetic model used by FullMag, the exchange
+stiffness $A>0$ favors parallel neighboring magnetization and contributes both an energy
+$E_{\mathrm{ex}}$ and an effective field $\mathbf H_{\mathrm{ex}}$. The physical contract is
 shared, but its finite-difference and finite-element realizations are not interchangeable
 implementation details.
 
 This page describes only bulk exchange on conforming magnetic domains. It does not silently fold
 surface exchange, RKKY/interlayer exchange, atomistic exchange, or nonconforming contact coupling
-into the bulk coefficient \(A\).
+into the bulk coefficient $A$.
 
 (governing-equations)=
 ## Governing equations
 
-For magnetic domain \(\Omega_m\), the implemented continuum energy is
+For magnetic domain $\Omega_m$, the implemented continuum energy is
 
 ```{math}
 :label: eq-exchange-energy
@@ -56,7 +56,7 @@ The effective field follows the FullMag SI convention
 \frac{2}{\mu_0M_s}\nabla\!\cdot\!\left(A\nabla\mathbf m\right).
 ```
 
-For constant \(A\), this becomes
+For constant $A$, this becomes
 
 ```{math}
 :label: eq-exchange-constant-a
@@ -94,35 +94,35 @@ A(\nabla\mathbf m)\mathbf n
 
 | Symbol | Definition | SI unit |
 |---|---|---:|
-| \(\mathbf M\) | magnetization | A/m |
-| \(M_s\) | saturation magnetization | A/m |
-| \(\mathbf m\) | reduced magnetization \(\mathbf M/M_s\) | 1 |
-| \(m_q\) | Cartesian component of \(\mathbf m\) | 1 |
-| \(A(\mathbf x)\) | bulk exchange stiffness | J/m |
-| \(\mu_0\) | vacuum permeability | N/A² |
-| \(E_{\mathrm{ex}}\) | exchange energy | J |
-| \(\mathbf H_{\mathrm{ex}}\) | exchange effective field | A/m |
-| \(\Omega_m\) | magnetic domain | m³ as integration domain |
-| \(\partial\Omega_m\) | magnetic boundary | m² as integration surface |
-| \(\mathbf n\) | outward unit normal | 1 |
-| \(\boldsymbol\eta\) | admissible magnetization variation | 1 |
-| \(i,j\) | discrete cell or node indices | 1 |
-| \(N_6(i)\) | six Cartesian neighbors of FDM cell \(i\) | 1 |
-| \(r_i\) | material-region index of cell \(i\) | 1 |
-| \(A_{r_ir_j}\) | realized exchange coefficient of FDM link \(i\!\leftrightarrow\!j\) | J/m |
-| \(\Delta_{ij}\) | center-to-center grid spacing along link \(i\!\leftrightarrow\!j\) | m |
-| \(V_i\) | FDM cell volume | m³ |
-| \(\varphi_i\) | magnetic volume fraction of cell \(i\) | 1 |
-| \(f_{i\to j}\) | directed magnetic face fraction | 1 |
-| \(\delta_{i,d}\) | T1 boundary distance correction on side \(d\) | m |
-| \(\delta_{\min}\) | positive lower bound applied to T1 boundary distances | m |
-| \(\varphi_{\mathrm{floor}}\) | positive lower bound applied to magnetic volume fraction | 1 |
-| \(\phi_i\) | scalar FEM basis function | 1 |
-| \(K_A\) | exchange stiffness matrix | J |
-| \(M_V\) | geometric FEM mass matrix | m³ |
-| \(M_{M_s}\) | saturation-weighted FEM mass matrix | A·m² |
-| \(\mathbf q\) | consistent-mass projected exchange residual | T |
-| \(V_i^{\mathrm{lump}}\) | lumped nodal FEM volume | m³ |
+| $\mathbf M$ | magnetization | $\mathrm{A\,m^{-1}}$ |
+| $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf m$ | reduced magnetization $\mathbf M/M_s$ | $1$ |
+| $m_q$ | Cartesian component of $\mathbf m$ | $1$ |
+| $A(\mathbf x)$ | bulk exchange stiffness | $\mathrm{J\,m^{-1}}$ |
+| $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
+| $E_{\mathrm{ex}}$ | exchange energy | $\mathrm{J}$ |
+| $\mathbf H_{\mathrm{ex}}$ | exchange effective field | $\mathrm{A\,m^{-1}}$ |
+| $\Omega_m$ | magnetic integration domain | $\mathrm{m^3}$ |
+| $\partial\Omega_m$ | magnetic integration boundary | $\mathrm{m^2}$ |
+| $\mathbf n$ | outward unit normal | $1$ |
+| $\boldsymbol\eta$ | admissible magnetization variation | $1$ |
+| $i,j$ | discrete cell or node indices | $1$ |
+| $N_6(i)$ | six Cartesian neighbors of FDM cell $i$ | $1$ |
+| $r_i$ | material-region index of cell $i$ | $1$ |
+| $A_{r_ir_j}$ | realized exchange coefficient of FDM link $i\!\leftrightarrow\!j$ | $\mathrm{J\,m^{-1}}$ |
+| $\Delta_{ij}$ | center-to-center grid spacing along link $i\!\leftrightarrow\!j$ | $\mathrm{m}$ |
+| $V_i$ | FDM cell volume | $\mathrm{m^3}$ |
+| $\varphi_i$ | magnetic volume fraction of cell $i$ | $1$ |
+| $f_{i\to j}$ | directed magnetic face fraction | $1$ |
+| $\delta_{i,d}$ | T1 boundary distance correction on side $d$ | $\mathrm{m}$ |
+| $\delta_{\min}$ | positive lower bound applied to T1 boundary distances | $\mathrm{m}$ |
+| $\varphi_{\mathrm{floor}}$ | positive lower bound applied to magnetic volume fraction | $1$ |
+| $\phi_i$ | scalar FEM basis function | $1$ |
+| $K_A$ | exchange stiffness matrix | $\mathrm{J}$ |
+| $M_V$ | geometric FEM mass matrix | $\mathrm{m^3}$ |
+| $M_{M_s}$ | saturation-weighted FEM mass matrix | $\mathrm{A\,m^2}$ |
+| $\mathbf q$ | consistent-mass projected exchange residual | $\mathrm{T}$ |
+| $V_i^{\mathrm{lump}}$ | lumped nodal FEM volume | $\mathrm{m^3}$ |
 
 (assumptions-and-validity)=
 ## Assumptions and validity
@@ -134,11 +134,287 @@ A(\nabla\mathbf m)\mathbf n
 - The reduced magnetization is expected to remain normalized by the surrounding solver contract.
 - The bulk free boundary is homogeneous Neumann. User-selected exchange Dirichlet data are not part
   of the current public `Exchange()` term.
-- A conforming FEM H1 space makes \(\mathbf m\) continuous across conforming material interfaces;
+- A conforming FEM H1 space makes $\mathbf m$ continuous across conforming material interfaces;
   the weak form implies normal flux continuity. This is not a model for discontinuous inter-body
   contact exchange.
 - FDM sub-cell corrections T0 and T1 are separate FP64 CUDA realizations. They must not be inferred
   for the CPU reference lane or FP32 CUDA lane.
+
+(python-authoring)=
+(python-api)=
+## Python authoring and canonical ProblemIR
+
+Exchange has no numerical parameter on `Exchange()` itself. The physical coefficient belongs to
+the material: `Material.A` is the bulk exchange stiffness in
+$\mathrm{J\,m^{-1}}$, while `Material.Ms` is the saturation magnetization in
+$\mathrm{A\,m^{-1}}$. This separation is intentional: the energy-term list enables the
+interaction, and each magnetic material supplies the coefficient used on its domain.
+
+### Complete, copyable example
+
+The following block is both a regular Python script and a Jupyter-compatible sequence of `# %%`
+cells. It builds an exchange-only problem, requests the exchange field and energy, and prints the
+canonical IR without launching a solver.
+
+```python
+# %% Imports and SI constants
+import json
+import fullmag as fm
+
+nm = 1.0e-9
+ps = 1.0e-12
+
+# %% Geometry and material
+geometry = fm.Box(size=(40 * nm, 20 * nm, 5 * nm), name="film")
+material = fm.Material(
+    name="Permalloy",
+    Ms=800.0e3,       # A/m
+    A=13.0e-12,       # J/m
+    alpha=0.01,       # dimensionless
+)
+magnet = fm.Ferromagnet(
+    name="film",
+    geometry=geometry,
+    material=material,
+    m0=fm.texture.uniform((1.0, 0.0, 0.0)),
+)
+
+# %% Exchange, outputs, and both discretization hints
+study = fm.TimeEvolution(
+    dynamics=fm.LLG(),
+    outputs=[
+        fm.SaveField("H_ex", every=1 * ps),
+        fm.SaveScalar("E_ex", every=1 * ps),
+    ],
+)
+problem = fm.Problem(
+    name="exchange_only",
+    magnets=[magnet],
+    energy=[fm.Exchange()],
+    study=study,
+    discretization=fm.DiscretizationHints(
+        fdm=fm.FDM(cell=(2 * nm, 2 * nm, 1 * nm)),
+        fem=fm.FEM(order=1, maximum_element_size=2 * nm),
+    ),
+)
+
+# %% Canonical, runtime-independent lowering
+problem_ir = problem.to_ir(include_geometry_assets=False)
+print(json.dumps(problem_ir, indent=2))
+```
+
+`problem.to_ir(...)` validates and lowers authoring objects; it does not select a concrete CPU or
+GPU runtime. The planner resolves that later from `backend_policy`, installed capabilities, and
+the requested execution context.
+
+### Exchange-facing parameter reference
+
+#### `Exchange()`
+
+| Parameter | Type | Default | SI unit | Validation and meaning | Backend support |
+|---|---|---|---|---|---|
+| *(none)* | — | — | — | Enables bulk exchange and lowers exactly to `{"kind": "exchange"}`. Supplying any argument is a Python `TypeError`. | FDM CPU reference, FDM CUDA, FEM CPU, and FEM CUDA, subject to the lane qualifications below. |
+
+#### `Material(...)` parameters relevant to Exchange
+
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `Material.name` | `str` | `required` | $1$ | `non-empty` | Material identity referenced by magnets. | `all lanes` | `materials[].name` |
+| `Material.Ms` | `float` | `required` | $\mathrm{A\,m^{-1}}$ | `finite and > 0` | Saturation magnetization; exchange field scales through $1/M_s$. | `all lanes; spatial realization differs` | `materials[].saturation_magnetisation` |
+| `Material.A` | `float` | `required` | $\mathrm{J\,m^{-1}}$ | `finite and > 0; unusual-SI warning outside [1e-14, 1e-8]` | Bulk exchange stiffness; no silent unit conversion. | `all lanes; heterogeneous realization differs` | `materials[].exchange_stiffness` |
+| `Material.alpha` | `float` | `required` | $1$ | `finite and >= 0` | Gilbert damping; affects LLG evolution, not the exchange field definition. | `all time-domain lanes` | `materials[].damping` |
+| `Material.Ms_field` | `list[float] \| None` | `None` | $\mathrm{A\,m^{-1}}$ | `mesh cardinality and lane legality validated downstream` | Optional spatial values overriding scalar `Ms`. | `FEM lanes and allocating FDM CPU reference; persistent FDM SoA/native CUDA do not realize it` | `materials[].ms_field` |
+| `Material.A_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-1}}$ | `mesh cardinality and lane legality validated downstream` | Optional spatial values overriding scalar `A`; not an FDM pair-coefficient LUT. | `FEM lanes and allocating FDM CPU reference; persistent FDM SoA/native CUDA do not realize it` | `materials[].a_field` |
+
+The remaining `Material` parameters are not hidden Exchange controls, but they are listed here so
+the constructor used by the example is documented completely.
+
+| Python | Type | Default | SI unit | Validation and meaning | ProblemIR |
+|---|---|---|---|---|---|
+| `Material.Ku1` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Finite signed first-order uniaxial anisotropy; orthogonal to Exchange. | `materials[].uniaxial_anisotropy` |
+| `Material.Ku2` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Finite signed second-order uniaxial anisotropy. | `materials[].uniaxial_anisotropy_k2` |
+| `Material.anisU` | three floats or `None` | `None` | $1$ | Finite three-vector defining the uniaxial axis; normalization/legality is checked downstream. | `materials[].anisotropy_axis` |
+| `Material.Kc1` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | First cubic-anisotropy coefficient; suspicious-SI values warn. | `materials[].cubic_anisotropy_kc1` |
+| `Material.Kc2` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Second cubic-anisotropy coefficient; suspicious-SI values warn. | `materials[].cubic_anisotropy_kc2` |
+| `Material.Kc3` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Third cubic-anisotropy coefficient; suspicious-SI values warn. | `materials[].cubic_anisotropy_kc3` |
+| `Material.anisC1` | three floats or `None` | `None` | $1$ | Finite first cubic-anisotropy axis. | `materials[].cubic_anisotropy_axis1` |
+| `Material.anisC2` | three floats or `None` | `None` | $1$ | Finite second cubic-anisotropy axis. | `materials[].cubic_anisotropy_axis2` |
+| `Material.Dind` | `float \| None` | `None` | $\mathrm{J\,m^{-2}}$ | Finite interfacial-DMI material coefficient; does not enable DMI by itself. | `materials[].interfacial_dmi` |
+| `Material.Dbulk` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Finite bulk-DMI material coefficient; does not enable DMI by itself. | `materials[].bulk_dmi` |
+| `Material.alpha_field` | `list[float] \| None` | `None` | $1$ | Optional mesh-aligned damping values; cardinality and lane support are checked downstream. | `materials[].alpha_field` |
+| `Material.Ku_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Optional spatial `Ku1` values. | `materials[].ku_field` |
+| `Material.Ku2_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Optional spatial `Ku2` values. | `materials[].ku2_field` |
+| `Material.Kc1_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Optional spatial `Kc1` values. | `materials[].kc1_field` |
+| `Material.Kc2_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Optional spatial `Kc2` values. | `materials[].kc2_field` |
+| `Material.Kc3_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Optional spatial `Kc3` values. | `materials[].kc3_field` |
+| `Material.Dind_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-2}}$ | Optional spatial interfacial-DMI values. | `materials[].dind_field` |
+| `Material.Dbulk_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Optional spatial bulk-DMI values. | `materials[].dbulk_field` |
+
+#### Geometry, magnet, study, and output parameters used above
+
+| Object.parameter | Type | Default | SI unit | Meaning and validation |
+|---|---|---|---|---|
+| `Box.size_or_x` | three floats, scalar, or `None` | `None` | $\mathrm{m}$ | Positional tuple or first scalar length; mutually exclusive with conflicting `size=`. |
+| `Box.y` | `float \| None` | `None` | $\mathrm{m}$ | Positional $L_y$ when scalar `size_or_x` is used. |
+| `Box.z` | `float \| None` | `None` | $\mathrm{m}$ | Positional $L_z$ when scalar `size_or_x` is used. |
+| `Box.size` | three positive floats | required in the keyword form | $\mathrm{m}$ | Full box lengths $(L_x,L_y,L_z)$. The positional alternatives are `Box((Lx,Ly,Lz))` or `Box(Lx,Ly,Lz)`; they must not conflict with `size=`. |
+| `Box.name` | `str` | `"box"` | $1$ | Non-empty geometry identity. |
+| `Ferromagnet.name` | `str` | required | $1$ | Non-empty object identity. |
+| `Ferromagnet.geometry` | `Geometry` | required | — | Geometry occupied by the magnetic body. |
+| `Ferromagnet.material` | `Material` | required | — | Material supplying $M_s$, $A$, and damping. |
+| `Ferromagnet.region` | `Region \mid None` | `None` | — | Optional named region; when absent, the geometry name becomes the magnet region. |
+| `Ferromagnet.m0` | `InitialMagnetization \mid None` | `None` | $1$ | Initial reduced magnetization. The example uses a normalized uniform vector. |
+| `Ferromagnet.mesh` | `PerObjectMeshRecipe \mid None` | `None` | — | Optional object-local mesh recipe. |
+| `Ferromagnet.object_regions` | tuple | `()` | — | Authored object-local regions lowered into `object_regions`; names and ownership are validated. |
+| `Ferromagnet.allocated_region_ids` | tuple of strings | `()` | $1$ | Reserved region identities used by builder/round-trip ownership. |
+| `Ferromagnet.material_parameter_fields` | tuple | `()` | — | Object-owned spatial material assignments lowered into `material_parameter_fields`. |
+| `texture.uniform.direction_or_x` | three floats or scalar | `(1, 0, 0)` | $1$ | Direction tuple or first Cartesian component of uniform reduced magnetization. |
+| `texture.uniform.y` | `float \| None` | `None` | $1$ | Second component for scalar-form authoring. |
+| `texture.uniform.z` | `float \| None` | `None` | $1$ | Third component for scalar-form authoring. |
+| `TimeEvolution.dynamics` | `LLG` | required | — | Time-domain equation and integrator settings. |
+| `TimeEvolution.outputs` | sequence | required | — | Sampling requests. An empty sequence is valid. |
+| `TimeEvolution.table_autosave` | `TableAutosave \mid None` | `None` | — | Optional tabular autosave policy. |
+| `LLG.gamma` | `float` | `221100.0` | $\mathrm{m\,A^{-1}\,s^{-1}}$ | Positive finite gyromagnetic ratio used by the H-field LLG convention. |
+| `LLG.integrator` | `str` | `"auto"` | $1$ | Canonical supported integrator identifier or `auto`; planner/runtime legality is validated explicitly. |
+| `LLG.fixed_timestep` | `float \mid None` | `None` | $\mathrm{s}$ | Positive fixed step when supplied; mutually constrained with adaptive stepping. |
+| `LLG.adaptive_timestep` | `AdaptiveTimestep \mid None` | `None` | — | Optional adaptive-step contract. |
+| `LLG.field_refresh` | `FieldRefreshPolicy \mid None` | `None` | — | Optional field-refresh policy; does not change the exchange equation. |
+| `SaveField.field` | `str` | required | $1$ | Canonical field ID. `H_ex` requires `Exchange()`. |
+| `SaveField.every` | positive `float` or `"auto"` | required | $\mathrm{s}$ | Finite positive sampling period in seconds, or `"auto"`; step-count sampling is not accepted here. |
+| `SaveScalar.scalar` | `str` | required | $1$ | Canonical scalar ID. `E_ex` requires `Exchange()`. |
+| `SaveScalar.every` | positive `float` or `"auto"` | required | $\mathrm{s}$ | Finite positive sampling period in seconds, or `"auto"`; step-count sampling is not accepted here. |
+
+#### Discretization parameters used above
+
+| Object.parameter | Type | Default | SI unit | Meaning and validation |
+|---|---|---|---|---|
+| `DiscretizationHints.fdm` | `FDM \mid None` | `None` | — | FDM-specific hint; it does not force FDM when backend selection remains `auto`. |
+| `DiscretizationHints.fem` | `FEM \mid None` | `None` | — | FEM-specific hint; it does not force FEM when backend selection remains `auto`. |
+| `DiscretizationHints.hybrid` | `Hybrid \mid None` | `None` | — | Optional hybrid hint, unused here. |
+| `FDM.cell` | three positive floats or `None` | `None` | $\mathrm{m}$ | Canonical uniform cell size. In the example it also becomes `default_cell`. |
+| `FDM.default_cell` | three positive floats or `None` | `None` | $\mathrm{m}$ | Default cell size when per-magnet grids are present. |
+| `FDM.per_magnet` | mapping or `None` | `None` | — | Optional explicit per-magnet FDM grids. |
+| `FDM.demag` | `FDMDemag \mid None` | `None` | — | Demagnetization hint; unrelated to Exchange. |
+| `FDM.boundary_correction` | `str \mid None` | `None` | $1$ | Optional `T0`/`T1`-family sub-cell policy. Support differs by precision and device as documented below. |
+| `FDM.boundary_phi_floor` | `float \mid None` | `None` | $1$ | Optional lower bound $\varphi_{\mathrm{floor}}$ with strict domain $0<\varphi_{\mathrm{floor}}<1$. |
+| `FDM.boundary_delta_min` | `float \mid None` | `None` | $\mathrm{m}$ | Optional T1 distance floor $\delta_{\min}\geq0$; zero is accepted. |
+| `FEM.order` | `int` | required | $1$ | Positive finite-element order. Current production Exchange uses continuous P1, so execution must resolve to order 1. |
+| `FEM.maximum_element_size` | positive `float` | required unless `hmax` is supplied | $\mathrm{m}$ | Canonical maximum element size. Construction fails if neither spelling is provided. |
+| `FEM.hmax` | positive `float \mid None` | `None` | $\mathrm{m}$ | Alternate input spelling for the same required size; if both are supplied, unequal values are rejected. |
+| `FEM.mesh` | `str \mid None` | `None` | — | Optional imported mesh reference. |
+| `FEM.demag_solver_policy` | policy or `None` | `None` | — | Demagnetization linear-solver policy; unrelated to Exchange. |
+
+`Problem(...)` is the enclosing canonical model. In this example its required parameters are
+`name`, `magnets`, `energy`, and `study`; `discretization` supplies backend hints. Optional
+mechanics, current, coupling, monitor, thermal, PBC, and legacy compatibility parameters retain
+their documented defaults and are orthogonal to Exchange. They are not interpreted as hidden
+exchange settings.
+
+For completeness, every `Problem` constructor parameter used by this public model type is listed
+below. “Orthogonal” means that the field is serialized independently and does not modify the
+Exchange equation.
+
+| Python | Type | Default | SI unit | Validation, meaning, and ProblemIR destination |
+|---|---|---|---|---|
+| `Problem.name` | `str` | `required` | $1$ | Non-empty problem identity; `problem_meta.name`. |
+| `Problem.magnets` | sequence of `Ferromagnet` | `required` | — | Non-empty magnetic objects; lowers geometry, regions, materials, and `magnets`. |
+| `Problem.energy` | sequence of energy terms | `required` | — | Authored interactions; `energy_terms`. Duplicate legality is checked by planners. |
+| `Problem.study` | study or `None` | `None` | — | Canonical study. One of `study` or legacy `dynamics` must be supplied; `study`. |
+| `Problem.dynamics` | `LLG \| None` | `None` | — | Legacy time-evolution input; conflicts with explicit `study`; normalized into `study.dynamics`. |
+| `Problem.outputs` | sequence or `None` | `None` | — | Legacy output list requiring legacy `dynamics`; normalized into `study.sampling.outputs`. |
+| `Problem.discretization` | hints or `None` | `None` | — | FDM/FEM/hybrid authoring hints; `backend_policy.discretization_hints`. |
+| `Problem.description` | `str \| None` | `None` | $1$ | Optional human description; `problem_meta.description`. |
+| `Problem.runtime` | `RuntimeSelection` | factory default | — | Requested backend/device/precision intent; `backend_policy` and runtime metadata. |
+| `Problem.runtime_metadata` | mapping | `{}` | — | User/runtime provenance metadata; `problem_meta.runtime_metadata`. |
+| `Problem.auxiliary_geometries` | sequence | `()` | — | Nonmagnetic/helper geometry entries; `geometry.entries`. |
+| `Problem.current_modules` | sequence | `()` | — | Current/Oersted modules; `current_modules`. |
+| `Problem.field_drives` | sequence | `()` | — | Regional/time-dependent field drives; `field_drives`. |
+| `Problem.couplings` | sequence | `()` | — | Explicit inter-object or multiphysics couplings; `couplings`. |
+| `Problem.monitors` | sequence | `()` | — | Planar monitor definitions; `planar_monitors`. |
+| `Problem.excitation_analysis` | analysis or `None` | `None` | — | Optional spin-wave excitation analysis; `excitation_analysis`. |
+| `Problem.geometry_asset_cache` | mapping | `{}` | — | Internal deterministic geometry-asset cache used during lowering; `geometry_assets`. |
+| `Problem.spin_torque` | legacy torque or `None` | `None` | — | Legacy single-torque compatibility input; normalized into torque modules. |
+| `Problem.spin_torques` | sequence | `()` | — | Canonical spin-torque modules; serialized into study/runtime contracts. |
+| `Problem.temperature` | `float \| None` | `None` | $\mathrm{K}$ | Optional non-negative thermal temperature; thermal metadata/term consistency is validated. |
+| `Problem.elastic_materials` | sequence | `()` | — | Elastic constitutive materials; `elastic_materials`. |
+| `Problem.elastic_bodies` | sequence | `()` | — | Elastic body assignments; `elastic_bodies`. |
+| `Problem.magnetostriction_laws` | sequence | `()` | — | Magnetostriction constitutive laws; `magnetostriction_laws`. |
+| `Problem.mechanical_bcs` | sequence | `()` | — | Mechanical boundary conditions; `mechanical_bcs`. |
+| `Problem.mechanical_loads` | sequence | `()` | — | Mechanical loads; `mechanical_loads`. |
+| `Problem.pbc` | `FdmPbc`, three booleans, or `None` | `None` | $1$ | Requested periodic axes; canonical PBC section and backend capability checks. |
+
+(problem-ir)=
+### Canonical ProblemIR excerpt
+
+The example lowers the Exchange-relevant sections exactly as follows (JSON numbers are SI):
+
+```json
+{
+  "materials": [
+    {
+      "name": "Permalloy",
+      "saturation_magnetisation": 800000.0,
+      "exchange_stiffness": 1.3e-11,
+      "damping": 0.01,
+      "ms_field": null,
+      "a_field": null
+    }
+  ],
+  "energy_terms": [
+    {"kind": "exchange"}
+  ],
+  "study": {
+    "kind": "time_evolution",
+    "dynamics": {
+      "kind": "llg",
+      "gyromagnetic_ratio": 221100.0,
+      "integrator": "auto",
+      "fixed_timestep": null
+    },
+    "sampling": {
+      "outputs": [
+        {"kind": "field", "name": "H_ex", "every_seconds": 1e-12},
+        {"kind": "scalar", "name": "E_ex", "every_seconds": 1e-12}
+      ]
+    }
+  },
+  "backend_policy": {
+    "requested_backend": "auto",
+    "execution_precision": "double",
+    "discretization_hints": {
+      "fdm": {"cell": [2e-9, 2e-9, 1e-9], "default_cell": [2e-9, 2e-9, 1e-9]},
+      "fem": {"order": 1, "hmax": 2e-9, "mesh": null},
+      "hybrid": null
+    }
+  },
+  "validation_profile": {"execution_mode": "strict"}
+}
+```
+
+The excerpt intentionally omits unrelated `null` material fields and geometry detail; it is not a
+replacement schema. The complete object printed by the Python block is the authoritative payload.
+
+(round-trip-and-failure-semantics)=
+### Python-to-IR mapping and failure semantics
+
+| Python authoring value | Canonical IR location | Planner/runtime consequence |
+|---|---|---|
+| `fm.Exchange()` | `energy_terms[].kind = "exchange"` | Lowering preserves every authored term; FDM and FEM planners reject a second Exchange declaration with `Exchange is declared more than once`. |
+| `Material.A` | `materials[].exchange_stiffness` | Supplies $A$ in $\mathrm{J\,m^{-1}}$; no unit conversion or harmonic-mean promise is added by lowering. |
+| `Material.Ms` | `materials[].saturation_magnetisation` | Supplies $M_s$ in $\mathrm{A\,m^{-1}}$. |
+| `Material.A_field` | `materials[].a_field` | Requests spatial exchange stiffness; unsupported lane combinations fail capability/validation checks. |
+| `Material.Ms_field` | `materials[].ms_field` | Requests spatial saturation magnetization; mesh cardinality and lane support remain explicit. |
+| `SaveField("H_ex", ...)` | `study.sampling.outputs[]` field record | Rejected if Exchange is absent or the selected executable path cannot materialize the field. |
+| `SaveScalar("E_ex", ...)` | `study.sampling.outputs[]` scalar record | Rejected if Exchange is absent or the selected executable path cannot materialize the scalar. |
+| FDM/FEM hints | `backend_policy.discretization_hints` | Preserve both authored hints. They do not claim which backend actually ran. |
+
+Python normalization preserves requested intent in `ProblemIR`. Backend, device, precision, and
+the concrete exchange realization are resolved later and must appear as resolved execution in
+provenance. Constructor and lowering validation errors are raised before planning; capability
+validation then rejects unsupported combinations instead of rewriting the authored model.
+There is no silent CPU fallback promised by `Exchange()`: an unsupported requested combination is
+an error. Likewise, adding `A` without `Exchange()` stores a material property but does not enable
+or output exchange physics.
 
 (discrete-realization)=
 ## Discrete realization by solver and device
@@ -160,6 +436,10 @@ uniform-material stencil:
 
 Open or inactive neighbors are replaced by the center magnetization, which yields zero normal
 exchange flux. Enabled periodic axes wrap the neighbor index. The hot runtime stencil uses `f64`.
+The production reference path is
+`crates/fullmag-engine/src/fdm/cpu/fields.rs` —
+`exchange_field_add_into_soa`; the richer allocating comparison path is the
+same file — `cell_exchange_field`.
 
 The allocating reference accessor also contains a heterogeneous link form
 
@@ -225,7 +505,7 @@ A_{r_ir_j}\,\varphi_iV_i
 
 #### FDM GPU T1 sub-cell correction — FP64 only
 
-For the positive-side link on axis \(d\), the exact implemented contribution is
+For the positive-side link on axis $d$, the exact implemented contribution is
 
 ```{math}
 :label: eq-fdm-gpu-t1-field
@@ -239,6 +519,12 @@ For the positive-side link on axis \(d\), the exact implemented contribution is
 T0/T1 do not consume periodic flags. FP32 rejects sub-cell correction rather than silently using a
 different model. The staged multilayer CUDA path is layer-local, supports FP64 and FP32 entry
 points, and presently has no cross-layer exchange, region LUT, or periodic exchange.
+The standard device kernels are
+`backends/fdm/gpu/cuda/interactions/exchange_fp64.cu` —
+`exchange_field_fp64_kernel` and
+`backends/fdm/gpu/cuda/interactions/exchange_fp32.cu` —
+`exchange_field_fp32_kernel`; T0 and T1 are separate symbols in `exchange_t0_fp64.cu` and
+`exchange_t1_fp64.cu`.
 
 ### FEM / CPU — native MFEM implementation
 
@@ -274,10 +560,15 @@ M_{M_s}\mathbf q_q=K_A\mathbf m_q,
 (M_{M_s})_{ij}=\int_{\Omega_m}M_s\phi_i\phi_j\,\mathrm dV.
 ```
 
-The consistent solve uses MFEM conjugate gradients with relative tolerance \(10^{-10}\), zero
+The consistent solve uses MFEM conjugate gradients with relative tolerance $10^{-10}$, zero
 absolute tolerance, and at most 200 iterations. Forms are restricted to magnetic elements;
 air-only nodes are zeroed. Periodicity is imposed by aggregating residual and mass over reduced-node
 equivalence classes and lifting the field back to full nodes.
+Assembly is implemented by
+`backends/fem/cpu/mfem/interactions/exchange_operator.cpp` —
+`initialize_exchange_operator_mfem`; field/energy evaluation is in `exchange_field.cpp` —
+`compute_exchange_for_magnetization`, and the optional consistent projection is in
+`exchange_mass_projection.cpp` — `apply_exchange_component_mass_projection`.
 
 ### FEM / GPU — MFEM assembly plus FullMag CUDA CSR kernels
 
@@ -305,14 +596,11 @@ E_{\mathrm{ex},h}
 The stage path is device-resident after setup and records exchange-specific transfer counters.
 Consistent-mass projection is not a GPU realization. libCEED can be present in the runtime bundle,
 but it is not the Exchange hot path.
-
-## Public authoring and semantic model
-
-The canonical Python term is `Exchange()`, lowered as `{"kind": "exchange"}`. The material
-parameter `A` lowers to `MaterialIR.exchange_stiffness` in J/m; `Ms` lowers to
-`saturation_magnetisation` in A/m. The planner sets `enable_exchange` and the current public
-exchange boundary vocabulary contains only `neumann`. Requested fields `H_ex` and scalars `E_ex`
-are rejected when `Exchange()` is absent.
+The CUDA operator is
+`backends/fem/gpu/cuda/exchange/exchange_kernels.cu` —
+`legacy_sparse_exchange_kernel`; RK-stage dispatch is
+`backends/fem/gpu/cuda/integrators/rk/rk_exchange_dispatch.cu` —
+`gpu_rk_compute_legacy_sparse_exchange`.
 
 (implementation-mapping)=
 ## Implementation mapping
@@ -324,8 +612,10 @@ be regenerated from the symbol when the code moves.
 | Lane | Responsibility | Source identity |
 |---|---|---|
 | Public API | canonical term | [`packages/fullmag-py/src/fullmag/model/energy.py` — `class Exchange`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/packages/fullmag-py/src/fullmag/model/energy.py#L11) |
+| Public API | material-to-IR lowering | `packages/fullmag-py/src/fullmag/model/structure.py` — `class Material` |
+| Planner | fail-closed output validation | `crates/fullmag-plan/src/validate.rs` — `validate_executable_outputs` |
 | ProblemIR | material coefficient | [`crates/fullmag-ir/src/model.rs` — `MaterialIR::exchange_stiffness`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/crates/fullmag-ir/src/model.rs#L413) |
-| FDM CPU | runtime field stencil | [`crates/fullmag-engine/src/fdm/cpu/fields.rs` — `ExchangeLlgProblem::exchange_field_add_into_soa`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/crates/fullmag-engine/src/fdm/cpu/fields.rs#L959) |
+| FDM CPU | runtime field stencil | [`crates/fullmag-engine/src/fdm/cpu/fields.rs` — `exchange_field_add_into_soa`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/crates/fullmag-engine/src/fdm/cpu/fields.rs#L959) |
 | FDM CPU | heterogeneous reference accessor | [`crates/fullmag-engine/src/fdm/cpu/fields.rs` — `cell_exchange_field`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/crates/fullmag-engine/src/fdm/cpu/fields.rs#L171) |
 | FDM GPU FP64 | standard field | [`backends/fdm/gpu/cuda/interactions/exchange_fp64.cu` — `exchange_field_fp64_kernel`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/backends/fdm/gpu/cuda/interactions/exchange_fp64.cu#L36) |
 | FDM GPU FP32 | standard field | [`backends/fdm/gpu/cuda/interactions/exchange_fp32.cu` — `exchange_field_fp32_kernel`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/backends/fdm/gpu/cuda/interactions/exchange_fp32.cu#L32) |
@@ -391,8 +681,8 @@ files and the shared worktree contains unrelated user changes.
 
 | Topic | Implementation symbol | Test or evidence symbol | Status |
 |---|---|---|---|
-| FDM CPU standard field | `ExchangeLlgProblem::exchange_field_add_into_soa` | `exchange_only_random_to_uniform`; periodic and energy guardrails | Test definitions present; not freshly executed here |
-| FDM CPU general accessor | `cell_exchange_field` | spatial \(A,M_s\) Taylor consistency tests | Helper validated; runtime SoA equivalence not established |
+| FDM CPU standard field | `exchange_field_add_into_soa` | `exchange_only_random_to_uniform`; periodic and energy guardrails | Test definitions present; not freshly executed here |
+| FDM CPU general accessor | `cell_exchange_field` | spatial $A,M_s$ Taylor consistency tests | Helper validated; runtime SoA equivalence not established |
 | FDM GPU FP64 | `exchange_field_fp64_kernel` | `fdm_exchange_fp64_parity`, `fdm_tier_a_compare` | Device-capable tests present; current device run absent |
 | FDM GPU FP32 | `exchange_field_fp32_kernel` | `fdm_tier_b_compare` | Device-capable parity test present; current device run absent |
 | FDM GPU T0/T1 | `exchange_field_t0_fp64_kernel`, `exchange_field_t1_fp64_kernel` | T0/T1 cases in `fdm_exchange_fp64_parity` | Field/energy smoke present; derivative and geometry qualification incomplete |

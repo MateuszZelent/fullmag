@@ -14,3 +14,11 @@ jobs:
 
       - name: Run contract guard checks
         run: ./scripts/ci/contract_guard.sh --strict
+
+      - name: Revalidate scientific documentation against current source
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' manifest; do
+            python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
+              "$manifest" --repo-root .
+          done < <(find public_docs/site/physics -name '*.source-map.json' -print0)
