@@ -13,5 +13,5 @@ This page reserves the public documentation location for the FEM GPU realization
 
 ## Related pages
 
-- {doc}`../../../../../exchange`
+- {doc}`../../../../exchange`
 - {doc}`../../../../../python-api/interactions/exchange`

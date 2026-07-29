@@ -74,7 +74,7 @@ This page reserves the public documentation location for the FDM CPU realization
 
 ## Related pages
 
-- {doc}`../../../../../exchange`
+- {doc}`../../../../exchange`
 - {doc}`../../../../../python-api/interactions/exchange`
 """,
         )

@@ -423,7 +423,7 @@ def render_page(spec: PageSpec, root: Path) -> str:
     }:
         rendered += (
             "\n## Related pages\n\n"
-            "- {doc}`../../../../../exchange`\n"
+            "- {doc}`../../../../exchange`\n"
             "- {doc}`../../../../../python-api/interactions/exchange`\n"
         )
     return rendered
