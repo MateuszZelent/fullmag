@@ -115,6 +115,20 @@
   "public_api": {
     "parameters": [
       {
+        "python": "GeometryMeshHandle.thin_film.maximum_element_size",
+        "type": "float \\| \"auto\" \\| None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "finite positive length, `\"auto\"`, or `None`; the bounded example supplies `3e-9`",
+        "meaning": "authored upper target for the magnetic source-face mesh; the certified mesher may deterministically refine below it to preserve quality",
+        "backend_support": "FEM CPU/GPU only",
+        "problem_ir": "problem_meta.runtime_metadata.mesh_workflow.per_geometry[].maximum_element_size",
+        "compatibility_alias": {
+          "python": "GeometryMeshHandle.thin_film.hmax",
+          "problem_ir": "problem_meta.runtime_metadata.mesh_workflow.per_geometry[].hmax"
+        }
+      },
+      {
         "python": "GeometryMeshHandle.thin_film.layers",
         "type": "int",
         "default": "1",
@@ -122,7 +136,7 @@
         "validation": "exact mixed-P1 execution accepts only `1`, `2`, or `3`; other positive values remain authorable only outside this lane and are rejected by its capability gate",
         "meaning": "prism-cell layers through the same physical film",
         "backend_support": "FEM CPU/GPU only",
-        "problem_ir": "mesh_workflow.per_geometry[].through_thickness_elements"
+        "problem_ir": "problem_meta.runtime_metadata.mesh_workflow.per_geometry[].through_thickness_elements"
       },
       {
         "python": "GeometryMeshHandle.thin_film.topology",
@@ -132,7 +146,7 @@
         "validation": "mixed-P1 requires `\"prismatic\"`",
         "meaning": "requested cell topology family",
         "backend_support": "FEM CPU/GPU only",
-        "problem_ir": "mesh_workflow.per_geometry[].topology"
+        "problem_ir": "problem_meta.runtime_metadata.mesh_workflow.per_geometry[].topology"
       },
       {
         "python": "GeometryMeshHandle.thin_film.exact_layers",
@@ -142,7 +156,7 @@
         "validation": "strict prismatic execution resolves `None` to `True` and rejects `False`",
         "meaning": "require requested and realized layer equality",
         "backend_support": "FEM CPU/GPU only",
-        "problem_ir": "mesh_workflow.per_geometry[].exact_layer_count"
+        "problem_ir": "problem_meta.runtime_metadata.mesh_workflow.per_geometry[].exact_layer_count"
       },
       {
         "python": "GeometryMeshHandle.thin_film.transition",
@@ -152,7 +166,7 @@
         "validation": "mixed shared-domain execution requires `\"pyramid_to_tetrahedra\"`",
         "meaning": "conforming air transition policy",
         "backend_support": "FEM CPU/GPU only",
-        "problem_ir": "mesh_workflow.per_geometry[].transition_policy"
+        "problem_ir": "problem_meta.runtime_metadata.mesh_workflow.per_geometry[].transition_policy"
       },
       {
         "python": "GeometryMeshHandle.thin_film.order",
@@ -162,7 +176,7 @@
         "validation": "prismatic execution accepts only `None` or `1` and resolves to P1",
         "meaning": "finite-element order",
         "backend_support": "FEM CPU/GPU only",
-        "problem_ir": "mesh_workflow.per_geometry[].order"
+        "problem_ir": "problem_meta.runtime_metadata.mesh_workflow.per_geometry[].order"
       }
     ]
   }
