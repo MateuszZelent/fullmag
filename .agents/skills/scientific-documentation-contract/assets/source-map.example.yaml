@@ -5,64 +5,35 @@
     "path": "public_docs/site/physics/interactions/fdm/gpu/demag.md",
     "kind": "terminal",
     "publication_scope": "public",
-    "hierarchy": {
-      "domain": "physical-interactions",
-      "solver": "FDM",
-      "lane": "GPU",
-      "topic": "demagnetization"
-    },
-    "sections": [
-      "problem-statement",
-      "governing-equations",
-      "symbols-and-si-units",
-      "assumptions-and-validity",
-      "discrete-realization",
-      "implementation-mapping",
-      "validation",
-      "limitations",
-      "scientific-bibliography",
-      "source-code-index"
-    ],
-    "bibliography": [
-      {
-        "id": "aharoni-1998",
-        "citation": "A. Aharoni, Demagnetizing factors for rectangular ferromagnetic prisms, Journal of Applied Physics 83, 3432 (1998).",
-        "doi": "10.1063/1.367113"
-      }
-    ],
-    "source_index": [
-      {"equation": "eq-demag-field", "source": "fdm-gpu-demag-field"}
-    ]
+    "revision": "HEAD",
+    "hierarchy": {"domain": "physical-interactions", "solver": "FDM", "lane": "GPU", "topic": "demagnetization"},
+    "sections": ["problem-statement", "governing-equations", "symbols-and-si-units", "assumptions-and-validity", "discrete-realization", "implementation-mapping", "validation", "limitations", "scientific-bibliography", "source-code-index"],
+    "bibliography": [{"id": "aharoni-1998", "citation": "A. Aharoni, Journal of Applied Physics 83, 3432 (1998)", "doi": "10.1063/1.367113"}],
+    "source_index": [{"equation": "eq-demag-field", "source": "fdm-gpu-demag-field"}]
   },
-  "equations": [
-    {
-      "id": "eq-demag-field",
-      "latex": "\\\\mathbf{H}_d=-\\\\nabla u",
-      "terms": [
-        {"id": "potential-gradient", "sources": ["fdm-gpu-demag-field"]}
-      ]
-    }
+  "symbols": [
+    {"id": "H_d", "latex": "\\mathbf H_d", "definition": "Demagnetizing field", "si_unit": "A/m"},
+    {"id": "u", "latex": "u", "definition": "Magnetic scalar potential", "si_unit": "A"}
   ],
-  "sources": [
-    {
-      "id": "fdm-gpu-demag-field",
-      "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu",
-      "symbol": "void launch_demag_field_fp64(Context &ctx) {",
-      "responsibility": "Launch the FP64 discrete demagnetizing-field realization.",
-      "solver": "FDM",
-      "lane": "GPU",
-      "revision": "a1f4dc0be9f53ece258b881d756db6f727ad5ecc",
-      "tests": ["backends/fdm/tests/batched_demag_fft_contract.cpp"]
-    }
-  ],
-  "backend_differences": [
-    {
-      "dimension": "CPU/GPU",
-      "different": true,
-      "chapters": {
-        "CPU": "physics/interactions/fdm/cpu/demag",
-        "GPU": "physics/interactions/fdm/gpu/demag"
-      }
-    }
+  "equations": [{
+    "id": "eq-demag-field", "latex": "\\mathbf H_d=-\\nabla u", "symbols": ["H_d", "u"],
+    "terms": [{"id": "potential-gradient", "sources": ["fdm-gpu-demag-field"], "evidence": ["fdm-gpu-demag-test"]}],
+    "semantic_review": {"status": "approved", "reviewer": "TODO-scientific-reviewer", "revision": "HEAD"}
+  }],
+  "sources": [{
+    "id": "fdm-gpu-demag-field", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu",
+    "symbol": "void launch_demag_field_fp64(Context &ctx) {", "responsibility": "Launch the FP64 discrete demagnetizing-field realization.",
+    "solver": "FDM", "lane": "GPU", "revision": "HEAD"
+  }],
+  "evidence": [{
+    "id": "fdm-gpu-demag-test", "kind": "test", "path": "backends/fdm/tests/batched_demag_fft_contract.cpp",
+    "symbol": "demag_launches_use_one_forward_and_inverse_batch", "revision": "HEAD",
+    "status": "runtime-executed", "device_identity": "TODO-executed-device-and-artifact-identity"
+  }],
+  "backend_matrix": [
+    {"solver": "FEM", "lane": "CPU", "status": "unsupported", "reason": "Document in its dedicated FEM CPU chapter."},
+    {"solver": "FEM", "lane": "GPU", "status": "unsupported", "reason": "Document in its dedicated FEM GPU chapter."},
+    {"solver": "FDM", "lane": "CPU", "status": "different", "chapter": "public_docs/site/physics/interactions/fdm/cpu/demag.md"},
+    {"solver": "FDM", "lane": "GPU", "status": "different", "chapter": "public_docs/site/physics/interactions/fdm/gpu/demag.md"}
   ]
 }
