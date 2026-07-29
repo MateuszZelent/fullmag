@@ -52,6 +52,7 @@ class BootstrapWorkflowContractTests(unittest.TestCase):
             'const expectedNodeIds = new Set([\n    "model:airbox",',
             audit,
         )
+        self.assertIn(r"/carrier:mesh-parts\/[1-9]\d*/", audit)
 
     def test_every_tracked_gitlink_has_submodule_metadata(self) -> None:
         gitmodules = (ROOT / ".gitmodules").read_text()
