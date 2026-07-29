@@ -18,6 +18,7 @@ reproducible example.
 
 conventions
 geometry-and-materials
+exchange
 exchange-demag-zeeman
 ```
 
