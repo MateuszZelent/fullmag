@@ -275,44 +275,6 @@ hash and region/material realization. For the first workload it proves:
 The certificate fails closed. A warning, inferred layer count, clipped cell,
 tet conversion, or unversioned connectivity does not satisfy it.
 
-#### 3.4.2 Deterministic transition-air quality repair
-
-The transition partition is a numerical realization detail, but its quality
-gate is part of the physical-domain acceptance contract: an accepted mesh must
-retain the three typed cell families and a positive, bounded-shape map for
-every cell used by the shared-domain Poisson weak form. In particular, the
-per-family `tetra_decomposition_scaled_jacobian.v1` p05 floor remains `0.1`;
-it must not be reduced to make an SP4 artifact appear accepted.
-
-The 2026-07-29 SP4 topology investigation found that the existing bounded
-pyramid-apex-only displacement can leave far-air `tet4` p05 below this floor.
-The smallest reproduction produced `prism6=0.24462655453597`,
-`pyramid5=0.14453924850201363`, and `tet4=0.060794081245974886`; this is a
-strict rejection, not a fallback path. Increasing airbox source refinement in
-that reproduction reduced the `tet4` p05 further, so source-side sizing alone
-is not an acceptance repair.
-
-An implementation repair may use a Gmsh tetrahedral optimization or a local
-transition-air remeshing/refinement step only when it proves all of the
-following before a certificate is minted:
-
-1. the magnetic `prism6` connectivity, exactly two magnetic planes, markers,
-   and conforming prism/pyramid interface are unchanged;
-2. `prism6`, `pyramid5`, and `tet4` p05 all meet the same `0.1` floor, with no
-   regression of the first two families below their pre-repair values;
-3. the accepted output is deterministic across two fresh Gmsh processes with
-   `Mesh.RandomFactor=0`, exactly one effective Gmsh thread, fixed algorithm,
-   and fixed optimization ordering; and
-4. a fresh topology fingerprint and full certificate/build-report evidence are
-   emitted from the repaired mesh. The repair must never overwrite a stale
-   fingerprint or reuse pre-repair quality evidence.
-
-Changing the quality floor, silently falling back to free tetrahedra, or
-promoting a mesh with an incomplete certificate is forbidden. If a Gmsh
-optimization method changes the deterministic generated topology, its method,
-iteration/threshold policy, and ordering are certificate inputs and require
-new frozen evidence plus the regression gates in Section 5.
-
 #### 3.4.1 Language-neutral topology fingerprint v3
 
 Accepted mixed-layer certificates emitted after this migration bind to topology
