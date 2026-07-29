@@ -54,6 +54,7 @@ describe("Node runtime version contract", () => {
     expect(jobStart).toBeGreaterThan(-1);
     expect(job).toContain("runs-on: ubuntu-22.04");
     expect(job).toContain(`node-version: ${nodeVersion}`);
+    expect(job).toContain("uses: actions/setup-node@v7");
     expect(job).toContain('"$(/usr/bin/rg --version | head -n 1)" = "ripgrep 13.0.0"');
     expect(job).toContain('node_bin="$(command -v node)"');
     expect(job).toContain('test "$("$node_bin" --version)" = "v24.18.0"');
