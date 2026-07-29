@@ -417,6 +417,25 @@ def _front_matter(path: Path) -> dict[str, str] | None:
     return None
 
 
+def _myst_toctree_entries(text: str) -> set[str]:
+    """Return explicit entries from fenced MyST ``toctree`` directives."""
+    entries: set[str] = set()
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        if lines[index].strip() != "```{toctree}":
+            index += 1
+            continue
+        index += 1
+        while index < len(lines) and lines[index].strip() != "```":
+            entry = lines[index].strip()
+            if entry and not entry.startswith(":"):
+                entries.add(entry)
+            index += 1
+        index += 1
+    return entries
+
+
 def check_pages(specs: Iterable[PageSpec], root: Path) -> list[str]:
     errors = validate_tree(specs)
     for spec in specs:
@@ -439,13 +458,14 @@ def check_pages(specs: Iterable[PageSpec], root: Path) -> list[str]:
         }.items():
             if metadata.get(key) != expected:
                 errors.append(f"reference metadata {key!r} does not match manifest: {spec.path}")
-        if f"({spec.label})=" not in path.read_text():
+        text = path.read_text()
+        if f"({spec.label})=" not in text:
             errors.append(f"reference label does not match manifest: {spec.path}")
         if spec.children:
-            expected_navigation = "\n".join(
+            expected_navigation = {
                 _relative_child(spec.path, child) for child in spec.children
-            )
-            if expected_navigation not in path.read_text():
+            }
+            if not expected_navigation.issubset(_myst_toctree_entries(text)):
                 errors.append(f"reference navigation does not match manifest: {spec.path}")
     return errors
 
