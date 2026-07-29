@@ -36,7 +36,12 @@ physics/index
 
 ## Publication status
 
-The first publication target is the GitHub Pages project site:
+The canonical public address is:
+
+https://fullmag.mzelent.pl/
+
+The GitHub Pages project address remains available as a fallback:
+
 https://mateuszelent.github.io/fullmag/
 
 The public source is only public_docs/site. The workflow must never build the whole docs/ tree.
