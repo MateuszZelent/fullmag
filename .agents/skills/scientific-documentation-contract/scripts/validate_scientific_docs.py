@@ -23,6 +23,7 @@ class ResolvedSource:
     identity: str
     start_line: int
     end_line: int
+    github_url: str
 
 
 @dataclass
@@ -42,7 +43,9 @@ def _all_strings(value: Any):
             yield from _all_strings(nested)
 
 
-def _resolve_source(source: dict[str, Any], repo_root: Path, result: ValidationResult) -> None:
+def _resolve_source(
+    source: dict[str, Any], repo_root: Path, repository_url: str, result: ValidationResult
+) -> None:
     source_id = source.get("id", "<missing-id>")
     rel_path = source.get("path")
     if not rel_path:
@@ -75,13 +78,24 @@ def _resolve_source(source: dict[str, Any], repo_root: Path, result: ValidationR
             result.errors.append(f"source {source_id}: end_symbol not found: {end_identity}")
             return
         end = end_matches[0]
-    result.resolved_sources[source_id] = ResolvedSource(rel_path, identity, start, end)
+    revision = str(source.get("revision", ""))
+    github_url = (
+        f"{repository_url.rstrip('/')}/blob/{revision}/{rel_path}#L{start}-L{end}"
+        if repository_url
+        else ""
+    )
+    result.resolved_sources[source_id] = ResolvedSource(
+        rel_path, identity, start, end, github_url
+    )
 
 
 def validate_manifest(manifest: dict[str, Any], repo_root: Path) -> ValidationResult:
     result = ValidationResult()
     if manifest.get("schema_version") != 1:
         result.errors.append("schema_version must equal 1")
+    repository_url = str(manifest.get("repository_url", ""))
+    if not repository_url.startswith("https://github.com/"):
+        result.errors.append("repository_url must be an HTTPS GitHub repository URL")
 
     document = manifest.get("document") or {}
     hierarchy = document.get("hierarchy") or {}
@@ -123,7 +137,7 @@ def validate_manifest(manifest: dict[str, Any], repo_root: Path) -> ValidationRe
             result.errors.append(f"source {source.get('id')}: lane must be CPU or GPU")
         if not SHA_RE.fullmatch(str(source.get("revision", ""))):
             result.errors.append(f"source {source.get('id')}: revision must be a full 40-character Git SHA")
-        _resolve_source(source, repo_root, result)
+        _resolve_source(source, repo_root, repository_url, result)
 
     equations = manifest.get("equations") or []
     equation_ids = {equation.get("id") for equation in equations if equation.get("id")}
@@ -167,6 +181,7 @@ def main() -> int:
     result = validate_manifest(manifest, args.repo_root.resolve())
     for source_id, resolved in sorted(result.resolved_sources.items()):
         print(f"SOURCE {source_id}: {resolved.path}:{resolved.start_line}-{resolved.end_line} ({resolved.identity})")
+        print(f"LINK {source_id}: {resolved.github_url}")
     for error in result.errors:
         print(f"ERROR: {error}")
     return 1 if result.errors else 0
