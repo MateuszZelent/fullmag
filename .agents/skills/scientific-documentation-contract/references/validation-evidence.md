@@ -32,4 +32,4 @@ Passing behavior blocks incomplete publication and produces the full hierarchy, 
 
 ## Automated regression suite
 
-The repository workflow runs both validator test modules. The suite covers actual page content, exact labelled LaTeX, symbol definitions and SI units, source/test symbols at one resolved commit, full backend-lane classification, semantic review, unsafe paths, malformed manifests, duplicate IDs, placeholders, source-index coverage, changed pages without sidecars, valid page/sidecar pairs, and deleted sidecars.
+The repository workflow runs both validator test modules. The suite covers actual page content, exact labelled LaTeX, symbol definitions and SI units, source/test symbols at one resolved commit, full backend-lane classification, semantic review, unsafe paths, malformed manifests, duplicate IDs, placeholders, source-index coverage, changed pages without sidecars, valid page/sidecar pairs, mismatched manifests, repository-wide revalidation, and deleted sidecars.
