@@ -20,6 +20,7 @@ class ScientificDocumentationValidatorTests(unittest.TestCase):
         source.write_text("void fullmag_demag_field_cuda() {}\n", encoding="utf-8")
         self.manifest = {
             "schema_version": 1,
+            "repository_url": "https://github.com/MateuszZelent/fullmag",
             "document": {
                 "path": "public_docs/site/physics/interactions/fdm/gpu/demag.md",
                 "kind": "terminal",
@@ -66,6 +67,12 @@ class ScientificDocumentationValidatorTests(unittest.TestCase):
         result = validate_manifest(self.manifest, self.repo)
         self.assertEqual([], result.errors)
         self.assertEqual(1, result.resolved_sources["src-demag"].start_line)
+        self.assertEqual(
+            "https://github.com/MateuszZelent/fullmag/blob/"
+            + "a" * 40
+            + "/backends/fdm/cuda/demag.cu#L1-L1",
+            result.resolved_sources["src-demag"].github_url,
+        )
 
     def test_requires_complete_hierarchy(self) -> None:
         manifest = copy.deepcopy(self.manifest)
