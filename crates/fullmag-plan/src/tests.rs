@@ -11589,42 +11589,46 @@ fn fem_planner_preserves_legacy_v2_when_rebinding_packed_certificate() {
 }
 
 #[test]
-fn fem_planner_uses_managed_override_without_erasing_authored_device_request() {
-    let mut ir = mixed_cpu_relaxation_ir(
-        fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
-        fullmag_ir::RequestedFemDemagIR::PoissonRobin,
-    );
-    ir.problem_meta.runtime_metadata.insert(
-        "runtime_selection".to_string(),
-        serde_json::json!({"device": "auto", "precision": "double"}),
-    );
-    ir.problem_meta.runtime_metadata.insert(
-        "runtime_device_override".to_string(),
-        serde_json::json!({"device": "cpu", "source": "managed_launcher"}),
-    );
+fn fem_planner_uses_managed_cpu_and_gpu_overrides_without_erasing_authored_device_request() {
+    for (device, expected) in [
+        ("cpu", fullmag_ir::ExecutionDevice::Cpu),
+        ("gpu", fullmag_ir::ExecutionDevice::Gpu),
+    ] {
+        let mut ir = mixed_cpu_relaxation_ir(
+            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+        );
+        ir.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({"device": "auto", "precision": "double"}),
+        );
+        ir.problem_meta.runtime_metadata.insert(
+            "runtime_device_override".to_string(),
+            serde_json::json!({"device": device, "source": "managed_launcher"}),
+        );
 
-    let planned = plan(&ir).expect("managed CPU override must feed the effective plan request");
-    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
-        panic!("mixed relaxation must resolve to FEM")
-    };
-    let provenance = fem
-        .mesh_build_report
-        .as_ref()
-        .and_then(|report| report.mixed_topology_provenance.as_ref())
-        .expect("mixed plan must bind effective execution provenance");
-    assert_eq!(
-        ir.problem_meta.runtime_metadata["runtime_selection"]["device"], "auto",
-        "planning must not rewrite authored script intent",
-    );
-    assert_eq!(
-        ir.problem_meta.runtime_metadata["runtime_device_override"]["source"],
-        "managed_launcher",
-    );
-    assert_eq!(
-        provenance.requested_device,
-        fullmag_ir::ExecutionDevice::Cpu,
-        "plan provenance must bind the effective launcher request",
-    );
+        let planned = plan(&ir).expect("managed override must feed the effective plan request");
+        let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+            panic!("mixed relaxation must resolve to FEM")
+        };
+        let provenance = fem
+            .mesh_build_report
+            .as_ref()
+            .and_then(|report| report.mixed_topology_provenance.as_ref())
+            .expect("mixed plan must bind effective execution provenance");
+        assert_eq!(
+            ir.problem_meta.runtime_metadata["runtime_selection"]["device"], "auto",
+            "planning must not rewrite authored script intent",
+        );
+        assert_eq!(
+            ir.problem_meta.runtime_metadata["runtime_device_override"]["source"],
+            "managed_launcher",
+        );
+        assert_eq!(
+            provenance.requested_device, expected,
+            "plan provenance must bind the effective launcher request for {device}",
+        );
+    }
 }
 
 #[test]

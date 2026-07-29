@@ -71,7 +71,8 @@ use crate::solver_runtime::fem_crossover::resolve_auto_fem_plan_device;
 #[cfg(feature = "fem-gpu")]
 use crate::solver_runtime::selection::all_in_gpu_fem_required;
 pub(crate) use crate::solver_runtime::selection::{
-    effective_fem_device_request, resolve_fdm_engine, resolve_fdm_engine_with_trail,
+    effective_fem_device_request, effective_fem_device_request_for_plan, resolve_fdm_engine,
+    resolve_fdm_engine_with_trail,
 };
 #[cfg(feature = "fem-gpu")]
 use crate::types::FemPoissonDemagProvenance;
@@ -1003,7 +1004,10 @@ fn resolve_fem_engine_with_registry(
     preview_enabled: bool,
 ) -> Result<DispatchEngineResolution, RunError> {
     apply_runtime_gpu_index(problem, "fem");
-    let requested_device = effective_fem_device_request(problem);
+    let requested_device = plan.map_or_else(
+        || effective_fem_device_request(problem),
+        |plan| effective_fem_device_request_for_plan(problem, plan),
+    );
     let forced_device = requested_device != "auto";
     let fem_crossover_decision = plan
         .filter(|_| !forced_device)
@@ -1332,7 +1336,7 @@ pub(crate) fn resolve_fem_engine_for_plan_with_trail(
                     .to_string(),
         });
     }
-    let requested_device = effective_fem_device_request(problem);
+    let requested_device = effective_fem_device_request_for_plan(problem, plan);
     let fem_crossover_decision =
         (requested_device == "auto").then(|| resolve_auto_fem_plan_device(plan, preview_enabled));
     apply_fem_gpu_plan_constraints(
@@ -7020,6 +7024,50 @@ mod tests {
                 reason.to_string()
             },
         }
+    }
+
+    #[test]
+    fn planned_mixed_gpu_engine_uses_bound_device_after_environment_changes_to_cpu() {
+        let _guard = env_lock().lock().expect("env mutex");
+        let problem = fem_policy_problem();
+        let mut plan = tiny_fem_plan();
+        plan.mesh_build_report = Some(
+            serde_json::from_value(serde_json::json!({
+                "build_mode": "shared_domain",
+                "mixed_topology_provenance": {
+                    "requested_topology": "mixed_p1",
+                    "resolved_topology": "mixed_p1",
+                    "accepted_certificate_fingerprint": "sha256:bound",
+                    "requested_device": "gpu",
+                    "precision": "double",
+                    "capability_status": "implemented"
+                }
+            }))
+            .expect("minimal mixed topology build report must deserialize"),
+        );
+
+        unsafe {
+            std::env::set_var("FULLMAG_FEM_EXECUTION", "cpu");
+        }
+        let requested_device = effective_fem_device_request_for_plan(&problem, &plan);
+        let resolution = resolve_fem_engine_with_availability(
+            &problem,
+            &requested_device,
+            false,
+            1,
+            &native_fem_availability_for_test(true, true, "test CPU/GPU availability"),
+        );
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+        }
+
+        assert_eq!(requested_device, "gpu");
+        assert_eq!(
+            resolution
+                .expect("bound GPU plan must resolve with an available GPU lane")
+                .engine,
+            FemEngine::NativeGpu,
+        );
     }
 
     #[test]

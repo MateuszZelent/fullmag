@@ -841,7 +841,7 @@ mod mesh_asset_validation_tests {
     }
 
     #[test]
-    fn mixed_topology_provenance_rejects_capability_promotion_without_operator_proof() {
+    fn mixed_topology_provenance_rejects_unproved_public_capability_status() {
         for status in ["source_visible", "production_executable", "validated"] {
             let mut payload = mixed_certificate_asset_value();
             let fingerprint = payload["build_report"]["mixed_layer_topology_certificate"]
@@ -859,10 +859,45 @@ mod mesh_asset_validation_tests {
                 .expect_err("unproved mixed-P1 capability promotion must reject");
 
             assert!(
-                errors.join("; ").contains("capability_status must be unsupported"),
+                errors
+                    .join("; ")
+                    .contains("capability_status must be unsupported or implemented"),
                 "status={status}: {errors:?}"
             );
         }
+    }
+
+    #[test]
+    fn mixed_topology_provenance_accepts_implemented_operator_precursor_round_trip() {
+        let mut payload = mixed_certificate_asset_value();
+        let fingerprint = payload["build_report"]["mixed_layer_topology_certificate"]
+            ["topology_fingerprint"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let mut provenance = mixed_topology_provenance_value(&fingerprint);
+        provenance["capability_status"] = serde_json::json!("implemented");
+        payload["build_report"]["mixed_topology_provenance"] = provenance;
+
+        let asset: FemDomainMeshAssetIR = serde_json::from_value(payload).unwrap();
+        asset
+            .validate()
+            .expect("implemented is the bounded mixed-P1 operator precursor status");
+
+        let encoded = serde_json::to_value(&asset).expect("asset must serialize");
+        let round_trip: FemDomainMeshAssetIR =
+            serde_json::from_value(encoded).expect("asset must deserialize");
+        round_trip
+            .validate()
+            .expect("implemented precursor provenance must remain valid after round trip");
+        assert_eq!(
+            round_trip
+                .build_report
+                .and_then(|report| report.mixed_topology_provenance)
+                .expect("round trip must retain mixed provenance")
+                .capability_status,
+            crate::FemMixedTopologyCapabilityStatusIR::Implemented,
+        );
     }
 
     #[test]
@@ -2858,11 +2893,13 @@ impl FemDomainMeshAssetIR {
                         .to_string(),
                 );
             }
-            if provenance.capability_status
-                != crate::FemMixedTopologyCapabilityStatusIR::Unsupported
-            {
+            if !matches!(
+                provenance.capability_status,
+                crate::FemMixedTopologyCapabilityStatusIR::Unsupported
+                    | crate::FemMixedTopologyCapabilityStatusIR::Implemented
+            ) {
                 errors.push(
-                    "fem_domain_mesh_asset mixed topology provenance capability_status must be unsupported until a mixed-P1 physics operator is production executable"
+                    "fem_domain_mesh_asset mixed topology provenance capability_status must be unsupported or implemented until managed public runtime proof exists"
                         .to_string(),
                 );
             }

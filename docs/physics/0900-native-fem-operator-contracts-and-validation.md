@@ -114,7 +114,9 @@ The current production target is low-order P1 FEM unless a feature-specific
 high-order contract says otherwise.
 
 Polynomial order and cell topology are independent capability dimensions. The
-current executable P1 path is tetrahedral. The native mixed-P1 target in
+current production-executable P1 path remains tetrahedral. Bounded mixed-P1
+CPU and GPU paths are implemented but await managed public-runtime proof. The
+native mixed-P1 target in
 `docs/physics/0106-fem-mixed-prism-pyramid-shared-domain.md` adds canonical
 `prism6`, `pyramid5`, `tet4`, `tri3`, and `quad4` contracts; it is not executable
 or validated merely because all cells are first order. Unsupported topology
@@ -221,11 +223,25 @@ hot_loop_compute_d2h_bytes = 0
 hot_loop_compute_host_sync_count = 0
 ```
 
-Initial strict GPU scope is tetrahedral P1, double precision, non-periodic
-shared-domain airbox Poisson with Dirichlet/Robin boundary policy. Mixed-P1,
-`fe_order > 1`, periodic demag, and Fredkin-Koehler GPU demag must reject with
-an actionable diagnostic until their operator contracts and validation gates
-are implemented and passed.
+Initial production-executable strict GPU scope remains tetrahedral P1, double
+precision, non-periodic shared-domain airbox Poisson with Dirichlet/Robin
+boundary policy. The bounded certificate-bound mixed-P1 relaxation tuple is
+`implemented` for explicit GPU, but is not yet `production_executable` or
+`validated`. Wider mixed-P1 requests, `fe_order > 1`, periodic demag, and
+Fredkin-Koehler GPU demag must reject with an actionable diagnostic.
+
+The bounded mixed-P1 extension is specified in
+`docs/physics/0106-fem-mixed-prism-pyramid-shared-domain.md`. Its Poisson
+stiffness spans the complete conforming prism/pyramid/tetrahedron domain, while
+the `m -> rhs` source and `u -> H_demag` recovery operators integrate and
+normalize only over magnetic cells. In particular, air-cell mass at shared
+interface nodes must not dilute recovered magnetic fields. The topology-aware
+MFEM operators are assembled once per topology generation, fingerprint-bound,
+uploaded once, and then applied through the existing device CSR/Hypre path.
+Mixed-P1 remains at `implemented` until an identical-fingerprint managed
+CPU/GPU run proves operator parity, device identity, empty fallback trails, and
+raw zero-transfer/zero-host-sync compute counters. Only that next proof may
+justify `production_executable`; it does not by itself establish `validated`.
 
 Poisson/airbox/Robin is an executable approximation to open-boundary
 magnetostatics. It is not a blanket proof of full-space demag accuracy. Release
@@ -291,8 +307,8 @@ qualification.
 - [ ] CPU and GPU lanes share physics semantics.
 - [ ] Hot paths have no avoidable heap allocation.
 - [ ] Capability matrix entries distinguish executable from validated.
-- [ ] Mixed-P1 lanes remain gated until topology-specific basis, quadrature,
-  Jacobian, masking, operator, ABI, artifact, and managed-runtime tests pass.
+- [ ] Mixed-P1 lanes remain below `production_executable` until the implemented
+  topology-specific operators pass the managed runtime and artifact gates.
 - [ ] Runtime artifacts preserve operator telemetry and solver provenance.
 
 ## 13. Deferred Work

@@ -1,6 +1,6 @@
 //! Runtime selection helpers for user/env policy, registry lookup, and device hints.
 
-use fullmag_ir::ProblemIR;
+use fullmag_ir::{ExecutionDevice, FemPlanIR, ProblemIR};
 use serde_json::Value;
 
 use crate::fdm::gpu::cuda::native as native_fdm;
@@ -89,6 +89,30 @@ pub(crate) fn effective_fem_device_request(problem: &ProblemIR) -> String {
         runtime_device_override(problem),
         &snapshot,
     )
+}
+
+pub(crate) fn effective_fem_device_request_from_metadata(problem: &ProblemIR) -> String {
+    effective_fem_device_request_from_sources(
+        runtime_device(problem),
+        runtime_device_override(problem),
+        None,
+        false,
+    )
+}
+
+pub(crate) fn effective_fem_device_request_for_plan(
+    problem: &ProblemIR,
+    plan: &FemPlanIR,
+) -> String {
+    plan.mesh_build_report
+        .as_ref()
+        .and_then(|report| report.mixed_topology_provenance.as_ref())
+        .map(|provenance| match provenance.requested_device {
+            ExecutionDevice::Cpu => "cpu".to_string(),
+            ExecutionDevice::Gpu => "gpu".to_string(),
+            ExecutionDevice::Auto => "auto".to_string(),
+        })
+        .unwrap_or_else(|| effective_fem_device_request(problem))
 }
 
 fn effective_fem_device_request_from_snapshot(

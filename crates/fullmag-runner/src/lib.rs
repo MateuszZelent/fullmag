@@ -1424,15 +1424,21 @@ fn require_supported_fem_topology(
             message: "fem_mixed_p1_runtime_provenance_stale: plan provenance does not match the exact mesh fingerprint/topology/precision; fallback=none".to_string(),
         });
     }
-    let requested_device = crate::solver_runtime::selection::effective_fem_device_request(problem);
-    let expected_device = match requested_device.as_str() {
+    let requested_device = match provenance.requested_device {
+        fullmag_ir::ExecutionDevice::Cpu => "cpu".to_string(),
+        fullmag_ir::ExecutionDevice::Gpu => "gpu".to_string(),
+        fullmag_ir::ExecutionDevice::Auto => "auto".to_string(),
+    };
+    let metadata_device =
+        crate::solver_runtime::selection::effective_fem_device_request_from_metadata(problem);
+    let expected_device = match metadata_device.as_str() {
         "cpu" => fullmag_ir::ExecutionDevice::Cpu,
         "gpu" | "cuda" => fullmag_ir::ExecutionDevice::Gpu,
         _ => fullmag_ir::ExecutionDevice::Auto,
     };
     if provenance.requested_device != expected_device {
         return Err(RunError {
-            message: "fem_mixed_p1_runtime_provenance_stale: effective device does not match plan provenance; fallback=none".to_string(),
+            message: "fem_mixed_p1_runtime_provenance_stale: authored/managed device metadata does not match plan-bound effective device; fallback=none".to_string(),
         });
     }
     if provenance.capability_status != fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented {
@@ -3359,8 +3365,9 @@ pub fn resolve_planned_runtime_engine(
                 accelerator: accelerator.to_string(),
             })
         }
-        BackendPlanIR::Fem(_) => {
-            let engine = dispatch::resolve_fem_engine_with_trail(problem)?.engine;
+        BackendPlanIR::Fem(fem) => {
+            let engine =
+                dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem, false)?.engine;
             let (engine_id, engine_label, accelerator) = fem_runtime_engine_info(engine);
             Ok(RuntimeEngineInfo {
                 backend_family: "fem".to_string(),
@@ -4467,7 +4474,7 @@ mod tests {
             .requested_device = fullmag_ir::ExecutionDevice::Gpu;
         assert_eq!(
             topology_guard_error(&problem, &stale_device),
-            "fem_mixed_p1_runtime_provenance_stale: effective device does not match plan provenance; fallback=none"
+            "fem_mixed_p1_runtime_provenance_stale: authored/managed device metadata does not match plan-bound effective device; fallback=none"
         );
 
         for status in [
@@ -4664,6 +4671,36 @@ mod tests {
     }
 
     #[test]
+    fn fem_topology_guard_keeps_bound_gpu_when_environment_changes_to_cpu_after_planning() {
+        let _env_guard = ENV_LOCK.lock().expect("lock FEM execution environment");
+        let (mut problem, mut plan) = certified_mixed_cpu_relaxation_guard_fixture();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            json!({"device": "gpu", "precision": "double"}),
+        );
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            unreachable!()
+        };
+        fem.mesh_build_report
+            .as_mut()
+            .and_then(|report| report.mixed_topology_provenance.as_mut())
+            .expect("mixed fixture carries provenance")
+            .requested_device = fullmag_ir::ExecutionDevice::Gpu;
+
+        unsafe {
+            std::env::set_var("FULLMAG_FEM_EXECUTION", "cpu");
+        }
+        let result = require_supported_fem_topology(&problem, &plan);
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+        }
+
+        result.expect(
+            "a live environment change must not redirect or invalidate a GPU-bound execution plan",
+        );
+    }
+
+    #[test]
     fn fem_topology_guard_rejects_gpu_mixed_p1_with_unsupported_physics() {
         let (mut problem, mut plan) = certified_mixed_cpu_relaxation_guard_fixture();
         problem.problem_meta.runtime_metadata.insert(
@@ -4692,7 +4729,7 @@ mod tests {
     }
 
     #[test]
-    fn fem_topology_guard_uses_the_same_effective_device_as_engine_resolution() {
+    fn fem_topology_guard_rejects_managed_override_changed_after_planning() {
         let (mut problem, plan) = certified_mixed_cpu_relaxation_guard_fixture();
         problem.problem_meta.runtime_metadata.insert(
             "runtime_selection".to_string(),
@@ -4711,18 +4748,11 @@ mod tests {
             json!({"device": "gpu", "source": "managed_launcher"}),
         );
         let error = require_supported_fem_topology(&problem, &plan)
-            .expect_err("effective managed GPU request must reject before native startup");
-        assert!(
-            error
-                .message
-                .contains("fem_mixed_p1_runtime_provenance_stale")
-                || error
-                    .message
-                    .contains("fem_mixed_p1_runtime_scope_rejected"),
-            "{}",
-            error.message
+            .expect_err("changing a managed override after planning must reject as stale");
+        assert_eq!(
+            error.message,
+            "fem_mixed_p1_runtime_provenance_stale: authored/managed device metadata does not match plan-bound effective device; fallback=none"
         );
-        assert!(error.message.contains("fallback=none"));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # FEM mixed prism/pyramid shared-domain mesh
 
-- Status: bounded FEM CPU/double mixed-P1 relaxation lane implemented in source/contracts; managed public-runtime proof pending; GPU and wider scopes fail closed
+- Status: bounded FEM CPU/GPU double mixed-P1 relaxation lanes implemented in source/contracts; managed public-runtime proof pending; wider scopes fail closed
 - Owners: Fullmag core
 - Last updated: 2026-07-29
 - Related ADRs: `docs/adr/0021-native-mixed-p1-fem-topology.md`
@@ -29,20 +29,19 @@ scale. The target solver mesh is one conforming shared domain with:
 This note makes that topology implementation-ready. Python authoring and Gmsh
 extraction, `MeshIR`, the runner/native ABI, the mixed-layer certificate, FMMT
 v2 transport, OpenAPI resources, and the control-room decoder/viewport already
-preserve typed variable-width topology. The certified topology is executable
-only through the bounded CPU lane below. The GPU path and every wider physics,
-geometry, precision, or workflow tuple remain fail-closed before native
-operator startup.
+preserve typed variable-width topology. The certified topology is implemented
+through only the bounded CPU and GPU lanes below. Every wider physics, geometry,
+precision, device, or workflow tuple remains fail-closed before native operator
+startup.
 
 The first qualification target is deliberately narrow: one axis-aligned
 `Box`, P1, one conforming shared-domain airbox, uniform `Ms` and `Aex`, exchange,
-uniform Zeeman, Poisson Robin or Dirichlet demag, explicit FEM CPU double
+uniform Zeeman, Poisson Robin or Dirichlet demag, explicit FEM CPU or GPU double
 precision, strict execution, and PG-BB, NCG, or overdamped LLG relaxation.
-That exact certificate-bound tuple is currently `implemented`, not
+Those exact certificate-bound device tuples are currently `implemented`, not
 `production_executable` or `validated`, because no immutable managed public
-SP4 runtime report exists yet.
-GPU, `auto`, single/extended/hybrid execution, and wider tuples remain
-`unsupported`; no fallback is permitted.
+CPU/GPU SP4 runtime report exists yet. Device `auto`, single/extended/hybrid
+execution, and wider tuples remain `unsupported`; no fallback is permitted.
 
 ## 2. Physical model
 
@@ -205,10 +204,51 @@ contract. They may use different kernels or assembly strategies, but must agree
 on connectivity order, basis traces, signs, material masks, energy ownership,
 quadrature sufficiency, requested/resolved provenance, and rejection reasons.
 
-The target is double precision only. The bounded explicit CPU lane is
-`implemented` in source and operator contracts; the GPU lane has no runtime claim and forced GPU
-cannot fall back to CPU. Neither lane may call the legacy prism-to-tet
-compatibility splitter in strict mode.
+The target is double precision only. The bounded explicit CPU and GPU lanes are
+`implemented` in source, operator, planner, and startup contracts. Neither lane
+is yet `production_executable` or `validated`; forced GPU cannot fall back to
+CPU. Neither lane may call the legacy prism-to-tet compatibility splitter in
+strict mode.
+
+#### 3.3.1 Mixed-P1 GPU operator and residency contract
+
+The first GPU implementation slice reuses topology-aware MFEM assembly during
+runtime setup and executes the resulting sparse operators on the device. It
+does not add prism- or pyramid-specific time-step kernels when the assembled
+CSR operator already represents the same weak form. For one immutable topology
+generation, setup must:
+
+1. assemble the exchange stiffness and magnetic mass projection from magnetic
+   `prism6` cells;
+2. assemble Poisson stiffness and the selected Robin boundary mass over the
+   complete conforming `prism6 | pyramid5 | tet4` domain;
+3. assemble `B_x/B_y/B_z: m -> rhs` using only magnetic-cell quadrature and
+   the existing positive weak-form source convention;
+4. assemble `R_x/R_y/R_z: phi -> H_demag` using only magnetic-cell recovery
+   weights, so shared interface nodes are not normalized by air-cell mass;
+5. bind every operator to the accepted typed-topology fingerprint and the
+   quadrature/material policy; and
+6. upload each CSR structure and value buffer exactly once for that topology
+   generation.
+
+The accepted-step and rejected-trial hot loop keeps magnetization, Poisson RHS,
+potential, recovered demag field, exchange field, effective field, and energy
+reductions device-resident. Strict GPU execution rejects rather than selecting
+`hybrid_cpu_poisson` or performing an implicit GPU-to-CPU fallback. Normal
+controller decisions may publish bounded scalar diagnostics, but the qualifying
+compute counters must report zero H2D bytes, zero D2H bytes, and zero host
+synchronizations for field/operator evaluation after setup. Qualification must
+inspect those raw counters, not infer clean residency from a derived status
+boolean.
+
+The same assembled operators serve PG-BB, nonlinear CG, and overdamped LLG;
+the relaxators must not inspect fixed-width tetrahedral connectivity. Before
+the GPU capability can move beyond `implemented`, a managed identical-topology
+CPU/GPU run must prove matching topology fingerprints, correct CUDA/Hypre device
+identity, `device_hypre_poisson`, empty fallback trails, field/energy/torque
+parity, and the residency counters above. Source tests, CUDA allocation tests,
+or successful setup/rollback alone do not promote executable or validated
+status.
 
 ### 3.4 Exact-layer and shared-domain certificate
 
@@ -234,6 +274,44 @@ hash and region/material realization. For the first workload it proves:
 
 The certificate fails closed. A warning, inferred layer count, clipped cell,
 tet conversion, or unversioned connectivity does not satisfy it.
+
+#### 3.4.2 Deterministic transition-air quality repair
+
+The transition partition is a numerical realization detail, but its quality
+gate is part of the physical-domain acceptance contract: an accepted mesh must
+retain the three typed cell families and a positive, bounded-shape map for
+every cell used by the shared-domain Poisson weak form. In particular, the
+per-family `tetra_decomposition_scaled_jacobian.v1` p05 floor remains `0.1`;
+it must not be reduced to make an SP4 artifact appear accepted.
+
+The 2026-07-29 SP4 topology investigation found that the existing bounded
+pyramid-apex-only displacement can leave far-air `tet4` p05 below this floor.
+The smallest reproduction produced `prism6=0.24462655453597`,
+`pyramid5=0.14453924850201363`, and `tet4=0.060794081245974886`; this is a
+strict rejection, not a fallback path. Increasing airbox source refinement in
+that reproduction reduced the `tet4` p05 further, so source-side sizing alone
+is not an acceptance repair.
+
+An implementation repair may use a Gmsh tetrahedral optimization or a local
+transition-air remeshing/refinement step only when it proves all of the
+following before a certificate is minted:
+
+1. the magnetic `prism6` connectivity, exactly two magnetic planes, markers,
+   and conforming prism/pyramid interface are unchanged;
+2. `prism6`, `pyramid5`, and `tet4` p05 all meet the same `0.1` floor, with no
+   regression of the first two families below their pre-repair values;
+3. the accepted output is deterministic across two fresh Gmsh processes with
+   `Mesh.RandomFactor=0`, exactly one effective Gmsh thread, fixed algorithm,
+   and fixed optimization ordering; and
+4. a fresh topology fingerprint and full certificate/build-report evidence are
+   emitted from the repaired mesh. The repair must never overwrite a stale
+   fingerprint or reuse pre-repair quality evidence.
+
+Changing the quality floor, silently falling back to free tetrahedra, or
+promoting a mesh with an incomplete certificate is forbidden. If a Gmsh
+optimization method changes the deterministic generated topology, its method,
+iteration/threshold policy, and ordering are certificate inputs and require
+new frozen evidence plus the regression gates in Section 5.
 
 #### 3.4.1 Language-neutral topology fingerprint v3
 
@@ -319,9 +397,9 @@ them without exposing Gmsh element IDs or algorithm names. Python-to-IR-to-UI-
 to-Python round-trip must preserve requested topology and exact layer count.
 
 The public Python API and its lowering preserve the requested prismatic
-topology, transition policy, and exact layer count. The bounded mixed-P1 CPU
-implementation exists, but public production status remains unclaimed until
-the exact managed SP4 run stores immutable execution evidence.
+topology, transition policy, and exact layer count. The bounded mixed-P1 CPU and
+GPU implementations exist, but public production status remains unclaimed until
+the exact managed CPU/GPU SP4 runs store immutable execution evidence.
 
 The bounded precursor command is
 `just verify-fem-mixed-prism-airbox-runtime`. It reads the exact canonical SP4
@@ -372,9 +450,12 @@ unchanged.
 `problem_meta.runtime_metadata.runtime_selection.device` remains the authored
 script request. A managed launcher records its explicit overlay separately as
 `runtime_device_override={"device":"cpu|gpu","source":"managed_launcher"}`.
-Planning and runtime engine resolution consume the effective overlay while
-session provenance continues to report the authored request; neither layer may
-rewrite the model-builder runtime map to make the overlay look authored.
+Planning resolves the effective device from authored intent plus that immutable
+launcher overlay and binds it into mixed-topology provenance. Planned startup
+and engine resolution consume the bound decision rather than re-reading mutable
+environment state, while session provenance continues to report the authored
+request and resolved engine separately. No layer may rewrite the model-builder
+runtime map to make the overlay look authored.
 
 ### 4.3 Planner and capability matrix
 
@@ -389,12 +470,13 @@ fem.cpu.exchange_demag.mixed_p1
 fem.gpu.exchange_demag.mixed_p1
 ```
 
-The four mesh capabilities and bounded CPU operator capability are
-`implemented`; the GPU operator capability is `unsupported`, and GPU mesh
-transport is only `semantic_only`. The legal implementation target is strict
-FEM, explicit CPU, double precision, the narrow workload in Section 1, and no
-fallback. `auto` remains rejecting. Authored device intent, a managed-launcher
-override, and resolved execution must remain distinct provenance.
+The four mesh capabilities and both bounded CPU/GPU operator capabilities are
+`implemented`. Neither operator lane is `production_executable` or `validated`
+until the next managed proof. The legal implementation target is strict FEM,
+explicit CPU or GPU, double precision, the narrow workload in Section 1, and
+no fallback. `auto` remains rejecting. Authored device intent, a managed-launcher
+override, the plan-bound effective device, and resolved execution must remain
+distinct provenance.
 
 Until separately qualified, planning rejects FEM/BEM demag, PBC/Floquet,
 DMI/STT/thermal/magnetoelastic terms, regional projections, eigen/frequency-
@@ -411,8 +493,9 @@ second FEM solver or hidden element conversion.
 
 The native ABI carries typed, variable-width cell/facet connectivity. CPU and
 GPU readiness probes reject an ABI/topology version they do not understand
-before allocating solver state, and the current physics gate rejects every
-non-`tet4`/`tri3` mesh before operator allocation.
+before allocating solver state. The bounded CPU and GPU mixed-P1 gates admit
+only the certificate-bound tuples in Section 1; every wider physics tuple still
+rejects before unsupported operator allocation.
 
 ### 4.5 API, binary transport, and control room
 
@@ -464,8 +547,9 @@ It freezes topology invariants, not incidental air-tet counts.
 
 ### 5.2 Operator checks
 
-The CPU implemented slice is backed by the following operator contracts; GPU
-promotion and any future `validated` promotion require their own fresh evidence:
+The CPU and GPU implemented slices are backed by the following operator
+contracts; any `production_executable` or `validated` promotion requires its
+own fresh managed evidence:
 
 - reference basis/gradient/Jacobian and quadrature tests for prism6, pyramid5,
   tet4, tri3, and quad4;
@@ -516,7 +600,7 @@ No lower level implies a higher one.
 - [x] Fail-closed planner and machine-readable capabilities
 - [x] Variable-width mesh container and native ABI
 - [x] FEM CPU mixed-element operators
-- [ ] FEM GPU mixed-element operators
+- [x] FEM GPU mixed-element operators
 - [x] FMMT v2, OpenAPI, generated client, and typed viewport transport
 - [ ] Managed runtime and physics validation
 - [ ] Production qualification report
