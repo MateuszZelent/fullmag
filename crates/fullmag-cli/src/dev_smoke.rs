@@ -11,6 +11,8 @@ use crate::live_workspace::LocalLiveWorkspace;
 const DEV_SMOKE_TIMEOUT: Duration = Duration::from_secs(20);
 const DEV_SMOKE_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const FMMT_HEADER_LEN: usize = 32;
+const FMMT_V2_HEADER_LEN: usize = 64;
+const FMMT_KIND_F64_U32: u8 = 1;
 
 #[derive(Debug, Deserialize)]
 struct MeshSummaryResource {
@@ -75,11 +77,13 @@ struct SceneObjectResource {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FmmtHeader {
+    version: u8,
     node_count: u32,
     element_count: u32,
     boundary_face_count: u32,
     element_marker_count: u32,
     boundary_marker_count: u32,
+    cell_type_counts: [u32; 4],
 }
 
 pub(crate) fn run_post_materialization_dev_smoke_tests(
@@ -203,6 +207,32 @@ fn run_mesh_api_smoke_test() -> Result<String> {
             shared_header.node_count,
             shared_header.element_count
         );
+    }
+    if object_header.version != shared_header.version {
+        bail!(
+            "object topology {} uses FMMT v{} but shared-domain topology uses FMMT v{}",
+            object_id,
+            object_header.version,
+            shared_header.version
+        );
+    }
+    for (label, (object_count, shared_count)) in
+        ["tet4", "prism6", "pyramid5", "hex8"].into_iter().zip(
+            object_header
+                .cell_type_counts
+                .into_iter()
+                .zip(shared_header.cell_type_counts),
+        )
+    {
+        if object_count > shared_count {
+            bail!(
+                "object topology {} has more {} cells than shared-domain topology (object={}, shared={})",
+                object_id,
+                label,
+                object_count,
+                shared_count
+            );
+        }
     }
 
     let expects_airbox = manifest.domain_mesh_mode.as_deref()
@@ -415,10 +445,18 @@ fn parse_fmmt_header(bytes: &[u8]) -> Result<FmmtHeader> {
     if &bytes[0..4] != b"FMMT" {
         bail!("invalid FMMT magic in mesh topology payload");
     }
-    if bytes[4] != 1 {
-        bail!("unsupported FMMT version {}", bytes[4]);
+    if bytes[5] != FMMT_KIND_F64_U32 {
+        bail!("unsupported FMMT topology kind {}", bytes[5]);
     }
 
+    match bytes[4] {
+        1 => parse_fmmt_v1_header(bytes),
+        2 => parse_fmmt_v2_header(bytes),
+        version => bail!("unsupported FMMT version {version}"),
+    }
+}
+
+fn parse_fmmt_v1_header(bytes: &[u8]) -> Result<FmmtHeader> {
     let node_count = u32::from_le_bytes(bytes[8..12].try_into().expect("slice length"));
     let element_count = u32::from_le_bytes(bytes[12..16].try_into().expect("slice length"));
     let boundary_face_count = u32::from_le_bytes(bytes[16..20].try_into().expect("slice length"));
@@ -439,12 +477,140 @@ fn parse_fmmt_header(bytes: &[u8]) -> Result<FmmtHeader> {
     }
 
     Ok(FmmtHeader {
+        version: 1,
         node_count,
         element_count,
         boundary_face_count,
         element_marker_count,
         boundary_marker_count,
+        cell_type_counts: [element_count, 0, 0, 0],
     })
+}
+
+fn parse_fmmt_v2_header(bytes: &[u8]) -> Result<FmmtHeader> {
+    if bytes.len() < FMMT_V2_HEADER_LEN {
+        bail!(
+            "FMMT v2 buffer too short: got {} bytes, need at least {}",
+            bytes.len(),
+            FMMT_V2_HEADER_LEN
+        );
+    }
+
+    let node_count = read_u32(bytes, 8);
+    let element_count = read_u32(bytes, 12);
+    let boundary_face_count = read_u32(bytes, 16);
+    let cell_connectivity_count = read_u32(bytes, 20);
+    let facet_connectivity_count = read_u32(bytes, 24);
+    let element_marker_count = read_u32(bytes, 28);
+    let boundary_marker_count = read_u32(bytes, 32);
+    let header_len = read_u32(bytes, 36) as usize;
+    if header_len != FMMT_V2_HEADER_LEN || !header_len.is_multiple_of(8) {
+        bail!(
+            "FMMT v2 header length must be {} and 8-byte aligned, got {}",
+            FMMT_V2_HEADER_LEN,
+            header_len
+        );
+    }
+    if element_marker_count != 0 && element_marker_count != element_count {
+        bail!(
+            "FMMT v2 cell marker count must be zero or {}, got {}",
+            element_count,
+            element_marker_count
+        );
+    }
+    if boundary_marker_count != 0 && boundary_marker_count != boundary_face_count {
+        bail!(
+            "FMMT v2 facet marker count must be zero or {}, got {}",
+            boundary_face_count,
+            boundary_marker_count
+        );
+    }
+
+    let position_count = (node_count as usize)
+        .checked_mul(3)
+        .ok_or_else(|| anyhow!("FMMT v2 position count overflow"))?;
+    let cell_offset_count = (element_count as usize)
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("FMMT v2 cell offset count overflow"))?;
+    let facet_offset_count = (boundary_face_count as usize)
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("FMMT v2 facet offset count overflow"))?;
+    let sections = [
+        (position_count, 8, "positions"),
+        (element_count as usize, 4, "cell types"),
+        (cell_offset_count, 4, "cell offsets"),
+        (cell_connectivity_count as usize, 4, "cell connectivity"),
+        (boundary_face_count as usize, 4, "facet types"),
+        (boundary_face_count as usize, 4, "facet roles"),
+        (facet_offset_count, 4, "facet offsets"),
+        (facet_connectivity_count as usize, 4, "facet connectivity"),
+        (element_marker_count as usize, 4, "cell markers"),
+        (boundary_marker_count as usize, 4, "facet markers"),
+    ];
+    let mut offset = header_len;
+    let mut cell_types = 0..0;
+    for (index, (count, bytes_per_element, label)) in sections.into_iter().enumerate() {
+        let range = fmmt_v2_section(&mut offset, count, bytes_per_element, label)?;
+        if index == 1 {
+            cell_types = range;
+        }
+    }
+    if bytes.len() != offset {
+        bail!(
+            "FMMT byte-length mismatch: expected {}, got {}",
+            offset,
+            bytes.len()
+        );
+    }
+
+    let mut counts = [0u32; 4];
+    for code in bytes[cell_types]
+        .chunks_exact(4)
+        .map(|raw| u32::from_le_bytes(raw.try_into().expect("cell type code length")))
+    {
+        let index = match code {
+            1..=4 => code as usize - 1,
+            _ => bail!("FMMT v2 contains unknown cell type code {code}"),
+        };
+        let count = &mut counts[index];
+        *count += 1;
+    }
+
+    Ok(FmmtHeader {
+        version: 2,
+        node_count,
+        element_count,
+        boundary_face_count,
+        element_marker_count,
+        boundary_marker_count,
+        cell_type_counts: counts,
+    })
+}
+
+fn fmmt_v2_section(
+    offset: &mut usize,
+    element_count: usize,
+    bytes_per_element: usize,
+    label: &str,
+) -> Result<std::ops::Range<usize>> {
+    let start = offset
+        .checked_add(7)
+        .map(|value| value & !7)
+        .ok_or_else(|| anyhow!("FMMT v2 {label} alignment overflow"))?;
+    let end = element_count
+        .checked_mul(bytes_per_element)
+        .and_then(|byte_len| start.checked_add(byte_len))
+        .ok_or_else(|| anyhow!("FMMT v2 {label} byte-length overflow"))?;
+    *offset = end;
+    Ok(start..end)
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(
+        bytes[offset..offset + 4]
+            .try_into()
+            .expect("u32 slice length"),
+    )
 }
 
 #[cfg(test)]
@@ -456,6 +622,7 @@ mod tests {
         let mut bytes = vec![0u8; FMMT_HEADER_LEN + 3 * 4 * 8 + 4 * 4 + 3 * 3 * 4 + 4 + 12];
         bytes[0..4].copy_from_slice(b"FMMT");
         bytes[4] = 1;
+        bytes[5] = 1;
         bytes[8..12].copy_from_slice(&(4u32).to_le_bytes());
         bytes[12..16].copy_from_slice(&(1u32).to_le_bytes());
         bytes[16..20].copy_from_slice(&(3u32).to_le_bytes());
@@ -465,6 +632,93 @@ mod tests {
         assert_eq!(header.node_count, 4);
         assert_eq!(header.element_count, 1);
         assert_eq!(header.boundary_face_count, 3);
+    }
+
+    #[test]
+    fn parse_fmmt_header_accepts_canonical_v2_mixed_payload() {
+        let bytes = mixed_fmmt_v2_payload();
+
+        let header = parse_fmmt_header(&bytes).expect("valid mixed FMMT v2 payload");
+
+        assert_eq!(header.version, 2);
+        assert_eq!(header.node_count, 8);
+        assert_eq!(header.element_count, 3);
+        assert_eq!(header.boundary_face_count, 2);
+        assert_eq!(header.element_marker_count, 3);
+        assert_eq!(header.boundary_marker_count, 2);
+        assert_eq!(header.cell_type_counts, [1, 1, 1, 0]);
+    }
+
+    #[test]
+    fn parse_fmmt_header_rejects_malformed_v2_payload_lengths() {
+        let valid = mixed_fmmt_v2_payload();
+        for malformed in [
+            &valid[..valid.len() - 1],
+            &[valid.as_slice(), &[0]].concat(),
+        ] {
+            let error = parse_fmmt_header(malformed)
+                .expect_err("truncated or trailing FMMT v2 bytes must reject");
+            assert!(
+                error.to_string().contains("byte-length mismatch"),
+                "{error:#}"
+            );
+        }
+    }
+
+    fn mixed_fmmt_v2_payload() -> Vec<u8> {
+        let node_count = 8u32;
+        let cell_types = [2u32, 3, 1];
+        let cell_offsets = [0u32, 6, 11, 15];
+        let cell_nodes = [0u32, 1, 2, 4, 5, 6, 0, 1, 2, 3, 4, 0, 1, 2, 4];
+        let facet_types = [1u32, 2];
+        let facet_roles = [1u32, 2];
+        let facet_offsets = [0u32, 3, 7];
+        let facet_nodes = [0u32, 1, 2, 0, 1, 5, 4];
+        let cell_markers = [1u32, 1, 2];
+        let facet_markers = [3u32, 4];
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"FMMT");
+        bytes.push(2);
+        bytes.push(1);
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        for count in [
+            node_count,
+            cell_types.len() as u32,
+            facet_types.len() as u32,
+            cell_nodes.len() as u32,
+            facet_nodes.len() as u32,
+            cell_markers.len() as u32,
+            facet_markers.len() as u32,
+        ] {
+            bytes.extend_from_slice(&count.to_le_bytes());
+        }
+        bytes.extend_from_slice(&64u32.to_le_bytes());
+        bytes.resize(64, 0);
+        append_f64_section(&mut bytes, &vec![0.0; node_count as usize * 3]);
+        append_u32_section(&mut bytes, &cell_types);
+        append_u32_section(&mut bytes, &cell_offsets);
+        append_u32_section(&mut bytes, &cell_nodes);
+        append_u32_section(&mut bytes, &facet_types);
+        append_u32_section(&mut bytes, &facet_roles);
+        append_u32_section(&mut bytes, &facet_offsets);
+        append_u32_section(&mut bytes, &facet_nodes);
+        append_u32_section(&mut bytes, &cell_markers);
+        append_u32_section(&mut bytes, &facet_markers);
+        bytes
+    }
+
+    fn append_f64_section(bytes: &mut Vec<u8>, values: &[f64]) {
+        bytes.resize(bytes.len().next_multiple_of(8), 0);
+        for value in values {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+
+    fn append_u32_section(bytes: &mut Vec<u8>, values: &[u32]) {
+        bytes.resize(bytes.len().next_multiple_of(8), 0);
+        for value in values {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
     }
 
     #[test]
@@ -542,18 +796,22 @@ mod tests {
             &summary,
             "arch_waveguide",
             super::FmmtHeader {
+                version: 1,
                 node_count: 128,
                 element_count: 512,
                 boundary_face_count: 96,
                 element_marker_count: 512,
                 boundary_marker_count: 96,
+                cell_type_counts: [512, 0, 0, 0],
             },
             super::FmmtHeader {
+                version: 1,
                 node_count: 17,
                 element_count: 41,
                 boundary_face_count: 23,
                 element_marker_count: 41,
                 boundary_marker_count: 23,
+                cell_type_counts: [41, 0, 0, 0],
             },
             7,
         );
