@@ -116,7 +116,7 @@
     "parameters": [
       {
         "python": "GeometryMeshHandle.thin_film.maximum_element_size",
-        "type": "float \\| \"auto\" \\| None",
+        "type": "float | \"auto\" | None",
         "default": "None",
         "si_unit": "\\mathrm m",
         "validation": "finite positive length, `\"auto\"`, or `None`; the bounded example supplies `3e-9`",
@@ -140,7 +140,7 @@
       },
       {
         "python": "GeometryMeshHandle.thin_film.topology",
-        "type": "\"tetrahedral\" \\| \"prismatic\" \\| None",
+        "type": "\"tetrahedral\" | \"prismatic\" | None",
         "default": "None",
         "si_unit": "1",
         "validation": "mixed-P1 requires `\"prismatic\"`",
@@ -150,7 +150,7 @@
       },
       {
         "python": "GeometryMeshHandle.thin_film.exact_layers",
-        "type": "bool \\| None",
+        "type": "bool | None",
         "default": "None",
         "si_unit": "1",
         "validation": "strict prismatic execution resolves `None` to `True` and rejects `False`",
@@ -160,7 +160,7 @@
       },
       {
         "python": "GeometryMeshHandle.thin_film.transition",
-        "type": "\"pyramid_to_tetrahedra\" \\| \"reject\" \\| None",
+        "type": "\"pyramid_to_tetrahedra\" | \"reject\" | None",
         "default": "None",
         "si_unit": "1",
         "validation": "mixed shared-domain execution requires `\"pyramid_to_tetrahedra\"`",
@@ -170,7 +170,7 @@
       },
       {
         "python": "GeometryMeshHandle.thin_film.order",
-        "type": "int \\| None",
+        "type": "int | None",
         "default": "None",
         "si_unit": "1",
         "validation": "prismatic execution accepts only `None` or `1` and resolves to P1",
