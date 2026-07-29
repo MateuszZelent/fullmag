@@ -11523,6 +11523,48 @@ fn fem_planner_accepts_certified_mixed_p1_cpu_double_and_rebinds_packed_certific
 }
 
 #[test]
+fn fem_planner_accepts_certified_mixed_p1_gpu_double_and_binds_gpu_provenance() {
+    let mut ir = mixed_cpu_relaxation_ir(
+        fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+        fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+    );
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "gpu", "precision": "double"}),
+    );
+
+    let planned = plan(&ir).expect("qualified mixed P1 GPU relaxation must plan");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("qualified mixed P1 GPU relaxation must resolve to FEM")
+    };
+    let report = fem
+        .mesh_build_report
+        .as_ref()
+        .expect("qualified mixed P1 GPU plan must preserve its build report");
+    let certificate = report
+        .mixed_layer_topology_certificate
+        .as_ref()
+        .expect("qualified mixed P1 GPU plan must carry its accepted certificate");
+    let provenance = report
+        .mixed_topology_provenance
+        .as_ref()
+        .expect("qualified mixed P1 GPU plan must bind mixed-topology provenance");
+
+    assert_eq!(
+        provenance.requested_device,
+        fullmag_ir::ExecutionDevice::Gpu
+    );
+    assert_eq!(
+        provenance.accepted_certificate_fingerprint,
+        certificate.topology_fingerprint
+    );
+    assert_eq!(
+        provenance.capability_status,
+        fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented
+    );
+}
+
+#[test]
 fn fem_planner_preserves_legacy_v2_when_rebinding_packed_certificate() {
     let mut ir = mixed_cpu_relaxation_ir(
         fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
@@ -11640,11 +11682,10 @@ fn fem_planner_rejects_valid_mixed_certificate_when_build_report_is_degraded() {
 }
 
 #[test]
-fn fem_planner_rejects_every_mixed_p1_execution_tuple_outside_cpu_double_strict_sp4_scope() {
+fn fem_planner_rejects_every_mixed_p1_execution_tuple_outside_bounded_strict_sp4_scope() {
     for case in [
         "backend_auto",
         "device_auto",
-        "device_gpu",
         "single",
         "extended",
         "time_evolution",
@@ -11665,12 +11706,6 @@ fn fem_planner_rejects_every_mixed_p1_execution_tuple_outside_cpu_double_strict_
                 ir.problem_meta.runtime_metadata.insert(
                     "runtime_selection".to_string(),
                     serde_json::json!({"device": "auto"}),
-                );
-            }
-            "device_gpu" => {
-                ir.problem_meta.runtime_metadata.insert(
-                    "runtime_selection".to_string(),
-                    serde_json::json!({"device": "gpu"}),
                 );
             }
             "single" => {
@@ -11792,8 +11827,8 @@ fn fem_planner_rejects_uncertified_mixed_per_object_asset_before_backend_startup
 }
 
 #[test]
-fn fem_planner_rejects_non_cpu_mixed_p1_requested_devices_without_fallback() {
-    for device in ["gpu", "auto"] {
+fn fem_planner_rejects_auto_mixed_p1_requested_device_without_fallback() {
+    for device in ["auto"] {
         let mut ir = mixed_cpu_relaxation_ir(
             fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
             fullmag_ir::RequestedFemDemagIR::PoissonRobin,
@@ -11804,7 +11839,7 @@ fn fem_planner_rejects_non_cpu_mixed_p1_requested_devices_without_fallback() {
         );
 
         let reason = plan(&ir)
-            .expect_err("non-CPU mixed P1 execution must fail closed")
+            .expect_err("automatic mixed P1 execution must fail closed")
             .reasons
             .join("\n");
         assert!(

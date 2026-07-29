@@ -1328,7 +1328,7 @@ fn validate_mixed_p1_build_report(
     }
 }
 
-fn validate_mixed_p1_cpu_scope(
+fn validate_mixed_p1_execution_scope(
     problem: &ProblemIR,
     certificate: &fullmag_ir::MixedLayerTopologyCertificateV1IR,
 ) -> Result<(), String> {
@@ -1418,7 +1418,7 @@ fn validate_mixed_p1_cpu_scope(
     let qualified = problem.backend_policy.requested_backend == fullmag_ir::BackendTarget::Fem
         && problem.validation_profile.execution_mode == fullmag_ir::ExecutionMode::Strict
         && problem.backend_policy.execution_precision == fullmag_ir::ExecutionPrecision::Double
-        && effective_runtime_device(problem) == "cpu"
+        && matches!(effective_runtime_device(problem), "cpu" | "gpu")
         && fem_order == Some(1)
         && exact_single_box
         && problem.regions.len() == 1
@@ -1437,7 +1437,7 @@ fn validate_mixed_p1_cpu_scope(
         Ok(())
     } else {
         Err(format!(
-            "fem_mixed_p1_scope_rejected: required=explicit_fem+explicit_cpu+strict+double+P1+one_axis_aligned_box+one_exact_layer+uniform_material+exchange+poisson_robin_or_dirichlet+PG_BB_or_NCG_or_LLG_overdamped; requested_backend={:?}; requested_device={}; requested_precision={:?}; execution_mode={:?}; fe_order={fem_order:?}; study={:?}; energy_terms={:?}; fallback=none",
+            "fem_mixed_p1_scope_rejected: required=explicit_fem+explicit_cpu_or_gpu+strict+double+P1+one_axis_aligned_box+one_exact_layer+uniform_material+exchange+poisson_robin_or_dirichlet+PG_BB_or_NCG_or_LLG_overdamped; requested_backend={:?}; requested_device={}; requested_precision={:?}; execution_mode={:?}; fe_order={fem_order:?}; study={:?}; energy_terms={:?}; fallback=none",
             problem.backend_policy.requested_backend,
             effective_runtime_device(problem),
             problem.backend_policy.execution_precision,
@@ -1495,7 +1495,7 @@ pub(crate) fn reject_unsupported_mixed_topology(
             )
         },
     )?;
-    validate_mixed_p1_cpu_scope(problem, certificate)
+    validate_mixed_p1_execution_scope(problem, certificate)
 }
 
 pub(crate) fn reject_auto_backend_mixed_fem_topology(problem: &ProblemIR) -> Result<(), String> {
@@ -1569,11 +1569,16 @@ pub(crate) fn resolve_fem_domain_mesh_asset(
                 )
             })?;
         validate_mixed_p1_build_report(report, "packed")?;
+        let requested_device = match effective_runtime_device(problem) {
+            "cpu" => fullmag_ir::ExecutionDevice::Cpu,
+            "gpu" => fullmag_ir::ExecutionDevice::Gpu,
+            _ => fullmag_ir::ExecutionDevice::Auto,
+        };
         report.mixed_topology_provenance = Some(fullmag_ir::FemMixedTopologyProvenanceIR {
             requested_topology: fullmag_ir::FemMeshTopologyFamilyIR::MixedP1,
             resolved_topology: fullmag_ir::FemMeshTopologyFamilyIR::MixedP1,
             accepted_certificate_fingerprint: fingerprint,
-            requested_device: fullmag_ir::ExecutionDevice::Cpu,
+            requested_device,
             precision: fullmag_ir::ExecutionPrecision::Double,
             capability_status: fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented,
         });

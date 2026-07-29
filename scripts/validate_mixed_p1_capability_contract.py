@@ -29,26 +29,26 @@ LANES = {
 }
 MARKDOWN_STATUS = {
     "mesh.topology.mixed_p1": (
-        "CPU `implemented`; GPU `semantic_only`; FDM `unsupported`",
+        "CPU/GPU `implemented`; FDM `unsupported`",
         "implemented",
     ),
     "mesh.swept.prism": (
-        "CPU `implemented`; GPU `semantic_only`; FDM `unsupported`",
+        "CPU/GPU `implemented`; FDM `unsupported`",
         "implemented",
     ),
     "mesh.transition.pyramid_tet": (
-        "CPU `implemented`; GPU `semantic_only`; FDM `unsupported`",
+        "CPU/GPU `implemented`; FDM `unsupported`",
         "implemented",
     ),
     "mesh.exact_layer_count": (
-        "CPU `implemented`; GPU `semantic_only`; FDM `unsupported`",
+        "CPU/GPU `implemented`; FDM `unsupported`",
         "implemented",
     ),
     "fem.cpu.exchange_demag.mixed_p1": (
         "`implemented`",
         "implemented",
     ),
-    "fem.gpu.exchange_demag.mixed_p1": ("`unsupported`", "source_visible"),
+    "fem.gpu.exchange_demag.mixed_p1": ("`implemented`", "implemented"),
 }
 STATUS_VOCABULARY = {
     "unsupported",
@@ -67,9 +67,11 @@ def expected_lanes(capability_id: str) -> dict[str, str]:
     lanes = {lane: "unsupported" for lane in LANES}
     if capability_id in MESH_CAPABILITIES:
         lanes["fem_cpu_public"] = "implemented"
-        lanes["fem_gpu_public"] = "semantic_only"
+        lanes["fem_gpu_public"] = "implemented"
     elif capability_id == CPU_OPERATOR_CAPABILITY:
         lanes["fem_cpu_public"] = "implemented"
+    elif capability_id == GPU_OPERATOR_CAPABILITY:
+        lanes["fem_gpu_public"] = "implemented"
     return lanes
 
 

@@ -60,6 +60,26 @@ class MixedP1CapabilityContractTest(unittest.TestCase):
                 capability_id,
             )
 
+    def test_repository_gpu_lane_is_implemented_without_public_promotion(self) -> None:
+        matrix = json.loads(
+            (REPO_ROOT / "docs/specs/capability-matrix-v0.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        by_id = {feature["id"]: feature for feature in matrix["features"]}
+        for capability_id in (
+            "mesh.topology.mixed_p1",
+            "mesh.swept.prism",
+            "mesh.transition.pyramid_tet",
+            "mesh.exact_layer_count",
+            "fem.gpu.exchange_demag.mixed_p1",
+        ):
+            self.assertEqual(
+                by_id[capability_id]["lanes"]["fem_gpu_public"],
+                "implemented",
+                capability_id,
+            )
+
     def test_rejects_cpu_operator_demotion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -119,7 +139,7 @@ class MixedP1CapabilityContractTest(unittest.TestCase):
             root = Path(directory)
             self._copy_contract(root)
             markdown = root / "docs/specs/capability-matrix-v0.md"
-            row = "| `mesh.topology.mixed_p1` | CPU `implemented`; GPU `semantic_only`; FDM `unsupported` | implemented | duplicate | none |\n"
+            row = "| `mesh.topology.mixed_p1` | CPU/GPU `implemented`; FDM `unsupported` | implemented | duplicate | none |\n"
             markdown.write_text(
                 markdown.read_text(encoding="utf-8") + row,
                 encoding="utf-8",

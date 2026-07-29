@@ -1513,7 +1513,7 @@ fn require_supported_fem_topology(
     let problem_scope = problem.backend_policy.requested_backend == fullmag_ir::BackendTarget::Fem
         && problem.backend_policy.execution_precision == fullmag_ir::ExecutionPrecision::Double
         && problem.validation_profile.execution_mode == fullmag_ir::ExecutionMode::Strict
-        && requested_device == "cpu"
+        && matches!(requested_device.as_str(), "cpu" | "gpu")
         && problem.geometry.entries.len() == 1
         && matches!(
             problem.geometry.entries[0],
@@ -1562,7 +1562,7 @@ fn require_supported_fem_topology(
     if !supported_relaxation || !problem_scope {
         return Err(RunError {
             message: format!(
-                "fem_mixed_p1_runtime_scope_rejected: study={study_kind}; requested_device={requested_device}; precision={precision:?}; required=explicit_cpu+strict+double+P1+exchange+poisson_robin_or_dirichlet+PG_BB_or_NCG_or_LLG_overdamped; fallback=none"
+                "fem_mixed_p1_runtime_scope_rejected: study={study_kind}; requested_device={requested_device}; precision={precision:?}; required=explicit_cpu_or_gpu+strict+double+P1+exchange+poisson_robin_or_dirichlet+PG_BB_or_NCG_or_LLG_overdamped; fallback=none"
             ),
         });
     }
@@ -4524,7 +4524,7 @@ mod tests {
     fn fem_topology_guard_fully_bound_mixed_frequency_plan_reaches_scope_rejection() {
         let (problem, plan) = certified_mixed_topology_guard_fixture();
 
-        let expected = "fem_mixed_p1_runtime_scope_rejected: study=fem_frequency_response; requested_device=cpu; precision=Double; required=explicit_cpu+strict+double+P1+exchange+poisson_robin_or_dirichlet+PG_BB_or_NCG_or_LLG_overdamped; fallback=none";
+        let expected = "fem_mixed_p1_runtime_scope_rejected: study=fem_frequency_response; requested_device=cpu; precision=Double; required=explicit_cpu_or_gpu+strict+double+P1+exchange+poisson_robin_or_dirichlet+PG_BB_or_NCG_or_LLG_overdamped; fallback=none";
         assert_eq!(topology_guard_error(&problem, &plan), expected);
         assert_eq!(
             resolve_planned_runtime_engine(&problem, &plan)
@@ -4641,6 +4641,54 @@ mod tests {
                 error.message
             );
         }
+    }
+
+    #[test]
+    fn fem_topology_guard_accepts_bound_gpu_double_relaxation_scope() {
+        let (mut problem, mut plan) = certified_mixed_cpu_relaxation_guard_fixture();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            json!({"device": "gpu", "precision": "double"}),
+        );
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            unreachable!()
+        };
+        fem.mesh_build_report
+            .as_mut()
+            .and_then(|report| report.mixed_topology_provenance.as_mut())
+            .expect("mixed fixture carries provenance")
+            .requested_device = fullmag_ir::ExecutionDevice::Gpu;
+
+        require_supported_fem_topology(&problem, &plan)
+            .expect("bound GPU-double mixed P1 relaxation must cross the startup guard");
+    }
+
+    #[test]
+    fn fem_topology_guard_rejects_gpu_mixed_p1_with_unsupported_physics() {
+        let (mut problem, mut plan) = certified_mixed_cpu_relaxation_guard_fixture();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            json!({"device": "gpu", "precision": "double"}),
+        );
+        problem
+            .energy_terms
+            .push(fullmag_ir::EnergyTermIR::BulkDmi { d: 1.0 });
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            unreachable!()
+        };
+        fem.mesh_build_report
+            .as_mut()
+            .and_then(|report| report.mixed_topology_provenance.as_mut())
+            .expect("mixed fixture carries provenance")
+            .requested_device = fullmag_ir::ExecutionDevice::Gpu;
+
+        let error = require_supported_fem_topology(&problem, &plan)
+            .expect_err("unsupported GPU physics must reject before backend allocation");
+        assert!(error
+            .message
+            .contains("fem_mixed_p1_runtime_scope_rejected"));
+        assert!(error.message.contains("requested_device=gpu"));
+        assert!(error.message.contains("fallback=none"));
     }
 
     #[test]
