@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "repository_url": "https://github.com/MateuszZelent/fullmag",
   "document": {
     "path": "public_docs/site/physics/interactions/fdm/gpu/demag.md",
     "kind": "terminal",
