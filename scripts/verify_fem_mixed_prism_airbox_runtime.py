@@ -10,6 +10,7 @@ import json
 import math
 from pathlib import Path
 import re
+import sys
 from typing import Any
 
 
@@ -34,6 +35,8 @@ GPU_PGBB_CONTROL_READBACK_BASE = 3
 GPU_PGBB_CONTROL_READBACK_PER_STEP = 4
 GPU_SCALAR_RESULT_SLOTS = 32
 DOUBLE_BYTES = 8
+DIMENSIONLESS_RECOMPUTATION_ATOL = 16.0 * sys.float_info.epsilon
+SCALAR_CSV_SERIALIZATION_RTOL = 1.0e-15
 TOLERANCE_SOURCE = {
     "state": "scripts/analysis/fem_gpu_benchmark.py:TASK11_CPU_GPU_MAGNETIZATION_ATOL",
     "energy_torque": "scripts/analysis/fem_gpu_benchmark.py:DEFAULT_CPU_GPU_*",
@@ -209,23 +212,37 @@ def _validate_scalar_artifact(path: Path) -> dict[str, object]:
         raise ContractError(f"cannot read scalar artifact {path}: {error}") from error
     if not rows:
         raise ContractError("scalars.csv must contain at least one row")
+    final_values: dict[str, float] = {}
     for index, row in enumerate(rows):
         for field in ("E_ex", "E_demag", "E_total", "max_torque_T"):
-            _finite(row.get(field), f"scalars.csv row {index} {field}")
+            value = _finite(row.get(field), f"scalars.csv row {index} {field}")
+            if index == len(rows) - 1:
+                final_values[field] = value
     try:
         final_step = int(rows[-1]["step"])
     except (KeyError, TypeError, ValueError) as error:
         raise ContractError("scalars.csv final step must be an integer") from error
     if final_step != 1:
         raise ContractError(f"scalars.csv final step must be 1, got {final_step}")
-    return {"scalar_rows": len(rows), "final_scalar_step": final_step}
+    return {
+        "scalar_rows": len(rows),
+        "final_scalar_step": final_step,
+        "final_scalar_values": final_values,
+    }
 
 
-def _validate_solver_steps(path: Path) -> dict[str, int]:
+def _validate_solver_steps(path: Path) -> dict[str, Any]:
     try:
         with path.open(newline="", encoding="utf-8") as stream:
             reader = csv.DictReader(stream)
-            required = {"step", "rhs_evals", "rejected_attempts"}
+            required = {
+                "step",
+                "rhs_evals",
+                "rejected_attempts",
+                "demag_solves",
+                "demag_iterations",
+                "demag_residual",
+            }
             missing = required - set(reader.fieldnames or ())
             if missing:
                 raise ContractError(f"solver_steps.csv is missing columns {sorted(missing)}")
@@ -237,20 +254,110 @@ def _validate_solver_steps(path: Path) -> dict[str, int]:
     step = _nonnegative_int(rows[0].get("step"), "solver_steps.csv step")
     if step != 1:
         raise ContractError(f"solver_steps.csv accepted step must be 1, got {step}")
+    demag_residual = _finite(
+        rows[0].get("demag_residual"), "solver_steps.csv demag_residual"
+    )
+    if demag_residual < 0.0:
+        raise ContractError("solver_steps.csv demag_residual must be non-negative")
     return {
         "accepted_steps": 1,
         "total_rhs_evals": _nonnegative_int(rows[0].get("rhs_evals"), "solver_steps.csv rhs_evals"),
         "rejected_attempts": _nonnegative_int(
             rows[0].get("rejected_attempts"), "solver_steps.csv rejected_attempts"
         ),
+        "demag_solves": _nonnegative_int(
+            rows[0].get("demag_solves"), "solver_steps.csv demag_solves"
+        ),
+        "demag_iterations": _nonnegative_int(
+            rows[0].get("demag_iterations"), "solver_steps.csv demag_iterations"
+        ),
+        "demag_residual": demag_residual,
     }
 
 
-def _validate_final_field(path: Path) -> list[list[float]]:
+def _magnetic_node_indices(metadata: dict[str, Any], node_count: int) -> set[int]:
+    execution_plan = _object(metadata.get("execution_plan"), "execution_plan")
+    backend_plan = _object(
+        execution_plan.get("backend_plan"), "execution_plan.backend_plan"
+    )
+    mesh_parts = backend_plan.get("mesh_parts")
+    if not isinstance(mesh_parts, list):
+        raise ContractError("execution_plan.backend_plan.mesh_parts must be an array")
+    magnetic_nodes: set[int] = set()
+    for part_index, raw_part in enumerate(mesh_parts):
+        part = _object(raw_part, f"mesh_parts[{part_index}]")
+        if part.get("role") != "magnetic_object":
+            continue
+        raw_indices = part.get("node_indices", [])
+        if not isinstance(raw_indices, list):
+            raise ContractError(f"mesh_parts[{part_index}].node_indices must be an array")
+        explicit_indices: list[int] = []
+        for index, raw_node in enumerate(raw_indices):
+            if isinstance(raw_node, bool) or not isinstance(raw_node, int) or raw_node < 0:
+                raise ContractError(
+                    f"mesh_parts[{part_index}].node_indices[{index}] "
+                    "must be a non-negative integer"
+                )
+            explicit_indices.append(raw_node)
+        if explicit_indices:
+            magnetic_nodes.update(
+                index for index in explicit_indices if index < node_count
+            )
+            continue
+        selector = _object(
+            part.get("node_selector"), f"mesh_parts[{part_index}].node_selector"
+        )
+        if selector.get("kind") != "node_range":
+            continue
+        start = selector.get("start")
+        count = selector.get("count")
+        for field, value in (("start", start), ("count", count)):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ContractError(
+                    f"mesh_parts[{part_index}].node_selector.{field} "
+                    "must be a non-negative integer"
+                )
+        magnetic_nodes.update(range(start, min(start + count, node_count)))
+    if not magnetic_nodes:
+        return set(range(node_count))
+    return magnetic_nodes
+
+
+def _validate_final_field(
+    path: Path,
+    *,
+    expected_step: int,
+    expected_source_hash: str,
+    expected_engine: str,
+    expected_precision: str,
+    expected_node_count: int,
+    magnetic_node_indices: set[int],
+) -> tuple[list[list[float]], float]:
     field = _read_json_object(path, "final magnetization artifact")
+    if field.get("observable") != "m":
+        raise ContractError("m_final.json observable must be m")
+    if field.get("unit") != "dimensionless":
+        raise ContractError("m_final.json unit must be dimensionless")
+    step = _nonnegative_int(field.get("step"), "m_final.json step")
+    if step != expected_step:
+        raise ContractError(
+            f"m_final.json step must match executed step {expected_step}, got {step}"
+        )
+    provenance = _object(field.get("provenance"), "m_final.json provenance")
+    expected_provenance = {
+        "source_hash": expected_source_hash,
+        "execution_engine": expected_engine,
+        "precision": expected_precision,
+    }
+    for key, expected in expected_provenance.items():
+        if provenance.get(key) != expected:
+            raise ContractError(f"m_final.json provenance {key} must be {expected!r}")
     values = field.get("values")
-    if not isinstance(values, list) or not values:
-        raise ContractError("m_final.json values must be a non-empty array")
+    if not isinstance(values, list) or len(values) != expected_node_count:
+        raise ContractError(
+            "m_final.json vector count must match mesh.node_count "
+            f"{expected_node_count}"
+        )
     result: list[list[float]] = []
     for index, vector in enumerate(values):
         if not isinstance(vector, list) or len(vector) != 3:
@@ -261,7 +368,41 @@ def _validate_final_field(path: Path) -> list[list[float]]:
                 for component, value in enumerate(vector)
             ]
         )
-    return result
+    norm_defect = max(
+        abs(math.sqrt(sum(component * component for component in vector)) - 1.0)
+        for index, vector in enumerate(result)
+        if index in magnetic_node_indices
+    )
+    return result, norm_defect
+
+
+def _cross_check_final_scalars(
+    scalar_evidence: dict[str, object],
+    energy_terms: dict[str, Any],
+    final_torque_t: float,
+) -> None:
+    values = _object(scalar_evidence.get("final_scalar_values"), "final scalar values")
+    expected = {
+        "E_ex": _finite(energy_terms.get("E_ex"), "final_energy_terms_j.E_ex"),
+        "E_demag": _finite(
+            energy_terms.get("E_demag"), "final_energy_terms_j.E_demag"
+        ),
+        "E_total": _finite(
+            energy_terms.get("E_total"), "final_energy_terms_j.E_total"
+        ),
+        "max_torque_T": final_torque_t,
+    }
+    for field, expected_value in expected.items():
+        observed_value = _finite(values.get(field), f"scalars.csv final {field}")
+        absolute_delta = abs(observed_value - expected_value)
+        allowed_delta = SCALAR_CSV_SERIALIZATION_RTOL * max(
+            abs(observed_value), abs(expected_value)
+        )
+        if absolute_delta > allowed_delta:
+            raise ContractError(
+                f"scalars.csv final {field} does not match relaxation qualification: "
+                f"delta={absolute_delta}, allowed={allowed_delta}"
+            )
 
 
 def _validate_mixed_certificate(
@@ -307,15 +448,48 @@ def _validate_mixed_certificate(
     ]
     if finite_planes[0] >= finite_planes[1]:
         raise ContractError("mixed topology planes must be strictly increasing")
+    if certificate.get("marker_coverage_complete") is not True:
+        raise ContractError("mixed topology certificate marker coverage must be complete")
+    for field in (
+        "nonconforming_face_count",
+        "orphan_face_count",
+        "nonmanifold_face_count",
+        "coincident_interface_face_count",
+    ):
+        if _nonnegative_int(certificate.get(field), f"mixed topology {field}") != 0:
+            raise ContractError(f"mixed topology certificate {field} must be zero")
     cell_counts = _object(
         certificate.get("cell_family_counts_by_part"),
         "mixed topology cell-family counts",
     )
+    if set(cell_counts) != {"magnetic", "transition_air", "far_air"}:
+        raise ContractError(
+            "mixed topology certificate must contain magnetic, transition_air, and far_air counts"
+        )
     magnetic_counts = _object(cell_counts.get("magnetic"), "magnetic cell-family counts")
     if set(magnetic_counts) != {"prism6"}:
         raise ContractError("magnetic mixed-P1 cells must be prism6 only")
     if _nonnegative_int(magnetic_counts.get("prism6"), "magnetic prism6 count") < 1:
         raise ContractError("magnetic mixed-P1 mesh must contain at least one prism6 cell")
+    transition_counts = _object(
+        cell_counts.get("transition_air"), "transition-air cell-family counts"
+    )
+    if set(transition_counts) != {"pyramid5", "tet4"}:
+        raise ContractError(
+            "transition-air mixed-P1 cells must contain pyramid5 and tet4 only"
+        )
+    for family in ("pyramid5", "tet4"):
+        if _nonnegative_int(
+            transition_counts.get(family), f"transition-air {family} count"
+        ) < 1:
+            raise ContractError(
+                f"transition-air mixed-P1 mesh must contain at least one {family} cell"
+            )
+    far_counts = _object(cell_counts.get("far_air"), "far-air cell-family counts")
+    if set(far_counts) != {"tet4"}:
+        raise ContractError("far-air mixed-P1 cells must be tet4 only")
+    if _nonnegative_int(far_counts.get("tet4"), "far-air tet4 count") < 1:
+        raise ContractError("far-air mixed-P1 mesh must contain at least one tet4 cell")
 
     mixed_provenance = _object(
         report.get("mixed_topology_provenance"), "mixed topology provenance"
@@ -334,7 +508,7 @@ def _validate_mixed_certificate(
     return topology_fingerprint, certificate
 
 
-def _expected_control_sync_budget(steps: dict[str, int]) -> int:
+def _expected_control_sync_budget(steps: dict[str, Any]) -> int:
     logical_rhs_trials = max(
         0,
         steps["total_rhs_evals"] - 2 * steps["accepted_steps"],
@@ -351,7 +525,7 @@ def _validate_gpu_execution(
     execution: dict[str, Any],
     qualification: dict[str, Any],
     runtime_identity: dict[str, object],
-    steps: dict[str, int],
+    steps: dict[str, Any],
 ) -> dict[str, object]:
     manifest_device = _object(
         runtime_identity.get("gpu_device_identity"), "runtime GPU device identity"
@@ -461,6 +635,16 @@ def _validate_gpu_execution(
     iterations = _nonnegative_int(
         demag_runtime.get("actual_iterations"), "GPU demag actual iterations"
     )
+    if steps["demag_solves"] < 1:
+        raise ContractError("GPU solver_steps.csv must prove at least one demag solve")
+    if steps["demag_iterations"] != iterations:
+        raise ContractError(
+            "GPU solver-step demag iterations do not match demag runtime diagnostics"
+        )
+    if steps["demag_residual"] != residual:
+        raise ContractError(
+            "GPU solver-step demag residual does not match demag runtime diagnostics"
+        )
     return {
         "raw": telemetry,
         "control_scalar_host_sync_count": control_syncs,
@@ -470,6 +654,7 @@ def _validate_gpu_execution(
         "demag_actual_iterations": iterations,
         "demag_final_residual_norm": residual,
         "demag_relative_tolerance": relative_tolerance,
+        "demag_solves": steps["demag_solves"],
     }
 
 
@@ -572,7 +757,31 @@ def validate_runtime_artifacts(
 
     scalar_evidence = _validate_scalar_artifact(scalars_path)
     solver_step_evidence = _validate_solver_steps(solver_steps_path)
-    final_field_vectors = _validate_final_field(final_field_path)
+    if scalar_evidence["final_scalar_step"] != qualification["executed_steps"]:
+        raise ContractError(
+            "scalars.csv final step does not match relaxation qualification executed_steps"
+        )
+    _cross_check_final_scalars(scalar_evidence, energy_terms, final_torque_t)
+    mesh = _object(metadata.get("mesh"), "mesh metadata")
+    mesh_node_count = _nonnegative_int(mesh.get("node_count"), "mesh.node_count")
+    if mesh_node_count < 1:
+        raise ContractError("mesh.node_count must be positive")
+    magnetic_node_indices = _magnetic_node_indices(metadata, mesh_node_count)
+    final_field_vectors, recomputed_norm_defect = _validate_final_field(
+        final_field_path,
+        expected_step=qualification["executed_steps"],
+        expected_source_hash=source_identity["bounded_source_sha256"],
+        expected_engine=engine,
+        expected_precision="double",
+        expected_node_count=mesh_node_count,
+        magnetic_node_indices=magnetic_node_indices,
+    )
+    if abs(recomputed_norm_defect - norm_defect) > DIMENSIONLESS_RECOMPUTATION_ATOL:
+        raise ContractError(
+            "m_final.json recomputed norm_defect does not match relaxation qualification: "
+            f"delta={abs(recomputed_norm_defect - norm_defect)}, "
+            f"allowed={DIMENSIONLESS_RECOMPUTATION_ATOL}"
+        )
     if runtime_log is None:
         raise ContractError("runtime log is required")
     try:

@@ -131,6 +131,11 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                 "transition_air": {"pyramid5": 4, "tet4": 4},
                 "far_air": {"tet4": 8},
             },
+            "marker_coverage_complete": True,
+            "nonconforming_face_count": 0,
+            "orphan_face_count": 0,
+            "nonmanifold_face_count": 0,
+            "coincident_interface_face_count": 0,
             "fallbacks_triggered": [],
         }
         report = {
@@ -148,14 +153,15 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
             },
         }
         energy_terms = {
-            "E_ex": 1.0,
-            "E_demag": 2.0,
+            "E_ex": 1.2345678901234567,
+            "E_demag": 2.345678901234567,
             "E_ext": 0.0,
             "e_drive": 0.0,
             "E_ani": 0.0,
             "E_dmi": 0.0,
-            "E_total": 3.0,
+            "E_total": 3.5802467913580237,
         }
+        final_torque_t = 5.123456789012345e-6
         engine = "fem_cpu_native" if device == "cpu" else "fem_native_gpu"
         execution_provenance: dict[str, object] = {
             "execution_engine": engine,
@@ -185,8 +191,41 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                 "fallback_policy": "forbidden",
             },
             "execution_provenance": execution_provenance,
+            "execution_plan": {
+                "backend_plan": {
+                    "mesh_parts": [
+                        {
+                            "role": "magnetic_object",
+                            "node_indices": [0],
+                            "node_selector": {
+                                "kind": "node_range",
+                                "start": 2,
+                                "count": 1,
+                            },
+                        },
+                        {
+                            "role": "magnetic_object",
+                            "node_selector": {
+                                "kind": "node_range",
+                                "start": 1,
+                                "count": 1,
+                            },
+                        },
+                        {
+                            "role": "air",
+                            "node_indices": [2],
+                            "node_selector": {
+                                "kind": "node_range",
+                                "start": 2,
+                                "count": 1,
+                            },
+                        },
+                    ]
+                }
+            },
             "mesh": {
                 "topology_fingerprint": topology_fingerprint,
+                "node_count": 3,
                 "mesh_build_report": report,
             },
         }
@@ -196,7 +235,7 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
             "executed_steps": 1,
             "final_energy_terms_j": energy_terms,
             "final_torque_apm": 4.0,
-            "final_torque_t": 5.0e-6,
+            "final_torque_t": final_torque_t,
             "norm_defect": 0.0,
         }
         if device == "cpu":
@@ -258,10 +297,10 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
             writer.writerow(
                 {
                     "step": 1,
-                    "E_ex": 1.0,
-                    "E_demag": 2.0,
-                    "E_total": 3.0,
-                    "max_torque_T": 5.0e-6,
+                    "E_ex": format(energy_terms["E_ex"], ".15e"),
+                    "E_demag": format(energy_terms["E_demag"], ".15e"),
+                    "E_total": format(energy_terms["E_total"], ".15e"),
+                    "max_torque_T": format(final_torque_t, ".15e"),
                 }
             )
         with (artifacts / "solver_steps.csv").open(
@@ -269,12 +308,46 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
         ) as stream:
             writer = csv.DictWriter(
                 stream,
-                fieldnames=["step", "rhs_evals", "rejected_attempts"],
+                fieldnames=[
+                    "step",
+                    "rhs_evals",
+                    "rejected_attempts",
+                    "demag_solves",
+                    "demag_iterations",
+                    "demag_residual",
+                ],
             )
             writer.writeheader()
-            writer.writerow({"step": 1, "rhs_evals": 2, "rejected_attempts": 0})
+            writer.writerow(
+                {
+                    "step": 1,
+                    "rhs_evals": 2,
+                    "rejected_attempts": 0,
+                    "demag_solves": 1,
+                    "demag_iterations": 12,
+                    "demag_residual": 1.0e-13,
+                }
+            )
         (artifacts / "m_final.json").write_text(
-            json.dumps({"values": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]}),
+            json.dumps(
+                {
+                    "observable": "m",
+                    "unit": "dimensionless",
+                    "step": 1,
+                    "time": 0.0,
+                    "solver_dt": 0.0,
+                    "provenance": {
+                        "source_hash": hashlib.sha256(bounded_text.encode()).hexdigest(),
+                        "execution_engine": engine,
+                        "precision": "double",
+                    },
+                    "values": [
+                        [1.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0],
+                        [0.0, 0.0, 0.0],
+                    ],
+                }
+            ),
             encoding="utf-8",
         )
         runtime_log = root / f"{device}.log"
@@ -317,6 +390,213 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
             self.assertEqual(comparison["state_parity"]["max_component_abs_delta"], 0.0)  # type: ignore[index]
             self.assertEqual(comparison["qualification_status"], "implemented")
             self.assertIn("E_ex", csv_path.read_text(encoding="utf-8"))
+            self.assertEqual(verifier.SCALAR_CSV_SERIALIZATION_RTOL, 1.0e-15)
+            self.assertNotEqual(
+                cpu_summary["final_scalar_values"]["E_ex"],  # type: ignore[index]
+                cpu_summary["final_energy_terms_j"]["E_ex"],  # type: ignore[index]
+            )
+
+    def test_validate_rejects_incomplete_certificate_coverage_and_air_families(self) -> None:
+        mutations = (
+            (
+                "marker_coverage_complete",
+                lambda certificate: certificate.__setitem__(
+                    "marker_coverage_complete", False
+                ),
+            ),
+            (
+                "nonconforming_face_count",
+                lambda certificate: certificate.__setitem__(
+                    "nonconforming_face_count", 1
+                ),
+            ),
+            (
+                "orphan_face_count",
+                lambda certificate: certificate.__setitem__("orphan_face_count", 1),
+            ),
+            (
+                "nonmanifold_face_count",
+                lambda certificate: certificate.__setitem__(
+                    "nonmanifold_face_count", 1
+                ),
+            ),
+            (
+                "coincident_interface_face_count",
+                lambda certificate: certificate.__setitem__(
+                    "coincident_interface_face_count", 1
+                ),
+            ),
+            (
+                "transition_pyramid5",
+                lambda certificate: certificate["cell_family_counts_by_part"].__setitem__(
+                    "transition_air", {"tet4": 4}
+                ),
+            ),
+            (
+                "transition_tet4",
+                lambda certificate: certificate["cell_family_counts_by_part"].__setitem__(
+                    "transition_air", {"pyramid5": 4}
+                ),
+            ),
+            (
+                "far_air_tet4",
+                lambda certificate: certificate["cell_family_counts_by_part"].__setitem__(
+                    "far_air", {"pyramid5": 8}
+                ),
+            ),
+        )
+        for case, mutate in mutations:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source, bounded, artifacts, runtime_log, manifest, metadata = (
+                    self._write_valid_bundle(root, "cpu")
+                )
+                mutated = copy.deepcopy(metadata)
+                certificate = mutated["mesh"]["mesh_build_report"][  # type: ignore[index]
+                    "mixed_layer_topology_certificate"
+                ]
+                mutate(certificate)
+                (artifacts / "metadata.json").write_text(
+                    json.dumps(mutated), encoding="utf-8"
+                )
+                with self.subTest(case=case), self.assertRaises(ContractError):
+                    validate_runtime_artifacts(
+                        source,
+                        bounded,
+                        artifacts,
+                        device="cpu",
+                        runtime_log=runtime_log,
+                        runtime_manifest=manifest,
+                    )
+
+    def test_validate_rejects_stale_truncated_or_cross_unbound_final_artifacts(self) -> None:
+        cases = (
+            "observable",
+            "unit",
+            "step_zero",
+            "source",
+            "engine",
+            "precision",
+            "truncated_values",
+            "mesh_node_count",
+            "scalar_energy",
+            "scalar_torque",
+            "norm_defect",
+        )
+        for case in cases:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source, bounded, artifacts, runtime_log, manifest, metadata = (
+                    self._write_valid_bundle(root, "cpu")
+                )
+                field_path = artifacts / "m_final.json"
+                field = json.loads(field_path.read_text(encoding="utf-8"))
+                if case == "observable":
+                    field["observable"] = "H_eff"
+                elif case == "unit":
+                    field["unit"] = "A/m"
+                elif case == "step_zero":
+                    field["step"] = 0
+                elif case == "source":
+                    field["provenance"]["source_hash"] = "0" * 64
+                elif case == "engine":
+                    field["provenance"]["execution_engine"] = "fem_native_gpu"
+                elif case == "precision":
+                    field["provenance"]["precision"] = "single"
+                elif case == "truncated_values":
+                    field["values"] = field["values"][:1]
+                elif case == "mesh_node_count":
+                    metadata["mesh"]["node_count"] = 4  # type: ignore[index]
+                    (artifacts / "metadata.json").write_text(
+                        json.dumps(metadata), encoding="utf-8"
+                    )
+                elif case == "scalar_energy":
+                    (artifacts / "scalars.csv").write_text(
+                        "step,E_ex,E_demag,E_total,max_torque_T\n1,9.0,2.0,3.0,5e-6\n",
+                        encoding="utf-8",
+                    )
+                elif case == "scalar_torque":
+                    (artifacts / "scalars.csv").write_text(
+                        "step,E_ex,E_demag,E_total,max_torque_T\n1,1.0,2.0,3.0,6e-6\n",
+                        encoding="utf-8",
+                    )
+                elif case == "norm_defect":
+                    metadata["fem_cpu_relaxation_qualification"][  # type: ignore[index]
+                        "norm_defect"
+                    ] = 1.0e-10
+                    (artifacts / "metadata.json").write_text(
+                        json.dumps(metadata), encoding="utf-8"
+                    )
+                field_path.write_text(json.dumps(field), encoding="utf-8")
+                with self.subTest(case=case), self.assertRaises(ContractError):
+                    validate_runtime_artifacts(
+                        source,
+                        bounded,
+                        artifacts,
+                        device="cpu",
+                        runtime_log=runtime_log,
+                        runtime_manifest=manifest,
+                    )
+
+    def test_norm_defect_recomputation_excludes_nonunit_shared_domain_air_nodes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, bounded, artifacts, runtime_log, manifest, _ = (
+                self._write_valid_bundle(root, "cpu")
+            )
+
+            summary = validate_runtime_artifacts(
+                source,
+                bounded,
+                artifacts,
+                device="cpu",
+                runtime_log=runtime_log,
+                runtime_manifest=manifest,
+            )
+
+            self.assertEqual(summary["norm_defect"], 0.0)
+            self.assertEqual(summary["final_magnetization"][-1], [0.0, 0.0, 0.0])
+
+    def test_dimensionless_recomputation_tolerance_is_exactly_sixteen_epsilon(self) -> None:
+        self.assertEqual(
+            verifier.DIMENSIONLESS_RECOMPUTATION_ATOL,
+            16.0 * math.ulp(1.0),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, bounded, artifacts, runtime_log, manifest, metadata = (
+                self._write_valid_bundle(root, "cpu")
+            )
+            qualification = metadata["fem_cpu_relaxation_qualification"]  # type: ignore[assignment]
+            qualification["norm_defect"] = verifier.DIMENSIONLESS_RECOMPUTATION_ATOL
+            (artifacts / "metadata.json").write_text(
+                json.dumps(metadata), encoding="utf-8"
+            )
+
+            validate_runtime_artifacts(
+                source,
+                bounded,
+                artifacts,
+                device="cpu",
+                runtime_log=runtime_log,
+                runtime_manifest=manifest,
+            )
+
+            qualification["norm_defect"] = (
+                2.0 * verifier.DIMENSIONLESS_RECOMPUTATION_ATOL
+            )
+            (artifacts / "metadata.json").write_text(
+                json.dumps(metadata), encoding="utf-8"
+            )
+            with self.assertRaises(ContractError):
+                validate_runtime_artifacts(
+                    source,
+                    bounded,
+                    artifacts,
+                    device="cpu",
+                    runtime_log=runtime_log,
+                    runtime_manifest=manifest,
+                )
 
     def test_validate_rejects_per_run_device_fallback_topology_and_source_violations(self) -> None:
         cases = (
@@ -428,6 +708,41 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                     json.dumps(mutated), encoding="utf-8"
                 )
                 with self.subTest(field=field), self.assertRaises(ContractError):
+                    validate_runtime_artifacts(
+                        source,
+                        bounded,
+                        artifacts,
+                        device="gpu",
+                        runtime_log=runtime_log,
+                        runtime_manifest=manifest,
+                    )
+
+    def test_validate_rejects_missing_or_unbound_gpu_demag_step_evidence(self) -> None:
+        for case in ("missing_columns", "zero_solves", "iterations", "residual"):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source, bounded, artifacts, runtime_log, manifest, _ = (
+                    self._write_valid_bundle(root, "gpu")
+                )
+                path = artifacts / "solver_steps.csv"
+                with path.open(newline="", encoding="utf-8") as stream:
+                    row = next(csv.DictReader(stream))
+                if case == "missing_columns":
+                    fieldnames = ["step", "rhs_evals", "rejected_attempts"]
+                else:
+                    fieldnames = list(row)
+                    if case == "zero_solves":
+                        row["demag_solves"] = "0"
+                    elif case == "iterations":
+                        row["demag_iterations"] = "11"
+                    elif case == "residual":
+                        row["demag_residual"] = "2e-13"
+                with path.open("w", newline="", encoding="utf-8") as stream:
+                    writer = csv.DictWriter(stream, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerow({field: row[field] for field in fieldnames})
+
+                with self.subTest(case=case), self.assertRaises(ContractError):
                     validate_runtime_artifacts(
                         source,
                         bounded,

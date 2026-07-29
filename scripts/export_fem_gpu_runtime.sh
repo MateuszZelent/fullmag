@@ -90,7 +90,11 @@ cd "${REPO_ROOT}"
 readonly FULLMAG_NATIVE_BUILD_STORAGE_ROOT="/zfn2/mateuszz/git/fullmag"
 readonly FULLMAG_NATIVE_BUILD_IMAGE="/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4"
 readonly FULLMAG_NATIVE_MOUNT_VIEW="/mnt/fullmag-zfn2-native"
-readonly FULLMAG_CONTAINER_TARGET_DIR="/mnt/fullmag-zfn2-native/managed-fem-runtime"
+readonly FULLMAG_CONTAINER_TARGET_ROOT="${FULLMAG_NATIVE_MOUNT_VIEW}/managed-fem-runtime"
+readonly FULLMAG_WORKTREE_TARGET_SLUG="$(basename "${REPO_ROOT}" | sed 's/[^A-Za-z0-9._-]/-/g')"
+readonly FULLMAG_WORKTREE_TARGET_DIGEST="$(printf '%s' "${REPO_ROOT}" | sha256sum | cut -c1-64)"
+readonly FULLMAG_WORKTREE_TARGET_ID="${FULLMAG_WORKTREE_TARGET_SLUG}-${FULLMAG_WORKTREE_TARGET_DIGEST}"
+readonly FULLMAG_CONTAINER_TARGET_DIR="${FULLMAG_CONTAINER_TARGET_ROOT}/${FULLMAG_WORKTREE_TARGET_ID}"
 : "${FULLMAG_LOOP_SYSFS_ROOT:=/sys/class/block}"
 : "${FULLMAG_FEM_RUNTIME_CARGO_JOBS:=1}"
 : "${FULLMAG_CUDA_ARCHITECTURES:=80-real;89-real;90-real;90-virtual}"
@@ -152,7 +156,7 @@ clear_runtime_bundle_contents() {
   mkdir -p "$runtime_root/include"
   mkdir -p "$runtime_root/openmpi/bin"
 }
-echo "[export_fem_gpu_runtime] clearing workspace release artifacts from the shared target cache"
+echo "[export_fem_gpu_runtime] clearing workspace release artifacts from the task-specific target cache"
 if [ "${FULLMAG_ENABLE_NVTX}" = "0" ] &&
    [[ "${RUSTFLAGS:-}" == *fullmag_enable_nvtx* ]]; then
   echo "[export_fem_gpu_runtime] inherited RUSTFLAGS contains fullmag_enable_nvtx while FULLMAG_ENABLE_NVTX=0" >&2

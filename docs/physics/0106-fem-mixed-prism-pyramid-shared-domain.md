@@ -363,17 +363,25 @@ topology, transition policy, and exact layer count. The bounded mixed-P1 CPU and
 GPU implementations exist, but public production status remains unclaimed until
 the exact managed CPU/GPU SP4 runs store immutable execution evidence.
 
-The bounded precursor command is
+The bounded managed qualification command is
 `just verify-fem-mixed-prism-airbox-runtime`. It reads the exact canonical SP4
 projected-gradient scenario, requires and replaces exactly one authored
 `max_steps=50_000` with `max_steps=1` in a generated temporary copy, and runs
-that copy through the existing managed FEM CPU headless route. Its validator
-requires authored `auto`, a separate managed CPU override, effective strict FEM
-CPU double execution, `fem_cpu_native`, no fallback, exact mixed certificate
-and topology identity, one executed step, and finite energies and torque. The
-recipe's existence is not runtime evidence: this note and the capability matrix
-remain `implemented` until the command actually passes and its immutable report
-is reviewed.
+that copy through the existing managed FEM CPU and strict GPU headless routes.
+Its validator requires authored `auto`, separate managed `cpu` and `gpu`
+overrides, effective strict FEM double execution, `fem_cpu_native` and
+`fem_native_gpu`, no fallback, exact mixed certificate and topology identity,
+one executed step, final-field and scalar artifacts bound to that step and
+execution, and bounded CPU/GPU state, energy, and torque parity. GPU evidence
+must additionally prove the managed CUDA/Hypre device identity and bounded
+control-scalar-only readbacks. Its accepted solver-step row must prove at least
+one demagnetization solve and bind the iteration count and final residual to
+the GPU demag runtime diagnostics. The solver-step residual uses the writer's
+`{:.17e}` binary64 round-trip representation and therefore matches the JSON
+diagnostic exactly after parsing; this identity check has no solver-tolerance
+allowance. The recipe's existence is not runtime evidence: this note and the
+capability matrix remain `implemented` until the command actually passes and
+its immutable report is reviewed.
 
 The ordinary Python API suite uses `--skip-geometry-assets` to keep authored
 `auto`, managed CPU override, and base-plus-relaxation-stage propagation under
@@ -493,6 +501,24 @@ At minimum, artifacts must record:
 - Gmsh version and deterministic meshing inputs;
 - `fallbacks_triggered`, with strict acceptance requiring an empty list;
 - implementation, execution, and validation states independently.
+
+The bounded managed gate treats final artifacts as identity-bearing evidence,
+not merely parseable arrays. `m_final.json` must report observable `m`, unit
+`dimensionless`, the accepted final step, the bounded source hash, the resolved
+engine and double precision, and exactly one three-component vector per
+`metadata.mesh.node_count`. Its final step must match `scalars.csv` and the
+relaxation qualification; final exchange, demagnetization, total energy, and
+torque scalars must match the qualification metadata within relative tolerance
+`1e-15` and no dimensional absolute tolerance. That bound reflects the
+`{:.15e}` scalar CSV writer's 16-significant-decimal-digit serialization; it is
+not a physics-parity tolerance. The dimensionless magnetization norm defect is
+independently recomputed from `m_final.json` and the execution plan's
+`magnetic_object` node selection; shared-domain air nodes are excluded exactly
+as they are in qualification generation. The recomputed value may differ from
+the recorded qualification value by at most
+`16 * epsilon64`, where IEEE-754 binary64 `epsilon64 = 2^-52`. This absolute
+dimensionless allowance covers only cross-language floating-point
+recomputation; it is not an energy, torque, state-parity, or solver tolerance.
 
 The checked-in Gmsh 4.15.2 fixture is reproducible feasibility evidence only.
 It is not runtime, MFEM, CPU/GPU, physics, API, or viewport proof.
