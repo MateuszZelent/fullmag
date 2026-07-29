@@ -71,7 +71,9 @@ jobs:
           --repo-root .
 
       - name: Install public documentation dependencies
-        run: python -m pip install -r public_docs/site/requirements.txt
+        run: |
+          python -m pip install -r public_docs/site/requirements.txt
+          python -m pip install ./packages/fullmag-py
 
       - name: Check public and internal documentation boundary
         run: python scripts/check_public_docs_boundary.py
