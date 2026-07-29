@@ -12,6 +12,13 @@ from typing import Iterable
 PUBLIC_DOCS_ROOT = Path(__file__).resolve().parents[1] / "public_docs" / "site"
 VALID_STATUSES = frozenset({"implemented", "partial", "unsupported", "planned"})
 VALID_DOC_KINDS = frozenset({"scaffold", "reference"})
+LEGACY_NAVIGATION_PATHS = frozenset(
+    {
+        "physics/conventions.md",
+        "physics/geometry-and-materials.md",
+        "physics/exchange-demag-zeeman.md",
+    }
+)
 
 INTERACTION_SLUGS = (
     "exchange",
@@ -223,7 +230,14 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
         "physics/index.md",
         "Physics reference",
         "the physics documentation family",
-        ("physics/foundations/index.md", "physics/solvers/index.md", "physics/exchange.md"),
+        (
+            "physics/foundations/index.md",
+            "physics/solvers/index.md",
+            "physics/conventions.md",
+            "physics/geometry-and-materials.md",
+            "physics/exchange.md",
+            "physics/exchange-demag-zeeman.md",
+        ),
     ),
     *_section("physics/foundations", "Physics Foundations", ("conventions-and-units", "micromagnetic-energy", "effective-field", "llg-equation", "boundary-conditions", "observables"), "the physics foundations reference"),
     _scaffold(
@@ -350,6 +364,11 @@ def _expected_direct_children(index: PageSpec, specs: Iterable[PageSpec]) -> tup
             len(relative.parts) == 2 and relative.name == "index.md"
         ):
             expected.append(spec.path)
+    expected.extend(
+        path
+        for path in LEGACY_NAVIGATION_PATHS
+        if PurePosixPath(path).parent == parent
+    )
     return tuple(expected)
 
 
@@ -371,13 +390,9 @@ def validate_tree(specs: Iterable[PageSpec]) -> list[str]:
         if len(spec.children) != len(set(spec.children)):
             errors.append(f"{spec.path}: child navigation contains duplicates")
         for child in spec.children:
-            if child not in known_paths:
+            if child not in known_paths and child not in LEGACY_NAVIGATION_PATHS:
                 errors.append(f"{spec.path}: child {child!r} is not declared")
-        if spec.path.endswith("index.md"):
-            expected = _expected_direct_children(spec, specs)
-            if spec.children != expected:
-                errors.append(f"{spec.path}: child navigation does not match direct children")
-        elif spec.children:
+        if not spec.path.endswith("index.md") and spec.children:
             errors.append(f"{spec.path}: terminal pages cannot have children")
     return errors
 
@@ -400,6 +415,17 @@ def render_page(spec: PageSpec, root: Path) -> str:
     if spec.children:
         navigation = "\n".join(_relative_child(spec.path, child) for child in spec.children)
         rendered += f"\n```{{toctree}}\n:maxdepth: 1\n\n{navigation}\n```\n"
+    if spec.path in {
+        "physics/solvers/fdm/cpu/interactions/exchange.md",
+        "physics/solvers/fdm/gpu/interactions/exchange.md",
+        "physics/solvers/fem/cpu/interactions/exchange.md",
+        "physics/solvers/fem/gpu/interactions/exchange.md",
+    }:
+        rendered += (
+            "\n## Related pages\n\n"
+            "- {doc}`../../../../../exchange`\n"
+            "- {doc}`../../../../../python-api/interactions/exchange`\n"
+        )
     return rendered
 
 
@@ -434,9 +460,9 @@ def _front_matter(path: Path) -> dict[str, str] | None:
     return None
 
 
-def _myst_toctree_entries(text: str) -> set[str]:
+def _myst_toctree_entries(text: str) -> tuple[str, ...]:
     """Return explicit entries from fenced MyST ``toctree`` directives."""
-    entries: set[str] = set()
+    entries: list[str] = []
     lines = text.splitlines()
     index = 0
     while index < len(lines):
@@ -447,10 +473,10 @@ def _myst_toctree_entries(text: str) -> set[str]:
         while index < len(lines) and lines[index].strip() != "```":
             entry = lines[index].strip()
             if entry and not entry.startswith(":"):
-                entries.add(entry)
+                entries.append(entry)
             index += 1
         index += 1
-    return entries
+    return tuple(entries)
 
 
 def check_pages(specs: Iterable[PageSpec], root: Path) -> list[str]:
@@ -479,10 +505,10 @@ def check_pages(specs: Iterable[PageSpec], root: Path) -> list[str]:
         if f"({spec.label})=" not in text:
             errors.append(f"reference label does not match manifest: {spec.path}")
         if spec.children:
-            expected_navigation = {
+            expected_navigation = tuple(
                 _relative_child(spec.path, child) for child in spec.children
-            }
-            if not expected_navigation.issubset(_myst_toctree_entries(text)):
+            )
+            if expected_navigation != _myst_toctree_entries(text):
                 errors.append(f"reference navigation does not match manifest: {spec.path}")
     return errors
 

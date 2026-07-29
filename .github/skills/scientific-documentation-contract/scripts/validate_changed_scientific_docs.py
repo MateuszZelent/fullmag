@@ -69,6 +69,52 @@ def _load_architecture_manifest(repo_root: Path) -> ModuleType | None:
     return module
 
 
+def _independent_scaffold_text(page_spec: object) -> str | None:
+    """Render the only source-map-free shape without trusting repo generator code."""
+    title = getattr(page_spec, "title", None)
+    label = getattr(page_spec, "label", None)
+    scope = getattr(page_spec, "scope", None)
+    children = getattr(page_spec, "children", ())
+    path = getattr(page_spec, "path", None)
+    if not all(isinstance(value, str) and value for value in (title, label, scope, path)):
+        return None
+    if any(token in scope for token in ("=", "\\", "`", "$", "{", "}", "[", "]", "\n")):
+        return None
+    if not isinstance(children, tuple) or not all(isinstance(child, str) for child in children):
+        return None
+    rendered = (
+        "---\n"
+        f"title: {title}\n"
+        "status: planned\n"
+        "doc_kind: scaffold\n"
+        "audience: user\n"
+        "owner: fullmag-public-docs\n"
+        "---\n\n"
+        f"({label})=\n"
+        f"# {title}\n\n"
+        f"This page reserves the public documentation location for {scope}.\n"
+    )
+    if children:
+        parent = PurePosixPath(path).parent
+        entries = "\n".join(
+            str(PurePosixPath(child).relative_to(parent).with_suffix(""))
+            for child in children
+        )
+        rendered += f"\n```{{toctree}}\n:maxdepth: 1\n\n{entries}\n```\n"
+    if path in {
+        "physics/solvers/fdm/cpu/interactions/exchange.md",
+        "physics/solvers/fdm/gpu/interactions/exchange.md",
+        "physics/solvers/fem/cpu/interactions/exchange.md",
+        "physics/solvers/fem/gpu/interactions/exchange.md",
+    }:
+        rendered += (
+            "\n## Related pages\n\n"
+            "- {doc}`../../../../../exchange`\n"
+            "- {doc}`../../../../../python-api/interactions/exchange`\n"
+        )
+    return rendered
+
+
 def is_registered_scaffold(path: Path, repo_root: Path) -> bool:
     try:
         relative = path.resolve().relative_to(repo_root.resolve())
@@ -85,9 +131,6 @@ def is_registered_scaffold(path: Path, repo_root: Path) -> bool:
     if module is None:
         return False
     page_specs = getattr(module, "PAGE_SPECS", ())
-    render_page = getattr(module, "render_page", None)
-    if not callable(render_page):
-        return False
     matching = [spec for spec in page_specs if getattr(spec, "path", None) == manifest_path]
     if len(matching) != 1:
         return False
@@ -97,8 +140,8 @@ def is_registered_scaffold(path: Path, repo_root: Path) -> bool:
     if getattr(page_spec, "doc_kind", None) != "scaffold":
         return False
     try:
-        expected = render_page(page_spec, repo_root / public_root)
-        return path.read_bytes() == expected.encode("utf-8")
+        expected = _independent_scaffold_text(page_spec)
+        return expected is not None and path.read_bytes() == expected.encode("utf-8")
     except (OSError, UnicodeError, ValueError, TypeError):
         return False
 

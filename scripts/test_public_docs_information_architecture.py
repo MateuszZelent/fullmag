@@ -51,7 +51,7 @@ class PublicDocumentationInformationArchitectureTests(unittest.TestCase):
         )
         self.assertEqual(existing_exchange.doc_kind, "reference")
 
-    def test_terminal_scaffold_uses_the_canonical_shape(self) -> None:
+    def test_terminal_exchange_scaffold_uses_the_canonical_shape(self) -> None:
         exchange = next(
             spec
             for spec in PAGE_SPECS
@@ -71,6 +71,11 @@ owner: fullmag-public-docs
 # Exchange — FDM CPU
 
 This page reserves the public documentation location for the FDM CPU realization of Exchange.
+
+## Related pages
+
+- {doc}`../../../../../exchange`
+- {doc}`../../../../../python-api/interactions/exchange`
 """,
         )
 
@@ -133,6 +138,53 @@ This page reserves the public documentation location for the FDM CPU realization
                 "```{toctree}\n:maxdepth: 1\n\nchild\n```\n"
             )
             self.assertEqual(check_pages((parent, child), root), [])
+
+    def test_reference_navigation_rejects_extra_entries(self) -> None:
+        child = PageSpec("child.md", "Child", "child", "partial", "reference", "child")
+        parent = PageSpec(
+            "index.md", "Parent", "parent", "partial", "reference", "parent", ("child.md",)
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "child.md").write_text(
+                "---\ntitle: Child\nstatus: partial\ndoc_kind: reference\n---\n\n(child)=\n# Child\n"
+            )
+            (root / "index.md").write_text(
+                "---\ntitle: Parent\nstatus: partial\ndoc_kind: reference\n---\n\n(parent)=\n# Parent\n\n"
+                "```{toctree}\n:maxdepth: 1\n\nchild\nextra\n```\n"
+            )
+            self.assertIn(
+                "reference navigation does not match manifest: index.md",
+                check_pages((parent, child), root),
+            )
+
+    def test_reference_navigation_rejects_duplicates_and_wrong_order(self) -> None:
+        first = PageSpec("first.md", "First", "first", "partial", "reference", "first")
+        second = PageSpec("second.md", "Second", "second", "partial", "reference", "second")
+        parent = PageSpec(
+            "index.md",
+            "Parent",
+            "parent",
+            "partial",
+            "reference",
+            "parent",
+            ("first.md", "second.md"),
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            for spec in (first, second):
+                (root / spec.path).write_text(
+                    f"---\ntitle: {spec.title}\nstatus: partial\ndoc_kind: reference\n---\n\n"
+                    f"({spec.label})=\n# {spec.title}\n"
+                )
+            (root / "index.md").write_text(
+                "---\ntitle: Parent\nstatus: partial\ndoc_kind: reference\n---\n\n(parent)=\n# Parent\n\n"
+                "```{toctree}\n:maxdepth: 1\n\nsecond\nfirst\nfirst\n```\n"
+            )
+            self.assertIn(
+                "reference navigation does not match manifest: index.md",
+                check_pages((parent, first, second), root),
+            )
 
     def test_reference_requires_complete_canonical_front_matter(self) -> None:
         spec = PageSpec("guide.md", "Guide", "guide", "partial", "reference", "guide")

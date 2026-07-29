@@ -10,3 +10,8 @@ owner: fullmag-public-docs
 # Exchange — FDM CPU
 
 This page reserves the public documentation location for the FDM CPU realization of Exchange.
+
+## Related pages
+
+- {doc}`../../../../../exchange`
+- {doc}`../../../../../python-api/interactions/exchange`

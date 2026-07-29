@@ -10,3 +10,8 @@ owner: fullmag-public-docs
 # Exchange — FEM GPU
 
 This page reserves the public documentation location for the FEM GPU realization of Exchange.
+
+## Related pages
+
+- {doc}`../../../../../exchange`
+- {doc}`../../../../../python-api/interactions/exchange`

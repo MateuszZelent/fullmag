@@ -19,6 +19,13 @@ qualified. In particular, current-revision executed-device proof is missing for 
 and for the newest mixed-element FEM CUDA path.
 :::
 
+## Solver and backend realizations
+
+- {doc}`solvers/fdm/cpu/interactions/exchange`
+- {doc}`solvers/fdm/gpu/interactions/exchange`
+- {doc}`solvers/fem/cpu/interactions/exchange`
+- {doc}`solvers/fem/gpu/interactions/exchange`
+
 (problem-statement)=
 ## Physical problem
 

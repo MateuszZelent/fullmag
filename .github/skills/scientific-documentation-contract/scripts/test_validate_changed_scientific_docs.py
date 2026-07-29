@@ -58,7 +58,7 @@ PAGE_SPECS = (
         \"public-docs-physics-solvers-fdm-cpu-exchange\",
         \"planned\",
         \"scaffold\",
-        \"FDM CPU exchange.\",
+        \"FDM CPU exchange\",
     ),
 )
 
@@ -68,10 +68,12 @@ def render_page(spec: PageSpec, root: Path) -> str:
         f\"title: {spec.title}\\n\"
         f\"status: {spec.status}\\n\"
         f\"doc_kind: {spec.doc_kind}\\n\"
+        \"audience: user\\n\"
+        \"owner: fullmag-public-docs\\n\"
         \"---\\n\\n\"
         f\"({spec.label})=\\n\"
         f\"# {spec.title}\\n\\n\"
-        f\"{spec.scope}\\n\"
+        f\"This page reserves the public documentation location for {spec.scope}.\\n\"
     )
 """,
             encoding="utf-8",
@@ -87,12 +89,14 @@ def render_page(spec: PageSpec, root: Path) -> str:
 title: Exchange
 status: planned
 doc_kind: scaffold
+audience: user
+owner: fullmag-public-docs
 ---
 
 (public-docs-physics-solvers-fdm-cpu-exchange)=
 # Exchange
 
-FDM CPU exchange.
+This page reserves the public documentation location for FDM CPU exchange.
 """,
             encoding="utf-8",
         )
@@ -142,6 +146,34 @@ FDM CPU exchange.
         page.write_text(page.read_text(encoding="utf-8") + "\\[E = A |\\nabla m|^2\\]\n")
         _git(self.repo, "add", ".")
         _git(self.repo, "commit", "-qm", "modify scaffold content")
+
+        errors = validate_changed(self.repo, self.base, "HEAD")
+
+        self.assertIn(
+            f"changed scientific page requires sidecar manifest: "
+            f"{page_path.removesuffix('.md')}.source-map.json",
+            errors,
+        )
+
+    def test_changed_generator_cannot_approve_arbitrary_scaffold_content(self) -> None:
+        page, page_path = self._render_registered_scaffold()
+        generator = self.repo / "scripts/public_docs_information_architecture.py"
+        generator.write_text(
+            generator.read_text(encoding="utf-8").replace(
+                'f"This page reserves the public documentation location for {spec.scope}.\\n"',
+                '"The exchange field is exactly H = 2 A laplacian(m).\\n"',
+            ),
+            encoding="utf-8",
+        )
+        page.write_text(
+            page.read_text(encoding="utf-8").replace(
+                "This page reserves the public documentation location for FDM CPU exchange.",
+                "The exchange field is exactly H = 2 A laplacian(m).",
+            ),
+            encoding="utf-8",
+        )
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "change generator and scaffold together")
 
         errors = validate_changed(self.repo, self.base, "HEAD")
 
