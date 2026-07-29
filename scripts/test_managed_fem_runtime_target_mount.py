@@ -88,7 +88,14 @@ class ManagedFemRuntimeTargetMountTest(unittest.TestCase):
             fake_bin.mkdir()
             docker_marker = root / "docker-called"
             mkdir = fake_bin / "mkdir"
-            mkdir.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            mkdir.write_text(
+                "#!/bin/sh\n"
+                'case "$*" in\n'
+                '  *".fullmag/runtimes"*) exec /usr/bin/mkdir "$@" ;;\n'
+                "  *) exit 0 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
             mkdir.chmod(0o755)
             findmnt = fake_bin / "findmnt"
             findmnt.write_text("#!/bin/sh\necho xfs\n", encoding="utf-8")
@@ -131,7 +138,14 @@ class ManagedFemRuntimeTargetMountTest(unittest.TestCase):
             fake_bin = root / "bin"
             fake_bin.mkdir()
             mkdir = fake_bin / "mkdir"
-            mkdir.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            mkdir.write_text(
+                "#!/bin/sh\n"
+                'case "$*" in\n'
+                '  *".fullmag/runtimes"*) exec /usr/bin/mkdir "$@" ;;\n'
+                "  *) exit 0 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
             mkdir.chmod(0o755)
             findmnt = fake_bin / "findmnt"
             findmnt.write_text("#!/bin/sh\necho xfs\n", encoding="utf-8")
@@ -172,7 +186,14 @@ class ManagedFemRuntimeTargetMountTest(unittest.TestCase):
             fake_bin.mkdir()
             docker_marker = root / "docker-called"
             mkdir = fake_bin / "mkdir"
-            mkdir.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            mkdir.write_text(
+                "#!/bin/sh\n"
+                'case "$*" in\n'
+                '  *".fullmag/runtimes"*) exec /usr/bin/mkdir "$@" ;;\n'
+                "  *) exit 0 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
             mkdir.chmod(0o755)
             findmnt = fake_bin / "findmnt"
             findmnt.write_text(
@@ -255,6 +276,8 @@ class ManagedFemRuntimeTargetMountTest(unittest.TestCase):
                     REPO_ROOT / "scripts/lib/managed_fem_image_identity.sh",
                     library / "managed_fem_image_identity.sh",
                 )
+                runtime_parent = repo_root / ".fullmag" / "runtimes"
+                self.assertFalse(runtime_parent.exists())
                 environment = os.environ.copy()
                 environment.update(
                     {
@@ -274,6 +297,7 @@ class ManagedFemRuntimeTargetMountTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertIn(f"must be an ext4 filesystem: {target}", result.stderr)
                 self.assertIn(CANONICAL_IMAGE, result.stderr)
+                self.assertTrue(runtime_parent.is_dir())
                 targets.append(target)
 
             self.assertNotEqual(targets[0], targets[1])
