@@ -3610,6 +3610,10 @@ mod tests {
             metadata["mesh_build_report"],
             serde_json::to_value(report).unwrap()
         );
+        assert_eq!(
+            metadata["mesh_build_report"]["orphan_entities"],
+            serde_json::json!([]),
+        );
     }
 
     fn test_multilayer_execution_plan() -> ExecutionPlanIR {

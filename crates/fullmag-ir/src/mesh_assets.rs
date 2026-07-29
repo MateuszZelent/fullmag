@@ -652,6 +652,18 @@ mod mesh_asset_validation_tests {
     }
 
     #[test]
+    fn mixed_build_report_serializes_explicit_empty_orphan_entities() {
+        let asset: FemDomainMeshAssetIR =
+            serde_json::from_value(mixed_certificate_asset_value()).unwrap();
+        let serialized = serde_json::to_value(asset).unwrap();
+
+        assert_eq!(
+            serialized["build_report"]["orphan_entities"],
+            serde_json::json!([]),
+        );
+    }
+
+    #[test]
     fn mixed_certificate_v3_validates_full_asset_and_unknown_v4_fails_closed() {
         let mut payload = mixed_certificate_asset_value();
         let mesh: MeshIR = serde_json::from_value(payload["mesh"].clone()).unwrap();
@@ -2773,7 +2785,7 @@ pub struct FemSharedDomainBuildReportIR {
     pub magnetic_submesh_signatures: Vec<FemMagneticSubmeshSignatureIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selector_resolution: Vec<Value>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub orphan_entities: Vec<Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rejected_element_types: Vec<Value>,

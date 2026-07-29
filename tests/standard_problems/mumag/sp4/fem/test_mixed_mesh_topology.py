@@ -390,6 +390,12 @@ def test_topology_collector_migrates_a_legacy_ledger_header(tmp_path: Path) -> N
             "degraded=false",
         ),
         (
+            lambda metadata: metadata["mesh"]["mesh_build_report"].pop(
+                "orphan_entities"
+            ),
+            "must prove no orphan entities",
+        ),
+        (
             lambda metadata: metadata["mesh"]["mesh_build_report"][
                 "mixed_layer_topology_certificate"
             ].update({"topology_fingerprint": "sha256:" + "b" * 64}),
