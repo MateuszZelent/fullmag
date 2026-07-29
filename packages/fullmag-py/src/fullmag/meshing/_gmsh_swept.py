@@ -23,9 +23,9 @@ from __future__ import annotations
 import math
 import numbers
 import tempfile
-from dataclasses import replace as _dc_replace
+from dataclasses import dataclass, replace as _dc_replace
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Iterator, Literal
 
 import numpy as np
 from numpy.typing import NDArray
@@ -39,6 +39,7 @@ from ._gmsh_types import (
     MeshRealizationReport,
     MeshOptions,
     MeshQualityReport,
+    _MIXED_CELL_LOCAL_FACETS,
     _infer_axis_aligned_periodic_pairs,
     _count_exact_layer_planes,
     _mixed_cell_scaled_jacobians,
@@ -228,6 +229,249 @@ def _mixed_gmsh_scaled_jacobian_p05(gmsh: Any) -> dict[str, float]:
     }
 
 
+def _mixed_apex_candidate_preserves_face_sides(
+    coordinates: dict[int, NDArray[np.float64]],
+    *,
+    apex: int,
+    candidate: NDArray[np.float64],
+    shared_faces: list[
+        tuple[
+            tuple[int, ...],
+            tuple[NDArray[np.int64], NDArray[np.int64]],
+        ]
+    ],
+) -> bool:
+    """Require the two owners of every moved shared face to remain opposite."""
+
+    def point(tag: int) -> NDArray[np.float64]:
+        return candidate if tag == apex else coordinates[tag]
+
+    for face, owners in shared_faces:
+        face_points = np.asarray([point(tag) for tag in face], dtype=np.float64)
+        origin = face_points[0]
+        normal: NDArray[np.float64] | None = None
+        for left in range(1, len(face_points) - 1):
+            trial = np.cross(
+                face_points[left] - origin,
+                face_points[left + 1] - origin,
+            )
+            norm = float(np.linalg.norm(trial))
+            if norm > 0.0:
+                normal = trial / norm
+                break
+        if normal is None:
+            return False
+        face_scale = max(
+            float(np.linalg.norm(right - left))
+            for offset, left in enumerate(face_points)
+            for right in face_points[offset + 1 :]
+        )
+        side_tolerance = max(
+            np.finfo(np.float64).tiny,
+            64.0 * np.finfo(np.float64).eps * face_scale,
+        )
+        face_nodes = set(face)
+        signed_distances: list[float] = []
+        for owner in owners:
+            opposite = [point(int(tag)) for tag in owner if int(tag) not in face_nodes]
+            if not opposite:
+                return False
+            owner_interior = np.mean(np.asarray(opposite), axis=0)
+            signed_distances.append(float(np.dot(owner_interior - origin, normal)))
+        if (
+            abs(signed_distances[0]) <= side_tolerance
+            or abs(signed_distances[1]) <= side_tolerance
+            or signed_distances[0] * signed_distances[1] >= 0.0
+        ):
+            return False
+    return True
+
+
+def _mixed_shared_faces_by_apex(
+    cells_by_family: dict[str, list[NDArray[np.int64]]],
+    *,
+    apex_tags: list[int],
+) -> dict[
+    int,
+    list[
+        tuple[
+            tuple[int, ...],
+            tuple[NDArray[np.int64], NDArray[np.int64]],
+        ]
+    ],
+]:
+    """Index every shared face whose plane or owner interior an apex can move."""
+    face_owners: dict[tuple[int, ...], list[NDArray[np.int64]]] = {}
+    for family, cells in cells_by_family.items():
+        for cell in cells:
+            for local_face in _MIXED_CELL_LOCAL_FACETS[family]:
+                face = tuple(sorted(int(cell[index]) for index in local_face))
+                face_owners.setdefault(face, []).append(cell)
+
+    apex_set = set(apex_tags)
+    shared_faces_by_apex: dict[
+        int,
+        list[
+            tuple[
+                tuple[int, ...],
+                tuple[NDArray[np.int64], NDArray[np.int64]],
+            ]
+        ],
+    ] = {apex: [] for apex in apex_tags}
+    for face, owners in face_owners.items():
+        if len(owners) != 2:
+            continue
+        owner_nodes = {int(tag) for owner in owners for tag in owner}
+        for apex in apex_set.intersection(owner_nodes):
+            shared_faces_by_apex[apex].append((face, (owners[0], owners[1])))
+    return shared_faces_by_apex
+
+
+@dataclass(frozen=True)
+class _MixedApexFaceSideConstraint:
+    first_start: float
+    first_slope: float
+    second_start: float
+    second_slope: float
+    normal_start: NDArray[np.float64]
+    normal_slope: NDArray[np.float64]
+    edge_starts: tuple[NDArray[np.float64], ...]
+    edge_slopes: tuple[NDArray[np.float64], ...]
+
+
+def _prepare_mixed_apex_face_side_constraints(
+    coordinates: dict[int, NDArray[np.float64]],
+    *,
+    directions: dict[int, NDArray[np.float64]],
+    shared_faces_by_apex: dict[
+        int,
+        list[
+            tuple[
+                tuple[int, ...],
+                tuple[NDArray[np.int64], NDArray[np.int64]],
+            ]
+        ],
+    ],
+) -> dict[int, list[_MixedApexFaceSideConstraint]]:
+    """Precompute affine signed-volume guards for one-dimensional apex moves."""
+
+    constraints: dict[int, list[_MixedApexFaceSideConstraint]] = {}
+    for apex, shared_faces in shared_faces_by_apex.items():
+        direction = directions[apex]
+
+        def point(tag: int, alpha: float) -> NDArray[np.float64]:
+            if tag == apex:
+                return coordinates[tag] + alpha * direction
+            return coordinates[tag]
+
+        apex_constraints: list[_MixedApexFaceSideConstraint] = []
+        for face, owners in shared_faces:
+            face_nodes = set(face)
+
+            def face_geometry(
+                alpha: float,
+            ) -> tuple[NDArray[np.float64], tuple[NDArray[np.float64], ...]]:
+                points = [point(tag, alpha) for tag in face]
+                origin = points[0]
+                normal = np.zeros(3, dtype=np.float64)
+                for left in range(1, len(points) - 1):
+                    trial = np.cross(points[left] - origin, points[left + 1] - origin)
+                    if float(np.linalg.norm(trial)) > 0.0:
+                        normal = trial
+                        break
+                edges = tuple(
+                    right - left
+                    for offset, left in enumerate(points)
+                    for right in points[offset + 1 :]
+                )
+                return normal, edges
+
+            def owner_determinant(owner: NDArray[np.int64], alpha: float) -> float:
+                normal_area, _edges = face_geometry(alpha)
+                origin = point(face[0], alpha)
+                opposite = [
+                    point(int(tag), alpha)
+                    for tag in owner
+                    if int(tag) not in face_nodes
+                ]
+                if not opposite:
+                    return 0.0
+                owner_interior = np.mean(np.asarray(opposite), axis=0)
+                return float(np.dot(owner_interior - origin, normal_area))
+
+            starts = [owner_determinant(owner, 0.0) for owner in owners]
+            ends = [owner_determinant(owner, 1.0) for owner in owners]
+            normal_start, edge_starts = face_geometry(0.0)
+            normal_end, edge_ends = face_geometry(1.0)
+            apex_constraints.append(
+                _MixedApexFaceSideConstraint(
+                    first_start=starts[0],
+                    first_slope=ends[0] - starts[0],
+                    second_start=starts[1],
+                    second_slope=ends[1] - starts[1],
+                    normal_start=normal_start,
+                    normal_slope=normal_end - normal_start,
+                    edge_starts=edge_starts,
+                    edge_slopes=tuple(
+                        end - start for start, end in zip(edge_starts, edge_ends, strict=True)
+                    ),
+                )
+            )
+        constraints[apex] = apex_constraints
+    return constraints
+
+
+def _mixed_apex_factor_preserves_face_sides(
+    constraints: list[_MixedApexFaceSideConstraint],
+    *,
+    alpha: float,
+) -> bool:
+    for constraint in constraints:
+        first = constraint.first_start + alpha * constraint.first_slope
+        second = constraint.second_start + alpha * constraint.second_slope
+        normal_norm = float(np.linalg.norm(
+            constraint.normal_start + alpha * constraint.normal_slope
+        ))
+        if normal_norm == 0.0:
+            return False
+        face_scale = max(
+            float(np.linalg.norm(start + alpha * slope))
+            for start, slope in zip(
+                constraint.edge_starts, constraint.edge_slopes, strict=True
+            )
+        )
+        tolerance = max(
+            np.finfo(np.float64).tiny,
+            64.0 * np.finfo(np.float64).eps * face_scale,
+        ) * normal_norm
+        if abs(first) <= tolerance or abs(second) <= tolerance or first * second >= 0.0:
+            return False
+    return True
+
+
+def _iter_mixed_apex_face_side_constraints(
+    coordinates: dict[int, NDArray[np.float64]],
+    *,
+    directions: dict[int, NDArray[np.float64]],
+    shared_faces_by_apex: dict[
+        int,
+        list[
+            tuple[
+                tuple[int, ...],
+                tuple[NDArray[np.int64], NDArray[np.int64]],
+            ]
+        ],
+    ],
+) -> Iterator[tuple[int, list[_MixedApexFaceSideConstraint]]]:
+    """Lazily prepare each apex guard after earlier apex moves are committed."""
+    for apex in sorted(directions):
+        yield apex, _prepare_mixed_apex_face_side_constraints(
+            coordinates,
+            directions={apex: directions[apex]},
+            shared_faces_by_apex={apex: shared_faces_by_apex[apex]},
+        )[apex]
+
+
 def _optimize_mixed_pyramid_apices(gmsh: Any) -> float:
     """Deterministically improve pyramid p05 without degrading incident cells."""
     pyramid_tags, pyramid_nodes = gmsh.model.mesh.getElementsByType(7)
@@ -270,6 +514,9 @@ def _optimize_mixed_pyramid_apices(gmsh: Any) -> float:
         apex: [] for apex in apex_tags
     }
     apex_set = set(apex_tags)
+    cells_by_family: dict[str, list[NDArray[np.int64]]] = {
+        "pyramid5": [pyramid for pyramid in pyramids]
+    }
     for element_type, family, arity in (
         (4, "tet4", 4),
         (6, "prism6", 6),
@@ -278,10 +525,16 @@ def _optimize_mixed_pyramid_apices(gmsh: Any) -> float:
         if len(element_tags) == 0:
             continue
         connectivity = np.asarray(element_nodes, dtype=np.int64).reshape((-1, arity))
+        cells_by_family[family] = [cell for cell in connectivity]
         for cell in connectivity:
             cell_apices = sorted(apex_set.intersection(int(tag) for tag in cell))
             for apex in cell_apices:
                 incident_by_apex[apex].append((family, cell))
+
+    shared_faces_by_apex = _mixed_shared_faces_by_apex(
+        cells_by_family,
+        apex_tags=apex_tags,
+    )
 
     def cell_qualities(
         family: str,
@@ -303,7 +556,11 @@ def _optimize_mixed_pyramid_apices(gmsh: Any) -> float:
         round((MIXED_PYRAMID_APEX_SCALE_MAX - 1.0) / MIXED_PYRAMID_APEX_SCALE_STEP)
     )
     selected_factors: list[float] = []
-    for apex in sorted(mean_direction):
+    for apex, face_side_constraints in _iter_mixed_apex_face_side_constraints(
+        coordinates,
+        directions=mean_direction,
+        shared_faces_by_apex=shared_faces_by_apex,
+    ):
         original_incident = [
             value
             for family, cell in incident_by_apex[apex]
@@ -346,6 +603,16 @@ def _optimize_mixed_pyramid_apices(gmsh: Any) -> float:
                     "pyramid5", pyramid, apex=apex, candidate=candidate
                 )
             )
+            if (
+                pyramid_min <= best_pyramid_min
+                and pyramid_min < MIXED_SCALED_JACOBIAN_P05_MIN
+            ):
+                continue
+            if not _mixed_apex_factor_preserves_face_sides(
+                face_side_constraints,
+                alpha=factor - 1.0,
+            ):
+                continue
             if pyramid_min > best_pyramid_min:
                 best_factor = factor
                 best_candidate = candidate

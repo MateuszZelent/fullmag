@@ -20,6 +20,7 @@ from fullmag.meshing._gmsh_extraction import (
     _extract_mesh_data,
 )
 from fullmag.meshing._gmsh_infra import _scale_mesh_nodes
+from fullmag.meshing._gmsh_occ import generate_shared_domain_mesh_via_occ
 from fullmag.meshing._gmsh_types import (
     MeshData,
     MeshOptions,
@@ -29,6 +30,11 @@ from fullmag.meshing._gmsh_types import (
 from fullmag.meshing._gmsh_swept import (
     SWEEP_STRATEGY_PRISM,
     _extract_swept_mesh_data,
+    _mixed_apex_factor_preserves_face_sides,
+    _mixed_apex_candidate_preserves_face_sides,
+    _iter_mixed_apex_face_side_constraints,
+    _mixed_shared_faces_by_apex,
+    _prepare_mixed_apex_face_side_constraints,
     generate_swept_box_mesh,
     generate_swept_cylinder_mesh,
     generate_swept_mesh,
@@ -55,6 +61,24 @@ CELL_FACES = {
         (3, 0, 4),
     ),
 }
+
+
+def test_mixed_face_frequency_counting_is_linear_in_face_count() -> None:
+    class CountingFace(tuple):
+        comparisons = 0
+
+        def __eq__(self, other: object) -> bool:
+            type(self).comparisons += 1
+            return super().__eq__(other)
+
+        __hash__ = tuple.__hash__
+
+    faces = [CountingFace((index, index + 1, index + 2)) for index in range(2_000)]
+
+    frequencies = gmsh_types._mixed_face_frequencies(faces)
+
+    assert len(frequencies) == len(faces)
+    assert CountingFace.comparisons <= len(faces)
 
 
 def test_gmsh_prism6_node_order_has_an_explicit_canonical_permutation() -> None:
@@ -86,6 +110,232 @@ def test_mixed_overlap_gate_detects_two_tetrahedra_on_the_same_face_side() -> No
     )
 
     assert _mixed_same_side_two_owner_face_count(mesh, tolerance=1.0e-12) == 1
+    diagnostics = gmsh_types._mixed_mesh_conformity_diagnostics(
+        mesh,
+        tolerance=1.0e-12,
+        limit=1,
+    )
+    assert diagnostics == [
+        {
+            "issue": "same_side_two_owner_face",
+            "interface": "tet4_tet4",
+            "node_ids": [0, 1, 2],
+            "coordinates_m": [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ],
+            "owners": [
+                {
+                    "cell": 0,
+                    "global_ordinal": 0,
+                    "family": "tet4",
+                    "marker": 0,
+                    "mesh_part": "",
+                },
+                {
+                    "cell": 1,
+                    "global_ordinal": 1,
+                    "family": "tet4",
+                    "marker": 0,
+                    "mesh_part": "",
+                },
+            ],
+            "explicit_facets": [],
+            "owner_signed_distances_m": [1.0, 2.0],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("candidate", "expected"),
+    [
+        (np.asarray([0.0, 0.0, 0.25]), True),
+        (np.asarray([0.0, 0.0, 2.0]), False),
+        (np.asarray([0.0, 0.0, 1.0 - 1.0e-15]), False),
+    ],
+    ids=["legal", "same-side-crossing", "near-zero-fail-closed"],
+)
+def test_mixed_apex_candidate_preserves_signed_shared_face_sides(
+    candidate: np.ndarray,
+    expected: bool,
+) -> None:
+    coordinates = {
+        0: np.asarray([0.0, 0.0, 0.0]),
+        1: np.asarray([1.0, 0.0, 0.0]),
+        2: np.asarray([0.0, 1.0, 0.0]),
+        3: np.asarray([0.0, 0.0, 1.0]),
+        4: np.asarray([0.0, 0.0, -1.0]),
+    }
+    shared_faces = [
+        (
+            (0, 1, 2),
+            (
+                np.asarray([0, 1, 2, 3], dtype=np.int64),
+                np.asarray([0, 1, 2, 4], dtype=np.int64),
+            ),
+        )
+    ]
+
+    assert _mixed_apex_candidate_preserves_face_sides(
+        coordinates,
+        apex=0,
+        candidate=candidate,
+        shared_faces=shared_faces,
+    ) is expected
+
+
+def test_mixed_apex_local_star_includes_owner_opposite_face() -> None:
+    first = np.asarray([0, 1, 2, 3], dtype=np.int64)
+    second = np.asarray([0, 1, 2, 4], dtype=np.int64)
+    shared_faces = _mixed_shared_faces_by_apex(
+        {"tet4": [first, second]},
+        apex_tags=[3],
+    )
+    coordinates = {
+        0: np.asarray([0.0, 0.0, 0.0]),
+        1: np.asarray([1.0, 0.0, 0.0]),
+        2: np.asarray([0.0, 1.0, 0.0]),
+        3: np.asarray([0.0, 0.0, 1.0]),
+        4: np.asarray([0.0, 0.0, -1.0]),
+    }
+
+    assert shared_faces[3] == [((0, 1, 2), (first, second))]
+    assert not _mixed_apex_candidate_preserves_face_sides(
+        coordinates,
+        apex=3,
+        candidate=np.asarray([0.0, 0.0, -2.0]),
+        shared_faces=shared_faces[3],
+    )
+
+
+@pytest.mark.parametrize(
+    ("alpha", "expected"),
+    [(0.25, True), (2.0, False), (1.0 - 1.0e-15, False)],
+)
+def test_precomputed_apex_face_constraints_match_geometric_guard(
+    alpha: float,
+    expected: bool,
+) -> None:
+    coordinates = {
+        0: np.asarray([0.0, 0.0, 0.0]),
+        1: np.asarray([1.0, 0.0, 0.0]),
+        2: np.asarray([0.0, 1.0, 0.0]),
+        3: np.asarray([0.0, 0.0, 1.0]),
+        4: np.asarray([0.0, 0.0, -1.0]),
+    }
+    shared_faces = _mixed_shared_faces_by_apex(
+        {
+            "tet4": [
+                np.asarray([0, 1, 2, 3], dtype=np.int64),
+                np.asarray([0, 1, 2, 4], dtype=np.int64),
+            ]
+        },
+        apex_tags=[0],
+    )
+    constraints = _prepare_mixed_apex_face_side_constraints(
+        coordinates,
+        directions={0: np.asarray([0.0, 0.0, 1.0])},
+        shared_faces_by_apex=shared_faces,
+    )
+
+    assert len(constraints[0]) == len(shared_faces[0]) == 1
+    assert _mixed_apex_factor_preserves_face_sides(
+        constraints[0], alpha=alpha
+    ) is expected
+
+
+@pytest.mark.parametrize("face", [(0, 1, 2), (0, 1, 2, 3)], ids=["tri", "quad"])
+@pytest.mark.parametrize("apex_role", ["face", "opposite"])
+def test_affine_face_guard_exactly_matches_direct_oracle(
+    face: tuple[int, ...],
+    apex_role: str,
+) -> None:
+    coordinates = {
+        0: np.asarray([0.0, 0.0, 0.0]),
+        1: np.asarray([1.0, 0.0, 0.0]),
+        2: np.asarray([0.0, 1.0, 0.0]),
+        3: np.asarray([1.0, 1.0, 0.0]),
+        4: np.asarray([0.25, 0.25, 1.0]),
+        5: np.asarray([0.25, 0.25, -1.0]),
+    }
+    owners = (
+        np.asarray([*face, 4], dtype=np.int64),
+        np.asarray([*face, 5], dtype=np.int64),
+    )
+    apex = face[0] if apex_role == "face" else 4
+    direction = (
+        np.asarray([0.0, 0.0, 1.0])
+        if apex_role == "face"
+        else np.asarray([0.0, 0.0, -2.0])
+    )
+    shared_faces = {apex: [(face, owners)]}
+    constraints = _prepare_mixed_apex_face_side_constraints(
+        coordinates,
+        directions={apex: direction},
+        shared_faces_by_apex=shared_faces,
+    )[apex]
+
+    for alpha in (0.0, 0.25, 0.5, 1.0 - 1.0e-15, 1.0, 2.0):
+        candidate = coordinates[apex] + alpha * direction
+        direct = _mixed_apex_candidate_preserves_face_sides(
+            coordinates,
+            apex=apex,
+            candidate=candidate,
+            shared_faces=shared_faces[apex],
+        )
+        assert _mixed_apex_factor_preserves_face_sides(
+            constraints, alpha=alpha
+        ) is direct
+
+
+def test_incremental_apex_constraint_iterator_observes_first_apex_move() -> None:
+    coordinates = {
+        0: np.asarray([0.0, 0.0, 0.0]),
+        1: np.asarray([1.0, 0.0, 0.0]),
+        2: np.asarray([0.0, 1.0, 0.0]),
+        3: np.asarray([0.0, 0.0, 1.0]),
+        4: np.asarray([0.0, 0.0, -1.0]),
+    }
+    owners = (
+        np.asarray([0, 1, 2, 3], dtype=np.int64),
+        np.asarray([0, 1, 2, 4], dtype=np.int64),
+    )
+    shared_faces = {
+        0: [((0, 1, 2), owners)],
+        3: [((0, 1, 2), owners)],
+    }
+    directions = {
+        0: np.asarray([0.0, 0.0, 0.25]),
+        3: np.asarray([0.0, 0.0, -2.0]),
+    }
+    stale = _prepare_mixed_apex_face_side_constraints(
+        coordinates,
+        directions={3: directions[3]},
+        shared_faces_by_apex={3: shared_faces[3]},
+    )[3]
+    iterator = _iter_mixed_apex_face_side_constraints(
+        coordinates,
+        directions=directions,
+        shared_faces_by_apex=shared_faces,
+    )
+    first_apex, _first_constraints = next(iterator)
+    assert first_apex == 0
+    coordinates[0] = coordinates[0] + directions[0]
+    second_apex, fresh = next(iterator)
+    assert second_apex == 3
+
+    alpha = 0.4
+    candidate = coordinates[3] + alpha * directions[3]
+    direct = _mixed_apex_candidate_preserves_face_sides(
+        coordinates,
+        apex=3,
+        candidate=candidate,
+        shared_faces=shared_faces[3],
+    )
+
+    assert _mixed_apex_factor_preserves_face_sides(fresh, alpha=alpha) is direct
+    assert _mixed_apex_factor_preserves_face_sides(stale, alpha=alpha) is not direct
 
 
 def _physical_entities(gmsh, *, dim: int, name: str) -> list[int]:
@@ -948,6 +1198,41 @@ def _shared_domain_face_owners(
     return owners
 
 
+def test_occ_tet_shared_domain_preserves_facet_roles_after_si_scaling() -> None:
+    pytest.importorskip("gmsh")
+    airbox = fm.meshing.AirboxOptions(
+        size=(8.0e-6, 6.0e-6, 4.0e-6),
+        center=(0.0, 0.0, 0.0),
+        minimum_element_size=0.8e-6,
+        maximum_element_size=1.6e-6,
+    )
+    mesh = generate_shared_domain_mesh_via_occ(
+        [fm.Box((4.0e-6, 2.0e-6, 1.0e-6), name="film")],
+        hmax=0.8e-6,
+        airbox=airbox,
+        options=MeshOptions(compute_quality=False, per_element_quality=False),
+    ).mesh
+    owners = _shared_domain_face_owners(mesh)
+    interfaces = {
+        tuple(sorted(int(node) for node in mesh.facet_node_ids(index)))
+        for index, role in enumerate(mesh.facet_roles.tolist())
+        if role == "material_interface"
+    }
+    exterior = {
+        tuple(sorted(int(node) for node in mesh.facet_node_ids(index)))
+        for index, role in enumerate(mesh.facet_roles.tolist())
+        if role == "exterior"
+    }
+
+    assert interfaces
+    assert all(
+        len(owners[face]) == 2
+        and {marker for marker, _family in owners[face]} == {0, 1}
+        for face in interfaces
+    )
+    assert all(len(owners[face]) == 1 for face in exterior)
+
+
 def test_shared_domain_box_preserves_family_marker_and_facet_partition() -> None:
     pytest.importorskip("gmsh")
     _body_size, airbox, mesh = _mixed_shared_domain_case()
@@ -1120,6 +1405,17 @@ def test_public_prismatic_thin_film_materializes_qualified_mixed_asset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pytest.importorskip("gmsh")
+    conformity_calls = 0
+    original_conformity_counts = gmsh_types._mixed_mesh_conformity_counts
+
+    def counted_conformity(*args, **kwargs):
+        nonlocal conformity_calls
+        conformity_calls += 1
+        return original_conformity_counts(*args, **kwargs)
+
+    monkeypatch.setattr(
+        gmsh_types, "_mixed_mesh_conformity_counts", counted_conformity
+    )
     monkeypatch.setenv("FULLMAG_FEM_MESH_CACHE_DIR", "")
     fm.reset()
     study = fm.study("public-prismatic-asset")
@@ -1221,6 +1517,7 @@ def test_public_prismatic_thin_film_materializes_qualified_mixed_asset(
         "shared_geo_extrusion_partitioned_pyramid_tet.v2"
     )
     assert certificate["deterministic_inputs"]["transition_volume_count"] == 26
+    assert conformity_calls <= 3
 
     nodes = np.asarray(mesh["nodes"], dtype=np.float64)
     cell_types = mesh["cells"]["types"]
@@ -1826,8 +2123,36 @@ def test_mesh_load_recomputes_mixed_certificate_evidence(
         certificate[resolved_field] = replacement(certificate[resolved_field])
 
     _rewrite_persisted_mixed_certificate(path, suffix, mutate)
-    with pytest.raises((TypeError, ValueError), match="mixed layer topology certificate"):
+    with pytest.raises(
+        (TypeError, ValueError), match="mixed layer topology certificate"
+    ):
         MeshData.load(path)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "nonconforming_face_count",
+        "orphan_face_count",
+        "nonmanifold_face_count",
+        "coincident_interface_face_count",
+    ],
+)
+def test_mixed_certificate_recomputes_each_conformity_claim(field: str) -> None:
+    pytest.importorskip("gmsh")
+    mesh = _mixed_shared_domain_case()[2]
+    original = mesh.mixed_layer_topology_certificate
+    assert original is not None
+    certificate = replace(original)
+    object.__setattr__(certificate, field, 1)
+    unsigned = replace(mesh, mixed_layer_topology_certificate=None)
+    object.__setattr__(unsigned, "mixed_layer_topology_certificate", certificate)
+
+    with pytest.raises(
+        ValueError,
+        match=rf"mixed layer topology certificate {field} is stale",
+    ):
+        unsigned._validate_mixed_layer_topology_certificate()
 
 
 @pytest.mark.parametrize("suffix", [".json", ".npz"])
@@ -2344,6 +2669,54 @@ _REFERENCE_CELLS = {
         ]
     ),
 }
+
+
+@pytest.mark.parametrize("cell_type", ["tet4", "prism6", "pyramid5", "hex8"])
+def test_strict_validation_is_invariant_under_uniform_si_scaling(
+    cell_type: str,
+) -> None:
+    nodes = _REFERENCE_CELLS[cell_type] * 1.0e-12
+    mesh = MeshData(
+        nodes=nodes,
+        cell_types=[cell_type],
+        cell_offsets=[0, len(nodes)],
+        cell_nodes=list(range(len(nodes))),
+        cell_global_ordinals=[0],
+        element_markers=[1],
+        facet_types=[],
+        facet_roles=[],
+        facet_offsets=[0],
+        facet_nodes=[],
+        boundary_markers=[],
+        facet_global_ordinals=[],
+    )
+
+    mesh.validate_strict()
+
+
+@pytest.mark.parametrize("length_scale", [1.0, 1.0e-12])
+def test_strict_validation_rejects_relatively_degenerate_cells_at_any_scale(
+    length_scale: float,
+) -> None:
+    nodes = np.array(_REFERENCE_CELLS["tet4"], copy=True) * length_scale
+    nodes[3, 2] = length_scale * np.finfo(np.float64).eps
+    mesh = MeshData(
+        nodes=nodes,
+        cell_types=["tet4"],
+        cell_offsets=[0, len(nodes)],
+        cell_nodes=list(range(len(nodes))),
+        cell_global_ordinals=[0],
+        element_markers=[1],
+        facet_types=[],
+        facet_roles=[],
+        facet_offsets=[0],
+        facet_nodes=[],
+        boundary_markers=[],
+        facet_global_ordinals=[],
+    )
+
+    with pytest.raises(ValueError, match="degenerate tet4 Jacobian"):
+        mesh.validate_strict()
 
 
 @pytest.mark.parametrize(

@@ -40,7 +40,7 @@ from ._gmsh_types import (
     MIXED_SHARED_GMSH_VERSION,
     SUPPORTED_VOLUME_ELEMENTS,
     _cluster_coordinate_planes,
-    _mixed_mesh_conformity_counts,
+    _mixed_mesh_conformity_diagnostics,
     _mixed_deterministic_inputs,
     _recompute_mixed_certificate_evidence,
     _validate_mixed_pyramid_bases,
@@ -555,14 +555,6 @@ def _attach_mixed_layer_topology_certificate(
             f"mixed shared-domain realization requested {requested_layers} layers "
             f"but resolved {realized_layers}"
         )
-    conformity = _mixed_mesh_conformity_counts(
-        mesh,
-        tolerance=plane_tolerance,
-        interface_marker=MIXED_INTERFACE_MARKER,
-        outer_boundary_marker=outer_boundary_marker,
-    )
-    if any(conformity.values()):
-        raise RuntimeError(f"mixed shared-domain conformity validation failed: {conformity}")
     _validate_mixed_pyramid_bases(mesh, interface_marker=MIXED_INTERFACE_MARKER)
     magnetic_bounds_min_m = tuple(float(-0.5 * value) for value in body_size_m)
     magnetic_bounds_max_m = tuple(float(0.5 * value) for value in body_size_m)
@@ -581,6 +573,26 @@ def _attach_mixed_layer_topology_certificate(
         raise RuntimeError(
             f"mixed shared-domain authored CAD bounds validation failed: {exc}"
         ) from exc
+    conformity = {
+        name: int(evidence[name])
+        for name in (
+            "nonconforming_face_count",
+            "orphan_face_count",
+            "nonmanifold_face_count",
+            "coincident_interface_face_count",
+        )
+    }
+    if any(conformity.values()):
+        diagnostics = _mixed_mesh_conformity_diagnostics(
+            mesh,
+            tolerance=plane_tolerance,
+            interface_marker=MIXED_INTERFACE_MARKER,
+            outer_boundary_marker=outer_boundary_marker,
+        )
+        raise RuntimeError(
+            "mixed shared-domain conformity validation failed: "
+            f"{conformity}; diagnostics={diagnostics}"
+        )
     certificate = MixedLayerTopologyCertificate(
         certificate_status="accepted",
         requested_sweep_direction="xyz"[requested_axis],

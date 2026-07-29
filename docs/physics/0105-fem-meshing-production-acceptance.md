@@ -78,6 +78,9 @@ or sampled as if airbox nodes belonged to magnetic objects.
 | `d_corner_transition` | corner transition span | m |
 | `q_sicn` | signed inverse condition number quality metric | dimensionless |
 | `q_gamma` | gamma or gamma-like quality metric | dimensionless |
+| `det(J_K)` | sampled physical-cell Jacobian determinant | m3 |
+| `h_K` | maximum distance between vertices of cell `K` | m |
+| `tau_J` | relative numerical-degeneracy tolerance | dimensionless |
 
 ### 2.3 Assumptions and approximations
 
@@ -167,6 +170,14 @@ FEM production meshing must satisfy these contracts:
    counts and apply a topology-valid SICN implementation or an honestly named
    scaled-Jacobian metric. The exact-layer certificate uses p05 `>= 0.1` and
    rejects non-positive order-2-or-higher Jacobians.
+
+   Strict topology validation is invariant under uniform changes of physical
+   length scale. Unless a caller supplies an explicit SI volume tolerance, a
+   sampled cell Jacobian is numerically degenerate when
+   `abs(det(J_K)) <= tau_J h_K^3`, with `tau_J = 64 epsilon_float64`.
+   `det(J_K)` and `h_K^3` both have unit m3. This numerical guard does not
+   replace the stronger dimensionless SICN/scaled-Jacobian quality gates, and
+   every negative sampled determinant still fails closed as an inversion.
 
 6. **Adaptive criterion truthfulness**
    - FEM relaxation adaptivity may use only an explicitly named estimator:
@@ -294,6 +305,9 @@ Small realized Gmsh fixtures must verify:
   secondary planner error.
 - mixed-P1 feasibility fixtures freeze topology and manifold invariants without
   freezing incidental far-air tet counts; they do not promote runtime support.
+- strict Jacobian tests apply the same valid and degenerate reference cells at
+  metre and nanometre scales, proving scale invariance while retaining
+  zero/near-zero and negative-Jacobian rejection.
 
 ### 7.3 Cross-layer checks
 

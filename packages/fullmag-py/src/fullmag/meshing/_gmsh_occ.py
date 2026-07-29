@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace as _dc_replace
 import itertools
 import math
 
@@ -984,19 +985,13 @@ def generate_shared_domain_mesh_via_occ(
             periodic_pair_specs=periodic_pair_specs,
         )
 
-        scaled_mesh = MeshData.from_legacy_tet4(
+        scaled_mesh = _dc_replace(
+            mesh,
             nodes=mesh.nodes / SCALE,
-            elements=mesh.elements,
-            element_markers=mesh.element_markers,
-            boundary_faces=mesh.boundary_faces,
-            boundary_markers=mesh.boundary_markers,
             periodic_boundary_pairs=_scale_periodic_boundary_pairs(
                 mesh.periodic_boundary_pairs,
                 scale=SCALE,
             ),
-            periodic_node_pairs=mesh.periodic_node_pairs,
-            quality=quality,
-            per_domain_quality=_pdq,
         )
 
         return SharedDomainMeshResult(

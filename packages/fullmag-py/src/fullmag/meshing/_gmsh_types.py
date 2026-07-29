@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field, replace
 import hashlib
 import itertools
@@ -12,8 +13,8 @@ import numpy as np
 from numpy.typing import NDArray
 
 
-FEM_TOPOLOGY_DETERMINANT_EPS = 1.0e-30
-FEM_TOPOLOGY_VOLUME_EPS = FEM_TOPOLOGY_DETERMINANT_EPS / 6.0
+FEM_TOPOLOGY_VOLUME_EPS = 1.0e-30 / 6.0
+FEM_TOPOLOGY_RELATIVE_DETERMINANT_EPS = 64.0 * np.finfo(np.float64).eps
 FEM_EXACT_LAYER_PLANE_ABS_TOLERANCE_M = 1.0e-15
 FEM_EXACT_LAYER_PLANE_REL_TOLERANCE = 1.0e-8
 MIXED_SHARED_GMSH_VERSION = "4.15.2"
@@ -1138,11 +1139,6 @@ class MeshData:
             raise ValueError("mixed layer topology certificate transition partition is stale")
         if _facet_counts_by_role_marker(self) != certificate.facet_family_counts_by_role_marker:
             raise ValueError("mixed layer topology certificate facet counts are stale")
-        conformity = _mixed_mesh_conformity_counts(self, tolerance=tolerance)
-        for name, actual in conformity.items():
-            if int(getattr(certificate, name)) != actual:
-                raise ValueError(f"mixed layer topology certificate {name} is stale")
-
     def topology_fingerprint_v2(self) -> str:
         payload = {
             "nodes": self.nodes.tolist(),
@@ -1373,20 +1369,19 @@ class MeshData:
         if self.element_markers.shape != (self.n_elements,):
             raise ValueError("element_markers must cover every FEM cell")
 
-        bbox = np.ptp(self.nodes, axis=0) if self.nodes.size else np.zeros(3, dtype=np.float64)
-        scale = float(np.max(bbox))
-        resolved_eps = (
-            float(eps_volume) * 6.0
-            if eps_volume is not None
-            else max(
-                np.finfo(np.float64).tiny,
-                FEM_TOPOLOGY_DETERMINANT_EPS,
-                (scale if scale > 0.0 else 1.0) ** 3 * 1e-18,
-            )
-        )
         for index, cell_type in enumerate(self.cell_types.tolist()):
             coordinates = self.nodes[self.cell_node_ids(index)]
             determinants = _cell_jacobian_determinants(cell_type, coordinates)
+            characteristic_length = float(np.max(np.linalg.norm(
+                coordinates[:, np.newaxis, :] - coordinates[np.newaxis, :, :],
+                axis=2,
+            )))
+            resolved_eps = (
+                float(eps_volume) * 6.0
+                if eps_volume is not None
+                else FEM_TOPOLOGY_RELATIVE_DETERMINANT_EPS
+                * characteristic_length**3
+            )
             minimum_abs = float(np.min(np.abs(determinants)))
             if minimum_abs <= resolved_eps:
                 raise ValueError(
@@ -1972,6 +1967,13 @@ _MIXED_CELL_LOCAL_FACETS: dict[str, tuple[tuple[int, ...], ...]] = {
 }
 
 
+def _mixed_face_frequencies(
+    faces: list[tuple[int, ...]],
+) -> Counter[tuple[int, ...]]:
+    """Count explicit face identities in one linear pass."""
+    return Counter(faces)
+
+
 def _mixed_mesh_conformity_counts(
     mesh: MeshData,
     *,
@@ -2020,22 +2022,26 @@ def _mixed_mesh_conformity_counts(
     same_side_two_owner_faces = _mixed_same_side_two_owner_face_count(
         mesh, tolerance=tolerance
     )
+    exterior_frequencies = _mixed_face_frequencies(exterior)
+    interface_frequencies = _mixed_face_frequencies(interfaces)
     nonconforming += same_side_two_owner_faces
     nonconforming += sum(
         1
         for key, owners in adjacency.items()
-        if len(owners) == 1 and exterior.count(key) != 1
+        if len(owners) == 1 and exterior_frequencies[key] != 1
     )
     nonconforming += sum(
         1
         for key, owners in adjacency.items()
         if len(owners) == 2
         and owners[0][0] != owners[1][0]
-        and interfaces.count(key) != 1
+        and interface_frequencies[key] != 1
     )
-    nonconforming += sum(max(0, exterior.count(key) - 1) for key in set(exterior))
+    nonconforming += sum(
+        max(0, count - 1) for count in exterior_frequencies.values()
+    )
     duplicate_interface_faces = sum(
-        max(0, len(explicit.get(key, [])) - 1) for key in set(interfaces)
+        max(0, len(explicit.get(key, [])) - 1) for key in interface_frequencies
     )
 
     interface_nodes = sorted({node for face in interfaces for node in face})
@@ -2062,6 +2068,12 @@ def _mixed_same_side_two_owner_face_count(
     mesh: MeshData, *, tolerance: float
 ) -> int:
     """Count shared faces whose two owner interiors lie on the same plane side."""
+    return len(_mixed_same_side_two_owner_face_details(mesh, tolerance=tolerance))
+
+
+def _mixed_same_side_two_owner_face_details(
+    mesh: MeshData, *, tolerance: float
+) -> list[tuple[tuple[int, ...], list[int], list[float]]]:
     adjacency: dict[tuple[int, ...], list[int]] = {}
     for ordinal, family in enumerate(mesh.cell_types.tolist()):
         cell = mesh.cell_node_ids(ordinal)
@@ -2069,7 +2081,7 @@ def _mixed_same_side_two_owner_face_count(
             key = tuple(sorted(int(cell[index]) for index in local_face))
             adjacency.setdefault(key, []).append(ordinal)
 
-    count = 0
+    issues: list[tuple[tuple[int, ...], list[int], list[float]]] = []
     for face, owners in adjacency.items():
         if len(owners) != 2:
             continue
@@ -2085,7 +2097,7 @@ def _mixed_same_side_two_owner_face_count(
                 normal = candidate / candidate_norm
                 break
         if normal is None:
-            count += 1
+            issues.append((face, owners, [0.0, 0.0]))
             continue
         face_scale = max(
             float(np.linalg.norm(right - left))
@@ -2111,8 +2123,161 @@ def _mixed_same_side_two_owner_face_count(
             and abs(distances[1]) > side_tolerance
             and distances[0] * distances[1] > 0.0
         ):
-            count += 1
-    return count
+            issues.append((face, owners, distances))
+    return issues
+
+
+def _mixed_mesh_conformity_diagnostics(
+    mesh: MeshData,
+    *,
+    tolerance: float,
+    interface_marker: int = MIXED_INTERFACE_MARKER,
+    outer_boundary_marker: int | None = None,
+    limit: int = 8,
+) -> list[dict[str, object]]:
+    """Return bounded, JSON-compatible evidence for strict conformity failures."""
+    if limit < 1:
+        return []
+
+    adjacency: dict[tuple[int, ...], list[int]] = {}
+    for ordinal, family in enumerate(mesh.cell_types.tolist()):
+        cell = mesh.cell_node_ids(ordinal)
+        for local_face in _MIXED_CELL_LOCAL_FACETS[str(family)]:
+            key = tuple(sorted(int(cell[index]) for index in local_face))
+            adjacency.setdefault(key, []).append(ordinal)
+
+    explicit: dict[tuple[int, ...], list[int]] = {}
+    for ordinal in range(mesh.n_boundary_faces):
+        key = tuple(sorted(int(node) for node in mesh.facet_node_ids(ordinal)))
+        explicit.setdefault(key, []).append(ordinal)
+
+    def interface_name(
+        face: tuple[int, ...], owners: list[int]
+    ) -> str:
+        roles = {str(mesh.facet_roles[index]) for index in explicit.get(face, [])}
+        if "periodic_seam" in roles:
+            return "periodic_boundary"
+        owner_families = sorted(str(mesh.cell_types[index]) for index in owners)
+        families = set(owner_families)
+        if families == {"prism6", "pyramid5"}:
+            return "prism6_pyramid5"
+        if families == {"pyramid5", "tet4"}:
+            return "pyramid5_tet4"
+        if len(owners) == 1 or "exterior" in roles:
+            return "exterior_boundary"
+        return "_".join(owner_families) or "unowned"
+
+    def evidence(
+        issue: str,
+        face: tuple[int, ...],
+        owners: list[int],
+        *,
+        owner_signed_distances: list[float] | None = None,
+    ) -> dict[str, object]:
+        owner_rows = []
+        for owner in owners:
+            mesh_part = (
+                str(mesh.cell_mesh_parts[owner])
+                if mesh.cell_mesh_parts.shape == (mesh.n_elements,)
+                else ""
+            )
+            owner_rows.append(
+                {
+                    "cell": int(owner),
+                    "global_ordinal": int(mesh.cell_global_ordinals[owner]),
+                    "family": str(mesh.cell_types[owner]),
+                    "marker": int(mesh.element_markers[owner]),
+                    "mesh_part": mesh_part,
+                }
+            )
+        explicit_rows = [
+            {
+                "facet": int(ordinal),
+                "global_ordinal": int(mesh.facet_global_ordinals[ordinal]),
+                "family": str(mesh.facet_types[ordinal]),
+                "role": str(mesh.facet_roles[ordinal]),
+                "marker": int(mesh.boundary_markers[ordinal]),
+            }
+            for ordinal in explicit.get(face, [])
+        ]
+        row: dict[str, object] = {
+            "issue": issue,
+            "interface": interface_name(face, owners),
+            "node_ids": [int(node) for node in face],
+            "coordinates_m": [
+                [float(value) for value in mesh.nodes[node]] for node in face
+            ],
+            "owners": owner_rows,
+            "explicit_facets": explicit_rows,
+        }
+        if owner_signed_distances is not None:
+            row["owner_signed_distances_m"] = [
+                float(value) for value in owner_signed_distances
+            ]
+        return row
+
+    diagnostics: list[dict[str, object]] = []
+    for face, owners, distances in _mixed_same_side_two_owner_face_details(
+        mesh, tolerance=tolerance
+    ):
+        diagnostics.append(
+            evidence(
+                "same_side_two_owner_face",
+                face,
+                owners,
+                owner_signed_distances=distances,
+            )
+        )
+        if len(diagnostics) >= limit:
+            return diagnostics
+
+    for face in sorted(adjacency):
+        owners = adjacency[face]
+        explicit_ordinals = explicit.get(face, [])
+        roles = [str(mesh.facet_roles[index]) for index in explicit_ordinals]
+        issue: str | None = None
+        if len(owners) > 2:
+            issue = "nonmanifold_face"
+        elif len(owners) == 1 and roles.count("exterior") != 1:
+            issue = "missing_or_duplicate_exterior_facet"
+        elif (
+            len(owners) == 2
+            and {int(mesh.element_markers[index]) for index in owners} == {0, 1}
+            and roles.count("material_interface") != 1
+        ):
+            issue = "missing_or_duplicate_material_interface_facet"
+        if issue is not None:
+            diagnostics.append(evidence(issue, face, owners))
+            if len(diagnostics) >= limit:
+                return diagnostics
+
+    for face in sorted(explicit):
+        owners = adjacency.get(face, [])
+        for ordinal in explicit[face]:
+            role = str(mesh.facet_roles[ordinal])
+            marker = int(mesh.boundary_markers[ordinal])
+            issue = None
+            if not owners:
+                issue = "orphan_explicit_facet"
+            elif role == "exterior" and (
+                len(owners) != 1
+                or (
+                    outer_boundary_marker is not None
+                    and marker != outer_boundary_marker
+                )
+            ):
+                issue = "invalid_exterior_facet"
+            elif role == "material_interface" and (
+                len(owners) != 2
+                or {int(mesh.element_markers[index]) for index in owners} != {0, 1}
+                or marker != interface_marker
+            ):
+                issue = "invalid_material_interface_facet"
+            if issue is not None:
+                diagnostics.append(evidence(issue, face, owners))
+                if len(diagnostics) >= limit:
+                    return diagnostics
+    return diagnostics
 
 
 def _mixed_cell_volume(family: str, coordinates: NDArray[np.float64]) -> float:
