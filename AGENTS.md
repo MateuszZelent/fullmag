@@ -397,25 +397,33 @@ Non-negotiable rules:
    `scientific-documentation-contract`.
 3. Organize implementation documentation hierarchically:
    domain → FEM/FDM → CPU/GPU → interaction or numerical subsystem.
-4. Give every production equation a complete LaTeX representation and map every nontrivial term to
-   repository-relative path + fully qualified symbol or `DOC-ANCHOR` + responsibility +
-   solver/lane + full Git SHA + validation evidence. Generated line ranges supplement this stable
-   identity; handwritten line numbers alone are not evidence.
-5. Split FEM from FDM and CPU from GPU whenever algorithm, discretization, precision, memory
+4. Give every production equation a stable MyST label and complete LaTeX representation. Define
+   every symbol with scientific meaning and SI unit; map every nontrivial term to numerical-test
+   evidence and repository-relative path + fully qualified symbol or `DOC-ANCHOR` + responsibility
+   + solver/lane.
+5. Use one resolved Git commit for the page, code, test evidence, and semantic review. Use `HEAD`
+   while authoring; the validator resolves it to a full SHA and generates current immutable line
+   links. Handwritten line numbers, moving branch links, and file-only citations are not evidence.
+6. Split FEM from FDM and CPU from GPU whenever algorithm, discretization, precision, memory
    ownership, libraries, boundary treatment, convergence, supported scope, or validation differs.
-6. Write every terminal topic as publication-grade science: complete equations, symbols and SI
+7. Write every terminal topic as publication-grade science: complete equations, symbols and SI
    units, assumptions, derivation or primary citation, validity/error regime, discrete realization,
    validation, limitations, scientific bibliography, and source-code index. Do not replace the
    implemented model with a pedagogical simplification.
-7. A page is not complete or publication-ready while hierarchy, equation mapping, backend split,
-   bibliography, source index, validation, or the public/internal documentation boundary is
-   incomplete.
-8. Keep internal canonical notes and evidence under `docs/`; curate public pages separately under
-   `public_docs/site/`. Never publish internal plans, audits, diagnostics, or agent instructions.
+8. Store every terminal scientific page together with its adjacent `.source-map.json`. The
+   documentation workflow must run the validator tests and changed-page gate; any failure blocks
+   publication.
+9. Automated validation proves structural completeness, traceability, and exact source existence;
+   it does not prove mathematical equivalence. Publication also requires an approved semantic
+   scientific review and relevant numerical/runtime evidence at the same resolved commit. GPU
+   claims require executed-device identity.
+10. Keep internal canonical notes and evidence under `docs/`; curate public pages separately under
+    `public_docs/site/`. Never publish internal plans, audits, diagnostics, or agent instructions.
 
-Run the skill's validator for every terminal scientific page and treat any failure as a publication
-blocker. Shared API names, source presence, compilation, or host-only tests do not prove backend
-parity.
+A page is not complete or publication-ready while hierarchy, equation/symbol mapping, backend
+split, bibliography, source index, semantic review, runtime evidence, or the public/internal
+documentation boundary is incomplete. Shared API names, source presence, compilation, or host-only
+tests do not prove backend parity.
 
 ---
 
