@@ -12,7 +12,7 @@ version = release
 
 extensions = ["myst_parser"]
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "internal", "generated"]
+exclude_patterns = ["_build", "internal", "generated", "README.md"]
 source_suffix = {".md": "markdown", ".rst": "restructuredtext"}
 
 myst_enable_extensions = [
