@@ -4650,6 +4650,23 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn certified_mixed_cpu_planned_runtime_resolves_native_engine() {
+        let _env_guard = ENV_LOCK.lock().expect("lock FEM execution environment");
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+        }
+        let (problem, plan) = certified_mixed_cpu_relaxation_guard_fixture();
+
+        let engine = resolve_planned_runtime_engine(&problem, &plan)
+            .expect("certified mixed-P1 CPU plan should resolve a runtime engine");
+
+        assert_eq!(engine.backend_family, "fem");
+        assert_eq!(engine.engine_id, "fem_cpu_native");
+        assert_eq!(engine.accelerator, "cpu");
+    }
+
     #[test]
     fn fem_topology_guard_accepts_bound_gpu_double_relaxation_scope() {
         let (mut problem, mut plan) = certified_mixed_cpu_relaxation_guard_fixture();

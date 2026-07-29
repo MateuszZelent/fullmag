@@ -7965,7 +7965,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         } else {
             fullmag_plan::plan(&stage.ir).map_err(|error| anyhow!(error.to_string()))?
         };
-        emit_initial_state_warnings(Some(&live_workspace), &execution_plan.backend_plan)?;
+        emit_initial_state_warnings(Some(&live_workspace), &stage.ir, &execution_plan)?;
         let use_live_callback = matches!(
             &execution_plan.backend_plan,
             BackendPlanIR::Fdm(_)
@@ -9347,7 +9347,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 .map_err(join_errors)?;
             let execution_plan =
                 fullmag_plan::plan(&stage.ir).map_err(|error| anyhow!(error.to_string()))?;
-            emit_initial_state_warnings(Some(&live_workspace), &execution_plan.backend_plan)?;
+            emit_initial_state_warnings(Some(&live_workspace), &stage.ir, &execution_plan)?;
             let use_live_callback = matches!(
                 &execution_plan.backend_plan,
                 BackendPlanIR::Fdm(_)

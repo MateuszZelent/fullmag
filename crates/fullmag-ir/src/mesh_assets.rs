@@ -598,6 +598,42 @@ mod mesh_asset_validation_tests {
     }
 
     #[test]
+    fn mixed_explicit_role_counts_preserve_duplicate_face_semantics() {
+        let face = vec![1, 4, 9];
+        let other = vec![2, 5, 10];
+        let counts = mixed_explicit_role_counts(&[
+            (face.clone(), crate::FemFacetRoleIR::Exterior),
+            (face.clone(), crate::FemFacetRoleIR::Exterior),
+            (face.clone(), crate::FemFacetRoleIR::MaterialInterface),
+            (other.clone(), crate::FemFacetRoleIR::PeriodicSeam),
+        ]);
+
+        assert_eq!(counts[&face].explicit, 3);
+        assert_eq!(counts[&face].exterior, 2);
+        assert_eq!(counts[&face].interface, 1);
+        assert_eq!(counts[&other].explicit, 1);
+        assert_eq!(counts[&other].exterior, 0);
+        assert_eq!(counts[&other].interface, 0);
+    }
+
+    #[test]
+    fn mixed_cross_language_evidence_accepts_only_machine_epsilon_drift() {
+        assert!(dimensionless_float_close(
+            8.074_798_210_422_18e-8,
+            8.074_798_214_634_024e-8,
+        ));
+        assert!(dimensionless_float_close(
+            1.880_790_961_315_66e-15,
+            2.507_721_281_754_213e-16,
+        ));
+        assert!(!dimensionless_float_close(
+            8.074_798_210_422_18e-8,
+            8.084_798_210_422_18e-8,
+        ));
+        assert!(!dimensionless_float_close(0.0, 1.0e-12));
+    }
+
+    #[test]
     fn mixed_certificate_is_typed_preserved_and_bound_to_the_exact_mesh() {
         let value = mixed_certificate_asset_value();
         let asset: FemDomainMeshAssetIR = serde_json::from_value(value).unwrap();
@@ -1943,6 +1979,15 @@ fn float_close(left: f64, right: f64, relative: f64, absolute: f64) -> bool {
     (left - right).abs() <= absolute.max(relative * left.abs().max(right.abs()))
 }
 
+// NumPy/LAPACK determinant and reduction order can differ from the direct Rust
+// arithmetic by a few ulps. This applies only to dimensionless certificate
+// evidence; dimensional Jacobians and volumes retain their stricter checks.
+const MIXED_DIMENSIONLESS_ABSOLUTE_TOLERANCE: f64 = f64::EPSILON * 16.0;
+
+fn dimensionless_float_close(left: f64, right: f64) -> bool {
+    float_close(left, right, 1.0e-12, MIXED_DIMENSIONLESS_ABSOLUTE_TOLERANCE)
+}
+
 fn bounds_for_nodes(
     mesh: &MeshIR,
     node_ids: &BTreeSet<u32>,
@@ -2085,6 +2130,29 @@ fn same_side_face_count(
     Ok(count)
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct MixedExplicitRoleCounts {
+    explicit: usize,
+    exterior: usize,
+    interface: usize,
+}
+
+fn mixed_explicit_role_counts(
+    faces: &[(Vec<u32>, crate::FemFacetRoleIR)],
+) -> BTreeMap<Vec<u32>, MixedExplicitRoleCounts> {
+    let mut counts = BTreeMap::<Vec<u32>, MixedExplicitRoleCounts>::new();
+    for (key, role) in faces {
+        let entry = counts.entry(key.clone()).or_default();
+        entry.explicit += 1;
+        match role {
+            crate::FemFacetRoleIR::Exterior => entry.exterior += 1,
+            crate::FemFacetRoleIR::MaterialInterface => entry.interface += 1,
+            crate::FemFacetRoleIR::PeriodicSeam => {}
+        }
+    }
+    counts
+}
+
 fn mixed_conformity_counts(
     mesh: &MeshIR,
     adjacency: &BTreeMap<Vec<u32>, Vec<(usize, u32)>>,
@@ -2092,33 +2160,33 @@ fn mixed_conformity_counts(
     interface_marker: u32,
     outer_marker: u32,
 ) -> Result<(u64, u64, u64, u64), String> {
-    let mut explicit = BTreeMap::<Vec<u32>, Vec<usize>>::new();
-    let mut exterior = Vec::<Vec<u32>>::new();
-    let mut interfaces = Vec::<Vec<u32>>::new();
+    let explicit_faces = (0..mesh.facets.types.len())
+        .map(|ordinal| {
+            let mut key = mesh
+                .facets
+                .item_nodes(ordinal)
+                .ok_or_else(|| format!("mixed certificate facet {ordinal} has invalid CSR"))?
+                .to_vec();
+            key.sort_unstable();
+            Ok((key, mesh.facets.roles[ordinal]))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let explicit = mixed_explicit_role_counts(&explicit_faces);
     let mut orphan = 0u64;
     let mut nonconforming = 0u64;
-    for ordinal in 0..mesh.facets.types.len() {
-        let mut key = mesh
-            .facets
-            .item_nodes(ordinal)
-            .ok_or_else(|| format!("mixed certificate facet {ordinal} has invalid CSR"))?
-            .to_vec();
-        key.sort_unstable();
-        explicit.entry(key.clone()).or_default().push(ordinal);
-        let owners = adjacency.get(&key).map(Vec::as_slice).unwrap_or_default();
+    for (ordinal, (key, role)) in explicit_faces.iter().enumerate() {
+        let owners = adjacency.get(key).map(Vec::as_slice).unwrap_or_default();
         if owners.is_empty() {
             orphan += 1;
             continue;
         }
-        match mesh.facets.roles[ordinal] {
+        match role {
             crate::FemFacetRoleIR::Exterior => {
-                exterior.push(key);
                 if owners.len() != 1 || mesh.boundary_markers[ordinal] != outer_marker {
                     nonconforming += 1;
                 }
             }
             crate::FemFacetRoleIR::MaterialInterface => {
-                interfaces.push(key);
                 let markers = owners
                     .iter()
                     .map(|(_, marker)| *marker)
@@ -2136,8 +2204,9 @@ fn mixed_conformity_counts(
     let nonmanifold = adjacency.values().filter(|owners| owners.len() > 2).count() as u64;
     nonconforming += same_side_face_count(mesh, adjacency, tolerance)?;
     for (key, owners) in adjacency {
-        let exterior_count = exterior.iter().filter(|face| *face == key).count();
-        let interface_count = interfaces.iter().filter(|face| *face == key).count();
+        let role_counts = explicit.get(key).copied().unwrap_or_default();
+        let exterior_count = role_counts.exterior;
+        let interface_count = role_counts.interface;
         if owners.len() == 1 && exterior_count != 1 {
             nonconforming += 1;
         }
@@ -2148,19 +2217,15 @@ fn mixed_conformity_counts(
             nonconforming += (exterior_count - 1) as u64;
         }
     }
-    let duplicate_faces = interfaces
-        .iter()
-        .collect::<BTreeSet<_>>()
-        .iter()
-        .map(|key| {
-            explicit
-                .get(*key)
-                .map_or(0, |faces| faces.len().saturating_sub(1))
-        })
+    let duplicate_faces = explicit
+        .values()
+        .filter(|counts| counts.interface > 0)
+        .map(|counts| counts.explicit.saturating_sub(1))
         .sum::<usize>() as u64;
-    let interface_nodes = interfaces
+    let interface_nodes = explicit
         .iter()
-        .flat_map(|face| face.iter().copied())
+        .filter(|(_, counts)| counts.interface > 0)
+        .flat_map(|(face, _)| face.iter().copied())
         .collect::<BTreeSet<_>>();
     let scale = tolerance.max(f64::EPSILON);
     let mut coordinate_keys = BTreeMap::<[u64; 3], u32>::new();
@@ -2465,6 +2530,18 @@ fn float_map_close(claimed: &BTreeMap<String, f64>, actual: &BTreeMap<String, f6
         })
 }
 
+fn dimensionless_float_map_close(
+    claimed: &BTreeMap<String, f64>,
+    actual: &BTreeMap<String, f64>,
+) -> bool {
+    claimed.len() == actual.len()
+        && claimed.iter().all(|(key, value)| {
+            actual
+                .get(key)
+                .is_some_and(|actual| dimensionless_float_close(*value, *actual))
+        })
+}
+
 fn validate_mixed_certificate_evidence_against_mesh(
     certificate: &MixedLayerTopologyCertificateV1IR,
     mesh: &MeshIR,
@@ -2517,13 +2594,13 @@ fn validate_mixed_certificate_evidence_against_mesh(
     ) {
         stale.push("jacobian_minima_m3_by_family");
     }
-    if !float_map_close(
+    if !dimensionless_float_map_close(
         &certificate.scaled_jacobian_minima_by_family,
         &evidence.scaled_minima,
     ) {
         stale.push("scaled_jacobian_minima_by_family");
     }
-    if !float_map_close(
+    if !dimensionless_float_map_close(
         &certificate.scaled_jacobian_p05_by_family,
         &evidence.scaled_p05,
     ) {
@@ -2543,11 +2620,9 @@ fn validate_mixed_certificate_evidence_against_mesh(
         - evidence.expected_magnetic_volume)
         / evidence.expected_magnetic_volume)
         .abs();
-    if !float_close(
+    if !dimensionless_float_close(
         certificate.magnetic_relative_volume_error,
         magnetic_relative_volume_error,
-        1.0e-12,
-        1.0e-15,
     ) {
         stale.push("magnetic_relative_volume_error");
     }
@@ -2570,11 +2645,9 @@ fn validate_mixed_certificate_evidence_against_mesh(
         - evidence.expected_shared_volume)
         / evidence.expected_shared_volume)
         .abs();
-    if !float_close(
+    if !dimensionless_float_close(
         certificate.shared_domain_relative_volume_error,
         shared_domain_relative_volume_error,
-        1.0e-12,
-        1.0e-15,
     ) {
         stale.push("shared_domain_relative_volume_error");
     }

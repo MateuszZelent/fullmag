@@ -182,7 +182,7 @@ fn main() -> Result<()> {
             let ir = read_ir(&path)?;
             let execution_plan =
                 fullmag_plan::plan(&ir).map_err(|error| anyhow!(error.to_string()))?;
-            emit_initial_state_warnings(None, &execution_plan.backend_plan)?;
+            emit_initial_state_warnings(None, &ir, &execution_plan)?;
             let result = fullmag_runner::run_problem(&ir, until, &output_dir)
                 .map_err(|e| anyhow!("{}", e))?;
             println!(
@@ -1134,6 +1134,46 @@ mod tests {
         assert!(update.fem_mesh_generation_id.is_some());
         assert_eq!(update.magnetization.as_ref().map(Vec::len), Some(12));
         assert!(!update.finished);
+    }
+
+    #[test]
+    fn native_mixed_fem_initial_diagnostic_does_not_use_legacy_tet_only_topology() {
+        let problem = shared_domain_fem_problem();
+        let mut execution_plan =
+            fullmag_plan::plan(&problem).expect("tetrahedral FEM fixture should plan");
+        let golden: serde_json::Value = serde_json::from_str(include_str!(
+            "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+        ))
+        .expect("mixed topology golden fixture should be valid JSON");
+        let mesh: MeshIR = serde_json::from_value(golden["mesh"].clone())
+            .expect("mixed topology golden mesh should deserialize");
+        let BackendPlanIR::Fem(fem) = &mut execution_plan.backend_plan else {
+            panic!("FEM fixture should produce a FEM execution plan");
+        };
+        fem.mesh = mesh;
+        fem.initial_magnetization = vec![[1.0, 0.0, 0.0]; fem.mesh.nodes.len()];
+
+        let diagnostic = crate::diagnostics::diagnose_initial_fem_plan(fem)
+            .expect("native mixed FEM diagnostics must not instantiate the legacy tet-only engine");
+
+        assert_eq!(diagnostic.max_effective_field_amplitude, None);
+        assert_eq!(diagnostic.max_rhs_amplitude, None);
+    }
+
+    #[test]
+    fn tetrahedral_fem_initial_diagnostic_keeps_numeric_observables() {
+        let problem = shared_domain_fem_problem();
+        let execution_plan =
+            fullmag_plan::plan(&problem).expect("tetrahedral FEM fixture should plan");
+        let BackendPlanIR::Fem(fem) = &execution_plan.backend_plan else {
+            panic!("FEM fixture should produce a FEM execution plan");
+        };
+
+        let diagnostic = crate::diagnostics::diagnose_initial_fem_plan(fem)
+            .expect("tetrahedral FEM diagnostics should keep the numeric Rust evaluator");
+
+        assert!(diagnostic.max_effective_field_amplitude.is_some());
+        assert!(diagnostic.max_rhs_amplitude.is_some());
     }
 
     #[test]

@@ -151,26 +151,50 @@ verify-fem-mixed-p1-capability-contract:
     cargo test -p fullmag-runner --no-default-features capabilities::tests::
 
 verify-fem-mixed-prism-airbox-runtime:
+    just ensure-managed-fem-runtime
     bash -euo pipefail -c '\
       canonical="tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py"; \
+      runtime_manifest=".fullmag/runtimes/fem-gpu-host/manifest.json"; \
+      git_common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"; \
+      managed_python="$(dirname "$git_common_dir")/.fullmag/local/python/bin/python"; \
+      if [ ! -x "$managed_python" ]; then echo "shared Fullmag Python interpreter is missing: $managed_python" >&2; exit 2; fi; \
+      "$managed_python" -c "import numpy, scipy, gmsh, meshio, trimesh, h5py, zarr"; \
       report_root=".fullmag/reports/fem-mixed-prism-airbox-runtime"; \
       mkdir -p "$report_root/runs"; \
-      run_dir="$(mktemp -d "$report_root/runs/cpu.XXXXXX")"; \
+      run_dir="$(mktemp -d "$report_root/runs/gate.XXXXXXXX")"; \
       temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/fullmag-mixed-prism-airbox-runtime.XXXXXX")"; \
       cleanup() { rm -rf "$temp_dir"; }; \
       trap cleanup EXIT INT TERM; \
       bounded="$temp_dir/relax_projected_gradient_bb.max_steps_1.py"; \
       python3 scripts/verify_fem_mixed_prism_airbox_runtime.py prepare \
         "$canonical" "$bounded" --evidence "$run_dir/source.v1.json"; \
-      set -o pipefail; \
-      just fem-managed-headless cpu "$bounded" "$run_dir/artifacts" \
-        2>&1 | tee "$run_dir/runtime.log"; \
       cp "$bounded" "$run_dir/bounded_scenario.py"; \
+      cp -L "$runtime_manifest" "$run_dir/runtime-manifest.v2.json"; \
+      mkdir -p "$run_dir/cpu" "$run_dir/gpu"; \
+      FULLMAG_PYTHON="$managed_python" just fem-managed-headless cpu "$bounded" "$run_dir/cpu/artifacts" \
+        2>&1 | tee "$run_dir/cpu/runtime.log"; \
+      cmp "$runtime_manifest" "$run_dir/runtime-manifest.v2.json"; \
       python3 scripts/verify_fem_mixed_prism_airbox_runtime.py validate \
-        "$canonical" "$run_dir/bounded_scenario.py" "$run_dir/artifacts" \
-        --runtime-log "$run_dir/runtime.log" \
-        --output "$run_dir/summary.v1.json"; \
-      echo "validated mixed prism-airbox runtime evidence: $run_dir/summary.v1.json"'
+        "$canonical" "$run_dir/bounded_scenario.py" "$run_dir/cpu/artifacts" \
+        --device cpu --runtime-log "$run_dir/cpu/runtime.log" \
+        --runtime-manifest "$runtime_manifest" \
+        --output "$run_dir/cpu/summary.v2.json"; \
+      FULLMAG_PYTHON="$managed_python" just fem-managed-headless gpu "$bounded" "$run_dir/gpu/artifacts" \
+        2>&1 | tee "$run_dir/gpu/runtime.log"; \
+      cmp "$runtime_manifest" "$run_dir/runtime-manifest.v2.json"; \
+      python3 scripts/verify_fem_mixed_prism_airbox_runtime.py validate \
+        "$canonical" "$run_dir/bounded_scenario.py" "$run_dir/gpu/artifacts" \
+        --device gpu --runtime-log "$run_dir/gpu/runtime.log" \
+        --runtime-manifest "$runtime_manifest" \
+        --output "$run_dir/gpu/summary.v2.json"; \
+      python3 scripts/verify_fem_mixed_prism_airbox_runtime.py compare \
+        --cpu-summary "$run_dir/cpu/summary.v2.json" \
+        --gpu-summary "$run_dir/gpu/summary.v2.json" \
+        --runtime-manifest "$runtime_manifest" \
+        --output "$run_dir/summary.v1.json" \
+        --csv-output "$run_dir/comparison.v1.csv"; \
+      cmp "$runtime_manifest" "$run_dir/runtime-manifest.v2.json"; \
+      echo "validated managed CPU/GPU mixed prism-airbox runtime evidence: $run_dir/summary.v1.json"'
 
 verify-fem-mixed-p1-native-contract:
     docker compose --profile fem-gpu run --rm \
@@ -4170,12 +4194,13 @@ fem-gpu-headless script:
     '
 
 fem-managed-headless fem_execution script output_dir="":
-    just ensure-python
+    if [ -z "${FULLMAG_PYTHON:-}" ]; then just ensure-python; fi
     just ensure-managed-fem-runtime
-    mode="{{fem_execution}}"; output_dir="{{output_dir}}"; output_args=(); \
+    managed_python="${FULLMAG_PYTHON:-{{repo_python}}}"; mode="{{fem_execution}}"; output_dir="{{output_dir}}"; output_args=(); \
+    if [ ! -x "$managed_python" ]; then echo "managed FEM Python interpreter is not executable: $managed_python" >&2; exit 2; fi; \
     case "$mode" in 0|cpu|CPU) mode="cpu" ;; gpu|GPU) mode="gpu" ;; *) echo "unsupported FEM execution mode: $mode (expected cpu or gpu)" >&2; exit 2 ;; esac; \
     if [ -n "$output_dir" ]; then output_args=(--output-dir "$output_dir" --workspace-root "$output_dir/workspace-history"); fi; \
-    FULLMAG_PYTHON="{{repo_python}}" \
+    FULLMAG_PYTHON="$managed_python" \
     FULLMAG_FDM_EXECUTION=cpu \
     FULLMAG_FEM_EXECUTION="$mode" \
     FULLMAG_RELAX_DEVICE="$mode" \

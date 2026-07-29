@@ -32,9 +32,66 @@ cleanup_failed_export() {
 }
 trap cleanup_failed_export EXIT
 
+print_container_target_remount_guidance() {
+  echo "Canonical durable build-storage root: ${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}" >&2
+  echo "Expected native ext4 backing image: ${FULLMAG_NATIVE_BUILD_IMAGE}" >&2
+  echo "Docker-bindable mount view: ${FULLMAG_NATIVE_MOUNT_VIEW}" >&2
+  echo "If the expected image is already mounted read-only, remount it from Windows with:" >&2
+  echo "  wsl.exe -d Ubuntu2 -u root -- mount -o remount,rw,noatime ${FULLMAG_NATIVE_MOUNT_VIEW}" >&2
+  echo "After a WSL restart, restore the mount view from the canonical image with:" >&2
+  echo "  wsl.exe -d Ubuntu2 -u root -- mount -o loop,rw,noatime ${FULLMAG_NATIVE_BUILD_IMAGE} ${FULLMAG_NATIVE_MOUNT_VIEW}" >&2
+}
+
+validate_container_target_dir() {
+  if ! mkdir -p "${FULLMAG_CONTAINER_TARGET_DIR}"; then
+    echo "[export_fem_gpu_runtime] cannot create managed container target directory: ${FULLMAG_CONTAINER_TARGET_DIR}" >&2
+    print_container_target_remount_guidance
+    return 2
+  fi
+  local filesystem_type
+  filesystem_type="$(findmnt -n -o FSTYPE --target "${FULLMAG_CONTAINER_TARGET_DIR}" 2>/dev/null || true)"
+  if [ "${filesystem_type}" != "ext4" ]; then
+    echo "[export_fem_gpu_runtime] FULLMAG_CONTAINER_TARGET_DIR must be an ext4 filesystem: ${FULLMAG_CONTAINER_TARGET_DIR} (observed ${filesystem_type:-unknown})" >&2
+    print_container_target_remount_guidance
+    return 2
+  fi
+  local source_device
+  source_device="$(findmnt -n -o SOURCE --target "${FULLMAG_CONTAINER_TARGET_DIR}" 2>/dev/null || true)"
+  if ! [[ "${source_device}" =~ ^/dev/loop[0-9]+$ ]]; then
+    echo "[export_fem_gpu_runtime] managed native mount view must use a loop device backed by ${FULLMAG_NATIVE_BUILD_IMAGE}: ${FULLMAG_CONTAINER_TARGET_DIR} (observed source ${source_device:-unknown})" >&2
+    print_container_target_remount_guidance
+    return 2
+  fi
+  local loop_device_name="${source_device#/dev/}"
+  local backing_file_path="${FULLMAG_LOOP_SYSFS_ROOT}/${loop_device_name}/loop/backing_file"
+  local observed_backing_image=""
+  if ! IFS= read -r observed_backing_image < "${backing_file_path}"; then
+    echo "[export_fem_gpu_runtime] cannot read loop backing image for ${source_device}: ${backing_file_path}" >&2
+    print_container_target_remount_guidance
+    return 2
+  fi
+  if [ "${observed_backing_image}" != "${FULLMAG_NATIVE_BUILD_IMAGE}" ]; then
+    echo "[export_fem_gpu_runtime] managed native mount view has the wrong physical backing image: expected ${FULLMAG_NATIVE_BUILD_IMAGE}, observed ${observed_backing_image:-unknown}" >&2
+    print_container_target_remount_guidance
+    return 2
+  fi
+  local write_probe="${FULLMAG_CONTAINER_TARGET_DIR}/.fullmag-write-probe.$$"
+  if ! (umask 077 && : > "${write_probe}") 2>/dev/null; then
+    echo "[export_fem_gpu_runtime] managed ext4 container target is not writable: ${FULLMAG_CONTAINER_TARGET_DIR}" >&2
+    print_container_target_remount_guidance
+    return 2
+  fi
+  rm -f -- "${write_probe}"
+}
+
 cd "${REPO_ROOT}"
 #rm -rf target/* target/.* 2>/dev/null || true
 
+: "${FULLMAG_NATIVE_BUILD_STORAGE_ROOT:=/zfn2/mateuszz/git/fullmag}"
+: "${FULLMAG_NATIVE_BUILD_IMAGE:=${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}/build-volumes/fullmag-native.ext4}"
+: "${FULLMAG_NATIVE_MOUNT_VIEW:=/mnt/fullmag-zfn2-native}"
+: "${FULLMAG_LOOP_SYSFS_ROOT:=/sys/class/block}"
+: "${FULLMAG_CONTAINER_TARGET_DIR:=${FULLMAG_NATIVE_MOUNT_VIEW}/managed-fem-runtime}"
 : "${FULLMAG_FEM_RUNTIME_CARGO_JOBS:=1}"
 : "${FULLMAG_CUDA_ARCHITECTURES:=80-real;89-real;90-real;90-virtual}"
 : "${FULLMAG_HYPRE_GPU_ARCHITECTURES:=60 70 80 89 90}"
@@ -46,6 +103,7 @@ case "${FULLMAG_ENABLE_NVTX}" in
   0|1) ;;
   *) echo "[export_fem_gpu_runtime] FULLMAG_ENABLE_NVTX must be 0 or 1" >&2; exit 2 ;;
 esac
+validate_container_target_dir
 export FULLMAG_CUDA_ARCHITECTURES
 export FULLMAG_HYPRE_GPU_ARCHITECTURES
 export FULLMAG_HYPRE_MEMORY_VARIANT
@@ -59,6 +117,7 @@ build_managed_fem_image "${docker_build_ref}" "${docker_compatibility_ref}"
 docker_image_id="${MANAGED_FEM_BUILT_IMAGE_ID}"
 
 FULLMAG_FEM_GPU_IMAGE="${docker_image_id}" docker compose --profile fem-gpu run --rm -T \
+  -v "${FULLMAG_CONTAINER_TARGET_DIR}:/workspace/target" \
   -e FULLMAG_FEM_RUNTIME_CARGO_JOBS="${FULLMAG_FEM_RUNTIME_CARGO_JOBS}" \
   -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES}" \
   -e FULLMAG_ENABLE_NVTX="${FULLMAG_ENABLE_NVTX}" \

@@ -126,9 +126,15 @@ pub(crate) fn replace_and_initialize_script_result_bundle(
 
 pub(crate) fn emit_initial_state_warnings(
     live_workspace: Option<&LocalLiveWorkspace>,
-    backend_plan: &BackendPlanIR,
+    problem: &fullmag_ir::ProblemIR,
+    execution_plan: &fullmag_ir::ExecutionPlanIR,
 ) -> Result<()> {
-    let diagnostic = crate::diagnostics::diagnose_initial_backend_plan(backend_plan)?;
+    let resolved_runtime = fullmag_runner::resolve_planned_runtime_engine(problem, execution_plan)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let diagnostic = crate::diagnostics::diagnose_initial_backend_plan(
+        &execution_plan.backend_plan,
+        &resolved_runtime,
+    )?;
     for warning in diagnostic.warnings {
         eprintln!("fullmag diagnostic warning: {}", warning);
         if let Some(workspace) = live_workspace {
