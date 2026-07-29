@@ -80,9 +80,14 @@ layer.mesh(
     minimum_element_size=1.6 * NM,
     order=1,
     mesh_strategy="swept_prism",
+    topology="prismatic",
     through_thickness_elements=1,
     through_thickness_distribution="fixed",
     sweep_face_meshing="triangular",
+    sweep_direction="auto",
+    element_family="prism",
+    transition_policy="pyramid_to_tetrahedra",
+    exact_layer_count=True,
 )
 
 top_ring = study.geometry(

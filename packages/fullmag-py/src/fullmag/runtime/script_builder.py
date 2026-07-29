@@ -2706,6 +2706,20 @@ def _render_mesh_kwargs(mesh_config: dict[str, object], *, source_root: Path) ->
     if isinstance(sweep_face_meshing_value, str) and sweep_face_meshing_value.strip():
         kwargs.append(f"sweep_face_meshing={_py_repr(sweep_face_meshing_value)}")
 
+    for key in (
+        "topology",
+        "sweep_direction",
+        "element_family",
+        "transition_policy",
+    ):
+        value = mesh_config.get(key)
+        if isinstance(value, str) and value.strip():
+            kwargs.append(f"{key}={_py_repr(value)}")
+
+    exact_layer_count = mesh_config.get("exact_layer_count")
+    if isinstance(exact_layer_count, bool):
+        kwargs.append(f"exact_layer_count={_py_literal(exact_layer_count)}")
+
     periodic_pair_ids = mesh_config.get("periodic_pair_ids")
     if isinstance(periodic_pair_ids, list) and periodic_pair_ids:
         kwargs.append(f"periodic_pair_ids={_py_literal(periodic_pair_ids)}")
@@ -2730,6 +2744,16 @@ def _render_thin_film_mesh_kwargs(mesh_config: dict[str, object]) -> list[str] |
         return None
     face_meshing = mesh_config.get("sweep_face_meshing")
     if isinstance(face_meshing, str) and face_meshing.strip() not in {"", "triangular"}:
+        return None
+    if prismatic and (
+        mesh_config.get("sweep_direction") != "auto"
+        or mesh_config.get("element_family") != "prism"
+        or mesh_config.get("transition_policy") != "pyramid_to_tetrahedra"
+        or not isinstance(mesh_config.get("exact_layer_count"), bool)
+        or mesh_config.get("through_thickness_element_ratio") is not None
+        or mesh_config.get("through_thickness_symmetric") is True
+        or mesh_config.get("order") != 1
+    ):
         return None
 
     kwargs: list[str] = []

@@ -241,6 +241,49 @@ class LayeredMeshDslValidationTests(unittest.TestCase):
                 mesh_strategy="swept_prism"
             )
 
+    def test_direct_layered_mesh_api_rejects_invalid_intent_atomically(self) -> None:
+        self.film.mesh.thin_film(layers=2, topology="prismatic")
+        before = self.film._mesh_spec
+
+        invalid_calls = (
+            lambda: self.film.mesh.configure(exact_layer_count="yes"),
+            lambda: self.film.mesh(through_thickness_distribution="unknown"),
+            lambda: self.film.mesh.configure(
+                through_thickness_distribution="linear",
+                exact_layer_count=True,
+            ),
+            lambda: self.film.mesh.configure(through_thickness_element_ratio=True),
+            lambda: self.film.mesh.configure(through_thickness_element_ratio="1.5"),
+            lambda: self.film.mesh.configure(through_thickness_element_ratio=0.0),
+            lambda: self.film.mesh.configure(through_thickness_element_ratio=float("inf")),
+            lambda: self.film.mesh.configure(through_thickness_element_ratio=float("nan")),
+            lambda: self.film.mesh.configure(through_thickness_symmetric="yes"),
+            lambda: self.film.mesh.configure(through_thickness_element_ratio=1.5),
+            lambda: self.film.mesh.configure(through_thickness_symmetric=True),
+        )
+        for invalid_call in invalid_calls:
+            with self.subTest(call=invalid_call), self.assertRaises(
+                (TypeError, ValueError)
+            ):
+                invalid_call()
+            self.assertIs(self.film._mesh_spec, before)
+            self.assertEqual(before.through_thickness_distribution, "fixed")
+            self.assertIs(before.exact_layer_count, True)
+
+    def test_direct_layered_mesh_api_rejects_incomplete_typed_intent(self) -> None:
+        for kwargs in (
+            {"sweep_direction": "x"},
+            {"element_family": "prism"},
+            {"transition_policy": "reject"},
+            {"exact_layer_count": True},
+            {"through_thickness_element_ratio": 1.5},
+            {"through_thickness_symmetric": True},
+        ):
+            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(
+                ValueError, "layered mesh intent is incomplete"
+            ):
+                self.film.mesh(**kwargs)
+
     def test_per_object_recipe_rejects_invalid_or_incoherent_layered_intent(self) -> None:
         invalid = (
             {"through_thickness_elements": 0},

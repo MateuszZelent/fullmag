@@ -1141,11 +1141,51 @@ def _validate_layered_mesh_spec(
         raise ValueError(
             f"{context}.transition_policy must be 'pyramid_to_tetrahedra' or 'reject'"
         )
+    if spec.through_thickness_distribution not in {
+        None,
+        "fixed",
+        "linear",
+        "exponential",
+    }:
+        raise ValueError(
+            f"{context}.through_thickness_distribution must be "
+            "'fixed', 'linear', or 'exponential'"
+        )
+    if spec.exact_layer_count is not None and not isinstance(
+        spec.exact_layer_count, bool
+    ):
+        raise TypeError(f"{context}.exact_layer_count must be bool")
+    if spec.through_thickness_element_ratio is not None:
+        ratio = spec.through_thickness_element_ratio
+        if isinstance(ratio, bool) or not isinstance(ratio, (int, float)):
+            raise TypeError(
+                f"{context}.through_thickness_element_ratio must be a number"
+            )
+        if not math.isfinite(float(ratio)) or float(ratio) <= 0.0:
+            raise ValueError(
+                f"{context}.through_thickness_element_ratio must be finite and positive"
+            )
+    if not isinstance(spec.through_thickness_symmetric, bool):
+        raise TypeError(f"{context}.through_thickness_symmetric must be bool")
     if spec.through_thickness_elements is not None:
         _element_layer_count(
             spec.through_thickness_elements,
             context=f"{context}.through_thickness_elements",
         )
+
+    if (
+        spec.exact_layer_count is True
+        and spec.through_thickness_distribution not in {None, "fixed"}
+    ):
+        raise ValueError(f"{context} exact layer count requires fixed distribution")
+    if (
+        spec.exact_layer_count is True
+        and spec.through_thickness_element_ratio is not None
+        and not math.isclose(float(spec.through_thickness_element_ratio), 1.0)
+    ):
+        raise ValueError(f"{context} exact layer count rejects graded distribution")
+    if spec.exact_layer_count is True and spec.through_thickness_symmetric:
+        raise ValueError(f"{context} exact layer count rejects symmetric distribution")
 
     if spec.topology == "tetrahedral" and any(
         value is not None
@@ -1185,7 +1225,17 @@ def _validate_layered_mesh_spec(
             raise ValueError(f"{context} hex elements contradict pyramid_to_tetrahedra transition")
 
     layered_strategy = spec.mesh_strategy in {"swept_prism", "swept_hex"}
-    if require_complete and (layered_strategy or spec.topology == "prismatic"):
+    typed_layered_intent = spec.topology == "prismatic" or any(
+        value is not None
+        for value in (
+            spec.sweep_direction,
+            spec.element_family,
+            spec.transition_policy,
+            spec.exact_layer_count,
+            spec.through_thickness_element_ratio,
+        )
+    ) or spec.through_thickness_symmetric
+    if require_complete and (layered_strategy or typed_layered_intent):
         required = {
             "through_thickness_elements": spec.through_thickness_elements,
             "through_thickness_distribution": spec.through_thickness_distribution,
@@ -1287,11 +1337,22 @@ class GeometryMeshHandle:
         compute_quality: bool | None = None,
         per_element_quality: bool | None = None,
         mesh_strategy: str | None = None,
+        topology: Literal["tetrahedral", "prismatic"] | None = None,
         through_thickness_elements: int | None = None,
-        through_thickness_distribution: str | None = None,
+        through_thickness_distribution: Literal[
+            "fixed", "linear", "exponential"
+        ]
+        | None = None,
         through_thickness_element_ratio: float | None = None,
         through_thickness_symmetric: bool | None = None,
-        sweep_face_meshing: str | None = None,
+        sweep_face_meshing: Literal["triangular", "quadrilateral"] | None = None,
+        sweep_direction: Literal["auto", "x", "y", "z"] | None = None,
+        element_family: Literal["prism", "hex"] | None = None,
+        transition_policy: Literal[
+            "pyramid_to_tetrahedra", "reject"
+        ]
+        | None = None,
+        exact_layer_count: bool | None = None,
     ) -> "GeometryMeshHandle":
         return self.configure(
             hmax=hmax, hmin=hmin,
@@ -1331,11 +1392,16 @@ class GeometryMeshHandle:
             compute_quality=compute_quality,
             per_element_quality=per_element_quality,
             mesh_strategy=mesh_strategy,
+            topology=topology,
             through_thickness_elements=through_thickness_elements,
             through_thickness_distribution=through_thickness_distribution,
             through_thickness_element_ratio=through_thickness_element_ratio,
             through_thickness_symmetric=through_thickness_symmetric,
             sweep_face_meshing=sweep_face_meshing,
+            sweep_direction=sweep_direction,
+            element_family=element_family,
+            transition_policy=transition_policy,
+            exact_layer_count=exact_layer_count,
         )
 
     def configure(
@@ -1384,11 +1450,22 @@ class GeometryMeshHandle:
         compute_quality: bool | None = None,
         per_element_quality: bool | None = None,
         mesh_strategy: str | None = None,
+        topology: Literal["tetrahedral", "prismatic"] | None = None,
         through_thickness_elements: int | None = None,
-        through_thickness_distribution: str | None = None,
+        through_thickness_distribution: Literal[
+            "fixed", "linear", "exponential"
+        ]
+        | None = None,
         through_thickness_element_ratio: float | None = None,
         through_thickness_symmetric: bool | None = None,
-        sweep_face_meshing: str | None = None,
+        sweep_face_meshing: Literal["triangular", "quadrilateral"] | None = None,
+        sweep_direction: Literal["auto", "x", "y", "z"] | None = None,
+        element_family: Literal["prism", "hex"] | None = None,
+        transition_policy: Literal[
+            "pyramid_to_tetrahedra", "reject"
+        ]
+        | None = None,
+        exact_layer_count: bool | None = None,
     ) -> "GeometryMeshHandle":
         """Configure mesh generation parameters.
 
@@ -1438,6 +1515,17 @@ class GeometryMeshHandle:
             Extract SICN/gamma quality metrics after meshing.
         per_element_quality : bool, optional
             Include per-element quality arrays (for visualization).
+        topology : str, optional
+            Requested element topology: ``"prismatic"`` or ``"tetrahedral"``.
+        sweep_direction : str, optional
+            Swept-mesh direction: ``"auto"``, ``"x"``, ``"y"``, or ``"z"``.
+        element_family : str, optional
+            Swept volume family: ``"prism"`` or ``"hex"``.
+        transition_policy : str, optional
+            Shared-domain transition policy: ``"pyramid_to_tetrahedra"`` or
+            ``"reject"``.
+        exact_layer_count : bool, optional
+            Require the requested through-thickness element count exactly.
         """
         spec = copy.deepcopy(self._owner._mesh_spec)
         resolved_hmax, resolved_hmin, resolved_growth_rate = _coalesce_mesh_size_controls(
@@ -1597,6 +1685,8 @@ class GeometryMeshHandle:
             spec.per_element_quality_configured = True
         if mesh_strategy is not None:
             spec.mesh_strategy = mesh_strategy
+        if topology is not None:
+            spec.topology = topology
         if through_thickness_elements is not None:
             spec.through_thickness_elements = through_thickness_elements
         if through_thickness_distribution is not None:
@@ -1607,6 +1697,14 @@ class GeometryMeshHandle:
             spec.through_thickness_symmetric = through_thickness_symmetric
         if sweep_face_meshing is not None:
             spec.sweep_face_meshing = sweep_face_meshing
+        if sweep_direction is not None:
+            spec.sweep_direction = sweep_direction
+        if element_family is not None:
+            spec.element_family = element_family
+        if transition_policy is not None:
+            spec.transition_policy = transition_policy
+        if exact_layer_count is not None:
+            spec.exact_layer_count = exact_layer_count
         _validate_perimeter_refinement_spec(
             self._owner._shape,
             spec,

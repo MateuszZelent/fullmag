@@ -144,6 +144,27 @@ class LayeredMeshAuthoringRoundTripTests(unittest.TestCase):
             {"triangular", "quadrilateral"},
         )
 
+        expected_direct_literals = {
+            "topology": {"tetrahedral", "prismatic"},
+            "through_thickness_distribution": {"fixed", "linear", "exponential"},
+            "sweep_face_meshing": {"triangular", "quadrilateral"},
+            "sweep_direction": {"auto", "x", "y", "z"},
+            "element_family": {"prism", "hex"},
+            "transition_policy": {"pyramid_to_tetrahedra", "reject"},
+        }
+        for method in (
+            fm.world.GeometryMeshHandle.__call__,
+            fm.world.GeometryMeshHandle.configure,
+        ):
+            hints = get_type_hints(method)
+            for argument, expected in expected_direct_literals.items():
+                literal = next(
+                    member
+                    for member in get_args(hints[argument])
+                    if get_origin(member) is Literal
+                )
+                self.assertEqual(set(get_args(literal)), expected)
+
     def test_ui_scene_exports_canonical_prismatic_python_and_round_trips_ir(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -312,6 +333,98 @@ class LayeredMeshAuthoringRoundTripTests(unittest.TestCase):
         self.assertIn('transition="reject"', rendered)
         self.assertNotIn(".thin_film(", rendered)
         self.assertEqual(_requested_layered_mesh(rewritten), _requested_layered_mesh(loaded))
+
+    def test_direct_prismatic_configure_round_trips_explicit_sweep_direction(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = self._load_layered(
+                root,
+                """film.mesh.configure(
+                    mesh_strategy="swept_prism",
+                    topology="prismatic",
+                    through_thickness_elements=1,
+                    through_thickness_distribution="fixed",
+                    sweep_face_meshing="triangular",
+                    sweep_direction="x",
+                    element_family="prism",
+                    transition_policy="pyramid_to_tetrahedra",
+                    exact_layer_count=True,
+                    order=1,
+                )""",
+                "direct_configure.py",
+            )
+            before = _requested_layered_mesh(loaded)
+            rendered = rewrite_loaded_problem_script(
+                loaded, overrides=export_builder_draft(loaded)
+            )["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "direct_configure_rewritten.py")
+
+        self.assertIn('topology="prismatic"', rendered)
+        self.assertIn('sweep_direction="x"', rendered)
+        self.assertIn('element_family="prism"', rendered)
+        self.assertIn('transition_policy="pyramid_to_tetrahedra"', rendered)
+        self.assertIn("exact_layer_count=True", rendered)
+        self.assertNotIn(".thin_film(", rendered)
+        self.assertEqual(_requested_layered_mesh(rewritten), before)
+
+    def test_direct_prismatic_configure_round_trips_graded_symmetric_intent(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = self._load_layered(
+                root,
+                """study.mode("extended"); film.mesh.configure(
+                    mesh_strategy="swept_prism",
+                    topology="prismatic",
+                    through_thickness_elements=2,
+                    through_thickness_distribution="fixed",
+                    through_thickness_element_ratio=1.5,
+                    through_thickness_symmetric=True,
+                    sweep_face_meshing="triangular",
+                    sweep_direction="auto",
+                    element_family="prism",
+                    transition_policy="pyramid_to_tetrahedra",
+                    exact_layer_count=False,
+                    order=1,
+                )""",
+                "direct_graded.py",
+            )
+            before = _requested_layered_mesh(loaded)
+            rendered = rewrite_loaded_problem_script(
+                loaded, overrides=export_builder_draft(loaded)
+            )["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "direct_graded_rewritten.py")
+
+        self.assertIn("through_thickness_element_ratio=1.5", rendered)
+        self.assertIn("through_thickness_symmetric=True", rendered)
+        self.assertNotIn(".thin_film(", rendered)
+        self.assertEqual(_requested_layered_mesh(rewritten), before)
+
+    def test_direct_prismatic_configure_without_order_does_not_gain_order_on_export(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = self._load_layered(
+                root,
+                """film.mesh.configure(
+                    mesh_strategy="swept_prism",
+                    topology="prismatic",
+                    through_thickness_elements=1,
+                    through_thickness_distribution="fixed",
+                    sweep_face_meshing="triangular",
+                    sweep_direction="auto",
+                    element_family="prism",
+                    transition_policy="pyramid_to_tetrahedra",
+                    exact_layer_count=True,
+                )""",
+                "direct_without_order.py",
+            )
+            before = _requested_layered_mesh(loaded)
+            rendered = rewrite_loaded_problem_script(
+                loaded, overrides=export_builder_draft(loaded)
+            )["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "direct_without_order_rewritten.py")
+
+        self.assertNotIn(".thin_film(", rendered)
+        self.assertEqual(_requested_layered_mesh(rewritten), before)
 
 
 class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
