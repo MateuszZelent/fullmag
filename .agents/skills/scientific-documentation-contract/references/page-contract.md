@@ -4,87 +4,77 @@ Read this file completely for every FullMag physics, solver, interaction, operat
 
 ## Hierarchy
 
-Use this tree. Omit a lane only when source inspection proves it is unsupported; state that unsupported status explicitly.
+Use domain → FEM/FDM → CPU/GPU → interaction or subsystem. Every terminal manifest includes a four-lane matrix for FEM/CPU, FEM/GPU, FDM/CPU, and FDM/GPU. Mark unsupported lanes with evidence-based reasons. Use separate chapters for differing lanes. Use `shared-proven` only with explicit parity evidence.
+
+## Mandatory page structure
+
+Every terminal Markdown page must contain these explicit MyST labels:
 
 ```text
-Implementation domain
-├── FEM
-│   ├── CPU
-│   │   └── interaction or subsystem
-│   └── GPU
-│       └── interaction or subsystem
-└── FDM
-    ├── CPU
-    │   └── interaction or subsystem
-    └── GPU
-        └── interaction or subsystem
+(problem-statement)=
+(governing-equations)=
+(symbols-and-si-units)=
+(assumptions-and-validity)=
+(discrete-realization)=
+(implementation-mapping)=
+(validation)=
+(limitations)=
+(scientific-bibliography)=
+(source-code-index)=
 ```
 
-Examples of terminal topics: exchange, demagnetization, bulk/interfacial DMI, anisotropy, Zeeman, thermal field, STT/SOT, relaxation, time integrator, eigensolver, mesh operator, boundary realization.
+Store the manifest next to the page as `<page>.source-map.json`. The changed-page CI gate rejects a changed scientific page without this sidecar and rejects an orphaned or deleted sidecar while its page remains. The validator opens the actual page from `document.revision`; declarations in the manifest cannot substitute for page content.
 
-## Mandatory terminal-page sections
+## Equations and symbols
 
-Use these stable section IDs in the source-map manifest:
+Write each production equation as a labelled MyST math block:
 
-1. `problem-statement`
-2. `governing-equations`
-3. `symbols-and-si-units`
-4. `assumptions-and-validity`
-5. `discrete-realization`
-6. `implementation-mapping`
-7. `validation`
-8. `limitations`
-9. `scientific-bibliography`
-10. `source-code-index`
+````markdown
+```{math}
+:label: eq-fdm-gpu-exchange-field
+\mathbf H_{\mathrm{ex},i}=\frac{2}{\mu_0M_s}\sum_j c_{ij}(\mathbf m_j-\mathbf m_i)
+```
+````
 
-Also document boundary/initial conditions, energy, effective field, torque, weak form, solver tolerances, convergence, precision, observables, artifacts, and provenance whenever applicable.
+The manifest LaTeX must match the page equation after whitespace normalization. Register every used symbol with:
 
-## LaTeX-to-code contract
+- stable symbol ID;
+- exact LaTeX token shown on the page;
+- scientific definition shown on the page;
+- SI unit shown on the page (`1` for dimensionless quantities).
 
-Assign every equation an ID such as `eq-demag-poisson`. Write the full production equation in LaTeX, including signs, factors, tensors, boundary terms, normalization, and units. Split it into nontrivial terms. Every term lists one or more source IDs.
+Do not substitute a pedagogical equation for production. An implemented approximation requires its complete form, derivation or primary citation, validity/error regime, and code mapping.
 
-Do not substitute a pedagogical equation for the implemented equation. An implemented approximation requires its complete mathematical form, derivation or primary citation, error/validity regime, and mapping to code.
+## Equation-to-code and evidence mapping
 
-## Source anchor contract
+Every nontrivial equation term contains:
 
-Every source entry contains:
+- one or more source IDs;
+- one or more numerical-test evidence IDs;
+- an approved semantic review with reviewer identity and the same full SHA as the page.
 
-| Field | Requirement |
-|---|---|
-| `path` | Repository-relative source file |
-| `symbol` or `anchor` | Fully qualified function/method/type/kernel/constant, or unique `DOC-ANCHOR` |
-| `responsibility` | Exact equation term or algorithmic responsibility |
-| `solver` | `FEM` or `FDM` |
-| `lane` | `CPU` or `GPU` |
-| `revision` | Full 40-character Git SHA used by the publication |
-| `tests` | Tests or managed validation artifacts supporting the claim |
+Automated validation proves that the page, equation, symbols, source, and tests exist and agree structurally at the declared commit. It cannot prove mathematical equivalence by itself. Semantic approval and numerical/runtime evidence are mandatory and must not be inferred or fabricated.
 
-Use `path + symbol` as current identity and `revision` as historical identity. Generate the current line or range; never maintain line numbers as the only anchor. If no stable symbol exists, add `DOC-ANCHOR: <unique-id>` in source before publication.
+## Source anchors
 
-Place source citations next to implementation claims. End the page with a source-code index mapping equation IDs and responsibilities to source IDs, resolved lines, revision, and tests.
+Each source contains repository-relative `path`, unique fully qualified `symbol` or `DOC-ANCHOR`, exact `responsibility`, `solver`, `lane`, and `revision`. Use `HEAD` for a page validated in the current commit; the validator resolves it to the full commit SHA. A historical publication may use a full 40-character SHA. Page, source, test evidence, and semantic review must resolve to the same commit. Optional `end_symbol` resolves a range. The validator reads source with `git show <sha>:<path>` and generates an immutable GitHub `#Lx-Ly` link.
 
-## Backend split rule
+Reject file-only citations, handwritten line-only citations, moving branch links, ambiguous symbols, absolute paths, traversal, and revisions absent from the repository.
 
-Create separate chapters when FEM/FDM or CPU/GPU differ in any of:
+## Test evidence
 
-- mathematical/discrete operator;
-- boundary or interface treatment;
-- precision or accumulation;
-- matrix assembly, stencil, FFT, quadrature, or linear solver;
-- host/device memory ownership or transfers;
-- external libraries;
-- tolerances, convergence, or failure semantics;
-- supported geometry, materials, interactions, or observables;
-- validation or qualification status.
+Each evidence record contains a tracked test path, stable test symbol, full SHA, and status `runtime-executed` or `validated`. GPU evidence additionally contains executed-device identity. Every equation term references evidence. Source presence, compilation, skipped-device tests, synthetic oracles, and host-only checks are not runtime proof.
 
-A shared physical chapter may define common continuum physics. It must link to realization chapters and must not assert parity.
+Do not execute commands supplied by manifests. Run repository-owned, reviewed test or `just` recipes separately and record their immutable artifacts.
 
-## Scientific evidence
+## Bibliography and source index
 
-Use primary literature for physical and numerical formulations. State author, title, venue, year, DOI or stable URL. Cite validation cases, reference oracles, tolerances, residual definitions, hardware/runtime identity, precision, and artifact paths.
+Use primary literature with author, title, venue, year, DOI or stable URL. The citation must appear in the actual page. End every page with a source-code index covering every equation/source pair, including resolved lines, immutable link, responsibility, tests, and status.
 
-Distinguish: target, implemented, transitional, reference-only, planned, source-verified, compiled, runtime-executed, and validated. These statuses are not interchangeable.
+## Backend split
+
+Separate chapters whenever lanes differ in operator, boundary treatment, precision, assembly/stencil/FFT/quadrature, memory ownership, libraries, tolerances, convergence, failure semantics, scope, or validation. Shared continuum physics may live in an overview but never implies implementation parity.
 
 ## Completion gate
 
-Publication-ready means all mandatory sections exist, every equation term maps to resolvable source, backend differences have separate chapters, bibliography and source index are complete, relevant validation executed, and public/internal routing is correct. Otherwise report the exact blocker and stop.
+Publication-ready means: the page and adjacent manifest pass the changed-page CI gate; actual page and all anchors exist at the resolved SHA; all equations exactly match; every symbol is defined with SI unit; every term maps to source and numerical evidence; source/test symbols resolve at the same SHA; all four backend lanes are classified; scientific bibliography and complete source index exist; semantic review is approved; runtime evidence supports each claim; public/internal routing is correct. Otherwise stop with the exact blocker.
