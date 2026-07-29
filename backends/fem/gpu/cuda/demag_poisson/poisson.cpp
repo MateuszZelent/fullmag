@@ -70,11 +70,12 @@ bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
         !cuda_ok(cudaMemset(ctx.gpu_state.device.demag_poisson.poisson_solution, 0,
                 static_cast<size_t>(ctx.mesh.n_nodes) * sizeof(double)),
             "cudaMemset demag poisson_solution", error)) {
-        gpu_demag_poisson_destroy(ctx);
+        destroy_demag_poisson_operators(*workspace);
         return false;
     }
 
     if (!initialize_demag_poisson_hypre_device_solver(ctx, *workspace, error)) {
+        destroy_demag_poisson_operators(*workspace);
         return false;
     }
     if (!initialize_hypre_stream_interop(workspace->stream_interop, error)) {
@@ -103,11 +104,12 @@ void gpu_demag_poisson_destroy(Context &ctx)
         return;
     }
 #if FULLMAG_HAS_CUDA_RUNTIME
+    const uint64_t workspace_device_bytes = workspace->device_bytes;
     destroy_demag_poisson_operators(*workspace);
-#endif
-    if (workspace->device_bytes <= ctx.gpu_state.device.lifecycle.device_bytes) {
-        ctx.gpu_state.device.lifecycle.device_bytes -= workspace->device_bytes;
+    if (workspace_device_bytes <= ctx.gpu_state.device.lifecycle.device_bytes) {
+        ctx.gpu_state.device.lifecycle.device_bytes -= workspace_device_bytes;
     }
+#endif
     delete workspace;
     ctx.poisson_demag.gpu_workspace = nullptr;
     ctx.poisson_demag.gpu_workspace_ready = false;

@@ -10,12 +10,17 @@
 #include "gpu/cuda/demag_poisson/operators.hpp"
 
 #include "context.hpp"
+#include "core/fem_material_runtime.hpp"
 #include "fem_common.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
+#include <iomanip>
 #include <limits>
+#include <map>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -23,6 +28,87 @@
 namespace fullmag::fem {
 
 namespace {
+
+constexpr std::string_view kMixedP1DemagQuadraturePolicy =
+    "mixed_p1_demag_operator.v1:int_rules_2p";
+
+void fnv1a_byte(uint64_t &hash, uint8_t value)
+{
+    hash ^= value;
+    hash *= 1099511628211ull;
+}
+
+void fnv1a_u64(uint64_t &hash, uint64_t value)
+{
+    for (unsigned shift = 0; shift < 64; shift += 8) {
+        fnv1a_byte(hash, static_cast<uint8_t>((value >> shift) & 0xffu));
+    }
+}
+
+void fnv1a_string(uint64_t &hash, std::string_view value)
+{
+    fnv1a_u64(hash, value.size());
+    for (const unsigned char byte : value) {
+        fnv1a_byte(hash, byte);
+    }
+}
+
+template <typename T>
+void fnv1a_integral_vector(uint64_t &hash, const std::vector<T> &values)
+{
+    fnv1a_u64(hash, values.size());
+    for (const T value : values) {
+        fnv1a_u64(hash, static_cast<uint64_t>(value));
+    }
+}
+
+bool canonical_double_bits(
+    double value,
+    uint64_t &bits,
+    const char *label,
+    std::string &error)
+{
+    if (!std::isfinite(value)) {
+        error = std::string("mixed GPU demag fingerprint rejects non-finite ") + label;
+        return false;
+    }
+    if (value == 0.0) {
+        bits = 0u;
+        return true;
+    }
+    static_assert(sizeof(bits) == sizeof(value));
+    std::memcpy(&bits, &value, sizeof(bits));
+    return true;
+}
+
+bool fnv1a_double(
+    uint64_t &hash,
+    double value,
+    const char *label,
+    std::string &error)
+{
+    uint64_t bits = 0u;
+    if (!canonical_double_bits(value, bits, label, error)) {
+        return false;
+    }
+    fnv1a_u64(hash, bits);
+    return true;
+}
+
+bool fnv1a_double_vector(
+    uint64_t &hash,
+    const std::vector<double> &values,
+    const char *label,
+    std::string &error)
+{
+    fnv1a_u64(hash, values.size());
+    for (const double value : values) {
+        if (!fnv1a_double(hash, value, label, error)) {
+            return false;
+        }
+    }
+    return true;
+}
 
 #if FULLMAG_HAS_CUDA_RUNTIME
 bool cuda_ok(cudaError_t rc, const char *operation, std::string &error)
@@ -253,6 +339,285 @@ bool reduce_sparse_matrix_by_periodic_classes(
     }
     return true;
 }
+
+uint32_t p1_cell_type_for_geometry(mfem::Geometry::Type geometry)
+{
+    switch (geometry) {
+    case mfem::Geometry::TETRAHEDRON:
+        return FULLMAG_FEM_CELL_TET4;
+    case mfem::Geometry::PRISM:
+        return FULLMAG_FEM_CELL_PRISM6;
+    case mfem::Geometry::PYRAMID:
+        return FULLMAG_FEM_CELL_PYRAMID5;
+    default:
+        return 0u;
+    }
+}
+
+bool validate_ctx_mfem_operator_mesh(
+    const Context &ctx,
+    const mfem::Mesh &mesh,
+    std::string &error)
+{
+    if (mesh.SpaceDimension() != 3 ||
+        mesh.GetNV() != static_cast<int>(ctx.mesh.n_nodes) ||
+        mesh.GetNE() != static_cast<int>(ctx.mesh.n_elements)) {
+        error = "strict FEM GPU demag ctx/MFEM mesh extent divergence";
+        return false;
+    }
+    if (ctx.mesh.nodes_xyz.size() != 3u * static_cast<size_t>(ctx.mesh.n_nodes)) {
+        error = "strict FEM GPU demag ctx/MFEM coordinate extent divergence";
+        return false;
+    }
+    for (int node = 0; node < mesh.GetNV(); ++node) {
+        const double *mfem_vertex = mesh.GetVertex(node);
+        for (int component = 0; component < 3; ++component) {
+            uint64_t ctx_bits = 0u;
+            uint64_t mfem_bits = 0u;
+            if (!canonical_double_bits(
+                    ctx.mesh.nodes_xyz[3u * static_cast<size_t>(node) +
+                                       static_cast<size_t>(component)],
+                    ctx_bits,
+                    "ctx mesh coordinate",
+                    error) ||
+                !canonical_double_bits(
+                    mfem_vertex[component],
+                    mfem_bits,
+                    "MFEM mesh coordinate",
+                    error)) {
+                return false;
+            }
+            if (ctx_bits != mfem_bits) {
+                error = "strict FEM GPU demag ctx/MFEM coordinate divergence";
+                return false;
+            }
+        }
+    }
+
+    if (ctx.mesh.cell_types.size() != static_cast<size_t>(mesh.GetNE()) ||
+        ctx.mesh.cell_offsets.size() != static_cast<size_t>(mesh.GetNE()) + 1u ||
+        ctx.mesh.cell_offsets.front() != 0u ||
+        ctx.mesh.cell_offsets.back() != ctx.mesh.cell_nodes.size()) {
+        error = "strict FEM GPU demag ctx/MFEM typed connectivity extent divergence";
+        return false;
+    }
+    uint32_t maximum_canonical_marker = 0u;
+    bool has_canonical_air = ctx.mesh.cell_markers.empty();
+    for (const uint32_t marker : ctx.mesh.cell_markers) {
+        maximum_canonical_marker = std::max(maximum_canonical_marker, marker);
+        has_canonical_air = has_canonical_air || marker == 0u;
+    }
+    if (has_canonical_air &&
+        maximum_canonical_marker >=
+            static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+        error = "strict FEM GPU demag ctx/MFEM cannot map canonical air marker";
+        return false;
+    }
+    const uint32_t mfem_air_attribute = has_canonical_air
+        ? maximum_canonical_marker + 1u
+        : 1u;
+
+    for (int element = 0; element < mesh.GetNE(); ++element) {
+        if (ctx.mesh.cell_types[static_cast<size_t>(element)] !=
+            p1_cell_type_for_geometry(mesh.GetElementGeometry(element))) {
+            error = "strict FEM GPU demag ctx/MFEM cell-family divergence";
+            return false;
+        }
+        mfem::Array<int> vertices;
+        mesh.GetElementVertices(element, vertices);
+        const uint32_t begin = ctx.mesh.cell_offsets[static_cast<size_t>(element)];
+        const uint32_t end = ctx.mesh.cell_offsets[static_cast<size_t>(element) + 1u];
+        if (end - begin != static_cast<uint32_t>(vertices.Size())) {
+            error = "strict FEM GPU demag ctx/MFEM connectivity arity divergence";
+            return false;
+        }
+        for (int local = 0; local < vertices.Size(); ++local) {
+            if (ctx.mesh.cell_nodes[static_cast<size_t>(begin) +
+                                    static_cast<size_t>(local)] !=
+                static_cast<uint32_t>(vertices[local])) {
+                error = "strict FEM GPU demag ctx/MFEM connectivity divergence";
+                return false;
+            }
+        }
+        if (!ctx.mesh.cell_markers.empty() &&
+            ctx.mesh.cell_markers.size() != static_cast<size_t>(mesh.GetNE())) {
+            error = "strict FEM GPU demag ctx/MFEM cell-marker extent divergence";
+            return false;
+        }
+        const uint32_t canonical_marker = ctx.mesh.cell_markers.empty()
+            ? 1u
+            : ctx.mesh.cell_markers[static_cast<size_t>(element)];
+        const uint32_t expected_mfem_attribute = canonical_marker == 0u
+            ? mfem_air_attribute
+            : canonical_marker;
+        if (expected_mfem_attribute !=
+            static_cast<uint32_t>(mesh.GetAttribute(element))) {
+            error = "strict FEM GPU demag ctx/MFEM cell-marker divergence";
+            return false;
+        }
+    }
+    return true;
+}
+
+bool fnv1a_device_csr_scalar(
+    uint64_t &hash,
+    const DeviceCsrScalar &op,
+    const char *label,
+    std::string &error)
+{
+    fnv1a_u64(hash, op.rows);
+    fnv1a_u64(hash, op.nnz);
+    fnv1a_integral_vector(hash, op.row_offsets);
+    fnv1a_integral_vector(hash, op.col_indices);
+    return fnv1a_double_vector(hash, op.values, label, error);
+}
+
+bool fnv1a_device_csr_triple(
+    uint64_t &hash,
+    const DeviceCsrTriple &op,
+    const char *label,
+    std::string &error)
+{
+    fnv1a_u64(hash, op.rows);
+    fnv1a_u64(hash, op.nnz);
+    fnv1a_integral_vector(hash, op.row_offsets);
+    fnv1a_integral_vector(hash, op.col_indices);
+    return fnv1a_double_vector(hash, op.values_x, label, error) &&
+           fnv1a_double_vector(hash, op.values_y, label, error) &&
+           fnv1a_double_vector(hash, op.values_z, label, error);
+}
+
+bool fnv1a_mfem_sparse_matrix(
+    uint64_t &hash,
+    const mfem::SparseMatrix &matrix,
+    std::string &error)
+{
+    const int height = matrix.Height();
+    const int width = matrix.Width();
+    const int *rows = matrix.GetI();
+    if (height < 0 || width < 0 || rows == nullptr || rows[height] < 0) {
+        error = "mixed GPU demag fingerprint received invalid Poisson CSR";
+        return false;
+    }
+    const int nnz = rows[height];
+    const int *columns = matrix.GetJ();
+    const double *values = matrix.GetData();
+    if (nnz > 0 && (columns == nullptr || values == nullptr)) {
+        error = "mixed GPU demag fingerprint received incomplete Poisson CSR";
+        return false;
+    }
+    fnv1a_u64(hash, static_cast<uint64_t>(height));
+    fnv1a_u64(hash, static_cast<uint64_t>(width));
+    fnv1a_u64(hash, static_cast<uint64_t>(nnz));
+    for (int row = 0; row <= height; ++row) {
+        fnv1a_u64(hash, static_cast<uint64_t>(rows[row]));
+    }
+    for (int entry = 0; entry < nnz; ++entry) {
+        fnv1a_u64(hash, static_cast<uint64_t>(columns[entry]));
+        if (!fnv1a_double(hash, values[entry], "Poisson matrix value", error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool build_mixed_p1_demag_operator_fingerprint(
+    const Context &ctx,
+    const GpuDemagPoissonWorkspace &workspace,
+    std::string_view quadrature_policy,
+    std::string &fingerprint,
+    std::string &error)
+{
+    uint64_t hash = 14695981039346656037ull;
+    fnv1a_string(hash, "fullmag.fem.gpu.demag.mixed_p1.operator.v2");
+    fnv1a_string(hash, quadrature_policy);
+    fnv1a_u64(hash, ctx.base_plan.fe_order);
+    fnv1a_u64(hash, ctx.mesh.n_nodes);
+    fnv1a_u64(hash, ctx.mesh.n_elements);
+    fnv1a_u64(hash, ctx.mesh.n_boundary_faces);
+    if (!fnv1a_double_vector(
+            hash, ctx.mesh.nodes_xyz, "mesh coordinate", error)) {
+        return false;
+    }
+    fnv1a_integral_vector(hash, ctx.mesh.cell_types);
+    fnv1a_integral_vector(hash, ctx.mesh.cell_offsets);
+    fnv1a_integral_vector(hash, ctx.mesh.cell_nodes);
+    fnv1a_integral_vector(hash, ctx.mesh.cell_markers);
+    fnv1a_integral_vector(hash, ctx.mesh.facet_types);
+    fnv1a_integral_vector(hash, ctx.mesh.facet_roles);
+    fnv1a_integral_vector(hash, ctx.mesh.facet_offsets);
+    fnv1a_integral_vector(hash, ctx.mesh.facet_nodes);
+    fnv1a_integral_vector(hash, ctx.mesh.facet_markers);
+    fnv1a_integral_vector(hash, ctx.mesh.magnetic_element_mask);
+    fnv1a_integral_vector(hash, ctx.mesh.periodic_node_pairs);
+    fnv1a_integral_vector(hash, ctx.mesh.periodic_reduced_node);
+    fnv1a_integral_vector(hash, ctx.mesh.periodic_representative_nodes);
+    fnv1a_u64(hash, ctx.mesh.periodic_reduced_node_count);
+    std::vector<uint32_t> periodic_boundary_markers(
+        ctx.mesh.periodic_boundary_marker_set.begin(),
+        ctx.mesh.periodic_boundary_marker_set.end());
+    std::sort(periodic_boundary_markers.begin(), periodic_boundary_markers.end());
+    fnv1a_integral_vector(hash, periodic_boundary_markers);
+
+    fnv1a_u64(hash, static_cast<uint64_t>(ctx.demag.realization));
+    fnv1a_u64(hash, static_cast<uint64_t>(ctx.poisson_demag.boundary_marker));
+    fnv1a_u64(hash, static_cast<uint64_t>(ctx.poisson_demag.robin_beta_mode));
+    if (!fnv1a_double(
+            hash,
+            ctx.poisson_demag.robin_beta_factor,
+            "Robin beta factor",
+            error) ||
+        !fnv1a_double(
+            hash,
+            ctx.poisson_demag.robin_effective_beta,
+            "effective Robin beta",
+            error)) {
+        return false;
+    }
+    fnv1a_integral_vector(hash, ctx.poisson_demag.ess_tdof_list);
+
+    fnv1a_string(
+        hash,
+        ctx.material_fields.Ms_field.empty() ? "uniform-Ms" : "nodal-P1-Ms");
+    if (!fnv1a_double(
+            hash,
+            ctx.material_fields.material.saturation_magnetisation,
+            "uniform Ms",
+            error) ||
+        !fnv1a_double_vector(
+            hash,
+            ctx.material_fields.Ms_field,
+            "nodal Ms",
+            error)) {
+        return false;
+    }
+
+    const auto *poisson_matrix = static_cast<const mfem::SparseMatrix *>(
+        ctx.poisson_demag.periodic_reduced_ready
+            ? ctx.poisson_demag.periodic_matrix
+            : ctx.poisson_demag.poisson_bc_op);
+    if (poisson_matrix == nullptr) {
+        error = "mixed GPU demag fingerprint requires the final Poisson operator";
+        return false;
+    }
+    if (!fnv1a_mfem_sparse_matrix(hash, *poisson_matrix, error) ||
+        !fnv1a_device_csr_triple(hash, workspace.rhs, "RHS CSR value", error) ||
+        !fnv1a_device_csr_scalar(hash, workspace.recovery_x, "physical recovery x", error) ||
+        !fnv1a_device_csr_scalar(hash, workspace.recovery_y, "physical recovery y", error) ||
+        !fnv1a_device_csr_scalar(hash, workspace.recovery_z, "physical recovery z", error) ||
+        !fnv1a_device_csr_scalar(hash, workspace.visual_recovery_x, "visual recovery x", error) ||
+        !fnv1a_device_csr_scalar(hash, workspace.visual_recovery_y, "visual recovery y", error) ||
+        !fnv1a_device_csr_scalar(hash, workspace.visual_recovery_z, "visual recovery z", error) ||
+        !fnv1a_device_csr_scalar(hash, workspace.robin_boundary_mass, "Robin boundary mass", error)) {
+        return false;
+    }
+    fnv1a_integral_vector(hash, workspace.ess_tdofs);
+
+    std::ostringstream encoded;
+    encoded << "fnv1a64:" << std::hex << std::setfill('0') << std::setw(16) << hash;
+    fingerprint = encoded.str();
+    return true;
+}
 #endif
 
 } // namespace
@@ -266,12 +631,21 @@ bool build_p1_demag_operators(Context &ctx, GpuDemagPoissonWorkspace &workspace,
         error = "GPU Poisson demag requires initialized MFEM mesh and potential FE space";
         return false;
     }
+    if (!validate_ctx_mfem_operator_mesh(ctx, *mesh, error)) {
+        return false;
+    }
     if (ctx.base_plan.fe_order != 1) {
         error = "strict FEM GPU demag supports P1 tetrahedral elements only";
         return false;
     }
     if (ctx.demag.realization == FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER) {
         error = "strict FEM GPU demag does not support Fredkin-Koehler FEM/BEM demag";
+        return false;
+    }
+    if (!ctx.material_fields.Ms_element_field.empty() ||
+        (ctx.material_fields.runtime &&
+         ctx.material_fields.runtime->has_elementwise_ms())) {
+        error = "strict FEM GPU mixed-P1 demag does not support elementwise-DG0 Ms";
         return false;
     }
 
@@ -292,6 +666,11 @@ bool build_p1_demag_operators(Context &ctx, GpuDemagPoissonWorkspace &workspace,
         error = "strict FEM GPU periodic demag requires a valid periodic reduced-node map";
         return false;
     }
+    if (!ctx.mesh.magnetic_element_mask.empty() &&
+        ctx.mesh.magnetic_element_mask.size() != static_cast<size_t>(mesh->GetNE())) {
+        error = "strict FEM GPU demag magnetic-element mask size mismatch";
+        return false;
+    }
 
     workspace.rhs.rows = rows;
     workspace.recovery_x.rows = full_rows;
@@ -302,14 +681,20 @@ bool build_p1_demag_operators(Context &ctx, GpuDemagPoissonWorkspace &workspace,
     workspace.recovery_y.row_offsets.assign(static_cast<size_t>(full_rows) + 1u, 0u);
     workspace.recovery_z.row_offsets.assign(static_cast<size_t>(full_rows) + 1u, 0u);
 
-    std::vector<std::vector<std::array<double, 4>>> rhs_rows(static_cast<size_t>(rows));
-    std::vector<std::vector<std::pair<uint32_t, double>>> rec_x(static_cast<size_t>(full_rows));
-    std::vector<std::vector<std::pair<uint32_t, double>>> rec_y(static_cast<size_t>(full_rows));
-    std::vector<std::vector<std::pair<uint32_t, double>>> rec_z(static_cast<size_t>(full_rows));
+    using Triple = std::array<double, 3>;
+    std::vector<std::map<uint32_t, Triple>> rhs_rows(static_cast<size_t>(rows));
+    std::vector<std::map<uint32_t, double>> rec_x(static_cast<size_t>(full_rows));
+    std::vector<std::map<uint32_t, double>> rec_y(static_cast<size_t>(full_rows));
+    std::vector<std::map<uint32_t, double>> rec_z(static_cast<size_t>(full_rows));
+    std::vector<std::map<uint32_t, double>> visual_x(static_cast<size_t>(full_rows));
+    std::vector<std::map<uint32_t, double>> visual_y(static_cast<size_t>(full_rows));
+    std::vector<std::map<uint32_t, double>> visual_z(static_cast<size_t>(full_rows));
     std::vector<double> recovery_weight(static_cast<size_t>(full_rows), 0.0);
+    std::vector<double> visual_weight(static_cast<size_t>(full_rows), 0.0);
 
     mfem::Array<int> dofs;
     mfem::DenseMatrix dshape;
+    mfem::Vector shape;
     for (int elem = 0; elem < mesh->GetNE(); ++elem) {
         const mfem::FiniteElement *fe = fes->GetFE(elem);
         if (fe == nullptr || fe->GetOrder() != 1) {
@@ -317,21 +702,20 @@ bool build_p1_demag_operators(Context &ctx, GpuDemagPoissonWorkspace &workspace,
             return false;
         }
         fes->GetElementDofs(elem, dofs);
-        if (dofs.Size() != 4) {
-            error = "strict FEM GPU demag requires tetrahedral P1 elements with four local DOFs";
+        const int local_ndof = dofs.Size();
+        if (local_ndof <= 0) {
+            error = "strict FEM GPU demag found an element without P1 DOFs";
             return false;
         }
 
         mfem::ElementTransformation *T = mesh->GetElementTransformation(elem);
-        const mfem::IntegrationPoint &ip0 = mfem::Geometries.GetCenter(fe->GetGeomType());
-        T->SetIntPoint(&ip0);
-        const double volume = std::abs(T->Weight()) / 6.0;
-        dshape.SetSize(4, 3);
-        fe->CalcPhysDShape(*T, dshape);
-
-        std::array<uint32_t, 4> nodes{};
-        std::array<double, 4> signs{};
-        for (int i = 0; i < 4; ++i) {
+        if (T == nullptr) {
+            error = "strict FEM GPU demag found a null element transformation";
+            return false;
+        }
+        std::vector<uint32_t> nodes(static_cast<size_t>(local_ndof));
+        std::vector<double> signs(static_cast<size_t>(local_ndof));
+        for (int i = 0; i < local_ndof; ++i) {
             const int gdof = signed_dof_index(dofs[i]);
             if (gdof < 0 || static_cast<uint64_t>(gdof) >= full_rows) {
                 error = "strict FEM GPU demag found an out-of-range P1 DOF";
@@ -339,81 +723,103 @@ bool build_p1_demag_operators(Context &ctx, GpuDemagPoissonWorkspace &workspace,
             }
             nodes[static_cast<size_t>(i)] = static_cast<uint32_t>(gdof);
             signs[static_cast<size_t>(i)] = signed_dof_sign(dofs[i]);
-            recovery_weight[static_cast<size_t>(gdof)] += volume / 4.0;
         }
 
-        if (ctx.mesh.magnetic_element_mask.empty() ||
-            ctx.mesh.magnetic_element_mask[static_cast<size_t>(elem)] != 0u) {
-            double ms_sum = 0.0;
-            std::array<double, 4> ms_nodes{};
-            for (int k = 0; k < 4; ++k) {
-                ms_nodes[static_cast<size_t>(k)] =
-                    scalar_ms_value(ctx, nodes[static_cast<size_t>(k)]);
-                ms_sum += ms_nodes[static_cast<size_t>(k)];
+        const bool magnetic_element = ctx.mesh.magnetic_element_mask.empty() ||
+            ctx.mesh.magnetic_element_mask[static_cast<size_t>(elem)] != 0u;
+        const mfem::IntegrationRule &ir =
+            mfem::IntRules.Get(fe->GetGeomType(), 2 * fe->GetOrder());
+        shape.SetSize(local_ndof);
+        dshape.SetSize(local_ndof, 3);
+        for (int q = 0; q < ir.GetNPoints(); ++q) {
+            const mfem::IntegrationPoint &ip = ir.IntPoint(q);
+            T->SetIntPoint(&ip);
+            const double w = ip.weight * T->Weight();
+            if (!std::isfinite(w) || w <= 0.0) {
+                error = "strict FEM GPU demag found a non-positive mixed-P1 quadrature weight";
+                return false;
             }
-            for (int i = 0; i < 4; ++i) {
+            fe->CalcShape(ip, shape);
+            fe->CalcPhysDShape(*T, dshape);
+
+            double ms = ctx.material_fields.material.saturation_magnetisation;
+            if (!ctx.material_fields.Ms_field.empty()) {
+                ms = 0.0;
+                for (int k = 0; k < local_ndof; ++k) {
+                    ms += shape(k) * scalar_ms_value(
+                        ctx, nodes[static_cast<size_t>(k)]);
+                }
+            }
+
+            for (int i = 0; i < local_ndof; ++i) {
+                const uint32_t node_i = nodes[static_cast<size_t>(i)];
+                const double projection_weight = shape(i) * w;
+                visual_weight[static_cast<size_t>(node_i)] += projection_weight;
+                if (magnetic_element) {
+                    recovery_weight[static_cast<size_t>(node_i)] += projection_weight;
+                }
+
+                if (!magnetic_element) {
+                    continue;
+                }
                 const uint32_t row =
-                    periodic_scalar_column(ctx, nodes[static_cast<size_t>(i)]);
-                for (int k = 0; k < 4; ++k) {
-                    const uint32_t col = nodes[static_cast<size_t>(k)];
-                    const double coeff = ctx.material_fields.Ms_field.empty()
-                        ? ctx.material_fields.material.saturation_magnetisation * volume / 4.0
-                        : volume * (ms_sum + ms_nodes[static_cast<size_t>(k)]) / 20.0;
-                    rhs_rows[static_cast<size_t>(row)].push_back({
-                        static_cast<double>(col),
-                        signs[static_cast<size_t>(i)] * signs[static_cast<size_t>(k)] *
-                            coeff * dshape(i, 0),
-                        signs[static_cast<size_t>(i)] * signs[static_cast<size_t>(k)] *
-                            coeff * dshape(i, 1),
-                        signs[static_cast<size_t>(i)] * signs[static_cast<size_t>(k)] *
-                            coeff * dshape(i, 2),
-                    });
+                    periodic_scalar_column(ctx, node_i);
+                for (int k = 0; k < local_ndof; ++k) {
+                    Triple &entry = rhs_rows[static_cast<size_t>(row)]
+                        [nodes[static_cast<size_t>(k)]];
+                    const double coeff = signs[static_cast<size_t>(i)] *
+                        signs[static_cast<size_t>(k)] * ms * shape(k) * w;
+                    entry[0] += coeff * dshape(i, 0);
+                    entry[1] += coeff * dshape(i, 1);
+                    entry[2] += coeff * dshape(i, 2);
+                }
+            }
+            for (int i = 0; i < local_ndof; ++i) {
+                const uint32_t row = nodes[static_cast<size_t>(i)];
+                const double projection_weight = shape(i) * w;
+                for (int k = 0; k < local_ndof; ++k) {
+                    const uint32_t scalar_col = periodic_scalar_column(
+                        ctx, nodes[static_cast<size_t>(k)]);
+                    const double signed_weight = projection_weight *
+                        signs[static_cast<size_t>(k)];
+                    visual_x[static_cast<size_t>(row)][scalar_col] -=
+                        signed_weight * dshape(k, 0);
+                    visual_y[static_cast<size_t>(row)][scalar_col] -=
+                        signed_weight * dshape(k, 1);
+                    visual_z[static_cast<size_t>(row)][scalar_col] -=
+                        signed_weight * dshape(k, 2);
+                    if (magnetic_element) {
+                        rec_x[static_cast<size_t>(row)][scalar_col] -=
+                            signed_weight * dshape(k, 0);
+                        rec_y[static_cast<size_t>(row)][scalar_col] -=
+                            signed_weight * dshape(k, 1);
+                        rec_z[static_cast<size_t>(row)][scalar_col] -=
+                            signed_weight * dshape(k, 2);
+                    }
                 }
             }
         }
-
-        for (int i = 0; i < 4; ++i) {
-            const uint32_t row = nodes[static_cast<size_t>(i)];
-            const double node_weight = recovery_weight[static_cast<size_t>(row)];
-            (void)node_weight;
-        }
     }
 
-    for (int elem = 0; elem < mesh->GetNE(); ++elem) {
-        const mfem::FiniteElement *fe = fes->GetFE(elem);
-        fes->GetElementDofs(elem, dofs);
-        mfem::ElementTransformation *T = mesh->GetElementTransformation(elem);
-        const mfem::IntegrationPoint &ip0 = mfem::Geometries.GetCenter(fe->GetGeomType());
-        T->SetIntPoint(&ip0);
-        const double volume = std::abs(T->Weight()) / 6.0;
-        dshape.SetSize(4, 3);
-        fe->CalcPhysDShape(*T, dshape);
-
-        std::array<uint32_t, 4> nodes{};
-        std::array<double, 4> signs{};
-        for (int i = 0; i < 4; ++i) {
-            nodes[static_cast<size_t>(i)] = static_cast<uint32_t>(signed_dof_index(dofs[i]));
-            signs[static_cast<size_t>(i)] = signed_dof_sign(dofs[i]);
-        }
-        for (int i = 0; i < 4; ++i) {
-            const uint32_t row = nodes[static_cast<size_t>(i)];
-            const double normalizer = recovery_weight[static_cast<size_t>(row)];
-            if (normalizer <= 0.0) {
+    auto normalize_recovery = [](std::vector<std::map<uint32_t, double>> &values,
+                                 const std::vector<double> &weights) {
+        for (size_t row = 0; row < values.size(); ++row) {
+            if (weights[row] <= 0.0) {
+                values[row].clear();
                 continue;
             }
-            const double weight = (volume / 4.0) / normalizer;
-            for (int k = 0; k < 4; ++k) {
-                const uint32_t col = nodes[static_cast<size_t>(k)];
-                const uint32_t scalar_col = periodic_scalar_column(ctx, col);
-                rec_x[static_cast<size_t>(row)].push_back(
-                    {scalar_col, -signs[static_cast<size_t>(k)] * dshape(k, 0) * weight});
-                rec_y[static_cast<size_t>(row)].push_back(
-                    {scalar_col, -signs[static_cast<size_t>(k)] * dshape(k, 1) * weight});
-                rec_z[static_cast<size_t>(row)].push_back(
-                    {scalar_col, -signs[static_cast<size_t>(k)] * dshape(k, 2) * weight});
+            for (auto &[column, value] : values[row]) {
+                (void)column;
+                value /= weights[row];
             }
         }
-    }
+    };
+    normalize_recovery(rec_x, recovery_weight);
+    normalize_recovery(rec_y, recovery_weight);
+    normalize_recovery(rec_z, recovery_weight);
+    normalize_recovery(visual_x, visual_weight);
+    normalize_recovery(visual_y, visual_weight);
+    normalize_recovery(visual_z, visual_weight);
 
     uint64_t rhs_nnz = 0;
     uint64_t rec_nnz = 0;
@@ -443,6 +849,9 @@ bool build_p1_demag_operators(Context &ctx, GpuDemagPoissonWorkspace &workspace,
     workspace.recovery_x.nnz = rec_nnz;
     workspace.recovery_y.nnz = rec_nnz;
     workspace.recovery_z.nnz = rec_nnz;
+    workspace.visual_recovery_x.rows = full_rows;
+    workspace.visual_recovery_y.rows = full_rows;
+    workspace.visual_recovery_z.rows = full_rows;
 
     workspace.rhs.col_indices.reserve(static_cast<size_t>(rhs_nnz));
     workspace.rhs.values_x.reserve(static_cast<size_t>(rhs_nnz));
@@ -450,27 +859,45 @@ bool build_p1_demag_operators(Context &ctx, GpuDemagPoissonWorkspace &workspace,
     workspace.rhs.values_z.reserve(static_cast<size_t>(rhs_nnz));
     for (uint64_t row = 0; row < rows; ++row) {
         for (const auto &entry : rhs_rows[static_cast<size_t>(row)]) {
-            workspace.rhs.col_indices.push_back(static_cast<uint32_t>(entry[0]));
-            workspace.rhs.values_x.push_back(entry[1]);
-            workspace.rhs.values_y.push_back(entry[2]);
-            workspace.rhs.values_z.push_back(entry[3]);
+            workspace.rhs.col_indices.push_back(entry.first);
+            workspace.rhs.values_x.push_back(entry.second[0]);
+            workspace.rhs.values_y.push_back(entry.second[1]);
+            workspace.rhs.values_z.push_back(entry.second[2]);
         }
     }
 
-    auto fill_recovery = [](const std::vector<std::vector<std::pair<uint32_t, double>>> &rows_in,
-                            DeviceCsrScalar &op) {
+    auto fill_recovery = [&](const std::vector<std::map<uint32_t, double>> &rows_in,
+                             DeviceCsrScalar &op,
+                             const char *label) {
         op.col_indices.reserve(static_cast<size_t>(op.nnz));
         op.values.reserve(static_cast<size_t>(op.nnz));
+        op.row_offsets.assign(rows_in.size() + 1u, 0u);
+        uint64_t nnz = 0;
+        for (size_t row = 0; row < rows_in.size(); ++row) {
+            nnz += rows_in[row].size();
+            if (nnz > std::numeric_limits<uint32_t>::max()) {
+                error = std::string(label) + " exceeds 32-bit CSR capacity";
+                return false;
+            }
+            op.row_offsets[row + 1u] = static_cast<uint32_t>(nnz);
+        }
+        op.nnz = nnz;
         for (const auto &row_entries : rows_in) {
             for (const auto &entry : row_entries) {
                 op.col_indices.push_back(entry.first);
                 op.values.push_back(entry.second);
             }
         }
+        return true;
     };
-    fill_recovery(rec_x, workspace.recovery_x);
-    fill_recovery(rec_y, workspace.recovery_y);
-    fill_recovery(rec_z, workspace.recovery_z);
+    if (!fill_recovery(rec_x, workspace.recovery_x, "demag recovery x") ||
+        !fill_recovery(rec_y, workspace.recovery_y, "demag recovery y") ||
+        !fill_recovery(rec_z, workspace.recovery_z, "demag recovery z") ||
+        !fill_recovery(visual_x, workspace.visual_recovery_x, "demag visual recovery x") ||
+        !fill_recovery(visual_y, workspace.visual_recovery_y, "demag visual recovery y") ||
+        !fill_recovery(visual_z, workspace.visual_recovery_z, "demag visual recovery z")) {
+        return false;
+    }
 
     if (ctx.demag.realization == FULLMAG_FEM_DEMAG_AIRBOX_ROBIN &&
         ctx.poisson_demag.robin_effective_beta > 0.0 &&
@@ -506,6 +933,15 @@ bool build_p1_demag_operators(Context &ctx, GpuDemagPoissonWorkspace &workspace,
                 periodic_scalar_column(ctx, static_cast<uint32_t>(tdof)));
         }
     }
+    if (!build_mixed_p1_demag_operator_fingerprint(
+            ctx,
+            workspace,
+            kMixedP1DemagQuadraturePolicy,
+            workspace.operator_fingerprint,
+            error)) {
+        return false;
+    }
+    workspace.operator_build_count += 1u;
     return true;
 }
 #else
@@ -528,6 +964,9 @@ bool upload_demag_poisson_operators(
         !upload_scalar(workspace.recovery_x, device_bytes, "cudaMalloc/upload demag recovery x CSR", error) ||
         !upload_scalar(workspace.recovery_y, device_bytes, "cudaMalloc/upload demag recovery y CSR", error) ||
         !upload_scalar(workspace.recovery_z, device_bytes, "cudaMalloc/upload demag recovery z CSR", error) ||
+        !upload_scalar(workspace.visual_recovery_x, device_bytes, "cudaMalloc/upload demag visual recovery x CSR", error) ||
+        !upload_scalar(workspace.visual_recovery_y, device_bytes, "cudaMalloc/upload demag visual recovery y CSR", error) ||
+        !upload_scalar(workspace.visual_recovery_z, device_bytes, "cudaMalloc/upload demag visual recovery z CSR", error) ||
         !upload_scalar(workspace.robin_boundary_mass, device_bytes, "cudaMalloc/upload demag Robin boundary mass CSR", error) ||
         !upload_device_array(
             workspace.d_ess_tdofs,
@@ -538,6 +977,7 @@ bool upload_demag_poisson_operators(
         destroy_demag_poisson_operators(workspace);
         return false;
     }
+    workspace.operator_upload_count += 1u;
     return true;
 #else
     (void)workspace;
@@ -555,11 +995,19 @@ void destroy_demag_poisson_operators(GpuDemagPoissonWorkspace &workspace)
     destroy_scalar(workspace.recovery_x);
     destroy_scalar(workspace.recovery_y);
     destroy_scalar(workspace.recovery_z);
+    destroy_scalar(workspace.visual_recovery_x);
+    destroy_scalar(workspace.visual_recovery_y);
+    destroy_scalar(workspace.visual_recovery_z);
     destroy_scalar(workspace.robin_boundary_mass);
     free_device_array(workspace.d_ess_tdofs);
 #else
     (void)workspace;
 #endif
+    workspace.operator_fingerprint.clear();
+    workspace.operator_build_count = 0;
+    workspace.operator_upload_count = 0;
+    workspace.device_bytes = 0;
+    workspace.ready = false;
 }
 
 GpuDemagPoissonWorkspace *workspace_ptr(const Context &ctx)

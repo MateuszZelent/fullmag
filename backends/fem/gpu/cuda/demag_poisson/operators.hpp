@@ -63,10 +63,16 @@ struct DeviceCsrScalar {
 };
 
 struct GpuDemagPoissonWorkspace {
+    std::string operator_fingerprint;
+    uint64_t operator_build_count = 0;
+    uint64_t operator_upload_count = 0;
     DeviceCsrTriple rhs;
     DeviceCsrScalar recovery_x;
     DeviceCsrScalar recovery_y;
     DeviceCsrScalar recovery_z;
+    DeviceCsrScalar visual_recovery_x;
+    DeviceCsrScalar visual_recovery_y;
+    DeviceCsrScalar visual_recovery_z;
     DeviceCsrScalar robin_boundary_mass;
     std::vector<uint32_t> ess_tdofs;
 #if FULLMAG_HAS_CUDA_RUNTIME

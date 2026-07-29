@@ -134,8 +134,8 @@ bool compute_device_demag_for_device_stage_impl(
         reason = "strict FEM GPU demag requires device-resident Poisson and H_demag buffers";
         return false;
     }
-    if (gpu.mesh_metrics.lumped_mass == nullptr || gpu.materials.ms == nullptr) {
-        reason = "strict FEM GPU demag energy requires uploaded Ms and lumped mass buffers";
+    if (gpu.mesh_metrics.node_volumes == nullptr || gpu.materials.ms == nullptr) {
+        reason = "strict FEM GPU demag energy requires uploaded Ms and node-volume buffers";
         return false;
     }
 
@@ -347,7 +347,7 @@ bool compute_device_demag_for_device_stage_impl(
         gpu.fields.h_demag.y,
         gpu.fields.h_demag.z,
         gpu.materials.ms,
-        gpu.mesh_metrics.lumped_mass,
+        gpu.mesh_metrics.node_volumes,
         gpu.mesh_regions.magnetic_node_mask,
         gpu.reductions.scalar_workspace,
         n,
@@ -431,31 +431,31 @@ bool recover_device_demag_full_domain_field_device(
 
     cudaStream_t stream = reinterpret_cast<cudaStream_t>(raw_stream);
     fullmag_cuda_demag_recovery_csr(
-        workspace->recovery_x.d_row_offsets,
-        workspace->recovery_x.d_col_indices,
-        workspace->recovery_x.d_values,
+        workspace->visual_recovery_x.d_row_offsets,
+        workspace->visual_recovery_x.d_col_indices,
+        workspace->visual_recovery_x.d_values,
         gpu.demag_poisson.poisson_solution,
         nullptr,
         visual.x,
-        static_cast<int>(workspace->recovery_x.rows),
+        static_cast<int>(workspace->visual_recovery_x.rows),
         stream);
     fullmag_cuda_demag_recovery_csr(
-        workspace->recovery_y.d_row_offsets,
-        workspace->recovery_y.d_col_indices,
-        workspace->recovery_y.d_values,
+        workspace->visual_recovery_y.d_row_offsets,
+        workspace->visual_recovery_y.d_col_indices,
+        workspace->visual_recovery_y.d_values,
         gpu.demag_poisson.poisson_solution,
         nullptr,
         visual.y,
-        static_cast<int>(workspace->recovery_y.rows),
+        static_cast<int>(workspace->visual_recovery_y.rows),
         stream);
     fullmag_cuda_demag_recovery_csr(
-        workspace->recovery_z.d_row_offsets,
-        workspace->recovery_z.d_col_indices,
-        workspace->recovery_z.d_values,
+        workspace->visual_recovery_z.d_row_offsets,
+        workspace->visual_recovery_z.d_col_indices,
+        workspace->visual_recovery_z.d_values,
         gpu.demag_poisson.poisson_solution,
         nullptr,
         visual.z,
-        static_cast<int>(workspace->recovery_z.rows),
+        static_cast<int>(workspace->visual_recovery_z.rows),
         stream);
     if (!cuda_ok(cudaGetLastError(), "launch full-domain GPU demag observable recovery", reason)) {
         return false;
