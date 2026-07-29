@@ -30,7 +30,7 @@
 - Create: `scripts/test_public_docs_information_architecture.py`
 
 **Interfaces:**
-- Produces: `PageSpec(path: str, title: str, label: str, status: str, scope: str, children: tuple[str, ...])`.
+- Produces: `PageSpec(path: str, title: str, label: str, status: str, doc_kind: str, scope: str, children: tuple[str, ...])`.
 - Produces: `PAGE_SPECS: tuple[PageSpec, ...]`, containing every exact path approved in `docs/superpowers/specs/2026-07-29-public-documentation-information-architecture-design.md`.
 - Produces: `INTERACTION_SLUGS: tuple[str, ...]` with the fourteen canonical interactions.
 - Produces: CLI `python scripts/public_docs_information_architecture.py --check|--write --root public_docs/site`.
@@ -89,7 +89,7 @@ Expected: import failure because `scripts/public_docs_information_architecture.p
 
 - [ ] **Step 3: Implement the manifest and renderer**
 
-Implement a frozen `PageSpec` dataclass and an explicit `PAGE_SPECS` tuple. Transcribe every path from sections 5–11 of the approved specification. Expand all four interaction trees explicitly from `INTERACTION_SLUGS`; do not use the phrase “same as” in stored page data.
+Implement a frozen `PageSpec` dataclass and an explicit `PAGE_SPECS` tuple. Transcribe every path from sections 5–11 of the approved specification. Expand all four interaction trees explicitly from `INTERACTION_SLUGS`; do not use the phrase “same as” in stored page data. Existing authored pages use `doc_kind="reference"`; newly reserved pages use `doc_kind="scaffold"`. Exact body rendering applies only to scaffolds, while references are checked for path, label, status, and direct-child navigation without replacing their authored body.
 
 The renderer must emit this exact shape for a terminal scaffold:
 
@@ -138,7 +138,14 @@ test(docs): define public information architecture contract
 - Create: `public_docs/site/architecture/provenance.md`
 - Modify: `public_docs/site/index.md`
 - Modify: `public_docs/site/physics/index.md`
+- Modify: `public_docs/site/physics/exchange.md` (front-matter status/label only in this task)
+- Modify: `public_docs/site/physics/conventions.md` (front-matter status/label only)
+- Modify: `public_docs/site/physics/geometry-and-materials.md` (front-matter label only)
+- Modify: `public_docs/site/physics/exchange-demag-zeeman.md` (front-matter status/label only)
 - Modify: `public_docs/site/architecture/index.md`
+- Modify: `public_docs/site/architecture/product.md` (front-matter status/label only)
+- Modify: `public_docs/site/architecture/semantic-model.md` (front-matter status/label only)
+- Modify: `public_docs/site/architecture/runtime.md` (front-matter status/label only)
 - Test: `scripts/test_public_docs_information_architecture.py`
 
 **Interfaces:**
@@ -157,7 +164,7 @@ Expected: every missing scaffold is created; existing authored files are reporte
 
 - [ ] **Step 2: Update existing root indexes without replacing authored prose**
 
-Patch the root, physics, and architecture indexes so their toctrees list direct children exactly once. Preserve existing introductory prose. The root toctree order must be:
+Patch the root, physics, and architecture indexes so their toctrees list direct children exactly once. Preserve existing introductory prose. Normalize every existing authored page represented by `PAGE_SPECS` to its manifest label and one of the four canonical statuses; use `partial` for existing root/index/architecture pages and the existing Exchange review candidate, while preserving `planned` where already honest. Do not alter scientific body content in this task. The root toctree order must be:
 
 ```text
 getting-started/index
@@ -287,6 +294,7 @@ ci(docs): validate planned scaffolds fail closed
 - Modify: `public_docs/site/python-api/discretization/fem.md`
 - Modify: `public_docs/site/python-api/problem/problem.md`
 - Modify: `public_docs/site/python-api/problem/problem-ir.md`
+- Modify: `scripts/public_docs_information_architecture.py`
 - Modify: `packages/fullmag-py/tests/test_public_exchange_documentation.py`
 - Create: `packages/fullmag-py/tests/test_public_python_api_documentation.py`
 
@@ -348,7 +356,7 @@ Expected: Exchange scope test fails because general tables remain; API ownership
 
 Move each existing table according to section 12 of the approved specification. Split the `Material` inventory so scalar constructor parameters live in `material.md` and spatial field semantics are explained and cross-linked from `spatial-parameter-fields.md`; keep all signature tokens on `material.md` so ownership remains unique. Move `ProblemIR` general framing to `problem-ir.md`, but keep the minimal executable Exchange JSON subset on Exchange.
 
-Each destination page changes from `doc_kind: scaffold` to `doc_kind: reference` and status `partial`. Add links from Exchange immediately after the executable example. Do not add new parameter values or backend claims beyond the prose already verified in Exchange.
+Each destination page changes from `doc_kind: scaffold` to `doc_kind: reference` and status `partial`. Update the matching `PageSpec` entries in `scripts/public_docs_information_architecture.py` in the same change so the manifest remains authoritative. Add links from Exchange immediately after the executable example. Do not add new parameter values or backend claims beyond the prose already verified in Exchange.
 
 - [ ] **Step 4: Reduce Exchange to its interaction contract**
 
