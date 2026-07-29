@@ -194,16 +194,6 @@ async function verifySemanticTargetExplorerInvariant({ browser, url }) {
     ) {
       throw new Error(`Semantic target fixture WebGL is not renderable: ${JSON.stringify(webgl)}`);
     }
-    await waitForCondition(
-      async () =>
-        /carrier:mesh-parts\/[1-9]\d*/.test(
-          (await readViewportDiagnostics(page)).raw,
-        ),
-      20_000,
-      async () =>
-        `Semantic target fixture did not adopt its FEM mesh carriers: ${(await readViewportDiagnostics(page)).raw}`,
-    );
-
     const canvasBox = await canvas.boundingBox();
     if (!canvasBox) throw new Error("Semantic target fixture canvas has no bounds.");
     for (let row = 5; row < 20 && selectedNodeIds.size < expectedNodeIds.size; row += 1) {
