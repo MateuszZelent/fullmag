@@ -237,4 +237,36 @@ describe("buildViewport3DMeshSizeHighlightModel", () => {
     expect(model?.sampledElementCount).toBe(1);
     expect(Array.from(model?.edgeIndices ?? [])).toContain(7);
   });
+
+  it("uses family-specific prism edges without interpreting the cell as tetrahedra", () => {
+    const topology = topologyFixture();
+    topology.cellCount = 2;
+    topology.cellTypes = new Uint32Array([1, 2]);
+    topology.cellOffsets = new Uint32Array([0, 4, 10]);
+    topology.cellNodes = new Uint32Array([
+      0, 1, 2, 3,
+      0, 1, 2, 4, 5, 6,
+    ]);
+    topology.indices = topology.cellNodes;
+    topology.nodeCount = 8;
+
+    const selected = buildViewport3DMeshSizeHighlightModel(
+      topology,
+      topologyModelFixture(),
+      femDomainFixture(),
+      highlight({ distributionId: "edge_length", distributionLabel: "Edge length" }),
+      { elementIndices: [1] },
+    );
+
+    expect(selected?.matchedElementCount).toBe(1);
+    expect(selected?.edgeIndices).toHaveLength(18);
+
+    const unsupportedVolume = buildViewport3DMeshSizeHighlightModel(
+      topology,
+      topologyModelFixture(),
+      femDomainFixture(),
+      highlight({ distributionId: "volume", distributionLabel: "Volume" }),
+    );
+    expect(unsupportedVolume).toBeNull();
+  });
 });

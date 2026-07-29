@@ -78,12 +78,27 @@ def apply_ir_runtime_device_override(ir: dict[str, object], device: str) -> None
     runtime_metadata = problem_meta.get("runtime_metadata")
     if not isinstance(runtime_metadata, dict):
         return
+    if device not in {"cpu", "gpu"}:
+        raise ValueError("managed runtime device override must be 'cpu' or 'gpu'")
+    runtime_metadata["runtime_device_override"] = {
+        "device": device,
+        "source": "managed_launcher",
+    }
+
+
+def apply_ir_runtime_device_selection(ir: dict[str, object], device: str) -> None:
+    problem_meta = ir.get("problem_meta")
+    if not isinstance(problem_meta, dict):
+        return
+    runtime_metadata = problem_meta.get("runtime_metadata")
+    if not isinstance(runtime_metadata, dict):
+        return
     for runtime in _runtime_metadata_runtime_maps(runtime_metadata):
         runtime["device"] = device
         if device == "cpu":
             runtime["gpu_count"] = 0
             runtime["device_index"] = None
-        elif device.startswith("cuda"):
+        elif device == "gpu" or device.startswith("cuda"):
             runtime["gpu_count"] = max(int(runtime.get("gpu_count") or 0), 1)
             runtime["device_index"] = _cuda_device_index(device)
 
@@ -182,6 +197,7 @@ class LoadedProblem:
         execution_precision,
         asset_cache: dict[str, dict[str, object] | None] | None = None,
         include_geometry_assets: bool = True,
+        runtime_device_override: str | None = None,
     ) -> dict[str, object]:
         study_pipeline = self.study_pipeline_document()
         base_problem = self.pipeline_base_problem()
@@ -202,6 +218,8 @@ class LoadedProblem:
             else None
         )
         if workspace_problem is None or workspace_problem == base_problem:
+            if runtime_device_override is not None:
+                apply_ir_runtime_device_override(ir, runtime_device_override)
             return ir
 
         workspace_ir = workspace_problem.to_ir(
@@ -220,6 +238,8 @@ class LoadedProblem:
         for key in ("model_builder", "script_sync", "domain_frame", "study_pipeline"):
             if key in workspace_runtime_metadata:
                 runtime_metadata[key] = workspace_runtime_metadata[key]
+        if runtime_device_override is not None:
+            apply_ir_runtime_device_override(ir, runtime_device_override)
         return ir
 
 

@@ -342,14 +342,7 @@ def generate_mesh(
                 ox, oy, oz = offset
                 if ox != 0.0 or oy != 0.0 or oz != 0.0:
                     shift = np.array([ox, oy, oz], dtype=np.float64)
-                    mesh = MeshData(
-                        nodes=mesh.nodes + shift,
-                        elements=mesh.elements,
-                        element_markers=mesh.element_markers,
-                        boundary_faces=mesh.boundary_faces,
-                        boundary_markers=mesh.boundary_markers,
-                        quality=mesh.quality,
-                    )
+                    mesh = _dc_replace(mesh, nodes=mesh.nodes + shift)
                 return mesh
         return _generate_csg_mesh(geometry, hmax=resolved_hmax, order=order, airbox=resolved_airbox, options=opts)
     if isinstance(geometry, ImportedGeometry):
@@ -417,7 +410,7 @@ def generate_box_mesh(
         emit_progress(
             f"Gmsh: mesh ready — {mesh.n_nodes} nodes, {mesh.n_elements} elements, {mesh.n_boundary_faces} boundary faces"
         )
-        return MeshData(
+        return MeshData.from_legacy_tet4(
             nodes=mesh.nodes / SCALE,
             elements=mesh.elements,
             element_markers=mesh.element_markers,
@@ -482,7 +475,7 @@ def generate_cylinder_mesh(
         emit_progress(
             f"Gmsh: mesh ready — {mesh.n_nodes} nodes, {mesh.n_elements} elements, {mesh.n_boundary_faces} boundary faces"
         )
-        return MeshData(
+        return MeshData.from_legacy_tet4(
             nodes=mesh.nodes / SCALE,
             elements=mesh.elements,
             element_markers=mesh.element_markers,
@@ -547,7 +540,7 @@ def generate_difference_mesh(
             f"Gmsh: mesh ready — {mesh.n_nodes} nodes, {mesh.n_elements} elements, {mesh.n_boundary_faces} boundary faces"
         )
         # Scale nodes back to SI metres
-        return MeshData(
+        return MeshData.from_legacy_tet4(
             nodes=mesh.nodes / SCALE,
             elements=mesh.elements,
             element_markers=mesh.element_markers,
@@ -650,7 +643,7 @@ def _generate_csg_mesh(
         emit_progress(
             f"Gmsh: mesh ready — {mesh.n_nodes} nodes, {mesh.n_elements} elements, {mesh.n_boundary_faces} boundary faces"
         )
-        return MeshData(
+        return MeshData.from_legacy_tet4(
             nodes=mesh.nodes / SCALE,
             elements=mesh.elements,
             element_markers=mesh.element_markers,
@@ -775,6 +768,8 @@ def generate_mesh_from_file(
     airbox: AirboxOptions | None = None,
     scale: float | tuple[float, float, float] = 1.0,
     options: MeshOptions | None = None,
+    *,
+    provisional_interface_markers: set[int] | None = None,
 ) -> MeshData:
     resolved = airbox or (AirboxOptions(padding_factor=air_padding) if air_padding > 0 else None)
     opts = options or MeshOptions()
@@ -807,6 +802,7 @@ def generate_mesh_from_file(
             airbox=resolved,
             scale_xyz=scale_xyz,
             options=opts,
+            provisional_interface_markers=provisional_interface_markers,
         )
     raise ValueError(f"unsupported mesh/geometry source format: {path.suffix}")
 
@@ -967,6 +963,7 @@ def _mesh_stl_surface(
     airbox: AirboxOptions | None = None,
     scale_xyz: NDArray[np.float64] = np.ones(3),
     options: MeshOptions | None = None,
+    provisional_interface_markers: set[int] | None = None,
 ) -> MeshData:
     opts = options or MeshOptions()
     stl_opts = _sanitize_volume_mesh_options(opts, context="STL mesh")
@@ -981,6 +978,7 @@ def _mesh_stl_surface(
                 airbox=airbox,
                 scale_xyz=scale_xyz,
                 options=stl_opts,
+                provisional_interface_markers=provisional_interface_markers,
             )
         except Exception as exc:
             retry_algorithm = _stl_meshing_retry_algorithm(
@@ -1006,6 +1004,7 @@ def _mesh_stl_surface_once(
     airbox: AirboxOptions | None,
     scale_xyz: NDArray[np.float64],
     options: MeshOptions,
+    provisional_interface_markers: set[int] | None = None,
 ) -> MeshData:
     stl_opts = options
     gmsh = _import_gmsh()
@@ -1038,7 +1037,13 @@ def _mesh_stl_surface_once(
             _extract_quality_metrics(gmsh, stl_opts) if stl_opts.compute_quality else (None, None)
         )
         mesh = _scale_mesh_nodes(
-            _extract_mesh_data(gmsh, quality=quality, has_physical_groups=has_airbox, per_domain_quality=_pdq),
+            _extract_mesh_data(
+                gmsh,
+                quality=quality,
+                has_physical_groups=has_airbox,
+                per_domain_quality=_pdq,
+                provisional_interface_markers=provisional_interface_markers,
+            ),
             scale_xyz,
         )
         emit_progress(

@@ -14,7 +14,6 @@ use serde_json::Value;
 use crate::error::ApiError;
 use crate::fem_slice_overlay::{collect_fem_slice_overlay, FemSliceOverlayInput};
 use crate::field_slice::{resolve_slice_query, FieldSliceQuery, SlicePlane};
-use crate::field_store::serialize_fem_mesh_topology_binary_v1;
 use crate::router_v2::handlers::sessions::status::{domain_generation_id, fdm_grid_shape};
 use crate::schemas::domain::*;
 use crate::types::{AppState, SessionStateResponse};
@@ -58,8 +57,8 @@ pub async fn get_domain_meta(
         (
             None,
             Some(m.nodes.len() as u64),
-            Some(m.elements.len() as u64),
-            Some(m.boundary_faces.len() as u64),
+            Some(m.cell_count() as u64),
+            Some(m.facet_count() as u64),
         )
     } else {
         (
@@ -206,9 +205,10 @@ fn value_array3_f64_allow_planar(value: &Value) -> Option<[f64; 3]> {
         ("Range" = Option<String>, Header, description = "Optional single byte range for chunked FMMT topology reads")
     ),
     responses(
-        (status = 200, description = "Binary FEM topology (FMMT)", content_type = "application/octet-stream"),
-        (status = 206, description = "Partial binary FEM topology range (FMMT)", content_type = "application/octet-stream"),
+        (status = 200, description = "Binary FEM topology (FMMT v2)", content_type = "application/octet-stream"),
+        (status = 206, description = "Partial binary FEM topology range (FMMT v2)", content_type = "application/octet-stream"),
         (status = 304, description = "Domain topology not modified for the supplied ETag"),
+        (status = 409, description = "Active FEM topology is malformed"),
         (status = 416, description = "Requested topology byte range is not satisfiable"),
         (status = 204, description = "Not applicable (FDM)"),
         (status = 404, description = "No active workspace"),
@@ -226,16 +226,17 @@ pub async fn get_domain_topology(
 
     match snapshot.fem_mesh.as_ref() {
         Some(mesh) => {
-            let binary = serialize_fem_mesh_topology_binary_v1(mesh);
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
             let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
             let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
                 "domain-topology:{generation_id}:{topology_hash}:{}",
                 snapshot.mesh_revision,
             ));
-            let mut response = crate::router_v2::handlers::shared::conditional_binary_response(
-                &headers, &etag, binary,
-            );
+            let mut response =
+                crate::router_v2::handlers::shared::conditional_fem_topology_response(
+                    &state, &headers, &etag, mesh,
+                )
+                .map_err(ApiError::conflict)?;
             crate::router_v2::handlers::shared::insert_mesh_topology_hash_header(
                 &mut response,
                 &topology_hash,
@@ -272,6 +273,11 @@ pub async fn get_domain_slice_mesh_overlay(
     let Some(mesh) = snapshot.fem_mesh.as_ref() else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
+    let elements = mesh.require_tet4_elements().map_err(|error| {
+        ApiError::conflict(format!(
+            "FMMT v1 domain slice requires tet4 topology: {error}"
+        ))
+    })?;
 
     let resolved = resolve_slice_query(
         &FieldSliceQuery {
@@ -291,7 +297,7 @@ pub async fn get_domain_slice_mesh_overlay(
     let overlay = collect_fem_slice_overlay(
         FemSliceOverlayInput {
             nodes: &mesh.nodes,
-            elements: &mesh.elements,
+            elements: &elements,
             element_markers: &mesh.element_markers,
         },
         &resolved,

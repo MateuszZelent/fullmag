@@ -29,6 +29,7 @@ REQUIRED_BUILD_METADATA = (
     "hypre_config_macros",
     "hypre_config_header_sha256",
 )
+MESH_ABI_QUERY = Path(__file__).with_name("query_fem_mesh_abi.py")
 
 HYPRE_MEMORY_VARIANT_CONTRACTS = {
     "baseline": {
@@ -115,6 +116,32 @@ def require_mapping(value: object, label: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise ValueError(f"managed FEM manifest has no {label} contract")
     return value
+
+
+def query_mesh_abi(library: Path, runtime_root: Path) -> Mapping[str, object]:
+    environment = os.environ.copy()
+    existing = environment.get("LD_LIBRARY_PATH")
+    environment["LD_LIBRARY_PATH"] = str(runtime_root / "lib") + (
+        f":{existing}" if existing else ""
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, str(MESH_ABI_QUERY), str(library)],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+    except OSError as exc:
+        raise ValueError(f"failed to execute mesh ABI query: {exc}") from exc
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise ValueError(f"managed FEM mesh ABI query failed: {detail}")
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError("managed FEM mesh ABI query returned invalid JSON") from exc
+    return require_mapping(value, "queried native_abi")
 
 
 def validate_hypre_memory_build_contract(build: Mapping[str, object]) -> None:
@@ -418,6 +445,14 @@ def validate_bundle(
                 f"managed FEM native library {name} requires CUDA but has no code objects"
             )
         resolved_libraries[name] = path
+
+    native_abi = require_mapping(manifest.get("native_abi"), "native_abi")
+    queried_native_abi = query_mesh_abi(resolved_libraries["fullmag_fem"], runtime_root)
+    if dict(native_abi) != dict(queried_native_abi):
+        raise ValueError(
+            "managed FEM mesh descriptor ABI mismatch: "
+            f"manifest {dict(native_abi)}, built library {dict(queried_native_abi)}"
+        )
 
     for name, sm in native_requirements:
         cubins = native_libraries[name]["cubins"]

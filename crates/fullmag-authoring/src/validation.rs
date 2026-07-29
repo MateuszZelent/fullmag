@@ -40,6 +40,15 @@ pub fn validate_scene_document(scene: &SceneDocument) -> Result<(), SceneDocumen
     if scene.version == "scene.v1" {
         validate_scene_v1_has_no_region_owned_payloads(scene)?;
     }
+    if !matches!(
+        scene.study.requested_mode.as_str(),
+        "" | "strict" | "extended" | "hybrid"
+    ) {
+        return Err(SceneDocumentValidationError::new(format!(
+            "study.requested_mode must be 'strict', 'extended', or 'hybrid'; got '{}'",
+            scene.study.requested_mode
+        )));
+    }
     validate_solver_state(&scene.study.solver, false, "study.solver")?;
     for (index, stage) in scene.study.stages.iter().enumerate() {
         validate_stage_solver_state(stage, index)?;
@@ -98,6 +107,20 @@ pub fn validate_scene_document(scene: &SceneDocument) -> Result<(), SceneDocumen
                 object.id
             )));
         }
+        if let Some(mesh) = object.object_mesh.as_ref() {
+            validate_requested_layered_mesh(
+                &format!("object '{}'.object_mesh", object.id),
+                mesh,
+                scene.study.requested_mode != "extended",
+            )?;
+        }
+        if let Some(mesh) = object.mesh_override.as_ref() {
+            validate_requested_layered_mesh(
+                &format!("object '{}'.mesh_override", object.id),
+                mesh,
+                scene.study.requested_mode != "extended",
+            )?;
+        }
         if object.role != "magnet" {
             continue;
         }
@@ -125,6 +148,13 @@ pub fn validate_scene_document(scene: &SceneDocument) -> Result<(), SceneDocumen
         }
     }
     validate_region_owned_scene_payloads(scene, &object_ids)?;
+    for interface in &scene.study.mesh_interfaces {
+        validate_requested_layered_mesh(
+            &format!("mesh interface '{}'.config", interface.interface_id),
+            &interface.config,
+            scene.study.requested_mode != "extended",
+        )?;
+    }
 
     if let Some(document) = &scene.study.study_pipeline {
         validate_study_pipeline_document(document)?;
@@ -132,6 +162,195 @@ pub fn validate_scene_document(scene: &SceneDocument) -> Result<(), SceneDocumen
     validate_scene_field_drives(scene, &object_ids)?;
     validate_scene_planar_monitors(scene, &object_ids)?;
 
+    Ok(())
+}
+
+fn validate_requested_layered_mesh(
+    path: &str,
+    mesh: &crate::ScriptBuilderPerGeometryMeshState,
+    strict_mode: bool,
+) -> Result<(), SceneDocumentValidationError> {
+    if mesh
+        .through_thickness_elements
+        .is_some_and(|layers| layers < 1)
+    {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{path}.through_thickness_elements must be >= 1"
+        )));
+    }
+    if let Some(topology) = mesh.topology.as_deref() {
+        if !matches!(topology, "tetrahedral" | "prismatic") {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.topology must be 'tetrahedral' or 'prismatic'"
+            )));
+        }
+    }
+    if let Some(direction) = mesh.sweep_direction.as_deref() {
+        if !matches!(direction, "auto" | "x" | "y" | "z") {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.sweep_direction must be 'auto', 'x', 'y', or 'z'"
+            )));
+        }
+    }
+    if let Some(family) = mesh.element_family.as_deref() {
+        if !matches!(family, "prism" | "hex") {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.element_family must be 'prism' or 'hex'"
+            )));
+        }
+    }
+    if let Some(transition) = mesh.transition_policy.as_deref() {
+        if !matches!(transition, "pyramid_to_tetrahedra" | "reject") {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.transition_policy must be 'pyramid_to_tetrahedra' or 'reject'"
+            )));
+        }
+    }
+
+    if let Some(strategy) = mesh.mesh_strategy.as_deref() {
+        if !matches!(
+            strategy,
+            "auto" | "free_tetrahedral" | "thin_film_tetrahedral" | "swept_prism" | "swept_hex"
+        ) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.mesh_strategy is unsupported"
+            )));
+        }
+    }
+    if let Some(distribution) = mesh.through_thickness_distribution.as_deref() {
+        if !matches!(distribution, "fixed" | "linear" | "exponential") {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.through_thickness_distribution is invalid"
+            )));
+        }
+    }
+    if let Some(face) = mesh.sweep_face_meshing.as_deref() {
+        if !matches!(face, "triangular" | "quadrilateral") {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.sweep_face_meshing must be 'triangular' or 'quadrilateral'"
+            )));
+        }
+    }
+
+    if mesh.topology.as_deref() == Some("tetrahedral")
+        && (mesh.sweep_direction.is_some()
+            || mesh.element_family.is_some()
+            || mesh.transition_policy.is_some()
+            || mesh.exact_layer_count.is_some())
+    {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{path} tetrahedral topology contradicts swept element intent"
+        )));
+    }
+
+    let prism_requested = mesh.topology.as_deref() == Some("prismatic")
+        || mesh.element_family.as_deref() == Some("prism")
+        || mesh.mesh_strategy.as_deref() == Some("swept_prism");
+    if prism_requested {
+        if mesh.order.is_some_and(|order| order != 1) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path} prismatic mesh supports order=1 only"
+            )));
+        }
+        if strict_mode && mesh.exact_layer_count == Some(false) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path} strict prismatic mesh requires exact_layer_count=true"
+            )));
+        }
+        if mesh
+            .through_thickness_distribution
+            .as_deref()
+            .is_some_and(|distribution| distribution != "fixed")
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path} strict prismatic mesh requires fixed layer distribution"
+            )));
+        }
+        if mesh
+            .sweep_face_meshing
+            .as_deref()
+            .is_some_and(|face| face != "triangular")
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path} prismatic mesh requires triangular source faces"
+            )));
+        }
+        if mesh
+            .element_family
+            .as_deref()
+            .is_some_and(|family| family != "prism")
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path} prismatic topology contradicts non-prism element family"
+            )));
+        }
+        if mesh.mesh_strategy.as_deref() != Some("swept_prism") {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path} prism element family requires mesh_strategy='swept_prism'"
+            )));
+        }
+    }
+
+    if mesh.topology.as_deref() == Some("prismatic")
+        && mesh.transition_policy.as_deref() != Some("pyramid_to_tetrahedra")
+    {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{path} explicit prismatic topology requires pyramid_to_tetrahedra transition"
+        )));
+    }
+
+    if mesh.element_family.as_deref() == Some("hex") {
+        if mesh.mesh_strategy.as_deref() != Some("swept_hex") {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path} hex element family requires mesh_strategy='swept_hex'"
+            )));
+        }
+        if mesh.sweep_face_meshing.as_deref() != Some("quadrilateral") {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path} hex element family requires quadrilateral source faces"
+            )));
+        }
+        if mesh.transition_policy.as_deref() == Some("pyramid_to_tetrahedra") {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path} hex element family contradicts pyramid_to_tetrahedra transition"
+            )));
+        }
+    }
+
+    let layered_requested = matches!(
+        mesh.mesh_strategy.as_deref(),
+        Some("swept_prism" | "swept_hex")
+    ) || mesh.topology.is_some()
+        || mesh.sweep_direction.is_some()
+        || mesh.element_family.is_some()
+        || mesh.transition_policy.is_some()
+        || mesh.exact_layer_count.is_some();
+    if layered_requested {
+        let missing = [
+            (
+                "through_thickness_elements",
+                mesh.through_thickness_elements.is_none(),
+            ),
+            (
+                "through_thickness_distribution",
+                mesh.through_thickness_distribution.is_none(),
+            ),
+            ("sweep_face_meshing", mesh.sweep_face_meshing.is_none()),
+            ("sweep_direction", mesh.sweep_direction.is_none()),
+            ("element_family", mesh.element_family.is_none()),
+            ("transition_policy", mesh.transition_policy.is_none()),
+            ("exact_layer_count", mesh.exact_layer_count.is_none()),
+        ]
+        .into_iter()
+        .filter_map(|(name, absent)| absent.then_some(name))
+        .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path} layered mesh intent is incomplete: {}",
+                missing.join(", ")
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -616,6 +835,54 @@ fn validate_study_pipeline_nodes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn valid_generic_swept_prism() -> crate::ScriptBuilderPerGeometryMeshState {
+        crate::ScriptBuilderPerGeometryMeshState {
+            mesh_strategy: Some("swept_prism".to_string()),
+            order: Some(1),
+            through_thickness_elements: Some(1),
+            through_thickness_distribution: Some("fixed".to_string()),
+            sweep_face_meshing: Some("triangular".to_string()),
+            sweep_direction: Some("auto".to_string()),
+            element_family: Some("prism".to_string()),
+            transition_policy: Some("reject".to_string()),
+            exact_layer_count: Some(true),
+            ..crate::ScriptBuilderPerGeometryMeshState::default()
+        }
+    }
+
+    #[test]
+    fn layered_mesh_validation_rejects_contradictory_or_incomplete_intent() {
+        let mut tetrahedral_prism = valid_generic_swept_prism();
+        tetrahedral_prism.topology = Some("tetrahedral".to_string());
+        tetrahedral_prism.transition_policy = Some("pyramid_to_tetrahedra".to_string());
+        let error = validate_requested_layered_mesh("mesh", &tetrahedral_prism, true)
+            .expect_err("tetrahedral topology with prism family must fail closed");
+        assert!(error.message.contains("tetrahedral"), "{}", error.message);
+
+        let mut inexact = valid_generic_swept_prism();
+        inexact.exact_layer_count = Some(false);
+        let error = validate_requested_layered_mesh("mesh", &inexact, true)
+            .expect_err("strict swept prism with exact=false must fail closed");
+        assert!(
+            error.message.contains("exact_layer_count"),
+            "{}",
+            error.message
+        );
+
+        let incomplete = crate::ScriptBuilderPerGeometryMeshState {
+            mesh_strategy: Some("swept_prism".to_string()),
+            ..crate::ScriptBuilderPerGeometryMeshState::default()
+        };
+        validate_requested_layered_mesh("mesh", &incomplete, true)
+            .expect_err("incomplete swept intent must fail before lowering");
+    }
+
+    #[test]
+    fn generic_swept_prism_allows_reject_transition_policy() {
+        validate_requested_layered_mesh("mesh", &valid_generic_swept_prism(), true)
+            .expect("generic swept prism must preserve transition='reject'");
+    }
 
     #[test]
     fn llg_stage_requires_explicit_timestep_policy() {

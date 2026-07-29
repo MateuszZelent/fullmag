@@ -145,7 +145,7 @@ void cuda_zhang_li_skew_tetra_matches_independent_affine_oracle()
     cpu_context.mesh.n_nodes = 4;
     cpu_context.mesh.n_elements = 1;
     cpu_context.mesh.nodes_xyz = nodes_xyz;
-    cpu_context.mesh.elements = elements;
+    cpu_context.mesh.cell_nodes = elements;
     cpu_context.mesh.magnetic_element_mask = magnetic_elements;
     cpu_context.mesh.magnetic_node_mask = magnetic_nodes;
     cpu_context.stt.zhang_li_enabled = true;

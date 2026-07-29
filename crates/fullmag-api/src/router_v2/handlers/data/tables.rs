@@ -497,10 +497,14 @@ fn resolve_table_columns(
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
-            if !available_columns
-                .iter()
-                .any(|available| available == column)
-            {
+            let requested_quantity = table_column_meta(column)
+                .map(|metadata| metadata.quantity_id)
+                .unwrap_or_default();
+            if !available_columns.iter().any(|available| {
+                available == column
+                    || table_column_meta(available)
+                        .is_some_and(|metadata| metadata.quantity_id == requested_quantity)
+            }) {
                 return Err(ApiError::bad_request(format!(
                     "table column '{column}' is not available in this table"
                 )));

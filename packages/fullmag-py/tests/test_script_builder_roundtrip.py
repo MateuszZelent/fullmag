@@ -5,6 +5,7 @@ import textwrap
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Literal, get_args, get_origin, get_type_hints
 
 import fullmag as fm
 from fullmag.runtime.scene_document import (
@@ -65,6 +66,252 @@ study.field_drives.add(fm.RegionalFieldDrive(
 study.stages.add_relax(stage_id="relax", max_steps=2, dt=1e-15)
 study.stages.add_run(stage_id="excite", until=4e-12)
 """
+
+
+def _requested_layered_mesh(loaded: object) -> dict[str, object]:
+    problem = loaded.stages[-1].problem  # type: ignore[attr-defined]
+    per_geometry = problem.runtime_metadata["mesh_workflow"]["per_geometry"]
+    return dict(per_geometry[0])
+
+
+class LayeredMeshAuthoringRoundTripTests(unittest.TestCase):
+    def _load_layered(self, root: Path, call: str, name: str) -> object:
+        return _load_text(
+            f"""
+            import fullmag as fm
+
+            study = fm.study("layered-roundtrip")
+            study.engine("fem")
+            film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+            film.Ms = 800e3
+            film.Aex = 13e-12
+            film.alpha = 0.01
+            {call}
+            study.stages.add_run(stage_id="run", until=1e-12)
+            """,
+            root,
+            name,
+        )
+
+    def test_prismatic_thin_film_preserves_requested_layered_mesh_ir(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            loaded = self._load_layered(
+                Path(tmp_dir),
+                'film.mesh.thin_film(maximum_element_size=3e-9, layers=1, topology="prismatic", exact_layers=True, order=1)',
+                "thin_film.py",
+            )
+
+        mesh = _requested_layered_mesh(loaded)
+        self.assertEqual(mesh["topology"], "prismatic")
+        self.assertEqual(mesh["sweep_direction"], "auto")
+        self.assertEqual(mesh["element_family"], "prism")
+        self.assertEqual(mesh["transition_policy"], "pyramid_to_tetrahedra")
+        self.assertIs(mesh["exact_layer_count"], True)
+        self.assertEqual(mesh["through_thickness_elements"], 1)
+
+    def test_public_layered_mesh_enum_arguments_use_literal_types(self) -> None:
+        thin_film_hints = get_type_hints(fm.world.GeometryMeshHandle.thin_film)
+        swept_hints = get_type_hints(fm.world.GeometryMeshHandle.swept)
+
+        topology_literal = next(
+            argument
+            for argument in get_args(thin_film_hints["topology"])
+            if get_origin(argument) is Literal
+        )
+        transition_literal = next(
+            argument
+            for argument in get_args(thin_film_hints["transition"])
+            if get_origin(argument) is Literal
+        )
+        self.assertIs(get_origin(topology_literal), Literal)
+        self.assertEqual(
+            set(get_args(topology_literal)),
+            {"tetrahedral", "prismatic"},
+        )
+        self.assertIs(get_origin(transition_literal), Literal)
+        self.assertEqual(
+            set(get_args(transition_literal)),
+            {"pyramid_to_tetrahedra", "reject"},
+        )
+        self.assertIs(get_origin(swept_hints["distribution"]), Literal)
+        self.assertEqual(
+            set(get_args(swept_hints["distribution"])),
+            {"fixed", "linear", "exponential"},
+        )
+        self.assertIs(get_origin(swept_hints["face_meshing"]), Literal)
+        self.assertEqual(
+            set(get_args(swept_hints["face_meshing"])),
+            {"triangular", "quadrilateral"},
+        )
+
+    def test_ui_scene_exports_canonical_prismatic_python_and_round_trips_ir(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = self._load_layered(
+                root,
+                'film.mesh.thin_film(layers=1, topology="prismatic", exact_layers=True, order=1)',
+                "source.py",
+            )
+            expected = _requested_layered_mesh(loaded)
+            scene = json.loads(json.dumps(build_scene_document_from_builder(export_builder_draft(loaded))))
+            builder = build_builder_from_scene_document(scene)
+            rendered = rewrite_loaded_problem_script(loaded, overrides=builder)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "rewritten.py")
+
+        self.assertIn(".mesh.thin_film(", rendered)
+        self.assertIn('topology="prismatic"', rendered)
+        self.assertIn("exact_layers=True", rendered)
+        self.assertEqual(_requested_layered_mesh(rewritten), expected)
+
+    def test_swept_defaults_and_prismatic_thin_film_lower_to_equivalent_hints(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            thin = self._load_layered(
+                root,
+                'film.mesh.thin_film(layers=1, topology="prismatic", order=1)',
+                "thin.py",
+            )
+            swept = self._load_layered(root, "film.mesh.swept(elements=1)", "swept.py")
+
+        keys = (
+            "sweep_direction",
+            "through_thickness_elements",
+            "through_thickness_distribution",
+            "element_family",
+            "transition_policy",
+            "exact_layer_count",
+        )
+        thin_mesh = _requested_layered_mesh(thin)
+        swept_mesh = _requested_layered_mesh(swept)
+        self.assertEqual(
+            {key: thin_mesh[key] for key in keys},
+            {key: swept_mesh[key] for key in keys},
+        )
+
+    def test_legacy_thin_film_remains_tetrahedral_across_authoring_round_trip(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = self._load_layered(
+                root,
+                "film.mesh.thin_film(maximum_element_size=3e-9, layers=1)",
+                "legacy.py",
+            )
+            draft = export_builder_draft(loaded)
+            scene = build_scene_document_from_builder(draft)
+            builder = build_builder_from_scene_document(scene)
+            rendered = rewrite_loaded_problem_script(loaded, overrides=builder)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "legacy_rewritten.py")
+
+        before = _requested_layered_mesh(loaded)
+        after = _requested_layered_mesh(rewritten)
+        self.assertEqual(
+            before,
+            {
+                "geometry": "film",
+                "mode": "custom",
+                "hmax": 3e-9,
+                "maximum_element_size": 3e-9,
+                "hmin": 5e-9,
+                "minimum_element_size": 5e-9,
+                "interface_hmax": 3e-9,
+                "interface_thickness": 3e-9,
+                "transition_distance": 24e-9,
+                "edge_hmax": 5e-9,
+                "edge_thickness": 3e-9,
+                "edge_transition_distance": 12e-9,
+                "corner_hmax": 5e-9,
+                "corner_extent": 3e-9,
+                "corner_transition_distance": 12e-9,
+                "mesh_strategy": "thin_film_tetrahedral",
+                "through_thickness_elements": 1,
+                "through_thickness_distribution": "fixed",
+                "sweep_face_meshing": "triangular",
+            },
+        )
+        self.assertEqual(after, before)
+        self.assertNotIn("topology=", rendered)
+
+    def test_scene_rewrite_rejects_non_integral_or_non_positive_layer_counts(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            thin_loaded = self._load_layered(
+                root,
+                'film.mesh.thin_film(layers=1, topology="prismatic")',
+                "scene_thin.py",
+            )
+            swept_loaded = self._load_layered(
+                root,
+                "film.mesh.swept(elements=1)",
+                "scene_swept.py",
+            )
+
+            for loaded in (thin_loaded, swept_loaded):
+                for invalid in (True, 1.5, 0, -1):
+                    with self.subTest(strategy=_requested_layered_mesh(loaded)["mesh_strategy"], invalid=invalid):
+                        builder = export_builder_draft(loaded)
+                        builder["geometries"][0]["mesh"]["through_thickness_elements"] = invalid
+                        with self.assertRaises((TypeError, ValueError)):
+                            rewrite_loaded_problem_script(loaded, overrides=builder)
+
+    def test_extended_prismatic_exact_false_round_trips_without_early_rejection(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = self._load_layered(
+                root,
+                'study.mode("extended"); film.mesh.thin_film(layers=1, topology="prismatic", exact_layers=False)',
+                "extended.py",
+            )
+            builder = export_builder_draft(loaded)
+            scene = build_scene_document_from_builder(builder)
+            rendered = rewrite_loaded_problem_script(loaded, overrides=builder)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "extended_rewritten.py")
+
+        self.assertEqual(builder["requested_mode"], "extended")
+        self.assertEqual(scene["study"]["requested_mode"], "extended")
+        self.assertIs(_requested_layered_mesh(loaded)["exact_layer_count"], False)
+        self.assertIn("exact_layers=False", rendered)
+        self.assertIs(_requested_layered_mesh(rewritten)["exact_layer_count"], False)
+
+    def test_prismatic_thin_film_with_generic_controls_preserves_typed_export(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = self._load_layered(
+                root,
+                'film.mesh.thin_film(layers=2, topology="prismatic").configure(compute_quality=True, growth_rate=1.3, algorithm_3d=1)',
+                "controlled.py",
+            )
+            before = _requested_layered_mesh(loaded)
+            rendered = rewrite_loaded_problem_script(
+                loaded, overrides=export_builder_draft(loaded)
+            )["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "controlled_rewritten.py")
+
+        self.assertIn(".mesh(", rendered)
+        self.assertIn(".thin_film(", rendered)
+        self.assertIn('topology="prismatic"', rendered)
+        self.assertIn("compute_quality=True", rendered)
+        self.assertIn("growth_rate=1.3", rendered)
+        self.assertIn("algorithm_3d=1", rendered)
+        self.assertEqual(_requested_layered_mesh(rewritten), before)
+
+    def test_prismatic_then_explicit_swept_direction_exports_swept_call(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = self._load_layered(
+                root,
+                'film.mesh.thin_film(layers=1, topology="prismatic").swept(elements=2, sweep_direction="x", transition="reject")',
+                "sequence.py",
+            )
+            rendered = rewrite_loaded_problem_script(
+                loaded, overrides=export_builder_draft(loaded)
+            )["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "sequence_rewritten.py")
+
+        self.assertIn(".swept(", rendered)
+        self.assertIn('sweep_direction="x"', rendered)
+        self.assertIn('transition="reject"', rendered)
+        self.assertNotIn(".thin_film(", rendered)
+        self.assertEqual(_requested_layered_mesh(rewritten), _requested_layered_mesh(loaded))
 
 
 class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
@@ -376,6 +623,46 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
         self.assertEqual(
             before["problem_meta"]["runtime_metadata"]["spin_wave_response"],
             after["problem_meta"]["runtime_metadata"]["spin_wave_response"],
+        )
+
+    def test_relax_stage_table_autosave_roundtrips_without_leaking(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("relax-table-roundtrip")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.add_relax(
+            stage_id="relax",
+            algorithm="projected_gradient_bb",
+            max_steps=20,
+        ).tableautosave(
+            every_steps=10,
+            quantities=["step", "mx"],
+            table_id="relax_metrics",
+        )
+        study.stages.add_run(stage_id="after", until=4e-12)
+        """
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "source.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "rewritten.py")
+
+        self.assertIn(
+            ').tableautosave(every_steps=10, quantities=["step", "mx"], '
+            'table_id="relax_metrics")',
+            rendered,
+        )
+        self.assertEqual(
+            rewritten.stages[0].table_autosave.to_ir(),
+            loaded.stages[0].table_autosave.to_ir(),
+        )
+        self.assertIsNone(rewritten.stages[1].table_autosave)
+        self.assertNotIn(
+            "table_autosave",
+            rewritten.pipeline_base_problem().study.to_ir()["sampling"],
         )
 
     def test_automatic_sampling_stages_roundtrip_as_literal_auto(self) -> None:

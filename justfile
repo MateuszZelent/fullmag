@@ -145,6 +145,38 @@ repo-check:
 verify-fem-meshing-production:
     bash scripts/verify_fem_meshing_production.sh
 
+verify-fem-mixed-p1-capability-contract:
+    python3 scripts/validate_mixed_p1_capability_contract.py
+    python3 -m unittest scripts.test_validate_mixed_p1_capability_contract
+    cargo test -p fullmag-runner --no-default-features capabilities::tests::
+
+verify-fem-mixed-prism-airbox-runtime:
+    bash -euo pipefail -c '\
+      canonical="tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py"; \
+      report_root=".fullmag/reports/fem-mixed-prism-airbox-runtime"; \
+      mkdir -p "$report_root/runs"; \
+      run_dir="$(mktemp -d "$report_root/runs/cpu.XXXXXX")"; \
+      temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/fullmag-mixed-prism-airbox-runtime.XXXXXX")"; \
+      cleanup() { rm -rf "$temp_dir"; }; \
+      trap cleanup EXIT INT TERM; \
+      bounded="$temp_dir/relax_projected_gradient_bb.max_steps_1.py"; \
+      python3 scripts/verify_fem_mixed_prism_airbox_runtime.py prepare \
+        "$canonical" "$bounded" --evidence "$run_dir/source.v1.json"; \
+      set -o pipefail; \
+      just fem-managed-headless cpu "$bounded" "$run_dir/artifacts" \
+        2>&1 | tee "$run_dir/runtime.log"; \
+      cp "$bounded" "$run_dir/bounded_scenario.py"; \
+      python3 scripts/verify_fem_mixed_prism_airbox_runtime.py validate \
+        "$canonical" "$run_dir/bounded_scenario.py" "$run_dir/artifacts" \
+        --runtime-log "$run_dir/runtime.log" \
+        --output "$run_dir/summary.v1.json"; \
+      echo "validated mixed prism-airbox runtime evidence: $run_dir/summary.v1.json"'
+
+verify-fem-mixed-p1-native-contract:
+    docker compose --profile fem-gpu run --rm \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_mixed_p1_contract fem_mesh_contract fem_mfem_context_contract fem_material_fields_contract fem_element_quadrature_material_contract fem_step_metrics_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_MIXED_P1_ROLLBACK_DEVICE=cpu native/build/backends/fem/fem_mixed_p1_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_MIXED_P1_ROLLBACK_DEVICE=cuda native/build/backends/fem/fem_mixed_p1_contract && native/build/backends/fem/fem_mesh_contract && native/build/backends/fem/fem_mfem_context_contract && native/build/backends/fem/fem_material_fields_contract && native/build/backends/fem/fem_element_quadrature_material_contract && native/build/backends/fem/fem_step_metrics_contract'
+
 # MESH-GATE-002: cross-backend PBC matrix contract. Managed runtime evidence
 # is deliberately supplied by the case artifacts, not inferred by this recipe.
 verify-fdm-pbc-production:
@@ -173,7 +205,12 @@ verify-fem-time-domain-native-contract:
     python3 scripts/check_llg_time_domain_contract_docs.py
     docker compose --profile fem-gpu run --rm \
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
-      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_oersted_contract fem_state_io_contract fem_snapshot_contract fem_llg_rhs_contract fem_aos_field_contract fem_adaptive_dt_contract fem_rk_explicit_contract fem_stt_contract fem_cuda_tetra_gradient_contract fem_cuda_rk_guard_contract fem_thermal_brown_contract fem_relaxation_source_contract fem_relaxation_energy_derivative_contract fem_relaxation_operator_contract fem_source_facade_gpu_rk_contract fem_gpu_solver_docs_contract fem_cpu_threads_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_oersted_contract && native/build/backends/fem/fem_state_io_contract && native/build/backends/fem/fem_snapshot_contract && native/build/backends/fem/fem_llg_rhs_contract && native/build/backends/fem/fem_aos_field_contract && native/build/backends/fem/fem_adaptive_dt_contract && native/build/backends/fem/fem_rk_explicit_contract && native/build/backends/fem/fem_stt_contract && native/build/backends/fem/fem_cuda_tetra_gradient_contract && native/build/backends/fem/fem_cuda_rk_guard_contract && native/build/backends/fem/fem_thermal_brown_contract && native/build/backends/fem/fem_relaxation_source_contract && native/build/backends/fem/fem_relaxation_energy_derivative_contract && native/build/backends/fem/fem_relaxation_operator_contract && native/build/backends/fem/fem_source_facade_gpu_rk_contract && native/build/backends/fem/fem_gpu_solver_docs_contract && native/build/backends/fem/fem_cpu_threads_contract'
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_mesh_contract fem_oersted_contract fem_state_io_contract fem_snapshot_contract fem_llg_rhs_contract fem_aos_field_contract fem_adaptive_dt_contract fem_rk_explicit_contract fem_stt_contract fem_cuda_tetra_gradient_contract fem_cuda_rk_guard_contract fem_thermal_brown_contract fem_relaxation_source_contract fem_relaxation_energy_derivative_contract fem_relaxation_operator_contract fem_source_facade_gpu_rk_contract fem_gpu_solver_docs_contract fem_cpu_threads_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_mesh_contract && native/build/backends/fem/fem_oersted_contract && native/build/backends/fem/fem_state_io_contract && native/build/backends/fem/fem_snapshot_contract && native/build/backends/fem/fem_llg_rhs_contract && native/build/backends/fem/fem_aos_field_contract && native/build/backends/fem/fem_adaptive_dt_contract && native/build/backends/fem/fem_rk_explicit_contract && native/build/backends/fem/fem_stt_contract && native/build/backends/fem/fem_cuda_tetra_gradient_contract && native/build/backends/fem/fem_cuda_rk_guard_contract && native/build/backends/fem/fem_thermal_brown_contract && native/build/backends/fem/fem_relaxation_source_contract && native/build/backends/fem/fem_relaxation_energy_derivative_contract && native/build/backends/fem/fem_relaxation_operator_contract && native/build/backends/fem/fem_source_facade_gpu_rk_contract && native/build/backends/fem/fem_gpu_solver_docs_contract && native/build/backends/fem/fem_cpu_threads_contract && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-fem-mesh-abi-rust-target cargo test -p fullmag-fem-sys --lib'
+
+verify-fem-mesh-runner-abi-contract:
+    docker compose --profile fem-gpu run --rm \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fullmag_fem && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-fem-mesh-runner-abi-target cargo test -p fullmag-runner --features fem-gpu runner_mesh_pack_preserves_all_typed_csr_buffers_and_lifetimes'
 
 verify-fem-llg-time-domain-qualification:
     rm -rf .fullmag/reports/fem-llg-time-domain-qualification/cpu-fp64
@@ -2053,6 +2090,9 @@ verify-fem-preview-energy-qualification:
 
 verify-fem-preview-json-roundtrip-contract:
     docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-api terminal_preview_json_transport_preserves_f64_bits -- --nocapture'
+
+verify-fem-mixed-wire-cli-contract:
+    docker compose --project-name fullmag --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'cd /workspace && FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-cli --features "cuda fem-gpu" python_bridge::tests::mixed_wire_ -- --nocapture'
 
 verify-fem-preparation-clock-contract:
     docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-cli simulation_preparation::tests::backward_wall_clock_adjustment_preserves_raw_time_and_monotonic_ordering -- --exact --nocapture'

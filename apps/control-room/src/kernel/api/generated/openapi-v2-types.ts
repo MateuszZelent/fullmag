@@ -5537,6 +5537,7 @@ export interface components {
             last_build_summary?: Record<string, never> | null;
             /** @description Build/pipeline state for build panels. */
             mesh_pipeline_status?: components["schemas"]["MeshBuildPipelinePhaseResource"][] | null;
+            mixed_layer_topology_rejection?: null | components["schemas"]["MeshMixedLayerTopologyRejectionResource"];
             /** @description Typed policy change summary for UI diff tables. */
             policy_diff?: components["schemas"]["MeshBuildPolicyDiffResource"][] | null;
             provenance?: null | components["schemas"]["MeshBuildProvenanceResource"];
@@ -5695,6 +5696,83 @@ export interface components {
             /** Format: int64 */
             source_scene_revision?: number | null;
         };
+        MeshLayeredPolicyResource: {
+            exact_layer_count: boolean;
+            /** Format: int32 */
+            layers: number;
+            /** Format: int32 */
+            node_planes: number;
+            sweep_direction: string;
+            topology: string;
+            transition_policy: string;
+        };
+        MeshMixedCertificateFamilyQualityGateResource: {
+            family: string;
+            metric: string;
+            /** Format: double */
+            minimum_jacobian_m3: number;
+            /** Format: double */
+            p05: number;
+            passed: boolean;
+            positive_jacobian: boolean;
+            /** Format: double */
+            threshold: number;
+        };
+        MeshMixedCertificateQualityEvidenceResource: {
+            certificate_fingerprint?: string | null;
+            certificate_schema_version?: string | null;
+            certificate_status?: string | null;
+            family_gates?: components["schemas"]["MeshMixedCertificateFamilyQualityGateResource"][];
+            /** Format: int64 */
+            mesh_revision: number;
+            reason?: string | null;
+            status: components["schemas"]["MeshMixedCertificateQualityEvidenceStatus"];
+            topology_fingerprint?: string | null;
+        };
+        /** @enum {string} */
+        MeshMixedCertificateQualityEvidenceStatus: "valid" | "stale" | "rejected" | "unavailable";
+        MeshMixedLayerTopologyCertificateSummaryResource: {
+            /** Format: int32 */
+            actual_node_plane_count?: number;
+            certificate_status: string;
+            gmsh_version: string;
+            /** Format: int32 */
+            realized_layer_count: number;
+            rejection_reason?: string | null;
+            /** Format: int32 */
+            requested_layer_count: number;
+            schema_version: string;
+            topology_fingerprint: string;
+        };
+        MeshMixedLayerTopologyRejectionResource: {
+            certificate_status: string;
+            fallback?: string | null;
+            free_tetrahedral_alternative?: string | null;
+            missing_capabilities?: string[];
+            rejection_category?: string | null;
+            rejection_reason: string;
+            requested_execution?: null | components["schemas"]["MeshMixedP1ExecutionResource"];
+            /** Format: int32 */
+            requested_layer_count: number;
+            resolved_execution?: null | components["schemas"]["MeshMixedP1ExecutionResource"];
+            schema_version: string;
+        };
+        MeshMixedP1ExecutionResource: {
+            backend?: string | null;
+            device?: string | null;
+            mode?: string | null;
+            precision?: string | null;
+            study?: string | null;
+        };
+        MeshMixedTopologyProvenanceResource: {
+            accepted_certificate_fingerprint: string;
+            capability_reason?: string | null;
+            capability_status: string;
+            precision: string;
+            requested_device: string;
+            requested_topology: string;
+            resolved_topology: string;
+        };
         MeshObjectConfigEntryResource: {
             config?: {
                 [key: string]: unknown;
@@ -5776,6 +5854,9 @@ export interface components {
             bounds_min?: number[] | null;
             /** Format: int32 */
             element_count: number;
+            element_counts_by_type?: {
+                [key: string]: number;
+            };
             /** Format: int32 */
             element_start: number;
             geometry_id?: string | null;
@@ -5896,6 +5977,7 @@ export interface components {
         };
         MeshQualityGatesResource: {
             gates?: Record<string, never> | null;
+            mixed_certificate: components["schemas"]["MeshMixedCertificateQualityEvidenceResource"];
             /** Format: int64 */
             revision: number;
         };
@@ -5994,7 +6076,18 @@ export interface components {
             effective_per_object_targets?: {
                 [key: string]: components["schemas"]["MeshPerObjectTargetResource"];
             };
-            fallbacks_triggered?: string[];
+            element_counts_by_type?: {
+                [key: string]: number;
+            };
+            facet_counts_by_type_and_role?: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            fallbacks_triggered?: string[] | null;
+            gmsh_version?: string | null;
+            mixed_layer_topology_certificate?: null | components["schemas"]["MeshMixedLayerTopologyCertificateSummaryResource"];
+            mixed_topology_provenance?: null | components["schemas"]["MeshMixedTopologyProvenanceResource"];
             object_region_markers?: Record<string, never>[];
             operation_statuses?: components["schemas"]["MeshOperationStatusResource"][];
             orphan_entities?: Record<string, never>[];
@@ -6002,9 +6095,13 @@ export interface components {
             realized_regions_count?: number | null;
             region_markers?: components["schemas"]["MeshDomainRegionMarkerResource"][];
             rejected_element_types?: Record<string, never>[];
+            requested_layered_policy?: null | components["schemas"]["MeshLayeredPolicyResource"];
+            resolved_layered_policy?: null | components["schemas"]["MeshLayeredPolicyResource"];
             selector_resolution?: Record<string, never>[];
             size_fields_realized?: components["schemas"]["MeshRealizedSizeFieldResource"][];
             thin_film_diagnostics?: components["schemas"]["MeshThinFilmDiagnosticResource"][];
+            /** Format: int32 */
+            topology_schema_version?: number | null;
             used_size_field_kinds?: string[];
         };
         MeshSharedDomainConfigReplaceRequest: {
@@ -6019,21 +6116,37 @@ export interface components {
         };
         MeshSharedDomainManifestResource: {
             domain_mesh_mode?: string | null;
+            element_counts_by_type?: {
+                [key: string]: number;
+            };
+            facet_counts_by_type_and_role?: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            fallbacks_triggered?: string[] | null;
             generation_id?: string | null;
             /** Format: int64 */
             geometry_realization_revision?: number | null;
+            gmsh_version?: string | null;
             mesh_id: string;
             /** @description Mesh identity for tree/selection metadata. */
             mesh_name: string;
             /** @description Scoped mesh parts for object/airbox/selection fetches. Heavy topology remains in binary topology endpoints. */
             mesh_parts?: components["schemas"]["MeshPartResource"][];
+            mixed_layer_topology_certificate?: null | components["schemas"]["MeshMixedLayerTopologyCertificateSummaryResource"];
+            mixed_topology_provenance?: null | components["schemas"]["MeshMixedTopologyProvenanceResource"];
             object_segments?: components["schemas"]["MeshObjectSegmentResource"][];
             regions?: components["schemas"]["MeshRegionResource"][];
+            requested_layered_policy?: null | components["schemas"]["MeshLayeredPolicyResource"];
+            resolved_layered_policy?: null | components["schemas"]["MeshLayeredPolicyResource"];
             /** Format: int64 */
             revision: number;
             /** Format: int64 */
             source_scene_revision?: number | null;
             topology_fingerprint: string;
+            /** Format: int32 */
+            topology_schema_version?: number | null;
         };
         MeshSharedDomainQualityResource: {
             quality?: unknown;
@@ -10245,7 +10358,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Binary FEM topology (FMMT) */
+            /** @description Binary FEM topology (FMMT v2) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -10261,7 +10374,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Partial binary FEM topology range (FMMT) */
+            /** @description Partial binary FEM topology range (FMMT v2) */
             206: {
                 headers: {
                     [name: string]: unknown;
@@ -10279,6 +10392,13 @@ export interface operations {
             };
             /** @description No active workspace */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Active FEM topology is malformed */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12665,7 +12785,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Binary per-object FEM topology (FMMT) */
+            /** @description Binary per-object FEM topology (FMMT v2) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -12681,7 +12801,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Partial per-object FEM topology range (FMMT) */
+            /** @description Partial per-object FEM topology range (FMMT v2) */
             206: {
                 headers: {
                     [name: string]: unknown;
@@ -12699,6 +12819,13 @@ export interface operations {
             };
             /** @description No active workspace or object mesh */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Selected FEM topology is malformed */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12730,7 +12857,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Binary per-part FEM topology (FMMT) */
+            /** @description Binary per-part FEM topology (FMMT v2) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -12746,7 +12873,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Partial per-part FEM topology range (FMMT) */
+            /** @description Partial per-part FEM topology range (FMMT v2) */
             206: {
                 headers: {
                     [name: string]: unknown;
@@ -12764,6 +12891,13 @@ export interface operations {
             };
             /** @description No active workspace or mesh part */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Selected FEM topology is malformed */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13188,7 +13322,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Binary shared-domain FEM topology (FMMT) */
+            /** @description Binary shared-domain FEM topology (FMMT v2) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -13204,7 +13338,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Partial shared-domain FEM topology range (FMMT) */
+            /** @description Partial shared-domain FEM topology range (FMMT v2) */
             206: {
                 headers: {
                     [name: string]: unknown;
@@ -13222,6 +13356,13 @@ export interface operations {
             };
             /** @description No active workspace */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Active FEM topology is malformed */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

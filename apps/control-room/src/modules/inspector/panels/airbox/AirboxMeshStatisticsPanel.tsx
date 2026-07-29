@@ -40,7 +40,18 @@ export function AirboxMeshStatisticsPanel({ selection }: InspectorPanelProps) {
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <InspectorGroup title="Airbox Mesh Statistics" badge={manifest.status}>
         <FieldRow label="Points / nodes" value={formatCount(model.statistics.nodeCount)} />
-        <FieldRow label="Tetrahedra" value={formatCount(model.statistics.elementCount)} />
+        <FieldRow label="Volume elements" value={formatCount(model.statistics.elementCount)} />
+        {model.statistics.volumeElementsByType.map(({ count, family }) => (
+          <FieldRow
+            key={family}
+            label={
+              model.statistics.volumeElementCountScope === "shared-domain"
+                ? `${family} (shared-domain)`
+                : family
+            }
+            value={formatCount(count)}
+          />
+        ))}
         <FieldRow label="Boundary faces" value={formatCount(model.statistics.boundaryFaceCount)} />
         <FieldRow label="Surface faces" value={formatCount(model.statistics.surfaceFaceCount)} />
         <FieldRow label="Shared interface nodes" value={formatCount(model.topology.sharedInterfaceNodes.count)} />

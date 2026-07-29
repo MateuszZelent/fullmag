@@ -332,7 +332,10 @@ fn add_surface_anisotropy_real(
     let Some((axis, coefficient)) = surface_anisotropy_config(plan) else {
         return;
     };
-    for face in &plan.mesh.boundary_faces {
+    let faces = plan.mesh.require_tri3_boundary_faces().expect(
+        "FEM surface anisotropy requires tri3 facets; mixed-facet execution is unavailable",
+    );
+    for face in &faces {
         let local = triangle_surface_matrix(face, &plan.mesh.nodes, axis, equilibrium, coefficient);
         for i in 0..3 {
             let Some(row) = reduction.node_map[face[i] as usize] else {
@@ -358,7 +361,10 @@ fn add_surface_anisotropy_complex(
     let Some((axis, coefficient)) = surface_anisotropy_config(plan) else {
         return;
     };
-    for face in &plan.mesh.boundary_faces {
+    let faces = plan.mesh.require_tri3_boundary_faces().expect(
+        "FEM surface anisotropy requires tri3 facets; mixed-facet execution is unavailable",
+    );
+    for face in &faces {
         let local = triangle_surface_matrix(face, &plan.mesh.nodes, axis, equilibrium, coefficient);
         for i in 0..3 {
             let node_i = face[i] as usize;
@@ -452,7 +458,10 @@ fn add_surface_anisotropy_2x2(
     let Some((axis, coefficient)) = surface_anisotropy_config(plan) else {
         return;
     };
-    for face in &plan.mesh.boundary_faces {
+    let faces = plan.mesh.require_tri3_boundary_faces().expect(
+        "FEM surface anisotropy requires tri3 facets; mixed-facet execution is unavailable",
+    );
+    for face in &faces {
         let local = triangle_surface_matrix(face, &plan.mesh.nodes, axis, equilibrium, coefficient);
         for i in 0..3 {
             let Some(row) = reduction.node_map[face[i] as usize] else {

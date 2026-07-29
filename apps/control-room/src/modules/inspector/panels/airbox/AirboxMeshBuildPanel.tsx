@@ -36,7 +36,16 @@ export function AirboxMeshBuildPanel({ selection }: InspectorPanelProps) {
         <FieldRow label="Source scene revision" value={String(lifecycle.sourceSceneRevision ?? "unknown")} />
         <FieldRow label="Latest successful revision" value={String(lifecycle.latestSuccess.revision ?? "unknown")} />
         <FieldRow label="Universe report revision" value={String(report.data?.revision ?? "unknown")} />
-        <FieldRow label="Fallbacks" value={lifecycle.fallbacks.length ? lifecycle.fallbacks.join(", ") : "none published"} />
+        <FieldRow
+          label="Fallbacks"
+          value={
+            !lifecycle.fallbacksPublished
+              ? "not published"
+              : lifecycle.fallbacks.length
+                ? lifecycle.fallbacks.join(", ")
+                : "none (strict)"
+          }
+        />
       </InspectorGroup>
       <InspectorGroup title="Build Provenance" badge={lifecycle.provenance.buildId ?? "not published"}>
         <FieldRow label="Build id" value={lifecycle.provenance.buildId ?? "not published"} />

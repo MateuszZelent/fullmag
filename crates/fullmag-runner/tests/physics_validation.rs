@@ -830,8 +830,8 @@ fn cube_mesh(side_nm: f64) -> MeshIR {
         },
     )
     .collect();
-    MeshIR {
-        mesh_name: format!("cube_{side_nm}nm"),
+    MeshIR::from_legacy_tet4(
+        format!("cube_{side_nm}nm"),
         nodes,
         elements,
         element_markers,
@@ -839,8 +839,8 @@ fn cube_mesh(side_nm: f64) -> MeshIR {
         boundary_markers,
         periodic_boundary_pairs,
         periodic_node_pairs,
-        per_domain_quality: std::collections::HashMap::new(),
-    }
+        std::collections::HashMap::new(),
+    )
 }
 
 /// Kittel uniform-mode frequency for an infinite thin film magnetized along x
@@ -2461,18 +2461,18 @@ fn fem_eigen_demag_lowers_frequency() {
 
 #[test]
 fn fem_eigen_poisson_robin_demag_runs_on_shared_domain_mesh() {
-    let mesh = MeshIR {
-        mesh_name: "eigen_shared_domain_robin".to_string(),
-        nodes: vec![
+    let mesh = MeshIR::from_legacy_tet4(
+        "eigen_shared_domain_robin".to_string(),
+        vec![
             [0.0, 0.0, 0.0],
             [1.0, 0.0, 0.0],
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
-        element_markers: vec![1, 0],
-        boundary_faces: vec![
+        vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+        vec![1, 0],
+        vec![
             [0, 1, 3],
             [1, 2, 3],
             [2, 0, 3],
@@ -2480,11 +2480,11 @@ fn fem_eigen_poisson_robin_demag_runs_on_shared_domain_mesh() {
             [1, 2, 4],
             [2, 0, 4],
         ],
-        boundary_markers: vec![1, 1, 1, 1, 1, 1],
-        periodic_boundary_pairs: Vec::new(),
-        periodic_node_pairs: Vec::new(),
-        per_domain_quality: std::collections::HashMap::new(),
-    };
+        vec![1, 1, 1, 1, 1, 1],
+        Vec::new(),
+        Vec::new(),
+        std::collections::HashMap::new(),
+    );
 
     let plan = FemEigenPlanIR {
         mesh_build_report: None,

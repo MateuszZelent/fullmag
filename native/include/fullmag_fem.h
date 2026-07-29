@@ -258,17 +258,53 @@ typedef enum {
 
 typedef int (*fullmag_fem_interrupt_poll_fn)(void *user_data);
 
+/* Canonical typed P1 mesh descriptor. Wire values are stable ABI, not Gmsh IDs. */
+#define FULLMAG_FEM_MESH_DESC_ABI_VERSION 2u
+#define FULLMAG_FEM_MESH_DESC_ABI_LAYOUT_FINGERPRINT \
+    "fullmag:fem-mesh-desc:abi:v2:lp64:size232:typed-csr-global-ordinals"
+
+#define FULLMAG_FEM_CELL_TET4 1u
+#define FULLMAG_FEM_CELL_PRISM6 2u
+#define FULLMAG_FEM_CELL_PYRAMID5 3u
+#define FULLMAG_FEM_CELL_HEX8 4u
+
+#define FULLMAG_FEM_FACET_TRI3 1u
+#define FULLMAG_FEM_FACET_QUAD4 2u
+
+#define FULLMAG_FEM_FACET_ROLE_EXTERIOR 1u
+#define FULLMAG_FEM_FACET_ROLE_MATERIAL_INTERFACE 2u
+#define FULLMAG_FEM_FACET_ROLE_PERIODIC_SEAM 3u
+
 typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+
     const double *nodes_xyz;
-    uint32_t n_nodes;
+    uint64_t nodes_xyz_len;
 
-    const uint32_t *elements;
-    uint32_t n_elements;
-    const uint32_t *element_markers;
+    const uint32_t *cell_types;
+    uint64_t cell_types_len;
+    const uint32_t *cell_offsets;
+    uint64_t cell_offsets_len;
+    const uint32_t *cell_nodes;
+    uint64_t cell_nodes_len;
+    const uint64_t *cell_global_ordinals;
+    uint64_t cell_global_ordinals_len;
+    const uint32_t *cell_markers;
+    uint64_t cell_markers_len;
 
-    const uint32_t *boundary_faces;
-    uint32_t n_boundary_faces;
-    const uint32_t *boundary_markers;
+    const uint32_t *facet_types;
+    uint64_t facet_types_len;
+    const uint32_t *facet_roles;
+    uint64_t facet_roles_len;
+    const uint32_t *facet_offsets;
+    uint64_t facet_offsets_len;
+    const uint32_t *facet_nodes;
+    uint64_t facet_nodes_len;
+    const uint64_t *facet_global_ordinals;
+    uint64_t facet_global_ordinals_len;
+    const uint32_t *facet_markers;
+    uint64_t facet_markers_len;
 
     /* Static periodic node pairs as [node_a0,node_b0,node_a1,node_b1,...].
        Supported native CPU/MFEM static-reduction paths consume these to build
@@ -276,15 +312,45 @@ typedef struct {
        and static-periodic driven-response projection.  Unsupported lanes must
        reject them explicitly rather than silently treating seams as open. */
     const uint32_t *periodic_node_pairs;
-    uint32_t n_periodic_node_pairs;
+    uint64_t periodic_node_pairs_len;
 
     /* MFEM boundary attribute markers for periodic seam face pairs,
        stored as [marker_a0, marker_b0, marker_a1, marker_b1, ...].
        Used to exclude periodic seam faces from Robin boundary mass
        when demag PBC is enabled.  Pass NULL / 0 when not applicable. */
     const uint32_t *periodic_boundary_pair_markers;
-    uint32_t periodic_boundary_pair_count;
+    uint64_t periodic_boundary_pair_markers_len;
 } fullmag_fem_mesh_desc;
+
+#define FULLMAG_FEM_MESH_ABI_LAYOUT_VERSION 1u
+#define FULLMAG_FEM_MESH_ABI_FIELD_COUNT 30u
+#define FULLMAG_FEM_MESH_ABI_FINGERPRINT_CAPACITY 96u
+#define FULLMAG_FEM_MESH_ABI_RECORD_VERSION 1u
+#define FULLMAG_FEM_MESH_ABI_RECORD_MAGIC_CAPACITY 40u
+#define FULLMAG_FEM_MESH_ABI_RECORD_MAGIC "FULLMAG_FEM_MESH_ABI_RECORD_V1"
+#define FULLMAG_FEM_MESH_ABI_RECORD_ENDIAN_TAG 0x01020304u
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t mesh_desc_abi_version;
+    uint32_t mesh_desc_struct_size;
+    uint32_t field_count;
+    uint32_t reserved;
+    uint64_t field_offsets[FULLMAG_FEM_MESH_ABI_FIELD_COUNT];
+    char layout_fingerprint[FULLMAG_FEM_MESH_ABI_FINGERPRINT_CAPACITY];
+} fullmag_fem_mesh_abi_layout;
+
+typedef struct {
+    char magic[FULLMAG_FEM_MESH_ABI_RECORD_MAGIC_CAPACITY];
+    uint32_t record_version;
+    uint32_t record_size;
+    uint32_t endian_tag;
+    uint32_t reserved;
+    fullmag_fem_mesh_abi_layout layout;
+} fullmag_fem_mesh_abi_record;
+
+extern const fullmag_fem_mesh_abi_record fullmag_fem_mesh_abi_record_v1;
 
 typedef struct {
     double saturation_magnetisation;
@@ -395,7 +461,7 @@ typedef struct {
 
     /* Per-element material coefficients for discontinuous conformal domains.
        NULL + 0 = use per-node field/scalar fallback. When present, length must
-       equal mesh.n_elements. These fields preserve one shared H1 magnetization
+       equal mesh.cell_types_len. These fields preserve one shared H1 magnetization
        space while allowing discontinuous A/Ms coefficients across conformal
        internal domain boundaries. */
     const double *ms_element_field;    uint64_t ms_element_field_len;
@@ -1158,6 +1224,7 @@ int fullmag_fem_get_frequency_domain_dependency_info(
 int fullmag_fem_get_frequency_domain_abi_layout(
     fullmag_fem_frequency_domain_abi_layout *out_layout
 );
+int fullmag_fem_get_mesh_abi_layout(fullmag_fem_mesh_abi_layout *out_layout);
 int fullmag_fem_frequency_domain_initial_sweep_progress(
     uint64_t total_frequency_points,
     fullmag_fem_frequency_domain_sweep_progress *out_progress

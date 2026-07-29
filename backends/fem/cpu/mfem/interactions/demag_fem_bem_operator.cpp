@@ -146,7 +146,7 @@ std::vector<std::vector<uint32_t>> build_node_element_adjacency(const Context &c
         }
         const size_t base = static_cast<size_t>(elem) * 4u;
         for (int i = 0; i < 4; ++i) {
-            const uint32_t node = ctx.mesh.elements[base + static_cast<size_t>(i)];
+            const uint32_t node = ctx.mesh.cell_nodes[base + static_cast<size_t>(i)];
             if (node < ctx.mesh.n_nodes) {
                 adjacency[static_cast<size_t>(node)].push_back(elem);
             }
@@ -166,7 +166,7 @@ double boundary_node_solid_angle_sum(
         const size_t base = static_cast<size_t>(elem) * 4u;
         int local = -1;
         for (int i = 0; i < 4; ++i) {
-            if (ctx.mesh.elements[base + static_cast<size_t>(i)] == node) {
+            if (ctx.mesh.cell_nodes[base + static_cast<size_t>(i)] == node) {
                 local = i;
                 break;
             }
@@ -181,7 +181,7 @@ double boundary_node_solid_angle_sum(
             if (i == local) {
                 continue;
             }
-            other[cursor++] = node_position(ctx, ctx.mesh.elements[base + static_cast<size_t>(i)]);
+            other[cursor++] = node_position(ctx, ctx.mesh.cell_nodes[base + static_cast<size_t>(i)]);
         }
         sum += solid_angle_magnitude(x, other[0], other[1], other[2]);
     }

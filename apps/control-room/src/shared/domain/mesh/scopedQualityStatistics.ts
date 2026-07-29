@@ -10,14 +10,20 @@ import type {
 
 const HISTOGRAM_BIN_COUNT = 30;
 const REGULAR_TETRA_CHARACTERISTIC_FACTOR = 6 * Math.sqrt(2);
-const TETRA_EDGES: readonly (readonly [number, number])[] = [
-  [0, 1],
-  [0, 2],
-  [0, 3],
-  [1, 2],
-  [1, 3],
-  [2, 3],
-];
+const CELL_NODE_COUNTS: Readonly<Record<number, number>> = {
+  1: 4,
+  2: 6,
+  3: 5,
+  4: 8,
+};
+const CELL_EDGES: Readonly<
+  Record<number, readonly (readonly [number, number])[]>
+> = {
+  1: [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]],
+  2: [[0, 1], [1, 2], [2, 0], [3, 4], [4, 5], [5, 3], [0, 3], [1, 4], [2, 5]],
+  3: [[0, 1], [1, 2], [2, 3], [3, 0], [0, 4], [1, 4], [2, 4], [3, 4]],
+  4: [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7]],
+};
 
 export function buildScopedMeshQualityStatistics({
   elementIndices,
@@ -39,14 +45,26 @@ export function buildScopedMeshQualityStatistics({
   );
   if (elements.length === 0) return null;
 
-  const volumes = elements.flatMap((element) => {
+  const volumeByElement = new Map<number, number>();
+  for (const element of elements) {
     const value = quality.volume?.[element] ?? tetraVolume(topology, element);
-    return finitePositive(value) ? [value] : [];
+    if (finitePositive(value)) volumeByElement.set(element, value);
+  }
+  const volumes = elements.flatMap((element) => {
+    const volume = volumeByElement.get(element);
+    return volume === undefined ? [] : [volume];
   });
-  const edgeLengths = elements.flatMap((element) => tetraEdgeLengths(topology, element));
-  const tetraSizes = volumes.map((volume) =>
-    Math.cbrt(volume * REGULAR_TETRA_CHARACTERISTIC_FACTOR),
+  const edgeLengths = elements.flatMap((element) =>
+    cellEdgeLengths(topology, element),
   );
+  const allTet4 = elements.every(
+    (element) => topologyCell(topology, element)?.type === 1,
+  );
+  const tetraSizes = allTet4
+    ? volumes.map((volume) =>
+        Math.cbrt(volume * REGULAR_TETRA_CHARACTERISTIC_FACTOR),
+      )
+    : [];
   const gammaMetric = buildMetric("gamma", "Gamma", quality.gamma, elements, 0.08);
   const sicnMetric = buildMetric("sicn", "SICN", quality.sicn, elements, 0.1);
   const worstElements = buildWorstElements({
@@ -55,7 +73,7 @@ export function buildScopedMeshQualityStatistics({
     scopeLabel,
     sicn: quality.sicn,
     topology,
-    volumes,
+    volumeByElement,
   });
 
   return {
@@ -67,7 +85,9 @@ export function buildScopedMeshQualityStatistics({
     ),
     qualitySource: "shared-domain per-element quality",
     sizeDistributions: [
-      buildDistribution("tetra_size", "Tetra size", tetraSizes),
+      allTet4
+        ? buildDistribution("tetra_size", "Tetra size", tetraSizes)
+        : null,
       buildDistribution("edge_length", "Edge length", edgeLengths),
       buildDistribution("volume", "Element volume", volumes),
     ].filter(
@@ -75,7 +95,11 @@ export function buildScopedMeshQualityStatistics({
         distribution !== null,
     ),
     volumeRatio: ratio(volumes),
-    warnings: [],
+    warnings: allTet4
+      ? []
+      : [
+          "Tetra size and centroid diagnostics are unavailable for mixed-cell topology; family-aware edge lengths and published element volumes remain available.",
+        ],
     worstElements,
     worstElementsByMetric: {
       gamma: buildWorstElements({
@@ -85,7 +109,7 @@ export function buildScopedMeshQualityStatistics({
         scopeLabel,
         sicn: quality.sicn,
         topology,
-        volumes,
+        volumeByElement,
       }),
       sicn: buildWorstElements({
         elements,
@@ -94,7 +118,7 @@ export function buildScopedMeshQualityStatistics({
         scopeLabel,
         sicn: quality.sicn,
         topology,
-        volumes,
+        volumeByElement,
       }),
     },
   };
@@ -207,7 +231,7 @@ function buildWorstElements({
   scopeLabel,
   sicn,
   topology,
-  volumes,
+  volumeByElement,
 }: {
   elements: readonly number[];
   gamma: Float64Array | null | undefined;
@@ -215,17 +239,16 @@ function buildWorstElements({
   scopeLabel: string;
   sicn: Float64Array | null | undefined;
   topology: DecodedTopology;
-  volumes: readonly number[];
+  volumeByElement: ReadonlyMap<number, number>;
 }): MeshWorstElement[] {
   const ranked = elements
-    .flatMap((element, index) => {
+    .flatMap((element) => {
       const score = metric === "sicn" ? sicn?.[element] : gamma?.[element];
       return finite(score)
         ? [
             {
               element,
               gamma: gamma?.[element] ?? null,
-              index,
               score,
               sicn: sicn?.[element] ?? null,
             },
@@ -240,7 +263,7 @@ function buildWorstElements({
     gamma: finite(entry.gamma) ? entry.gamma : null,
     scopeLabel,
     sicn: finite(entry.sicn) ? entry.sicn : null,
-    volume: volumes[entry.index] ?? null,
+    volume: volumeByElement.get(entry.element) ?? null,
   }));
 }
 
@@ -266,10 +289,11 @@ function tetraVolume(topology: DecodedTopology, element: number): number {
   return Math.abs(crossX * dx + crossY * dy + crossZ * dz) / 6;
 }
 
-function tetraEdgeLengths(topology: DecodedTopology, element: number): number[] {
-  const nodes = tetraNodes(topology, element);
-  if (!nodes) return [];
-  return TETRA_EDGES.flatMap(([leftCorner, rightCorner]) => {
+function cellEdgeLengths(topology: DecodedTopology, element: number): number[] {
+  const cell = topologyCell(topology, element);
+  if (!cell) return [];
+  return (CELL_EDGES[cell.type] ?? []).flatMap(([leftCorner, rightCorner]) => {
+    const nodes = cell.nodes;
     const leftNode = nodes[leftCorner];
     const rightNode = nodes[rightCorner];
     return leftNode === undefined || rightNode === undefined
@@ -296,11 +320,9 @@ function tetraNodes(
   topology: DecodedTopology,
   element: number,
 ): [number, number, number, number] | null {
-  const offset = element * 4;
-  const a = topology.indices[offset];
-  const b = topology.indices[offset + 1];
-  const c = topology.indices[offset + 2];
-  const d = topology.indices[offset + 3];
+  const cell = topologyCell(topology, element);
+  if (!cell || cell.type !== 1) return null;
+  const [a, b, c, d] = cell.nodes;
   if (
     a === undefined ||
     b === undefined ||
@@ -314,6 +336,38 @@ function tetraNodes(
     return null;
   }
   return [a, b, c, d];
+}
+
+function topologyCell(
+  topology: DecodedTopology,
+  element: number,
+): { nodes: readonly number[]; type: number } | null {
+  if (!Number.isInteger(element) || element < 0) return null;
+  if (
+    topology.cellTypes &&
+    topology.cellOffsets &&
+    topology.cellNodes &&
+    topology.cellOffsets.length === topology.cellTypes.length + 1 &&
+    element < topology.cellTypes.length
+  ) {
+    const type = topology.cellTypes[element] ?? 0;
+    const start = topology.cellOffsets[element] ?? 0;
+    const end = topology.cellOffsets[element + 1] ?? start;
+    const nodes = Array.from(topology.cellNodes.subarray(start, end));
+    if (
+      nodes.length !== CELL_NODE_COUNTS[type] ||
+      nodes.some((node) => node >= topology.nodeCount)
+    ) {
+      return null;
+    }
+    return { nodes, type };
+  }
+  const offset = element * 4;
+  const nodes = Array.from(topology.indices.subarray(offset, offset + 4));
+  if (nodes.length !== 4 || nodes.some((node) => node >= topology.nodeCount)) {
+    return null;
+  }
+  return { nodes, type: 1 };
 }
 
 function nodeDistance(

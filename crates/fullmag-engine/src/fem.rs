@@ -1010,7 +1010,12 @@ impl MeshTopology {
             .map_err(|errors| EngineError::new(errors.join("; ")))?;
 
         let coords = mesh.nodes.clone();
-        let elements = mesh.elements.clone();
+        let elements = mesh.require_tet4_elements().map_err(|error| {
+            EngineError::new(format!("legacy Rust FEM engine is tet4-only: {error}"))
+        })?;
+        let boundary_faces = mesh.require_tri3_boundary_faces().map_err(|error| {
+            EngineError::new(format!("legacy Rust FEM engine is tri3-only: {error}"))
+        })?;
         let n_nodes = coords.len();
         let n_elements = elements.len();
         let magnetic_element_mask = magnetic_element_mask_from_markers(&mesh.element_markers);
@@ -1069,8 +1074,7 @@ impl MeshTopology {
             element_stiffness.push(stiffness);
         }
 
-        let boundary_nodes = mesh
-            .boundary_faces
+        let boundary_nodes = boundary_faces
             .iter()
             .flat_map(|face| face.iter().copied())
             .collect::<BTreeSet<_>>()
@@ -1088,7 +1092,7 @@ impl MeshTopology {
         // Build sparse CSR representations for the operators
         let stiffness_csr = CsrMatrix::from_tet_assembly(n_nodes, &elements, &element_stiffness);
         let boundary_mass_csr =
-            CsrMatrix::from_boundary_mass_assembly(n_nodes, &mesh.boundary_faces, &coords);
+            CsrMatrix::from_boundary_mass_assembly(n_nodes, &boundary_faces, &coords);
         // WARNING: demag_csr includes Robin boundary mass on ALL boundary faces,
         // including periodic seam faces. It must NOT be used when PBC is active;
         // the PBC path uses `periodic_demag_reduced` which builds its own operator
@@ -1120,7 +1124,7 @@ impl MeshTopology {
             elements,
             element_markers: mesh.element_markers.clone(),
             magnetic_element_mask,
-            boundary_faces: mesh.boundary_faces.clone(),
+            boundary_faces,
             boundary_nodes,
             periodic_boundary_pairs: mesh
                 .periodic_boundary_pairs
@@ -3648,9 +3652,9 @@ mod tests {
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0],
             ],
-            elements: vec![[0, 1, 3, 2]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 3, 2]]),
             element_markers: vec![1],
-            boundary_faces: Vec::new(),
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
             boundary_markers: Vec::new(),
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -3675,9 +3679,9 @@ mod tests {
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0],
             ],
-            elements: vec![[0, 1, 2, 3]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
             element_markers: vec![1],
-            boundary_faces: vec![[0, 1, 2]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
             boundary_markers: vec![1],
             periodic_boundary_pairs: if periodic {
                 vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
@@ -3747,16 +3751,16 @@ mod tests {
                 [20e-9, 10e-9, 5e-9],
                 [-20e-9, 10e-9, 5e-9],
             ],
-            elements: vec![
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![
                 [0, 1, 2, 6],
                 [0, 2, 3, 6],
                 [0, 3, 7, 6],
                 [0, 7, 4, 6],
                 [0, 4, 5, 6],
                 [0, 5, 1, 6],
-            ],
+            ]),
             element_markers: vec![1, 1, 1, 1, 1, 1],
-            boundary_faces: vec![
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
                 [0, 1, 2],
                 [0, 1, 5],
                 [1, 2, 6],
@@ -3769,7 +3773,7 @@ mod tests {
                 [0, 4, 5],
                 [4, 5, 6],
                 [1, 5, 6],
-            ],
+            ]),
             boundary_markers: vec![1; 12],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -3796,7 +3800,9 @@ mod tests {
         for element_marker in &mut mesh.element_markers {
             *element_marker = 0;
         }
-        for (element_index, element) in mesh.elements.iter().enumerate() {
+        for cell in mesh.cells.iter() {
+            let element_index = cell.ordinal;
+            let element = cell.nodes;
             let centroid = element.iter().fold([0.0; 3], |acc, node| {
                 let coord = mesh.nodes[*node as usize];
                 [acc[0] + coord[0], acc[1] + coord[1], acc[2] + coord[2]]
@@ -4379,9 +4385,9 @@ mod tests {
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0],
             ],
-            elements: vec![[0, 1, 2, 3]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
             element_markers: vec![1],
-            boundary_faces: vec![[0, 1, 2]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
             boundary_markers: vec![1],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -4431,9 +4437,9 @@ mod tests {
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0],
             ],
-            elements: vec![[0, 1, 2, 3]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
             element_markers: vec![1],
-            boundary_faces: vec![[0, 1, 2]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
             boundary_markers: vec![1],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -4495,9 +4501,9 @@ mod tests {
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0],
             ],
-            elements: vec![[0, 1, 2, 3]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
             element_markers: vec![1],
-            boundary_faces: vec![[0, 1, 2]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
             boundary_markers: vec![1],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -4557,9 +4563,9 @@ mod tests {
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0],
             ],
-            elements: vec![[0, 1, 2, 3]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
             element_markers: vec![1],
-            boundary_faces: vec![[0, 1, 2]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
             boundary_markers: vec![1],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -4992,9 +4998,9 @@ mod tests {
                 [0.0, 1.0e-9, 0.0],
                 [0.0, 0.0, 1.0e-9],
             ],
-            elements: vec![[0, 1, 2, 3]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
             element_markers: vec![1],
-            boundary_faces: vec![[0, 1, 2]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
             boundary_markers: vec![1],
             periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                 pair_id: "x_periodic".to_string(),

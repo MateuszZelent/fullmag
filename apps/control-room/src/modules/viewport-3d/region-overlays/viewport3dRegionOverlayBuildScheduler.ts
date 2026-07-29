@@ -197,6 +197,15 @@ class RegionOverlayWorkerClient {
     addArrayBufferTransferable(transferables, request.topology.boundaryMarkers.buffer);
     addArrayBufferTransferable(transferables, request.topology.elementMarkers.buffer);
     addArrayBufferTransferable(transferables, request.topology.indices.buffer);
+    addArrayBufferTransferable(transferables, request.topology.cellNodes?.buffer);
+    addArrayBufferTransferable(transferables, request.topology.cellOffsets?.buffer);
+    addArrayBufferTransferable(transferables, request.topology.cellTypes?.buffer);
+    addArrayBufferTransferable(transferables, request.topology.cellMarkers?.buffer);
+    addArrayBufferTransferable(transferables, request.topology.facetNodes?.buffer);
+    addArrayBufferTransferable(transferables, request.topology.facetOffsets?.buffer);
+    addArrayBufferTransferable(transferables, request.topology.facetTypes?.buffer);
+    addArrayBufferTransferable(transferables, request.topology.facetRoles?.buffer);
+    addArrayBufferTransferable(transferables, request.topology.facetMarkers?.buffer);
     addArrayBufferTransferable(transferables, request.topology.positions.buffer);
 
     return new Promise((resolve, reject) => {
@@ -327,9 +336,24 @@ function cloneRegionOverlayTopology(topology: DecodedTopology): DecodedTopology 
     boundaryFaces: new Uint32Array(topology.boundaryFaces),
     boundaryMarkers: new Uint32Array(topology.boundaryMarkers),
     elementMarkers: new Uint32Array(topology.elementMarkers),
+    cellNodes: cloneOptionalArray(topology.cellNodes),
+    cellOffsets: cloneOptionalArray(topology.cellOffsets),
+    cellTypes: cloneOptionalArray(topology.cellTypes),
+    cellMarkers: cloneOptionalArray(topology.cellMarkers),
+    facetNodes: cloneOptionalArray(topology.facetNodes),
+    facetOffsets: cloneOptionalArray(topology.facetOffsets),
+    facetTypes: cloneOptionalArray(topology.facetTypes),
+    facetRoles: cloneOptionalArray(topology.facetRoles),
+    facetMarkers: cloneOptionalArray(topology.facetMarkers),
     indices: new Uint32Array(topology.indices),
     positions: new Float64Array(topology.positions),
   };
+}
+
+function cloneOptionalArray(
+  source: Uint32Array | undefined,
+): Uint32Array | undefined {
+  return source ? new Uint32Array(source) : undefined;
 }
 
 function addArrayBufferTransferable(

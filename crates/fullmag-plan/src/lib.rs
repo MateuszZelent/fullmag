@@ -80,7 +80,12 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
     let mut errors = Vec::new();
     let resolved_backend = match problem.backend_policy.requested_backend {
         BackendTarget::Fdm => BackendTarget::Fdm,
-        BackendTarget::Auto => validate::resolve_auto_backend(problem),
+        BackendTarget::Auto => {
+            if let Err(reason) = mesh::reject_auto_backend_mixed_fem_topology(problem) {
+                errors.push(reason);
+            }
+            validate::resolve_auto_backend(problem)
+        }
         BackendTarget::Fem => BackendTarget::Fem,
         other => {
             errors.push(format!(

@@ -297,16 +297,12 @@ fn magnetic_bounds(plan: &FemPlanIR) -> Option<([f64; 3], [f64; 3])> {
     let mut max = [f64::NEG_INFINITY; 3];
     let mut found = false;
 
-    for (element, marker) in plan
-        .mesh
-        .elements
-        .iter()
-        .zip(plan.mesh.element_markers.iter())
-    {
+    for cell in plan.mesh.cells.iter() {
+        let marker = plan.mesh.element_markers.get(cell.ordinal)?;
         if *marker == 0 {
             continue;
         }
-        for &node_idx in element {
+        for &node_idx in cell.nodes {
             let node = plan.mesh.nodes.get(node_idx as usize)?;
             for axis in 0..3 {
                 min[axis] = min[axis].min(node[axis]);

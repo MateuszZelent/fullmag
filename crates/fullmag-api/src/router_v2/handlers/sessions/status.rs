@@ -170,7 +170,7 @@ pub(crate) fn build_live_status(
         snapshot
             .fem_mesh
             .as_ref()
-            .map(|m| m.elements.len() as u64)
+            .map(|m| m.cell_count() as u64)
             .unwrap_or(0)
     } else {
         fdm_grid_shape

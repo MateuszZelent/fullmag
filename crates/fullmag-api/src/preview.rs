@@ -77,13 +77,13 @@ pub(crate) fn mesh_preview_active_mask(mesh: &FemMeshPayload, quantity: &str) ->
     if quantity_spatial_domain(quantity) != "magnetic_only" {
         return None;
     }
-    if mesh.element_markers.len() == mesh.elements.len() && !mesh.elements.is_empty() {
+    if mesh.element_markers.len() == mesh.cell_count() && !mesh.cells.is_empty() {
         let mut active_mask = vec![false; mesh.nodes.len()];
-        for (element_index, element) in mesh.elements.iter().enumerate() {
-            if mesh.element_markers[element_index] == 0 {
+        for cell in mesh.cells.iter() {
+            if mesh.element_markers[cell.ordinal] == 0 {
                 continue;
             }
-            for &node_index in element {
+            for &node_index in cell.nodes {
                 let Some(active) = active_mask.get_mut(node_index as usize) else {
                     continue;
                 };
@@ -138,8 +138,11 @@ pub(crate) fn mesh_preview_active_mask(mesh: &FemMeshPayload, quantity: &str) ->
         let element_count = usize::try_from(segment.element_count).ok()?;
         let element_end = element_start
             .saturating_add(element_count)
-            .min(mesh.elements.len());
-        for element in &mesh.elements[element_start..element_end] {
+            .min(mesh.cell_count());
+        for element_index in element_start..element_end {
+            let Some(element) = mesh.cells.item_nodes(element_index) else {
+                continue;
+            };
             for node_index in element {
                 if let Some(active) = active_mask.get_mut(*node_index as usize) {
                     *active = true;
@@ -170,9 +173,9 @@ mod tests {
             mesh_name: "test_mesh".to_string(),
             mesh_id: "test_mesh:gen0".to_string(),
             nodes,
-            elements: Vec::new(),
+            cells: fullmag_ir::FemConnectivityIR::empty(),
             element_markers: Vec::new(),
-            boundary_faces: Vec::new(),
+            facets: fullmag_ir::FemFacetConnectivityIR::empty(),
             boundary_markers: Vec::new(),
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -266,7 +269,7 @@ mod tests {
             }],
             Vec::new(),
         );
-        mesh.elements = vec![[0, 2, 4, 5]];
+        mesh.set_tet4_cells(vec![[0, 2, 4, 5]]);
 
         assert_eq!(
             mesh_preview_active_mask(&mesh, "m"),
@@ -344,7 +347,7 @@ mod tests {
                     node_count: 4,
                     boundary_face_indices: Vec::new(),
                     node_indices: Vec::new(),
-                    surface_faces: Vec::new(),
+                    facet_global_ordinals: Vec::new(),
                     bounds_min: None,
                     bounds_max: None,
                 },
@@ -363,7 +366,7 @@ mod tests {
                     node_count: 2,
                     boundary_face_indices: Vec::new(),
                     node_indices: Vec::new(),
-                    surface_faces: Vec::new(),
+                    facet_global_ordinals: Vec::new(),
                     bounds_min: None,
                     bounds_max: None,
                 },

@@ -929,7 +929,7 @@ fn fem_mesh_identity(mesh: &fullmag_runner::FemMeshPayload) -> String {
 }
 
 fn is_solver_domain_fem_mesh(mesh: &fullmag_runner::FemMeshPayload) -> bool {
-    !mesh.elements.is_empty()
+    !mesh.cells.is_empty()
 }
 
 fn apply_fem_mesh_update(
@@ -2241,7 +2241,7 @@ mod tests {
         let mut current = test_current_snapshot();
         let first_mesh = domain_fem_mesh("domain-gen-1");
         let mut remeshed = domain_fem_mesh("domain-gen-1");
-        remeshed.elements[0] = [0, 1, 3, 2];
+        remeshed.set_tet4_cells(vec![[0, 1, 3, 2]]);
 
         apply_fem_mesh_update(&mut current, first_mesh);
         let mesh_revision = current.mesh_revision;
@@ -2254,7 +2254,7 @@ mod tests {
     }
 
     #[test]
-    fn fem_mesh_identity_changes_for_same_count_part_order_change() {
+    fn fem_mesh_identity_ignores_non_topological_part_order_change() {
         let mut current = test_current_snapshot();
         let mut first_mesh = domain_fem_mesh("domain-gen-1");
         first_mesh.mesh_parts = vec![
@@ -2270,8 +2270,8 @@ mod tests {
 
         apply_fem_mesh_update(&mut current, remeshed);
 
-        assert!(current.mesh_revision > mesh_revision);
-        assert!(current.mesh_build_revision > mesh_build_revision);
+        assert_eq!(current.mesh_revision, mesh_revision);
+        assert_eq!(current.mesh_build_revision, mesh_build_revision);
     }
 
     #[test]
@@ -3395,9 +3395,9 @@ mod tests {
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0],
             ],
-            elements: vec![[0, 1, 2, 3]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
             element_markers: vec![1],
-            boundary_faces: vec![[0, 1, 2]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
             boundary_markers: vec![1],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -3427,7 +3427,7 @@ mod tests {
             node_start: 0,
             node_count: node_indices.len() as u32,
             node_indices,
-            surface_faces: vec![[0, 1, 2]],
+            facet_global_ordinals: vec![0],
             bounds_min: None,
             bounds_max: None,
         }
@@ -3438,9 +3438,9 @@ mod tests {
             mesh_name: "surface-preview".to_string(),
             mesh_id: "surface-preview-id".to_string(),
             nodes: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-            elements: Vec::new(),
+            cells: fullmag_ir::FemConnectivityIR::empty(),
             element_markers: Vec::new(),
-            boundary_faces: vec![[0, 1, 2]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
             boundary_markers: vec![1],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),

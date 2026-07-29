@@ -61,7 +61,11 @@ from fullmag.meshing._mesh_targets import (
 )
 from fullmag.meshing._gmsh_types import _infer_axis_aligned_periodic_pairs
 from fullmag.meshing._gmsh_infra import _GmshProgressLogger, _gmsh_heartbeat_interval
-from fullmag.meshing._gmsh_extraction import _orient_periodic_boundary_faces
+from fullmag.meshing._gmsh_extraction import (
+    _derive_facet_roles,
+    _extract_gmsh_typed_connectivity,
+    _orient_periodic_boundary_faces,
+)
 from fullmag.model.discretization import PerObjectMeshRecipe, SharedMeshAssemblyPolicy
 from fullmag.meshing.gmsh_bridge import (
     ALGO_3D_DELAUNAY,
@@ -146,6 +150,144 @@ from fullmag.meshing.surface_assets import (
 )
 from fullmag.meshing._size_field_plan import _build_perimeter_refinement_fields
 from fullmag.meshing.voxelization import VoxelMaskData, voxelize_geometry
+
+
+class LayeredMeshDslValidationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        fm.reset()
+        self.film = fm.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+
+    def tearDown(self) -> None:
+        fm.reset()
+
+    def test_thin_film_rejects_invalid_prismatic_requests_before_lowering(self) -> None:
+        invalid = (
+            {"layers": 0, "topology": "prismatic"},
+            {"layers": True, "topology": "prismatic"},
+            {"layers": 1.5, "topology": "prismatic"},
+            {"layers": 1, "topology": "unknown"},
+            {"layers": 1, "topology": "prismatic", "order": 2},
+            {"layers": 1, "topology": "prismatic", "transition": "unknown"},
+        )
+        for kwargs in invalid:
+            with self.subTest(kwargs=kwargs), self.assertRaises((TypeError, ValueError)):
+                self.film.mesh.thin_film(**kwargs)
+
+        with self.assertRaises(ValueError):
+            self.film.mesh.thin_film(
+                layers=1,
+                topology="prismatic",
+                exact_layers=False,
+            )
+        fm.mode("hybrid")
+        with self.assertRaises(ValueError):
+            self.film.mesh.thin_film(
+                layers=1,
+                topology="prismatic",
+                exact_layers=False,
+            )
+
+    def test_swept_rejects_invalid_or_contradictory_requests_before_lowering(self) -> None:
+        invalid = (
+            {"elements": 0},
+            {"elements": True},
+            {"elements": 1.5},
+            {"elements": 1, "transition": "unknown"},
+            {
+                "elements": 1,
+                "face_meshing": "quadrilateral",
+                "transition": "pyramid_to_tetrahedra",
+            },
+        )
+        for kwargs in invalid:
+            with self.subTest(kwargs=kwargs), self.assertRaises((TypeError, ValueError)):
+                self.film.mesh.swept(**kwargs)
+
+    def test_layered_mesh_mutation_sequences_replace_stale_typed_intent(self) -> None:
+        self.film.mesh.thin_film(layers=2, topology="prismatic")
+        self.film.mesh.thin_film(layers=3)
+        legacy = self.film._mesh_spec
+        self.assertEqual(legacy.mesh_strategy, "thin_film_tetrahedral")
+        self.assertEqual(legacy.through_thickness_elements, 3)
+        self.assertIsNone(legacy.topology)
+        self.assertIsNone(legacy.sweep_direction)
+        self.assertIsNone(legacy.element_family)
+        self.assertIsNone(legacy.transition_policy)
+        self.assertIsNone(legacy.exact_layer_count)
+
+        self.film.mesh.thin_film(layers=2, topology="prismatic")
+        self.film.mesh.swept(elements=4, sweep_direction="x", transition="reject")
+        swept = self.film._mesh_spec
+        self.assertEqual(swept.mesh_strategy, "swept_prism")
+        self.assertEqual(swept.through_thickness_elements, 4)
+        self.assertIsNone(swept.topology)
+        self.assertEqual(swept.sweep_direction, "x")
+        self.assertEqual(swept.element_family, "prism")
+        self.assertEqual(swept.transition_policy, "reject")
+        self.assertIs(swept.exact_layer_count, True)
+
+    def test_prismatic_configure_rejects_contradiction_atomically(self) -> None:
+        self.film.mesh.thin_film(layers=2, topology="prismatic")
+        before = self.film._mesh_spec
+        with self.assertRaisesRegex(ValueError, "order=1"):
+            self.film.mesh(order=2)
+        after = self.film._mesh_spec
+        self.assertIs(after, before)
+        self.assertEqual(after.order, 1)
+        self.assertEqual(after.topology, "prismatic")
+
+        with self.assertRaisesRegex(ValueError, "layered mesh intent is incomplete"):
+            fm.geometry(fm.Box(20e-9, 10e-9, 1e-9), name="incomplete").mesh(
+                mesh_strategy="swept_prism"
+            )
+
+    def test_per_object_recipe_rejects_invalid_or_incoherent_layered_intent(self) -> None:
+        invalid = (
+            {"through_thickness_elements": 0},
+            {"through_thickness_elements": True},
+            {"topology": "unknown"},
+            {"sweep_direction": "diagonal"},
+            {"element_family": "tet"},
+            {"transition_policy": "unknown"},
+            {
+                "mesh_strategy": "swept_prism",
+                "through_thickness_elements": 1,
+                "through_thickness_distribution": "fixed",
+                "sweep_face_meshing": "triangular",
+                "topology": "tetrahedral",
+                "sweep_direction": "auto",
+                "element_family": "prism",
+                "transition_policy": "pyramid_to_tetrahedra",
+                "exact_layer_count": True,
+            },
+            {
+                "mesh_strategy": "swept_prism",
+                "through_thickness_elements": 1,
+                "through_thickness_distribution": "fixed",
+                "sweep_face_meshing": "triangular",
+                "topology": "prismatic",
+                "sweep_direction": "auto",
+                "element_family": "prism",
+                "transition_policy": "pyramid_to_tetrahedra",
+                "exact_layer_count": False,
+            },
+        )
+        for kwargs in invalid:
+            with self.subTest(kwargs=kwargs), self.assertRaises((TypeError, ValueError)):
+                PerObjectMeshRecipe(**kwargs)
+
+        valid = PerObjectMeshRecipe(
+            mesh_strategy="swept_prism",
+            order=1,
+            through_thickness_elements=1,
+            through_thickness_distribution="fixed",
+            sweep_face_meshing="triangular",
+            sweep_direction="x",
+            element_family="prism",
+            transition_policy="reject",
+            exact_layer_count=True,
+        )
+        self.assertEqual(valid.to_ir()["transition_policy"], "reject")
 
 
 class MeshScaffoldTests(unittest.TestCase):
@@ -306,7 +448,7 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertIsNone(per_domain)
 
     def test_meshdata_validate_strict_rejects_degenerate_tets(self) -> None:
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -322,11 +464,11 @@ class MeshScaffoldTests(unittest.TestCase):
             boundary_markers=np.zeros((0,), dtype=np.int32),
         )
 
-        with self.assertRaisesRegex(ValueError, "degenerate tetra volume"):
+        with self.assertRaisesRegex(ValueError, "degenerate tet4 Jacobian"):
             mesh.validate_strict()
 
     def test_drop_degenerate_tetrahedra_removes_only_invalid_elements(self) -> None:
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -362,7 +504,7 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(fallbacks, ["shared_domain_degenerate_tetra_cleanup"])
 
     def test_drop_degenerate_tetrahedra_removes_orphan_boundary_faces(self) -> None:
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -450,7 +592,7 @@ class MeshScaffoldTests(unittest.TestCase):
         )
 
     def test_meshdata_validate_strict_rejects_fem_topology_floor_tets(self) -> None:
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -466,11 +608,11 @@ class MeshScaffoldTests(unittest.TestCase):
             boundary_markers=np.zeros((0,), dtype=np.int32),
         )
 
-        with self.assertRaisesRegex(ValueError, "degenerate tetra volume"):
+        with self.assertRaisesRegex(ValueError, "degenerate tet4 Jacobian"):
             mesh.validate_strict()
 
     def test_meshdata_oriented_copy_flips_negative_tets(self) -> None:
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -540,7 +682,7 @@ class MeshScaffoldTests(unittest.TestCase):
                 handle.write(struct.pack("<H", 0))
 
     def _unit_tet_mesh(self) -> MeshData:
-        return MeshData(
+        return MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -620,7 +762,7 @@ class MeshScaffoldTests(unittest.TestCase):
 
     def test_meshdata_roundtrip_npz(self) -> None:
         base_mesh = self._unit_tet_mesh()
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=base_mesh.nodes,
             elements=base_mesh.elements,
             element_markers=base_mesh.element_markers,
@@ -1146,7 +1288,7 @@ class MeshScaffoldTests(unittest.TestCase):
         np.testing.assert_array_equal(mesh.boundary_markers, loaded.boundary_markers)
 
     def test_meshdata_to_ir_includes_mesh_statistics(self) -> None:
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=self._unit_tet_mesh().nodes,
             elements=self._unit_tet_mesh().elements,
             element_markers=np.asarray([0], dtype=np.int32),
@@ -1255,7 +1397,7 @@ class MeshScaffoldTests(unittest.TestCase):
             )
             elements.append([base, base + 1, base + 2, base + 3])
 
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(nodes, dtype=np.float64),
             elements=np.asarray(elements, dtype=np.int32),
             element_markers=np.zeros(len(elements), dtype=np.int32),
@@ -1270,7 +1412,7 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(sum(bin_["count"] for bin_ in bins), len(elements))
 
     def test_mesh_statistics_reports_per_marker_boundary_faces(self) -> None:
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -1533,7 +1675,7 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(reordered.element_volume, [2.0, 1.0])
 
     def test_per_domain_quality_uses_final_shared_domain_markers(self) -> None:
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -1586,7 +1728,7 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(per_domain[1].n_elements, 1)
 
     def test_mesh_statistics_publish_metric_ranked_worst_elements(self) -> None:
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -1648,7 +1790,7 @@ class MeshScaffoldTests(unittest.TestCase):
     def test_swept_quality_does_not_label_gamma_proxy_as_sicn(self) -> None:
         mesh = self._unit_tet_mesh()
         quality = _compute_swept_quality(mesh.nodes, mesh.elements)
-        swept_mesh = MeshData(
+        swept_mesh = MeshData.from_legacy_tet4(
             nodes=mesh.nodes,
             elements=mesh.elements,
             element_markers=mesh.element_markers,
@@ -1738,7 +1880,7 @@ class MeshScaffoldTests(unittest.TestCase):
 
     def test_remesh_cli_payload_writes_per_element_quality_artifact(self) -> None:
         unit = self._unit_tet_mesh()
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=unit.nodes,
             elements=unit.elements,
             element_markers=unit.element_markers,
@@ -2181,15 +2323,24 @@ class MeshScaffoldTests(unittest.TestCase):
             artifact_path = Path(artifact["path"])
             self.assertTrue(artifact_path.is_file())
             self.assertEqual(payload["nodes"], [])
-            self.assertEqual(payload["elements"], [])
-            self.assertEqual(payload["boundary_faces"], [])
+            self.assertNotIn("elements", payload)
+            self.assertNotIn("boundary_faces", payload)
+            self.assertEqual(payload["cell_types"], [])
+            self.assertEqual(payload["facet_types"], [])
 
             artifact_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
             self.assertEqual(artifact_payload["mesh_name"], "large_mesh")
             self.assertEqual(artifact_payload["nodes"], mesh.nodes.tolist())
-            self.assertEqual(artifact_payload["elements"], mesh.elements.tolist())
+            self.assertNotIn("elements", artifact_payload)
+            self.assertNotIn("boundary_faces", artifact_payload)
+            self.assertEqual(artifact_payload["cell_types"], mesh.cell_types.tolist())
+            self.assertEqual(artifact_payload["cell_offsets"], mesh.cell_offsets.tolist())
+            self.assertEqual(artifact_payload["cell_nodes"], mesh.cell_nodes.tolist())
             self.assertEqual(artifact_payload["element_markers"], mesh.element_markers.tolist())
-            self.assertEqual(artifact_payload["boundary_faces"], mesh.boundary_faces.tolist())
+            self.assertEqual(artifact_payload["facet_types"], mesh.facet_types.tolist())
+            self.assertEqual(artifact_payload["facet_roles"], mesh.facet_roles.tolist())
+            self.assertEqual(artifact_payload["facet_offsets"], mesh.facet_offsets.tolist())
+            self.assertEqual(artifact_payload["facet_nodes"], mesh.facet_nodes.tolist())
             self.assertEqual(artifact_payload["boundary_markers"], mesh.boundary_markers.tolist())
 
     def test_remesh_cli_payload_preserves_shared_domain_region_markers(self) -> None:
@@ -2476,7 +2627,7 @@ class MeshScaffoldTests(unittest.TestCase):
     @unittest.skipUnless(_has_trimesh, "trimesh not installed")
     def test_occ_failure_with_edge_corner_reports_degraded_fallback_not_secondary_error(self) -> None:
         geometry = fm.Box((100e-9, 40e-9, 2e-9), name="arch")
-        fallback_mesh = MeshData(
+        fallback_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [-10e-9, -5e-9, -0.4e-9],
@@ -4116,7 +4267,8 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertTrue(surface.is_watertight)
         self.assertTrue(surface.is_winding_consistent)
         self.assertGreater(nodes.shape[0], 0)
-        self.assertGreater(len(payload["boundary_faces"]), 0)
+        self.assertGreater(len(payload["facet_types"]), 0)
+        self.assertEqual(set(payload["facet_types"]), {"tri3"})
         self.assertAlmostEqual(float(nodes[:, 0].min()), -50e-9)
         self.assertAlmostEqual(float(nodes[:, 0].max()), 50e-9)
         self.assertAlmostEqual(float(nodes[:, 2].min()), -10e-9)
@@ -4171,50 +4323,15 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertFalse(result.sweepable)
         self.assertIn("OCC free-tetrahedral", result.reason)
 
-    def test_arch_waveguide_shared_domain_uses_component_surface_prep(self) -> None:
-        if not _has_trimesh:
-            self.skipTest("trimesh not available")
-
-        mesh = self._unit_tet_mesh()
-        mesh = MeshData(
-            nodes=mesh.nodes,
-            elements=mesh.elements,
-            element_markers=np.asarray([17], dtype=np.int32),
-            boundary_faces=mesh.boundary_faces,
-            boundary_markers=mesh.boundary_markers,
-        )
-
-        def _fake_component_mesh(component_descriptors, **_kwargs):
-            self.assertEqual(len(component_descriptors), 1)
-            self.assertEqual(component_descriptors[0].geometry_name, "arch_waveguide")
-            imported = _import_trimesh().load_mesh(
-                component_descriptors[0].stl_path,
-                force="mesh",
-                process=False,
-            )
-            vertices = np.asarray(imported.vertices, dtype=np.float64)
-            left_section = vertices[
-                np.isclose(vertices[:, 0], vertices[:, 0].min(), rtol=0.0, atol=1e-18)
-            ]
-            z_levels = np.unique(np.round(left_section[:, 2], decimals=18))
-            self.assertEqual(len(z_levels), 2)
-            return SharedDomainMeshResult(
-                mesh=mesh,
-                component_marker_tags={"arch_waveguide": 17},
-                component_volume_tags={"arch_waveguide": [1]},
-                component_surface_tags={"arch_waveguide": [10]},
-                interface_surface_tags=[10],
-                outer_boundary_surface_tags=[99],
-            )
-
+    def test_arch_waveguide_shared_domain_rejects_unqualified_mixed_route(self) -> None:
         with patch(
-            "fullmag.meshing._gmsh_occ.is_occ_compatible",
-            return_value=False,
-        ), patch(
-            "fullmag.meshing.asset_pipeline.generate_shared_domain_mesh_from_components",
-            side_effect=_fake_component_mesh,
-        ):
-            _mesh, _region_markers, report = realize_fem_domain_mesh_asset_from_components_with_report(
+            "fullmag.meshing.asset_pipeline.generate_shared_domain_mesh_from_components"
+        ) as generator:
+            with self.assertRaisesRegex(
+                ValueError,
+                "qualified mixed shared-domain route rejects: exactly one Box geometry",
+            ):
+                realize_fem_domain_mesh_asset_from_components_with_report(
                 [
                     fm.ArchWaveguide(
                         length=100e-9,
@@ -4237,16 +4354,7 @@ class MeshScaffoldTests(unittest.TestCase):
                     }
                 },
             )
-
-        self.assertEqual(report.build_mode, "component_aware")
-        self.assertNotIn("component_surface_prep_failed", report.fallbacks_triggered)
-        statuses = {
-            (status.kind, status.scope): status
-            for status in report.operation_statuses
-        }
-        swept_status = statuses[("swept_prism", "arch_waveguide")]
-        self.assertEqual(swept_status.status, "applied")
-        self.assertEqual(swept_status.actual_method, "layered_surface_tetrahedral")
+        generator.assert_not_called()
 
     def test_meshdata_to_ir_has_canonical_shape(self) -> None:
         mesh = self._unit_tet_mesh()
@@ -4255,13 +4363,18 @@ class MeshScaffoldTests(unittest.TestCase):
 
         self.assertEqual(mesh_ir["mesh_name"], "unit_tet")
         self.assertEqual(len(mesh_ir["nodes"]), 4)
-        self.assertEqual(len(mesh_ir["elements"]), 1)
+        self.assertNotIn("elements", mesh_ir)
+        self.assertNotIn("boundary_faces", mesh_ir)
+        self.assertEqual(mesh_ir["cells"]["types"], ["tet4"])
+        self.assertEqual(mesh_ir["cells"]["offsets"], [0, 4])
+        self.assertEqual(mesh_ir["facets"]["types"], ["tri3"])
+        self.assertEqual(mesh_ir["facets"]["roles"], ["exterior"])
         self.assertEqual(mesh_ir["boundary_markers"], [7])
         if fullmag_core.validate_mesh_ir(mesh_ir) is not None:
             self.assertTrue(fullmag_core.validate_mesh_ir(mesh_ir))
 
     def test_meshdata_to_ir_does_not_infer_axis_aligned_periodic_pairs(self) -> None:
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -4307,7 +4420,7 @@ class MeshScaffoldTests(unittest.TestCase):
 
     def test_meshdata_to_ir_preserves_explicit_periodic_pairs(self) -> None:
         mesh = self._unit_tet_mesh()
-        explicit_mesh = MeshData(
+        explicit_mesh = MeshData.from_legacy_tet4(
             nodes=mesh.nodes,
             elements=mesh.elements,
             element_markers=mesh.element_markers,
@@ -4336,7 +4449,7 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(mesh_ir["periodic_node_pairs"], explicit_mesh.periodic_node_pairs)
 
     def test_axis_aligned_periodic_pair_inference_includes_translation_and_tolerance(self) -> None:
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -4424,7 +4537,7 @@ class MeshScaffoldTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 fm.meshing.add_air_box(fm.Box(1e-9, 1e-9, 1e-9), hmax=1e-9, factor=1.0)
 
-    def test_extract_gmsh_connectivity_rejects_unsupported_element_types(self) -> None:
+    def test_extract_gmsh_connectivity_supports_typed_mixed_and_rejects_higher_order(self) -> None:
         class _FakeMeshApi:
             @staticmethod
             def getElementProperties(element_type: int) -> tuple[str, int, int, int, list[float], int]:
@@ -4448,24 +4561,46 @@ class MeshScaffoldTests(unittest.TestCase):
             model = _FakeModel()
 
         node_index = {tag: tag - 1 for tag in range(1, 17)}
-        for element_type, arity in ((6, 6), (5, 8), (7, 5), (11, 10)):
+        for element_type, arity in ((6, 6), (5, 8), (7, 5)):
             blocks = (
                 [element_type],
                 [np.asarray([1], dtype=np.int32)],
                 [np.arange(1, arity + 1, dtype=np.int32)],
             )
             with self.assertRaisesRegex(
-                UnsupportedGmshElementError,
-                rf"type {element_type}.*dimension=3.*order=.*arity={arity}",
+                ValueError,
+                "tet4-only compatibility extraction",
             ):
                 _extract_gmsh_connectivity(
                     _FakeGmsh(), blocks, node_index, nodes_per_element=4
                 )
 
+        mixed_types, mixed_offsets, mixed_nodes = _extract_gmsh_typed_connectivity(
+            _FakeGmsh(),
+            (
+                [6, 7, 4],
+                [np.asarray([1]), np.asarray([2]), np.asarray([3])],
+                [np.arange(1, 7), np.arange(7, 12), np.arange(12, 16)],
+            ),
+            node_index,
+            dimension=3,
+        )
+        self.assertEqual(mixed_types, ["prism6", "pyramid5", "tet4"])
+        np.testing.assert_array_equal(mixed_offsets, np.asarray([0, 6, 11, 15]))
+        np.testing.assert_array_equal(mixed_nodes, np.arange(15, dtype=np.int32))
+
         with self.assertRaisesRegex(
             UnsupportedGmshElementError,
-            r"type 3.*dimension=2.*order=1.*arity=4",
+            r"type 11.*dimension=3.*order=2.*arity=10",
         ):
+            _extract_gmsh_typed_connectivity(
+                _FakeGmsh(),
+                ([11], [np.asarray([1])], [np.arange(1, 11)]),
+                node_index,
+                dimension=3,
+            )
+
+        with self.assertRaisesRegex(ValueError, "tri3-only compatibility extraction"):
             _extract_gmsh_connectivity(
                 _FakeGmsh(),
                 ([3], [np.asarray([1], dtype=np.int32)], [np.arange(1, 5, dtype=np.int32)]),
@@ -4487,6 +4622,57 @@ class MeshScaffoldTests(unittest.TestCase):
         )
         np.testing.assert_array_equal(tet4, np.asarray([[0, 1, 2, 3]], dtype=np.int32))
         np.testing.assert_array_equal(tri3, np.asarray([[0, 1, 2]], dtype=np.int32))
+
+    def test_derive_facet_roles_allows_only_declared_provisional_same_region_interface(self) -> None:
+        topology = {
+            "cell_types": ["tet4", "tet4"],
+            "cell_offsets": [0, 4, 8],
+            "cell_nodes": [0, 1, 2, 3, 0, 2, 1, 4],
+            "element_markers": [0, 0],
+            "facet_offsets": [0, 3],
+            "facet_nodes": [0, 1, 2],
+            "boundary_markers": [10],
+        }
+
+        with self.assertRaisesRegex(ValueError, r"adjacency \[0, 0\]"):
+            _derive_facet_roles(**topology)
+
+        self.assertEqual(
+            _derive_facet_roles(
+                **topology,
+                provisional_interface_markers={10},
+            ),
+            ["material_interface"],
+        )
+
+        physical_group_topology = dict(topology)
+        physical_group_topology["element_markers"] = [1, 1]
+        self.assertEqual(
+            _derive_facet_roles(
+                **physical_group_topology,
+                provisional_interface_markers={10},
+            ),
+            ["material_interface"],
+        )
+
+        with self.assertRaisesRegex(ValueError, r"adjacency \[0, 0\]"):
+            _derive_facet_roles(
+                **topology,
+                provisional_interface_markers={11},
+            )
+
+    def test_derive_facet_roles_rejects_declared_provisional_quad_between_prisms(self) -> None:
+        with self.assertRaisesRegex(ValueError, r"adjacency \[0, 0\]"):
+            _derive_facet_roles(
+                cell_types=["prism6", "prism6"],
+                cell_offsets=[0, 6, 12],
+                cell_nodes=[0, 1, 2, 3, 4, 5, 0, 1, 6, 3, 4, 7],
+                element_markers=[0, 0],
+                facet_offsets=[0, 4],
+                facet_nodes=[0, 3, 4, 1],
+                boundary_markers=[10],
+                provisional_interface_markers={10},
+            )
 
     def test_certify_extracted_periodic_mesh_rejects_missing_mirrored_face(self) -> None:
         nodes = np.asarray(
@@ -4560,7 +4746,7 @@ class MeshScaffoldTests(unittest.TestCase):
                 node_pairs,
             )
 
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=nodes,
             elements=elements,
             element_markers=np.ones(elements.shape[0], dtype=np.int32),
@@ -5228,7 +5414,7 @@ class MeshScaffoldTests(unittest.TestCase):
 
             with patch(
                 "fullmag.meshing.asset_pipeline.generate_mesh_from_file",
-                return_value=MeshData(
+                return_value=MeshData.from_legacy_tet4(
                     nodes=np.asarray(
                         [
                             [0.0, 0.0, 0.0],
@@ -5258,8 +5444,13 @@ class MeshScaffoldTests(unittest.TestCase):
                 [1.0, 0.0, 0.0],
                 [0.0, 1.0, 0.0],
             ],
-            "elements": [],
-            "boundary_faces": [[0, 1, 2]],
+            "cell_types": [],
+            "cell_offsets": [0],
+            "cell_nodes": [],
+            "facet_types": ["tri3"],
+            "facet_roles": ["exterior"],
+            "facet_offsets": [0, 3],
+            "facet_nodes": [0, 1, 2],
         }
 
         with patch(
@@ -5295,7 +5486,7 @@ class MeshScaffoldTests(unittest.TestCase):
         left = fm.Box(size=(1.0, 1.0, 1.0), name="left")
         right = fm.Box(size=(1.0, 1.0, 1.0), name="right").translate((2.0, 0.0, 0.0))
 
-        shared_domain_mesh = MeshData(
+        shared_domain_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [-0.5, -0.5, -0.5],
@@ -5386,7 +5577,7 @@ class MeshScaffoldTests(unittest.TestCase):
         left = fm.Box(size=(1.0, 1.0, 1.0), name="left")
         right = fm.Box(size=(1.0, 1.0, 1.0), name="right").translate((2.0, 0.0, 0.0))
 
-        shared_domain_mesh = MeshData(
+        shared_domain_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [-0.5, -0.5, -0.5],
@@ -5474,7 +5665,7 @@ class MeshScaffoldTests(unittest.TestCase):
 
     def test_generated_frozen_magnetic_submesh_mode_requires_explicit_source(self) -> None:
         film = fm.Box(size=(200e-9, 200e-9, 10e-9), name="film")
-        shared_domain_mesh = MeshData(
+        shared_domain_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [-100e-9, -100e-9, -5e-9],
@@ -5589,7 +5780,7 @@ class MeshScaffoldTests(unittest.TestCase):
             )
 
     def test_frozen_magnetic_submesh_source_loads_mesh_markers_and_interface_faces(self) -> None:
-        frozen_mesh = MeshData(
+        frozen_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -5627,14 +5818,17 @@ class MeshScaffoldTests(unittest.TestCase):
 
         self.assertEqual(payload.mesh.n_nodes, 4)
         self.assertEqual(payload.region_markers, [{"geometry_name": "film", "marker": 1}])
-        np.testing.assert_array_equal(payload.interface_boundary_faces, frozen_mesh.boundary_faces)
+        np.testing.assert_array_equal(
+            payload.interface_facet_ordinals,
+            np.arange(frozen_mesh.n_boundary_faces, dtype=np.int64),
+        )
         self.assertEqual(len(payload.magnetic_submesh_signatures), 1)
         self.assertEqual(payload.magnetic_submesh_signatures[0]["geometry_name"], "film")
         self.assertEqual(payload.magnetic_submesh_signatures[0]["tetra_count"], 1)
         self.assertIsInstance(payload.magnetic_submesh_signatures[0]["digest"], str)
 
     def test_frozen_magnetic_submesh_source_rejects_sidecar_node_count_drift(self) -> None:
-        frozen_mesh = MeshData(
+        frozen_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -5704,7 +5898,7 @@ class MeshScaffoldTests(unittest.TestCase):
                 )
 
     def test_frozen_magnetic_submesh_source_rejects_sidecar_periodic_pair_drift(self) -> None:
-        frozen_mesh = MeshData(
+        frozen_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -5780,7 +5974,7 @@ class MeshScaffoldTests(unittest.TestCase):
                 )
 
     def test_extract_frozen_magnetic_submesh_from_shared_domain_preserves_interface_faces(self) -> None:
-        shared_mesh = MeshData(
+        shared_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -5821,15 +6015,13 @@ class MeshScaffoldTests(unittest.TestCase):
         np.testing.assert_array_equal(payload.mesh.nodes, shared_mesh.nodes[:4])
         np.testing.assert_array_equal(payload.mesh.elements, np.asarray([[0, 1, 2, 3]], dtype=np.int32))
         np.testing.assert_array_equal(payload.mesh.element_markers, np.asarray([1], dtype=np.int32))
-        np.testing.assert_array_equal(
-            payload.interface_boundary_faces,
-            np.asarray([[0, 1, 2], [0, 1, 3], [0, 2, 3]], dtype=np.int32),
-        )
+        np.testing.assert_array_equal(payload.interface_facet_ordinals, [0, 1, 2])
+        np.testing.assert_array_equal(payload.mesh.boundary_faces, [[0, 1, 2], [0, 1, 3], [0, 2, 3]])
         self.assertEqual(payload.magnetic_submesh_signatures[0]["geometry_name"], "film")
         self.assertEqual(payload.magnetic_submesh_signatures[0]["tetra_count"], 1)
 
     def test_extract_frozen_magnetic_submesh_excludes_periodic_boundary_faces(self) -> None:
-        shared_mesh = MeshData(
+        shared_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -5865,15 +6057,13 @@ class MeshScaffoldTests(unittest.TestCase):
             geometry_name="film",
         )
 
-        np.testing.assert_array_equal(
-            payload.interface_boundary_faces,
-            np.asarray([[0, 1, 2]], dtype=np.int32),
-        )
+        np.testing.assert_array_equal(payload.interface_facet_ordinals, [0])
+        np.testing.assert_array_equal(payload.mesh.boundary_faces, [[0, 1, 2]])
         np.testing.assert_array_equal(payload.mesh.boundary_markers, np.asarray([10], dtype=np.int32))
 
     def test_generated_frozen_magnetic_submesh_mode_validates_source_before_generator_gap(self) -> None:
         film = fm.Box(size=(200e-9, 200e-9, 10e-9), name="film")
-        frozen_mesh = MeshData(
+        frozen_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -5925,7 +6115,7 @@ class MeshScaffoldTests(unittest.TestCase):
 
     def test_frozen_air_filter_rejects_tet_with_vertex_inside_magnetic_submesh(self) -> None:
         frozen_payload = mesh_asset_pipeline.FrozenMagneticSubmeshPayload(
-            mesh=MeshData(
+            mesh=MeshData.from_legacy_tet4(
                 nodes=np.asarray(
                     [
                         [0.0, 0.0, 0.0],
@@ -5941,10 +6131,10 @@ class MeshScaffoldTests(unittest.TestCase):
                 boundary_markers=np.asarray([10], dtype=np.int32),
             ),
             region_markers=[{"geometry_name": "film", "marker": 1}],
-            interface_boundary_faces=np.asarray([[0, 1, 2]], dtype=np.int32),
+            interface_facet_ordinals=np.asarray([0], dtype=np.int64),
             magnetic_submesh_signatures=[],
         )
-        generated_air = MeshData(
+        generated_air = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.1, 0.1, 0.1],
@@ -5968,7 +6158,7 @@ class MeshScaffoldTests(unittest.TestCase):
         np.testing.assert_array_equal(keep, np.asarray([False], dtype=bool))
 
     def test_filter_boundary_faces_drops_faces_without_kept_air_tet(self) -> None:
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -6006,7 +6196,7 @@ class MeshScaffoldTests(unittest.TestCase):
         np.testing.assert_array_equal(boundary_markers, np.asarray([99], dtype=np.int32))
 
     def test_merge_frozen_magnetic_submesh_with_air_mesh_preserves_magnetic_indices(self) -> None:
-        frozen_mesh = MeshData(
+        frozen_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -6032,13 +6222,16 @@ class MeshScaffoldTests(unittest.TestCase):
         payload = mesh_asset_pipeline.FrozenMagneticSubmeshPayload(
             mesh=frozen_mesh,
             region_markers=[{"geometry_name": "film", "marker": 1}],
-            interface_boundary_faces=frozen_mesh.boundary_faces,
+            interface_facet_ordinals=np.arange(
+                frozen_mesh.n_boundary_faces,
+                dtype=np.int64,
+            ),
             magnetic_submesh_signatures=mesh_asset_pipeline._magnetic_submesh_signatures(
                 frozen_mesh,
                 [{"geometry_name": "film", "marker": 1}],
             ),
         )
-        air_mesh = MeshData(
+        air_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -6082,7 +6275,7 @@ class MeshScaffoldTests(unittest.TestCase):
         )
 
     def test_generate_air_mesh_for_frozen_submesh_drops_periodic_pairs_without_kept_elements(self) -> None:
-        frozen_mesh = MeshData(
+        frozen_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [10.0, 10.0, 10.0],
@@ -6108,10 +6301,13 @@ class MeshScaffoldTests(unittest.TestCase):
         payload = mesh_asset_pipeline.FrozenMagneticSubmeshPayload(
             mesh=frozen_mesh,
             region_markers=[{"geometry_name": "film", "marker": 1}],
-            interface_boundary_faces=frozen_mesh.boundary_faces,
+            interface_facet_ordinals=np.arange(
+                frozen_mesh.n_boundary_faces,
+                dtype=np.int64,
+            ),
             magnetic_submesh_signatures=[],
         )
-        generated = MeshData(
+        generated = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -6171,7 +6367,7 @@ class MeshScaffoldTests(unittest.TestCase):
 
     def test_generated_frozen_magnetic_submesh_mode_merges_prebuilt_air_mesh(self) -> None:
         film = fm.Box(size=(200e-9, 200e-9, 10e-9), name="film")
-        frozen_mesh = MeshData(
+        frozen_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -6194,7 +6390,7 @@ class MeshScaffoldTests(unittest.TestCase):
             ),
             boundary_markers=np.asarray([10, 10, 10, 10], dtype=np.int32),
         )
-        air_mesh = MeshData(
+        air_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -6253,7 +6449,7 @@ class MeshScaffoldTests(unittest.TestCase):
 
     def test_generated_frozen_magnetic_submesh_mode_uses_air_mesh_generator_when_no_source(self) -> None:
         film = fm.Box(size=(200e-9, 200e-9, 10e-9), name="film")
-        frozen_mesh = MeshData(
+        frozen_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -6276,7 +6472,7 @@ class MeshScaffoldTests(unittest.TestCase):
             ),
             boundary_markers=np.asarray([10, 10, 10, 10], dtype=np.int32),
         )
-        generated_air_mesh = MeshData(
+        generated_air_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -6341,7 +6537,7 @@ class MeshScaffoldTests(unittest.TestCase):
             self.skipTest("gmsh not available")
 
         film = fm.Box(size=(1.0, 1.0, 1.0), name="film")
-        frozen_mesh = MeshData(
+        frozen_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -6491,7 +6687,7 @@ class MeshScaffoldTests(unittest.TestCase):
         left = fm.Box(size=(1.0, 1.0, 1.0), name="left")
         right = fm.Box(size=(1.0, 1.0, 1.0), name="right").translate((2.0, 0.0, 0.0))
 
-        shared_domain_mesh = MeshData(
+        shared_domain_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [-0.5, -0.5, -0.5],
@@ -6606,7 +6802,7 @@ class MeshScaffoldTests(unittest.TestCase):
         left = fm.Box(size=(1.0, 1.0, 1.0), name="left")
         right = fm.Box(size=(1.0, 1.0, 1.0), name="right").translate((2.0, 0.0, 0.0))
 
-        shared_domain_mesh = MeshData(
+        shared_domain_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [-0.5, -0.5, -0.5],
@@ -6738,6 +6934,59 @@ class MeshScaffoldTests(unittest.TestCase):
         ]
         self.assertEqual(emitted_phases[-1], failed_event["phase"])
 
+    def test_mixed_mesh_build_failed_event_preserves_rejection_evidence(self) -> None:
+        geometry = fm.Box(size=(1.0, 1.0, 0.1), name="magnet")
+
+        with patch(
+            "fullmag.meshing.asset_pipeline.emit_progress_event"
+        ) as emit_event, patch(
+            "fullmag.meshing.asset_pipeline.generate_mesh",
+            side_effect=RuntimeError("resolved 2 layers"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "resolved 2 layers"):
+                realize_fem_domain_mesh_asset(
+                    [geometry],
+                    fm.FEM(order=1, hmax=0.1),
+                    study_universe={
+                        "mode": "manual",
+                        "size": [4.0, 4.0, 4.0],
+                        "center": [0.0, 0.0, 0.0],
+                    },
+                    mesh_workflow={
+                        "per_geometry": [{
+                            "geometry": "magnet",
+                            "mode": "custom",
+                            "hmax": 0.1,
+                            "maximum_element_size": 0.1,
+                            "order": 1,
+                            "mesh_strategy": "swept_prism",
+                            "through_thickness_elements": 1,
+                            "through_thickness_distribution": "fixed",
+                            "sweep_face_meshing": "triangular",
+                            "topology": "prismatic",
+                            "sweep_direction": "auto",
+                            "element_family": "prism",
+                            "transition_policy": "pyramid_to_tetrahedra",
+                            "exact_layer_count": True,
+                        }],
+                    },
+                )
+
+        failed_event = next(
+            call.args[0]
+            for call in emit_event.call_args_list
+            if call.args[0]["kind"] == "mesh_build_failed"
+        )
+        self.assertEqual(
+            failed_event["mixed_layer_topology_rejection"],
+            {
+                "schema_version": "mixed_layer_topology_rejection.v1",
+                "certificate_status": "rejected",
+                "requested_layer_count": 1,
+                "rejection_reason": "resolved 2 layers",
+            },
+        )
+
     def test_mesh_build_failed_event_reports_postprocessing_failure_once(self) -> None:
         geometry = fm.Box(size=(1.0, 1.0, 1.0), name="magnet")
         failure = RuntimeError("postprocessing failed")
@@ -6789,7 +7038,7 @@ class MeshScaffoldTests(unittest.TestCase):
             )
             elements.append([base, base + 1, base + 2, base + 3])
 
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(nodes, dtype=np.float64),
             elements=np.asarray(elements, dtype=np.int32),
             element_markers=np.ones(len(elements), dtype=np.int32),
@@ -8127,7 +8376,7 @@ class FieldStackAcceptanceTests(unittest.TestCase):
                 )
                 elements = np.asarray([[0, 1, 2, 3], [4, 5, 6, 7]], dtype=np.int32)
                 markers = np.asarray([0, 7], dtype=np.int32)
-            return MeshData(
+            return MeshData.from_legacy_tet4(
                 nodes=nodes,
                 elements=elements,
                 element_markers=markers,
@@ -8189,7 +8438,7 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         calls: list[int] = []
 
         def _mesh(partial_degenerate: bool) -> MeshData:
-            return MeshData(
+            return MeshData.from_legacy_tet4(
                 nodes=np.asarray(
                     [
                         [0.0, 0.0, 0.0],
@@ -8295,7 +8544,7 @@ class FieldStackAcceptanceTests(unittest.TestCase):
                 )
                 elements = np.asarray([[0, 1, 2, 3], [4, 5, 6, 7]], dtype=np.int32)
                 markers = np.asarray([0, 7], dtype=np.int32)
-            return MeshData(
+            return MeshData.from_legacy_tet4(
                 nodes=nodes,
                 elements=elements,
                 element_markers=markers,
@@ -8385,7 +8634,7 @@ class FieldStackAcceptanceTests(unittest.TestCase):
                 )
                 elements = np.asarray([[0, 1, 2, 3], [4, 5, 6, 7]], dtype=np.int32)
                 markers = np.asarray([0, 7], dtype=np.int32)
-            return MeshData(
+            return MeshData.from_legacy_tet4(
                 nodes=nodes,
                 elements=elements,
                 element_markers=markers,

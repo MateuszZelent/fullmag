@@ -1674,7 +1674,7 @@ fn magnetic_node_index_set(mesh: &FemMeshPayload) -> BTreeSet<usize> {
         if *marker == 0 {
             continue;
         }
-        if let Some(element) = mesh.elements.get(element_index) {
+        if let Some(element) = mesh.cells.item_nodes(element_index) {
             node_indices.extend(element.iter().map(|index| *index as usize));
         }
     }
@@ -1693,16 +1693,22 @@ fn node_indices_for_segment(
 
     let element_start = segment.element_start as usize;
     let element_end = element_start.saturating_add(segment.element_count as usize);
-    if let Some(elements) = mesh.elements.get(element_start..element_end) {
-        for element in elements {
+    if element_end <= mesh.cell_count() {
+        for element_index in element_start..element_end {
+            let Some(element) = mesh.cells.item_nodes(element_index) else {
+                continue;
+            };
             node_indices.extend(element.iter().map(|index| *index as usize));
         }
     }
 
     let face_start = segment.boundary_face_start as usize;
     let face_end = face_start.saturating_add(segment.boundary_face_count as usize);
-    if let Some(faces) = mesh.boundary_faces.get(face_start..face_end) {
-        for face in faces {
+    if face_end <= mesh.facet_count() {
+        for face_index in face_start..face_end {
+            let Some(face) = mesh.facets.item_nodes(face_index) else {
+                continue;
+            };
             node_indices.extend(face.iter().map(|index| *index as usize));
         }
     }
@@ -1869,6 +1875,9 @@ fn field_node_indices_cache_token(node_indices: Option<&[u32]>) -> String {
 }
 
 fn mesh_topology_hash_bytes(hash: &str) -> Result<[u8; 32], ApiError> {
+    let hash = hash.strip_prefix("sha256:").ok_or_else(|| {
+        ApiError::internal("mesh topology fingerprint must use the canonical sha256: prefix")
+    })?;
     let mut bytes = [0u8; 32];
     if hash.len() != 64 {
         return Err(ApiError::internal(format!(
@@ -3262,7 +3271,7 @@ fn is_fem_runtime(snapshot: &crate::types::SessionStateResponse) -> bool {
 
 fn fem_topology_available(snapshot: &crate::types::SessionStateResponse) -> bool {
     snapshot.fem_mesh.as_ref().is_some_and(|mesh| {
-        !mesh.nodes.is_empty() && (!mesh.elements.is_empty() || !mesh.boundary_faces.is_empty())
+        !mesh.nodes.is_empty() && (!mesh.cells.is_empty() || !mesh.facets.is_empty())
     })
 }
 
@@ -5260,9 +5269,9 @@ mod tests {
             mesh_name: "multi-airbox-test".to_string(),
             mesh_id: "multi-airbox-test:1".to_string(),
             nodes: vec![[0.0, 0.0, 0.0]; 8],
-            elements: Vec::new(),
+            cells: fullmag_ir::FemConnectivityIR::empty(),
             element_markers: Vec::new(),
-            boundary_faces: Vec::new(),
+            facets: fullmag_ir::FemFacetConnectivityIR::empty(),
             boundary_markers: Vec::new(),
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -5283,7 +5292,7 @@ mod tests {
                     node_start: 0,
                     node_count: 4,
                     node_indices: vec![0, 1, 2, 3],
-                    surface_faces: Vec::new(),
+                    facet_global_ordinals: Vec::new(),
                     bounds_min: None,
                     bounds_max: None,
                 },
@@ -5302,7 +5311,7 @@ mod tests {
                     node_start: 4,
                     node_count: 2,
                     node_indices: vec![4, 5],
-                    surface_faces: Vec::new(),
+                    facet_global_ordinals: Vec::new(),
                     bounds_min: None,
                     bounds_max: None,
                 },
@@ -5321,7 +5330,7 @@ mod tests {
                     node_start: 6,
                     node_count: 2,
                     node_indices: vec![6, 7],
-                    surface_faces: Vec::new(),
+                    facet_global_ordinals: Vec::new(),
                     bounds_min: None,
                     bounds_max: None,
                 },
@@ -5369,9 +5378,9 @@ mod tests {
             mesh_name: "compact-scope-test".to_string(),
             mesh_id: "compact-scope-test:1".to_string(),
             nodes: vec![[0.0, 0.0, 0.0]; 5],
-            elements: Vec::new(),
+            cells: fullmag_ir::FemConnectivityIR::empty(),
             element_markers: Vec::new(),
-            boundary_faces: Vec::new(),
+            facets: fullmag_ir::FemFacetConnectivityIR::empty(),
             boundary_markers: Vec::new(),
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -5392,7 +5401,7 @@ mod tests {
                     node_start: 0,
                     node_count: 1,
                     node_indices: vec![1],
-                    surface_faces: Vec::new(),
+                    facet_global_ordinals: Vec::new(),
                     bounds_min: None,
                     bounds_max: None,
                 },
@@ -5411,7 +5420,7 @@ mod tests {
                     node_start: 0,
                     node_count: 1,
                     node_indices: vec![3],
-                    surface_faces: Vec::new(),
+                    facet_global_ordinals: Vec::new(),
                     bounds_min: None,
                     bounds_max: None,
                 },
@@ -5624,6 +5633,7 @@ mod tests {
             capability_profile_version: "test".to_string(),
             supported_terms: Vec::new(),
             term_scopes: std::collections::BTreeMap::new(),
+            feature_capabilities: std::collections::BTreeMap::new(),
             supported_demag_realizations: Vec::new(),
             preview_quantities: Vec::new(),
             snapshot_quantities: Vec::new(),
@@ -5691,12 +5701,12 @@ mod tests {
             fem_mesh: None,
         });
         snapshot.fem_mesh = Some(FemMeshPayload {
-            boundary_faces: Vec::new(),
+            facets: fullmag_ir::FemFacetConnectivityIR::empty(),
             boundary_markers: Vec::new(),
             domain_frame: None,
             domain_mesh_mode: None,
             element_markers: vec![1],
-            elements: vec![[1, 2, 3, 4]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[1, 2, 3, 4]]),
             generation_id: None,
             mesh_id: "mesh:analysis-field-fem-scope".to_string(),
             mesh_name: "analysis-field-fem-scope".to_string(),
@@ -5717,7 +5727,7 @@ mod tests {
                 node_start: 0,
                 object_id: Some("film".to_string()),
                 role: "magnetic_object".to_string(),
-                surface_faces: Vec::new(),
+                facet_global_ordinals: Vec::new(),
             }],
             nodes: vec![
                 [0.0, 0.0, 0.0],

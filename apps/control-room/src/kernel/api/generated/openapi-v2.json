@@ -9552,6 +9552,17 @@
               "null"
             ]
           },
+          "mixed_layer_topology_rejection": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshMixedLayerTopologyRejectionResource",
+                "description": "Failure evidence from the latest mixed-layer build attempt. This is not\na solver-accepted topology certificate."
+              }
+            ]
+          },
           "policy_diff": {
             "description": "Typed policy change summary for UI diff tables.",
             "items": {
@@ -10220,6 +10231,328 @@
         ],
         "type": "object"
       },
+      "MeshLayeredPolicyResource": {
+        "properties": {
+          "exact_layer_count": {
+            "type": "boolean"
+          },
+          "layers": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "node_planes": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sweep_direction": {
+            "type": "string"
+          },
+          "topology": {
+            "type": "string"
+          },
+          "transition_policy": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "topology",
+          "sweep_direction",
+          "layers",
+          "node_planes",
+          "transition_policy",
+          "exact_layer_count"
+        ],
+        "type": "object"
+      },
+      "MeshMixedCertificateFamilyQualityGateResource": {
+        "properties": {
+          "family": {
+            "type": "string"
+          },
+          "metric": {
+            "type": "string"
+          },
+          "minimum_jacobian_m3": {
+            "format": "double",
+            "type": "number"
+          },
+          "p05": {
+            "format": "double",
+            "type": "number"
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "positive_jacobian": {
+            "type": "boolean"
+          },
+          "threshold": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "family",
+          "metric",
+          "p05",
+          "threshold",
+          "passed",
+          "minimum_jacobian_m3",
+          "positive_jacobian"
+        ],
+        "type": "object"
+      },
+      "MeshMixedCertificateQualityEvidenceResource": {
+        "properties": {
+          "certificate_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "certificate_schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "certificate_status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "family_gates": {
+            "items": {
+              "$ref": "#/components/schemas/MeshMixedCertificateFamilyQualityGateResource"
+            },
+            "type": "array"
+          },
+          "mesh_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/MeshMixedCertificateQualityEvidenceStatus"
+          },
+          "topology_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "mesh_revision"
+        ],
+        "type": "object"
+      },
+      "MeshMixedCertificateQualityEvidenceStatus": {
+        "enum": [
+          "valid",
+          "stale",
+          "rejected",
+          "unavailable"
+        ],
+        "type": "string"
+      },
+      "MeshMixedLayerTopologyCertificateSummaryResource": {
+        "properties": {
+          "actual_node_plane_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "certificate_status": {
+            "type": "string"
+          },
+          "gmsh_version": {
+            "type": "string"
+          },
+          "realized_layer_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rejection_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requested_layer_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "topology_fingerprint": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "certificate_status",
+          "topology_fingerprint",
+          "requested_layer_count",
+          "realized_layer_count",
+          "gmsh_version"
+        ],
+        "type": "object"
+      },
+      "MeshMixedLayerTopologyRejectionResource": {
+        "properties": {
+          "certificate_status": {
+            "type": "string"
+          },
+          "fallback": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "free_tetrahedral_alternative": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "missing_capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "rejection_category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rejection_reason": {
+            "type": "string"
+          },
+          "requested_execution": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshMixedP1ExecutionResource"
+              }
+            ]
+          },
+          "requested_layer_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resolved_execution": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshMixedP1ExecutionResource"
+              }
+            ]
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "certificate_status",
+          "requested_layer_count",
+          "rejection_reason"
+        ],
+        "type": "object"
+      },
+      "MeshMixedP1ExecutionResource": {
+        "properties": {
+          "backend": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "device": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "precision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "study": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "MeshMixedTopologyProvenanceResource": {
+        "properties": {
+          "accepted_certificate_fingerprint": {
+            "type": "string"
+          },
+          "capability_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "capability_status": {
+            "type": "string"
+          },
+          "precision": {
+            "type": "string"
+          },
+          "requested_device": {
+            "type": "string"
+          },
+          "requested_topology": {
+            "type": "string"
+          },
+          "resolved_topology": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requested_topology",
+          "resolved_topology",
+          "accepted_certificate_fingerprint",
+          "requested_device",
+          "precision",
+          "capability_status"
+        ],
+        "type": "object"
+      },
       "MeshObjectConfigEntryResource": {
         "properties": {
           "config": {
@@ -10501,6 +10834,17 @@
             "format": "int32",
             "minimum": 0,
             "type": "integer"
+          },
+          "element_counts_by_type": {
+            "additionalProperties": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
           },
           "element_start": {
             "format": "int32",
@@ -10972,6 +11316,9 @@
               "null"
             ]
           },
+          "mixed_certificate": {
+            "$ref": "#/components/schemas/MeshMixedCertificateQualityEvidenceResource"
+          },
           "revision": {
             "format": "int64",
             "minimum": 0,
@@ -10979,7 +11326,8 @@
           }
         },
         "required": [
-          "revision"
+          "revision",
+          "mixed_certificate"
         ],
         "type": "object"
       },
@@ -11399,11 +11747,68 @@
             },
             "type": "object"
           },
+          "element_counts_by_type": {
+            "additionalProperties": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "facet_counts_by_type_and_role": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
           "fallbacks_triggered": {
             "items": {
               "type": "string"
             },
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "gmsh_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mixed_layer_topology_certificate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshMixedLayerTopologyCertificateSummaryResource"
+              }
+            ]
+          },
+          "mixed_topology_provenance": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshMixedTopologyProvenanceResource"
+              }
+            ]
           },
           "object_region_markers": {
             "items": {
@@ -11443,6 +11848,26 @@
             },
             "type": "array"
           },
+          "requested_layered_policy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshLayeredPolicyResource"
+              }
+            ]
+          },
+          "resolved_layered_policy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshLayeredPolicyResource"
+              }
+            ]
+          },
           "selector_resolution": {
             "items": {
               "type": "object"
@@ -11460,6 +11885,14 @@
               "$ref": "#/components/schemas/MeshThinFilmDiagnosticResource"
             },
             "type": "array"
+          },
+          "topology_schema_version": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "used_size_field_kinds": {
             "items": {
@@ -11510,6 +11943,43 @@
               "null"
             ]
           },
+          "element_counts_by_type": {
+            "additionalProperties": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "facet_counts_by_type_and_role": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "fallbacks_triggered": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "generation_id": {
             "type": [
               "string",
@@ -11521,6 +11991,12 @@
             "minimum": 0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "gmsh_version": {
+            "type": [
+              "string",
               "null"
             ]
           },
@@ -11538,6 +12014,26 @@
             },
             "type": "array"
           },
+          "mixed_layer_topology_certificate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshMixedLayerTopologyCertificateSummaryResource"
+              }
+            ]
+          },
+          "mixed_topology_provenance": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshMixedTopologyProvenanceResource"
+              }
+            ]
+          },
           "object_segments": {
             "items": {
               "$ref": "#/components/schemas/MeshObjectSegmentResource"
@@ -11549,6 +12045,26 @@
               "$ref": "#/components/schemas/MeshRegionResource"
             },
             "type": "array"
+          },
+          "requested_layered_policy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshLayeredPolicyResource"
+              }
+            ]
+          },
+          "resolved_layered_policy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshLayeredPolicyResource"
+              }
+            ]
           },
           "revision": {
             "format": "int64",
@@ -11565,6 +12081,14 @@
           },
           "topology_fingerprint": {
             "type": "string"
+          },
+          "topology_schema_version": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -24647,7 +25171,7 @@
             "content": {
               "application/octet-stream": {}
             },
-            "description": "Binary FEM topology (FMMT)"
+            "description": "Binary FEM topology (FMMT v2)"
           },
           "204": {
             "description": "Not applicable (FDM)"
@@ -24656,13 +25180,16 @@
             "content": {
               "application/octet-stream": {}
             },
-            "description": "Partial binary FEM topology range (FMMT)"
+            "description": "Partial binary FEM topology range (FMMT v2)"
           },
           "304": {
             "description": "Domain topology not modified for the supplied ETag"
           },
           "404": {
             "description": "No active workspace"
+          },
+          "409": {
+            "description": "Active FEM topology is malformed"
           },
           "416": {
             "description": "Requested topology byte range is not satisfiable"
@@ -29275,7 +29802,7 @@
             "content": {
               "application/octet-stream": {}
             },
-            "description": "Binary per-object FEM topology (FMMT)"
+            "description": "Binary per-object FEM topology (FMMT v2)"
           },
           "204": {
             "description": "No FEM mesh available"
@@ -29284,13 +29811,16 @@
             "content": {
               "application/octet-stream": {}
             },
-            "description": "Partial per-object FEM topology range (FMMT)"
+            "description": "Partial per-object FEM topology range (FMMT v2)"
           },
           "304": {
             "description": "Per-object topology not modified for the supplied ETag"
           },
           "404": {
             "description": "No active workspace or object mesh"
+          },
+          "409": {
+            "description": "Selected FEM topology is malformed"
           },
           "416": {
             "description": "Requested topology byte range is not satisfiable"
@@ -29344,7 +29874,7 @@
             "content": {
               "application/octet-stream": {}
             },
-            "description": "Binary per-part FEM topology (FMMT)"
+            "description": "Binary per-part FEM topology (FMMT v2)"
           },
           "204": {
             "description": "No FEM mesh available"
@@ -29353,13 +29883,16 @@
             "content": {
               "application/octet-stream": {}
             },
-            "description": "Partial per-part FEM topology range (FMMT)"
+            "description": "Partial per-part FEM topology range (FMMT v2)"
           },
           "304": {
             "description": "Per-part topology not modified for the supplied ETag"
           },
           "404": {
             "description": "No active workspace or mesh part"
+          },
+          "409": {
+            "description": "Selected FEM topology is malformed"
           },
           "416": {
             "description": "Requested topology byte range is not satisfiable"
@@ -29852,7 +30385,7 @@
             "content": {
               "application/octet-stream": {}
             },
-            "description": "Binary shared-domain FEM topology (FMMT)"
+            "description": "Binary shared-domain FEM topology (FMMT v2)"
           },
           "204": {
             "description": "No FEM mesh available"
@@ -29861,13 +30394,16 @@
             "content": {
               "application/octet-stream": {}
             },
-            "description": "Partial shared-domain FEM topology range (FMMT)"
+            "description": "Partial shared-domain FEM topology range (FMMT v2)"
           },
           "304": {
             "description": "Shared-domain topology not modified for the supplied ETag"
           },
           "404": {
             "description": "No active workspace"
+          },
+          "409": {
+            "description": "Active FEM topology is malformed"
           },
           "416": {
             "description": "Requested topology byte range is not satisfiable"

@@ -39,9 +39,22 @@ std::array<double, 3> average_magnetization_components(const Context &ctx)
 
     std::array<double, 3> sum{};
     double weight_sum = 0.0;
+    const bool mixed_topology = std::any_of(
+        ctx.mesh.cell_types.begin(),
+        ctx.mesh.cell_types.end(),
+        [](uint32_t type) { return type != FULLMAG_FEM_CELL_TET4; });
+    if (mixed_topology &&
+        ctx.integration_weights.mfem_lumped_mass.size() != nodes) {
+        return {0.0, 0.0, 0.0};
+    }
     const auto &lumped_volume = !ctx.integration_weights.mfem_lumped_mass.empty()
         ? ctx.integration_weights.mfem_lumped_mass
         : ctx.mesh.node_volumes;
+    if (lumped_volume.size() != nodes || std::any_of(
+            lumped_volume.begin(), lumped_volume.end(),
+            [](double weight) { return !std::isfinite(weight) || weight < 0.0; })) {
+        return {0.0, 0.0, 0.0};
+    }
     for (size_t node = 0; node < nodes; ++node) {
         if (!ctx.mesh.magnetic_node_mask.empty() && ctx.mesh.magnetic_node_mask[node] == 0u) {
             continue;

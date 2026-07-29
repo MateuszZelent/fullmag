@@ -1,48 +1,81 @@
 # Subagent-driven development progress
 
-## Plan: 2026-07-17 LLG time-domain solver remediation
+## Plan: FEM single-layer prism/pyramid shared domain
 
-- Worktree: `/tmp/fullmag-llg-time-domain-remediation-phase2`
-- Branch: `codex/llg-time-domain-remediation-phase2`
-- Base: `3130ac7a0950e456c8e4eaab220df2ba0da9dbb9`
-- Approved audit: `docs/audits/2026-07-16-llg-time-domain-solver-audit.md`
-- Canonical contract: `docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md`
-- Implementation plan: `docs/superpowers/plans/2026-07-17-llg-time-domain-solver-remediation.md`
+- Worktree: `/home/kkingstoun/git/fullmag/fullmag/.worktrees/fem-mixed-prism-pyramid-runtime`
+- Branch: `codex/fem-mixed-prism-pyramid-runtime`
+- Integrated base: `6f695afa2ddb5c0780cb1e1daa632baff0c8de86`
+- Source plan: `/home/kkingstoun/git/fullmag/fullmag/docs/plans/active/2026-07-27-fem-single-layer-prism-pyramid-shared-domain.md`
 
-| Task | Status | RED evidence | GREEN evidence | Reviews | Commit |
+| Slice | Status | RED evidence | GREEN evidence | Reviews | Commit |
 |---:|---|---|---|---|---|
-| 1 | completed | empty CUDA architecture, stale report path, stale external-energy assertion | default and `FULLMAG_CUDA_ARCHITECTURES=75` managed gates exit 0 | spec APPROVED; quality APPROVED | `54df61a8` |
-| 2 | completed | initial 23 failures; review RED 7; re-review RED 6; fixed-draft/resolver follow-up RED | focused 24 passed + 24 subtests; task-owned test_api 251 passed | spec APPROVED; quality APPROVED | `753505d3` |
-| 3 | completed | max-error intent was not serialized; unsupported adaptive policies could reach CUDA/FEM ABI gaps; stale Floquet fixture conflated periodic and outer markers | IR 181 passed; full planner 229 passed; focused CLI/Python/runner gates green; managed CUDA test pending | spec APPROVED; quality APPROVED | `5905482a` |
-| 4 | completed | hidden first-step/max sentinels, lossy `dt_policy`, fake physical time for direct minimizers, and unbound lane provenance | runner 558/558; all-features and CLI checks green; sentinel restricted to native FEM ABI; adaptive CUDA fails closed | spec APPROVED; quality APPROVED | `c6edf60d` |
-| 5 | completed | policy dropped across authoring/API/UI; raw solver JSON; incomplete/implicit stage policy; flat-relax scope regression; Rust/Python scene `algorithm` drift | authoring 47/47; focused API scene 1/1; Python focused 54/54 then 45/45; Control Room full 3482/3482, typecheck/lint green; full Python residual 3/717 reproduced at pre-Task-5 base | spec APPROVED; quality APPROVED after findings 1-25 | `378ba773..3b5ba284` |
-| 6 | completed | q=2/q=4 order ignored; accepted steps could not shrink; dt_min force-retry; unsafe GPU candidate failure paths; max_err rtol=0 rejected | independent managed `verify-fem-time-domain-native-contract` exit 0; shared CPU/CUDA-host golden vectors and boundary/failure contracts green | spec APPROVED; quality APPROVED | `7471a615` |
-| 7 | completed | fixed RK23/RK45 emitted adaptive suggestions; adaptive floor could force-accept; CUDA ABI dropped authored controller policy; production CUDA loop reused immutable initial dt | engine 200/200; plan 230/230; runner 561/561; fdm-sys 1/1; CPU-only and CUDA managed native contracts PASS; feature-CUDA cargo check PASS | spec APPROVED; quality APPROVED after production dispatch correction | `22e224f7` |
-| 8 | completed | CPU relative-only airbox node produced zero scale; legacy FEM adaptive ABI was grown in place; helper-only tests did not prove production rollback | managed FEM CPU/CUDA gate PASS including executed CUDA zero/subnormal/NaN/Inf guard contract; plan 230/230; runner 561/561; production CPU norm/rotation/nonfinite rollback green | spec APPROVED; quality APPROVED after airbox-mask, ABI-v2, and runtime-test corrections | `141cfb77`, `f78e2d6e` |
-| 9 | completed | non-periodic Hypre, periodic MFEM CG, strict GPU Hypre, and FEM/BEM Hypre all published `max_iterations=1` candidates; `preconditioner=none` aborted through invalid `HypreIdentity::SetOperator` | `just verify-fem-demag-poisson-contract` exit 0 with actual CPU/periodic/FEM-BEM/GPU nonconvergence fixtures and failed-candidate publication guards | self-review complete; managed contract green after rebase | `45f85564` |
-| 10 | completed | candidate, endpoint-refresh, and post-statistics failpoints previously leaked fields/controller/FSAL/cache state; adaptive retries restored only magnetization | managed `just verify-fem-time-domain-native-contract` exit 0 after rebase; CPU full-state failpoints, retry cache rollback, persistent CUDA device-to-device field/FSAL/Poisson rollback, and exactly-once success publication green | self-review complete; managed CPU/CUDA contract green after rebase | `81590e0a` |
-| 11 | completed | accepted-step-only telemetry hid rejected attempts; native ABI exposed no bounded trace; live `Error` was normalized eta rather than the authored max-error quantity; no typed solver artifacts existed | managed `just verify-fem-time-domain-native-contract` PASS on CPU/CUDA; runner artifact replay 1/1; API solver-status 1/1; runner/CLI/API cargo check green; Control Room targeted 13/13, typecheck/lint green, full Vitest 386 files passed with 3686 tests passed and 1 skipped | self-review complete; versioned 64-record ABI and fail-closed copy validation; GPU guard metrics use one 24-byte audited readback | `b8fa66b1` |
-| 12 | completed | macrospin/exchange/fast-mode fixtures absent; production relax-to-run initially changed 63 scalar values by FP64 renormalization; GPU first post-relax warm-start could report unconverged at zero iterations despite a certified residual; no approved periodic-antidot asset/runtime gate | `just verify-fem-llg-time-domain-qualification-production`, `just verify-fem-llg-periodic-antidot-qualification-production`, `just verify-fem-demag-poisson-contract`, and `just verify-fem-time-domain-native-contract` all exit 0; CPU/GPU FP64 analytic and production runtime artifacts pass; exact persisted handoff has zero differing values; PBC seams are `ok` | self-review complete; capability promotion is limited to explicit adaptive FEM RK45 FP64 and does not imply FP32, stiff lanes, or every optional interaction | `cc6e8867` |
-| 13 | pending | pending | pending | pending | pending |
-| 14 | pending | pending | pending | pending | pending |
-| 15 | pending | pending | pending | pending | pending |
+| 1 | complete | missing fixture; import-order and boundary-set guards reproduced | focused Gmsh 1 passed; co-collection 1 passed/251 deselected | spec compliant; quality approved | `0b12322b..cf2d0b3c` |
+| 2 | complete | missing canonical typed CSR/strict mixed topology; review reproduced lossy Jacobian/ordinal/interface/fingerprint/API guards | Python 43; IR 52+148; plan 247; runner 10+artifact; CLI 13; API 691; Control Room 3808; strict resource/contract guards | three review rounds; final approved with no findings | `76199c84..7a790d46` |
+| 3 | complete | old fixed tet/tri ABI; review reproduced unchecked facet geometry, unbound manifest ABI, incomplete layout assertions, overflow and non-isolated build artifacts | parser/manifest 46; runner ABI 1; native sys 31; material and full managed export/validator/demag exit 0; active variant `66284f27` | three review rounds; final approved with no findings | `9ef6afe8` |
+| 4 | complete | native prism path initially split to tet; remediation reproduced silent hex-to-prism relabel, non-durable/false provenance, permissive numeric ingress, invalid dimensions, wrong realized plane count, and hidden requested/resolved degradation | mixed+fallback 104; swept regression 3; compileall and diff-check exit 0 | three review rounds; final approved with no findings | `923a39ad` |
+| 5 | complete | shared-domain route absent; remediation reproduced overlapping air tets, circular CAD volume evidence, mutable certificate claims, incomplete interface coverage, ignored authored controls, environment-dependent threads, scaling gaps, and strict-wire coercions | mixed 146; API 263; final-wave 14; compileall and diff-check exit 0; production verifier mixed/API components pass | four review rounds; final task-scoped approval with no findings; overall production gate still blocked by recorded baseline/external evidence | `4d5c3627` |
+| 6 | complete with concerns | stale layered state, lossy authoring round-trip, ineffective interface ramp, overlapping transition tets, and pyramid p05 below 0.1 reproduced | mixed+fallback 178; DSL/round-trip 30 + 47 subtests; authoring 57; full meshing 254 + 19 subtests with one baseline failure | two review waves; final task-scoped approval; production gate still blocked by missing evidence/runtime and proven baseline periodic-facet bug | `4f47893a` |
+| 7 | complete | stale/self-certified mixed certificate, saturating cross-language node quantization, planner repacking, partial API mesh parts, and CLI artifact certificate drop reproduced | IR 64+149; planner 248; API focused 1; managed mixed-wire CLI 5; no-feature API check; targeted fmt/diff checks | certificate, planner, and CLI/API reviews independently approved with no findings | `14a7f009` |
+| 8 | complete (fail-closed interim) | certified mixed plans could bypass through per-object assets, backend auto, materialized planned-runtime entrypoints, stale/self-consistent certificate evidence, false capability provenance, or empty topology | IR 70+149; planner 254; runtime topology guard 7; capability gate runner 10 + Python 6; API check; diff-check all pass | independent capability and runtime reviews approved after closing auto/runtime/status/legacy-tet findings | `a0a6b2e2` |
+| 9 | complete | FMMT v1 fixed-arity payload, lossy mixed aliases, unchecked Range identity/length, concurrent full serialization, stale capability projection, and missing typed rejection/fallback publication reproduced | FMMT/API focused 23+; mixed API 7; OpenAPI typed truth; ControlRoom API codec 102; cache/range/304 guards; IR fallback presence 1 | independent data-plane and capability reviews approved after strong-ETag, bounded-cache, current-rejection precedence, stale-capability, and fallback-tristate remediation | pending |
+| 10 | complete | tet-only viewport faces/edges/quality, unsafe facet-ID fallback, Tri3/Quad4 collision, disabled-control JSON bypass, and misleading airbox labels reproduced | viewport/scoped focused 140; full Control Room 420 files / 3963 tests; typecheck; lint zero warnings; diff-check pass | independent UI/viewport reviews approved after positional facet identity and mixed CSR quality remediation | pending |
+| 11 | pending | pending | pending | pending | pending |
+| 12 | pending | pending | pending | pending | pending |
 
-### Baseline evidence
+Task 0.1 documentation remediation: complete (commit dea075a0, review clean).
 
-- 2026-07-17: focused legacy Python solver tests passed (2 tests).
-- 2026-07-17: runner `initial_timestep_tests` passed (5 tests), including
-  stale expectations for hidden `1e-13` fallback.
-- 2026-07-17: `just verify-fem-time-domain-native-contract` failed during
-  CMake generation because CUDA targets had empty `CUDA_ARCHITECTURES`; the
-  recipe did not reach adaptive solver assertions.
+Task 4.1 native MFEM mesh builder: complete. RED reached the managed target and
+failed on the missing builder header. GREEN evidence is
+`just verify-fem-mixed-p1-native-contract` with explicit separate CPU and CUDA
+rollback processes, plus `just verify-fem-time-domain-native-contract` with
+Rust ABI 31/31. Four implementation/review-fix commits:
+`5ef3ff06`, `afa01f0f`, `bba70b74`, `3a847139`. Three independent review waves
+closed lifecycle, orientation, rollback-matrix, and false-positive source-test
+findings; final verdict `Ready: Yes` with no Critical or Important issues.
+The public mixed solver remains fail-closed before material/MFEM/GPU startup.
 
-### Routed remediation debt
+Task 4.2 generic mixed-P1 measures and nodal materials: complete. Production
+MFEM magnetic mass row sums are the canonical integration weights and feed the
+compatibility node-volume copy and Ms-weighted averages. Uniform and legal
+nodal-P1 Ms/A material realizations work on prism/pyramid/tet meshes; DG0 stays
+fail-closed. Review remediation added a non-affine prism oracle that
+distinguishes MFEM row sums from volume/arity and validates nodal Ms/A through
+the real validator plus `GridFunctionCoefficient` evaluation. Managed
+`just verify-fem-mixed-p1-native-contract` passed including CPU/CUDA rollback
+processes. Independent final review: approved with 0 Critical/Important.
+Commits: `83b69feb`, `44ce8ef2`. The public mixed solver remains fail-closed
+until Task 4.3 exchange and Poisson operators are complete.
 
-- Task 10 closes general post-backup `gpu_rk_run_stage_attempt` failure
-  rollback, candidate field/cache rollback, and the final-statistics commit
-  boundary on CPU and CUDA.
-- FDM norm and per-spin rotation guard intent remains transported and fails
-  closed; Task 8 implements and verifies the FEM CPU/GPU guard realization.
-- Task 10 closes candidate H/work/demag-cache rollback and atomic publication;
-  Task 7 remains the historical proof for magnetization/time/FSAL-only
-  rejected-step behavior before the complete transaction was added.
+Task 4.3 mixed CPU exchange/Poisson/relaxation implementation is source- and
+contract-complete but remains product status `implemented`. The first public
+unlock commit `bdb60758` did not qualify `production_executable`: independent
+review found missing enclosing build-report fallback/degradation checks,
+destructive managed-device overlay provenance, and no exact managed public SP4
+runtime report. Review remediation now requires explicit empty certificate and
+report fallback trails, `degraded=false`, separate authored and managed-launcher
+device requests, and one effective device source shared by runner topology and
+engine resolution. CPU promotion remains blocked until a fresh managed public
+SP4 run stores immutable topology fingerprint, CPU engine/device identity,
+empty fallback trail, solver telemetry, and artifacts. GPU and auto remain
+rejecting.
+
+The review-required public-runtime precursor is now named
+`just verify-fem-mixed-prism-airbox-runtime`. It generates a one-step temporary
+copy of the exact SP4 projected-gradient scenario and validates immutable
+managed CPU artifact identity without changing the authored source. Source and
+validator contract tests do not promote status. Fast Python coverage exports
+the base and relaxation-stage overlay without real assets; the standalone
+real-asset helper export is an explicit
+`FULLMAG_RUN_SLOW_REAL_ASSET_TESTS=1` diagnostic. The non-skipping managed
+recipe is the authoritative exact-source runtime gate. Task 4.3 remains
+`implemented` until that managed command itself passes with reviewed evidence.
+
+## Global constraints
+
+- Native mixed topology is `prism6` in the magnet, `pyramid5` only in air transition, and `tet4` in far air; facets are `tri3 | quad4`.
+- `layers=1` means exactly two magnetic node planes.
+- Strict mode never silently splits or falls back to tetrahedra.
+- Unsupported physics and topology combinations fail before backend startup.
+- FEM builds and runtime proof use repository container-backed `just` recipes first.
+- Preserve the dirty master checkout and the user-owned SP4 scenario edit.
+- Slice 8 does not complete plan Task 3.2 positive mixed-P1 CPU/GPU execution: native exchange/demag operators remain absent, so the canonical product status is `unsupported` and every mixed plan rejects before backend startup.

@@ -38,7 +38,7 @@ pub(super) fn field_point_count_matches_current_domain(
     let Some(mesh) = snapshot.fem_mesh.as_ref() else {
         return true;
     };
-    if point_count == 0 || mesh.nodes.is_empty() || mesh.elements.is_empty() {
+    if point_count == 0 || mesh.nodes.is_empty() || mesh.cells.is_empty() {
         return false;
     }
     if point_count == mesh.nodes.len() {
@@ -194,8 +194,11 @@ fn mark_magnetic_object_segments(mesh: &FemMeshPayload, active: &mut [bool]) -> 
         let element_start = segment.element_start as usize;
         let element_end = element_start
             .saturating_add(segment.element_count as usize)
-            .min(mesh.elements.len());
-        for element in &mesh.elements[element_start..element_end] {
+            .min(mesh.cell_count());
+        for element_index in element_start..element_end {
+            let Some(element) = mesh.cells.item_nodes(element_index) else {
+                continue;
+            };
             for node_index in element {
                 if let Some(slot) = active.get_mut(*node_index as usize) {
                     *slot = true;
@@ -207,16 +210,16 @@ fn mark_magnetic_object_segments(mesh: &FemMeshPayload, active: &mut [bool]) -> 
 }
 
 fn mark_nonzero_marker_elements(mesh: &FemMeshPayload, active: &mut [bool]) -> bool {
-    if mesh.element_markers.len() != mesh.elements.len() || mesh.elements.is_empty() {
+    if mesh.element_markers.len() != mesh.cell_count() || mesh.cells.is_empty() {
         return false;
     }
     let mut marked = false;
-    for (element_index, element) in mesh.elements.iter().enumerate() {
-        if mesh.element_markers[element_index] == 0 {
+    for cell in mesh.cells.iter() {
+        if mesh.element_markers[cell.ordinal] == 0 {
             continue;
         }
         marked = true;
-        for node_index in element {
+        for node_index in cell.nodes {
             if let Some(slot) = active.get_mut(*node_index as usize) {
                 *slot = true;
             }
@@ -309,17 +312,18 @@ pub(super) fn extract_fem_field(
     n_comp: usize,
 ) -> Option<FemField> {
     let mesh = snapshot.fem_mesh.as_ref()?;
-    if mesh.nodes.is_empty() || mesh.elements.is_empty() {
+    if mesh.nodes.is_empty() || mesh.cells.is_empty() {
         return None;
     }
     let values = extract_raw_field_values(snapshot, quantity_id, n_comp)?;
     if n_comp == 0 || values.len() / n_comp != mesh.nodes.len() {
         return None;
     }
+    let elements = mesh.require_tet4_elements().ok()?;
     Some(FemField {
         n_comp,
         nodes: mesh.nodes.clone(),
-        elements: mesh.elements.clone(),
+        elements,
         element_markers: mesh.element_markers.clone(),
         values,
     })

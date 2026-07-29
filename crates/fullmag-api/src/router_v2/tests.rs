@@ -51,6 +51,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
     let builder = fullmag_authoring::ScriptBuilderState {
         revision: 3,
         backend: None,
+        requested_mode: Some("strict".to_string()),
         cpu_threads: None,
         fem_demag_solver_policy: None,
         exchange_enabled: true,
@@ -171,9 +172,9 @@ fn sample_fem_mesh_payload() -> FemMeshPayload {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![7],
-        boundary_faces: vec![[0, 1, 2]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
         boundary_markers: vec![3],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -207,9 +208,9 @@ fn regular_tetra_fem_mesh_payload() -> FemMeshPayload {
             [0.5, 3.0_f64.sqrt() / 2.0, 0.0],
             [0.5, 3.0_f64.sqrt() / 6.0, h],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![7],
-        boundary_faces: vec![[0, 1, 2]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
         boundary_markers: vec![3],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -250,7 +251,7 @@ fn sample_fem_mesh_payload_with_manifest() -> FemMeshPayload {
             node_start: 0,
             node_count: 0,
             node_indices: vec![],
-            surface_faces: vec![],
+            facet_global_ordinals: vec![],
             bounds_min: Some([-1.0, -1.0, -1.0]),
             bounds_max: Some([2.0, 2.0, 2.0]),
         },
@@ -269,7 +270,7 @@ fn sample_fem_mesh_payload_with_manifest() -> FemMeshPayload {
             node_start: 0,
             node_count: 4,
             node_indices: vec![0, 1, 2, 3],
-            surface_faces: vec![[0, 1, 2]],
+            facet_global_ordinals: vec![0],
             bounds_min: Some([0.0, 0.0, 0.0]),
             bounds_max: Some([1.0, 1.0, 1.0]),
         },
@@ -287,9 +288,9 @@ fn sample_periodic_fem_mesh_payload() -> FemMeshPayload {
         [0.0, 0.0, 1.0e-6],
         [1.0e-6, 0.0, 1.0e-6],
     ];
-    mesh.elements = vec![[0, 1, 2, 3], [0, 1, 4, 5]];
+    mesh.set_tet4_cells(vec![[0, 1, 2, 3], [0, 1, 4, 5]]);
     mesh.element_markers = vec![7, 0];
-    mesh.boundary_faces = vec![[0, 2, 4], [1, 5, 3]];
+    mesh.set_tri3_facets(vec![[0, 2, 4], [1, 5, 3]]);
     mesh.boundary_markers = vec![10, 11];
     mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
         pair_id: "x_periodic".to_string(),
@@ -337,9 +338,9 @@ fn sample_scoped_fem_mesh_payload() -> FemMeshPayload {
             [-1.0, 2.0, -1.0],
             [-1.0, -1.0, 2.0],
         ],
-        elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
         element_markers: vec![7, 8],
-        boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
         boundary_markers: vec![3, 4],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -381,7 +382,7 @@ fn sample_scoped_fem_mesh_payload() -> FemMeshPayload {
                 node_start: 0,
                 node_count: 4,
                 node_indices: vec![0, 1, 2, 3],
-                surface_faces: vec![[0, 1, 2]],
+                facet_global_ordinals: vec![0],
                 bounds_min: Some([0.0, 0.0, 0.0]),
                 bounds_max: Some([1.0, 1.0, 1.0]),
             },
@@ -400,7 +401,7 @@ fn sample_scoped_fem_mesh_payload() -> FemMeshPayload {
                 node_start: 4,
                 node_count: 4,
                 node_indices: vec![4, 5, 6, 7],
-                surface_faces: vec![[4, 5, 6]],
+                facet_global_ordinals: vec![1],
                 bounds_min: Some([-1.0, -1.0, -1.0]),
                 bounds_max: Some([2.0, 2.0, 2.0]),
             },
@@ -469,9 +470,9 @@ fn sample_fem_neel_skyrmion_mesh_and_values(
         mesh_name: "skyrmion-test-mesh".to_string(),
         mesh_id: "skyrmion-test-mesh:1".to_string(),
         nodes,
-        elements,
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(elements),
         element_markers: vec![1; (grid - 1) * (grid - 1) * 6],
-        boundary_faces: Vec::new(),
+        facets: fullmag_ir::FemFacetConnectivityIR::empty(),
         boundary_markers: Vec::new(),
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -500,7 +501,7 @@ fn sample_fem_neel_skyrmion_mesh_and_values(
             node_start: 0,
             node_count: node_indices.len() as u32,
             node_indices,
-            surface_faces: Vec::new(),
+            facet_global_ordinals: Vec::new(),
             bounds_min: Some([-span * 0.5, -span * 0.5, -half_thickness]),
             bounds_max: Some([span * 0.5, span * 0.5, half_thickness]),
         }],
@@ -535,9 +536,9 @@ fn sample_shared_node_airbox_mesh_payload() -> FemMeshPayload {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+        cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 1, 2, 4]]),
         element_markers: vec![7, 0],
-        boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
+        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 3], [0, 1, 4]]),
         boundary_markers: vec![3, 4],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
@@ -557,7 +558,7 @@ fn sample_shared_node_airbox_mesh_payload() -> FemMeshPayload {
             node_start: 4,
             node_count: 4,
             node_indices: vec![0, 1, 2, 4],
-            surface_faces: vec![[0, 1, 4]],
+            facet_global_ordinals: vec![1],
             bounds_min: Some([0.0, 0.0, -1.0]),
             bounds_max: Some([1.0, 1.0, 0.0]),
         }],
@@ -2547,9 +2548,11 @@ async fn domain_topology_supports_byte_ranges_for_large_topology_payloads() {
         snapshot.fem_mesh = Some(sample_fem_mesh_payload());
         snapshot.mesh_revision = 18;
     }
+    let cache_state = state.clone();
     let app = build_v2_router().with_state(state);
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v2/sessions/current/data/domain/topology")
@@ -2573,10 +2576,70 @@ async fn domain_topology_supports_byte_ranges_for_large_topology_payloads() {
             .headers()
             .get("content-range")
             .and_then(|value| value.to_str().ok()),
-        Some("bytes 0-3/164")
+        Some("bytes 0-3/244")
     );
     let body = body_bytes(response).await;
     assert_eq!(&body[..], b"FMMT");
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/topology")
+                .header("range", "bytes=64-71")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        cache_state
+            .quantity_data_plane
+            .topology_cache
+            .lock()
+            .expect("topology cache lock")
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn domain_topology_matching_etag_does_not_populate_binary_cache() {
+    let state = test_app_state_with_live_session().await;
+    let mesh = sample_fem_mesh_payload();
+    let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(&mesh);
+    let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
+    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+        "domain-topology:{generation_id}:{topology_hash}:19"
+    ));
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_revision = 19;
+    }
+    let cache_state = state.clone();
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/topology")
+                .header("if-none-match", etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(
+        cache_state
+            .quantity_data_plane
+            .topology_cache
+            .lock()
+            .expect("topology cache lock")
+            .len(),
+        0
+    );
 }
 
 #[tokio::test]
@@ -4786,7 +4849,7 @@ async fn display_patch_accepts_partial_update() {
     assert_eq!(sel.selection.y_chosen_size, 16);
     assert_eq!(sel.revision, 1);
     assert_eq!(presentation.colormap, "viridis");
-    assert!(presentation.vector_glyphs);
+    assert!(!presentation.vector_glyphs);
 }
 
 #[tokio::test]
@@ -5828,6 +5891,294 @@ async fn mesh_semantics_returns_three_level_projection() {
 }
 
 #[tokio::test]
+async fn mesh_capabilities_replace_stale_workspace_mixed_features_fail_closed() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "mesh_capabilities": {
+                "has_volume_mesh": true,
+                "mesh.topology.mixed_p1": { "status": "production_executable" },
+                "mesh.swept.prism": { "status": "production_executable" },
+                "mesh.transition.pyramid_tet": { "status": "production_executable" },
+                "mesh.exact_layer_count": { "status": "production_executable" }
+            }
+        }));
+        snapshot.capabilities = Some(
+            serde_json::from_value(serde_json::json!({
+                "engine_id": "fem_cpu_native",
+                "capability_profile_version": "2026-07-28",
+                "supported_terms": [],
+                "feature_capabilities": {
+                    "mesh.topology.mixed_p1": {
+                        "status": "semantic_only",
+                        "reason": "native mixed-P1 execution is not advertised",
+                        "scope": "conforming P1"
+                    },
+                    "mesh.swept.prism": {
+                        "status": "semantic_only",
+                        "reason": "native mixed-P1 execution is not advertised",
+                        "scope": "prism6 magnetic cells"
+                    },
+                    "mesh.transition.pyramid_tet": {
+                        "status": "semantic_only",
+                        "reason": "native mixed-P1 execution is not advertised",
+                        "scope": "pyramid5 transition and tet4 far air"
+                    },
+                    "fem.cpu.exchange_demag.mixed_p1": {
+                        "status": "unsupported",
+                        "reason": "operator unavailable",
+                        "scope": "cpu"
+                    }
+                },
+                "supported_demag_realizations": [],
+                "preview_quantities": [],
+                "snapshot_quantities": [],
+                "scalar_outputs": [],
+                "approximate_operators": [],
+                "supports_frequency_response": false,
+                "supports_coupled_magnetoelastic_quasistatic": false,
+                "supports_coupled_magnetoelastic_elastodynamic": false,
+                "supports_frequency_domain_elastodynamics": false,
+                "supports_coupled_eigenmodes": false,
+                "supports_lossy_fallback_override": false
+            }))
+            .expect("backend capabilities fixture should deserialize"),
+        );
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/capabilities")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let capabilities = json["mesh_capabilities"]
+        .as_object()
+        .expect("mesh capabilities should be an object");
+    assert_eq!(capabilities["has_volume_mesh"], true);
+    for id in [
+        "mesh.topology.mixed_p1",
+        "mesh.swept.prism",
+        "mesh.transition.pyramid_tet",
+    ] {
+        assert_eq!(capabilities[id]["status"], "semantic_only", "{id}");
+        assert!(capabilities[id]["reason"].is_string(), "{id}");
+        assert!(capabilities[id]["scope"].is_string(), "{id}");
+    }
+    assert!(!capabilities.contains_key("mesh.exact_layer_count"));
+    assert!(!capabilities.contains_key("fem.cpu.exchange_demag.mixed_p1"));
+}
+
+#[tokio::test]
+async fn mixed_shared_domain_resources_publish_typed_topology_truth() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+        ))
+        .expect("mixed certificate fixture should parse");
+        let mut mesh = sample_fem_mesh_payload_with_manifest();
+        mesh.build_report = Some(
+            serde_json::from_value(serde_json::json!({
+                "build_mode": "component_aware",
+                "fallbacks_triggered": [],
+                "mixed_layer_topology_certificate": fixture["certificate"].clone(),
+                "mixed_topology_provenance": {
+                    "requested_topology": "mixed_p1",
+                    "resolved_topology": "mixed_p1",
+                    "accepted_certificate_fingerprint": fixture["certificate"]["topology_fingerprint"].clone(),
+                    "requested_device": "auto",
+                    "precision": "double",
+                    "capability_status": "semantic_only"
+                }
+            }))
+            .expect("mixed build report fixture should deserialize"),
+        );
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.capabilities = Some(
+            serde_json::from_value(serde_json::json!({
+                "engine_id": "fem_cpu_native",
+                "capability_profile_version": "2026-07-28",
+                "supported_terms": [],
+                "feature_capabilities": {
+                    "mesh.topology.mixed_p1": {
+                        "status": "semantic_only",
+                        "reason": "native mixed-P1 execution is not advertised",
+                        "scope": "conforming P1"
+                    }
+                },
+                "supported_demag_realizations": [],
+                "preview_quantities": [],
+                "snapshot_quantities": [],
+                "scalar_outputs": [],
+                "approximate_operators": [],
+                "supports_frequency_response": false,
+                "supports_coupled_magnetoelastic_quasistatic": false,
+                "supports_coupled_magnetoelastic_elastodynamic": false,
+                "supports_frequency_domain_elastodynamics": false,
+                "supports_coupled_eigenmodes": false,
+                "supports_lossy_fallback_override": false
+            }))
+            .expect("backend capabilities fixture should deserialize"),
+        );
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "mesh_summary": { "mesh_name": "test-mesh" }
+        }));
+        snapshot.mesh_revision = 91;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let report_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/semantics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(report_response.status(), StatusCode::OK);
+    let report_json = body_json(report_response).await;
+    let report = &report_json["solver_mesh"]["build_report"];
+    assert_eq!(report["topology_schema_version"], 2);
+    assert_eq!(report["element_counts_by_type"]["prism6"], 2);
+    assert_eq!(report["element_counts_by_type"]["pyramid5"], 4);
+    assert_eq!(report["element_counts_by_type"]["tet4"], 8);
+    assert_eq!(
+        report["facet_counts_by_type_and_role"]["exterior"]["tri3"],
+        38
+    );
+    assert_eq!(report["requested_layered_policy"]["layers"], 1);
+    assert_eq!(report["resolved_layered_policy"]["layers"], 1);
+    assert_eq!(
+        report["mixed_layer_topology_certificate"]["certificate_status"],
+        "accepted"
+    );
+    assert_eq!(
+        report["mixed_layer_topology_certificate"]["actual_node_plane_count"],
+        2
+    );
+    assert_eq!(report["gmsh_version"], "4.15.2");
+    assert_eq!(report["fallbacks_triggered"], serde_json::json!([]));
+    assert_eq!(
+        report["mixed_topology_provenance"]["requested_topology"],
+        "mixed_p1"
+    );
+    assert_eq!(
+        report["mixed_topology_provenance"]["capability_reason"],
+        "native mixed-P1 execution is not advertised"
+    );
+
+    let manifest_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/manifest")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(manifest_response.status(), StatusCode::OK);
+    let manifest = body_json(manifest_response).await;
+    assert_eq!(manifest["topology_schema_version"], 2);
+    assert_eq!(manifest["element_counts_by_type"]["prism6"], 2);
+    assert_eq!(manifest["element_counts_by_type"]["pyramid5"], 4);
+    assert_eq!(manifest["element_counts_by_type"]["tet4"], 8);
+    assert_eq!(manifest["gmsh_version"], "4.15.2");
+    assert_eq!(manifest["fallbacks_triggered"], serde_json::json!([]));
+    assert_eq!(
+        manifest["mixed_topology_provenance"]["capability_reason"],
+        "native mixed-P1 execution is not advertised"
+    );
+    let airbox = manifest["mesh_parts"]
+        .as_array()
+        .and_then(|parts| parts.iter().find(|part| part["id"] == "airbox"))
+        .expect("airbox part should be present");
+    assert_eq!(airbox["element_counts_by_type"]["pyramid5"], 4);
+    assert_eq!(airbox["element_counts_by_type"]["tet4"], 8);
+    assert!(manifest.get("cells").is_none());
+    assert!(manifest.get("connectivity").is_none());
+}
+
+#[tokio::test]
+async fn mesh_active_build_publishes_mixed_layer_rejection_evidence() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "last_build_summary": {
+                "kind": "mesh_build_failed",
+                "mixed_layer_topology_rejection": {
+                    "schema_version": "mixed_layer_topology_rejection.v1",
+                    "certificate_status": "rejected",
+                    "requested_layer_count": 1,
+                    "rejection_category": "missing_capability",
+                    "rejection_reason": "resolved 2 layers",
+                    "missing_capabilities": ["fem.gpu.exchange_demag.mixed_p1"],
+                    "requested_execution": {
+                        "backend": "fem",
+                        "device": "gpu",
+                        "precision": "double",
+                        "mode": "strict",
+                        "study": "relaxation"
+                    },
+                    "fallback": "none",
+                    "free_tetrahedral_alternative": "Select free_tetrahedral explicitly."
+                }
+            },
+            "last_build_error": "resolved 2 layers"
+        }));
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/builds/current")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(
+        json["mixed_layer_topology_rejection"]["certificate_status"],
+        "rejected"
+    );
+    assert_eq!(
+        json["mixed_layer_topology_rejection"]["rejection_reason"],
+        "resolved 2 layers"
+    );
+    assert_eq!(
+        json["mixed_layer_topology_rejection"]["rejection_category"],
+        "missing_capability"
+    );
+    assert_eq!(
+        json["mixed_layer_topology_rejection"]["missing_capabilities"][0],
+        "fem.gpu.exchange_demag.mixed_p1"
+    );
+    assert_eq!(
+        json["mixed_layer_topology_rejection"]["requested_execution"]["device"],
+        "gpu"
+    );
+    assert_eq!(json["mixed_layer_topology_rejection"]["fallback"], "none");
+    assert_eq!(
+        json["mixed_layer_topology_rejection"]["free_tetrahedral_alternative"],
+        "Select free_tetrahedral explicitly."
+    );
+}
+
+#[tokio::test]
 async fn mesh_semantics_returns_404_without_scene_document() {
     let app = test_router_with_session().await;
     let response = app
@@ -6134,6 +6485,277 @@ async fn mesh_quality_gates_returns_marked_projection_when_backend_payload_is_mi
         json["gates"]["reason"],
         "mesh_quality_gates is missing from the current mesh workspace/build report"
     );
+    assert_eq!(json["mixed_certificate"]["status"], "unavailable");
+    assert_eq!(json["mixed_certificate"]["mesh_revision"], 20);
+    assert_eq!(
+        json["mixed_certificate"]["family_gates"],
+        serde_json::json!([])
+    );
+}
+
+#[tokio::test]
+async fn mesh_quality_gates_publishes_revision_bound_mixed_certificate_evidence() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+        ))
+        .expect("mixed certificate fixture should parse");
+        let mesh_ir: fullmag_ir::MeshIR = serde_json::from_value(fixture["mesh"].clone())
+            .expect("mixed mesh fixture should deserialize");
+        let mut certificate: fullmag_ir::MixedLayerTopologyCertificateV1IR =
+            serde_json::from_value(fixture["certificate"].clone())
+                .expect("mixed certificate fixture should deserialize");
+        certificate.topology_fingerprint_version = "v3".to_string();
+        certificate.topology_fingerprint = mesh_ir.mixed_topology_fingerprint_v3().unwrap();
+        let report: fullmag_ir::FemSharedDomainBuildReportIR =
+            serde_json::from_value(serde_json::json!({
+                "build_mode": "shared_domain",
+                "fallbacks_triggered": [],
+                "mixed_layer_topology_certificate": certificate
+            }))
+            .expect("mixed build report should deserialize");
+        snapshot.fem_mesh = Some(FemMeshPayload {
+            mesh_name: mesh_ir.mesh_name,
+            mesh_id: "mixed-quality:1".to_string(),
+            nodes: mesh_ir.nodes,
+            cells: mesh_ir.cells,
+            element_markers: mesh_ir.element_markers,
+            facets: mesh_ir.facets,
+            boundary_markers: mesh_ir.boundary_markers,
+            periodic_boundary_pairs: mesh_ir.periodic_boundary_pairs,
+            periodic_node_pairs: mesh_ir.periodic_node_pairs,
+            object_segments: Vec::new(),
+            mesh_parts: Vec::new(),
+            domain_mesh_mode: Some("shared_domain".to_string()),
+            domain_frame: None,
+            generation_id: Some("mixed-quality-generation".to_string()),
+            per_domain_quality: Default::default(),
+            build_report: Some(report),
+        });
+        snapshot.mesh_workspace = Some(serde_json::json!({}));
+        snapshot.mesh_revision = 91;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/quality-gates")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let evidence = &json["mixed_certificate"];
+    assert_eq!(evidence["status"], "valid");
+    assert_eq!(evidence["mesh_revision"], 91);
+    assert_eq!(
+        evidence["topology_fingerprint"],
+        evidence["certificate_fingerprint"]
+    );
+    assert_eq!(evidence["certificate_status"], "accepted");
+    let gates = evidence["family_gates"]
+        .as_array()
+        .expect("family gates should be typed rows");
+    assert_eq!(gates.len(), 3);
+    let prism = gates
+        .iter()
+        .find(|gate| gate["family"] == "prism6")
+        .expect("prism6 gate should be published");
+    assert_eq!(prism["metric"], "tetra_decomposition_scaled_jacobian.v1");
+    assert_eq!(prism["threshold"], 0.1);
+    assert_eq!(prism["passed"], true);
+    assert_eq!(prism["positive_jacobian"], true);
+    assert!(prism["minimum_jacobian_m3"].as_f64().unwrap() > 0.0);
+}
+
+#[tokio::test]
+async fn mesh_quality_gates_preserves_legacy_v2_mixed_certificate_evidence() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+        ))
+        .expect("mixed certificate fixture should parse");
+        let mesh_ir: fullmag_ir::MeshIR = serde_json::from_value(fixture["mesh"].clone())
+            .expect("mixed mesh fixture should deserialize");
+        let certificate: fullmag_ir::MixedLayerTopologyCertificateV1IR =
+            serde_json::from_value(fixture["certificate"].clone())
+                .expect("mixed certificate fixture should deserialize");
+        assert_eq!(certificate.topology_fingerprint_version, "v2");
+        let report: fullmag_ir::FemSharedDomainBuildReportIR =
+            serde_json::from_value(serde_json::json!({
+                "build_mode": "shared_domain",
+                "fallbacks_triggered": [],
+                "mixed_layer_topology_certificate": certificate
+            }))
+            .expect("mixed build report should deserialize");
+        snapshot.fem_mesh = Some(FemMeshPayload {
+            mesh_name: mesh_ir.mesh_name,
+            mesh_id: "mixed-quality:v2".to_string(),
+            nodes: mesh_ir.nodes,
+            cells: mesh_ir.cells,
+            element_markers: mesh_ir.element_markers,
+            facets: mesh_ir.facets,
+            boundary_markers: mesh_ir.boundary_markers,
+            periodic_boundary_pairs: mesh_ir.periodic_boundary_pairs,
+            periodic_node_pairs: mesh_ir.periodic_node_pairs,
+            object_segments: Vec::new(),
+            mesh_parts: Vec::new(),
+            domain_mesh_mode: Some("shared_domain".to_string()),
+            domain_frame: None,
+            generation_id: Some("mixed-quality-v2-generation".to_string()),
+            per_domain_quality: Default::default(),
+            build_report: Some(report),
+        });
+        snapshot.mesh_workspace = Some(serde_json::json!({}));
+        snapshot.mesh_revision = 92;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/quality-gates")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let evidence = &body_json(response).await["mixed_certificate"];
+    assert_eq!(evidence["status"], "valid");
+    assert_eq!(evidence["mesh_revision"], 92);
+    assert_eq!(
+        evidence["topology_fingerprint"],
+        evidence["certificate_fingerprint"]
+    );
+}
+
+#[tokio::test]
+async fn mesh_quality_gates_rejects_quality_evidence_mutated_for_the_same_topology() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+        ))
+        .expect("mixed certificate fixture should parse");
+        let mesh_ir: fullmag_ir::MeshIR = serde_json::from_value(fixture["mesh"].clone())
+            .expect("mixed mesh fixture should deserialize");
+        let mut certificate: fullmag_ir::MixedLayerTopologyCertificateV1IR =
+            serde_json::from_value(fixture["certificate"].clone())
+                .expect("mixed certificate fixture should deserialize");
+        *certificate
+            .scaled_jacobian_p05_by_family
+            .get_mut("prism6")
+            .expect("fixture should contain prism6 quality") += 0.01;
+        certificate
+            .validate()
+            .expect("mutated finite above-threshold evidence remains internally valid");
+        let report: fullmag_ir::FemSharedDomainBuildReportIR =
+            serde_json::from_value(serde_json::json!({
+                "build_mode": "shared_domain",
+                "fallbacks_triggered": [],
+                "mixed_layer_topology_certificate": certificate
+            }))
+            .expect("mixed build report should deserialize");
+        snapshot.fem_mesh = Some(FemMeshPayload {
+            mesh_name: mesh_ir.mesh_name,
+            mesh_id: "mixed-quality:mutated".to_string(),
+            nodes: mesh_ir.nodes,
+            cells: mesh_ir.cells,
+            element_markers: mesh_ir.element_markers,
+            facets: mesh_ir.facets,
+            boundary_markers: mesh_ir.boundary_markers,
+            periodic_boundary_pairs: mesh_ir.periodic_boundary_pairs,
+            periodic_node_pairs: mesh_ir.periodic_node_pairs,
+            object_segments: Vec::new(),
+            mesh_parts: Vec::new(),
+            domain_mesh_mode: Some("shared_domain".to_string()),
+            domain_frame: None,
+            generation_id: Some("mixed-quality-mutated-generation".to_string()),
+            per_domain_quality: Default::default(),
+            build_report: Some(report),
+        });
+        snapshot.mesh_workspace = Some(serde_json::json!({}));
+        snapshot.mesh_revision = 93;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/quality-gates")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["mixed_certificate"]["status"], "rejected");
+    assert_eq!(
+        json["mixed_certificate"]["family_gates"],
+        serde_json::json!([])
+    );
+    assert!(json["mixed_certificate"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("scaled_jacobian_p05_by_family"));
+}
+
+#[tokio::test]
+async fn mesh_quality_gates_suppresses_stale_mixed_certificate_values() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+        ))
+        .expect("mixed certificate fixture should parse");
+        let certificate: fullmag_ir::MixedLayerTopologyCertificateV1IR =
+            serde_json::from_value(fixture["certificate"].clone())
+                .expect("mixed certificate fixture should deserialize");
+        let report: fullmag_ir::FemSharedDomainBuildReportIR =
+            serde_json::from_value(serde_json::json!({
+                "build_mode": "shared_domain",
+                "mixed_layer_topology_certificate": certificate
+            }))
+            .expect("mixed build report should deserialize");
+        let mut mesh = sample_fem_mesh_payload();
+        mesh.build_report = Some(report);
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_workspace = Some(serde_json::json!({}));
+        snapshot.mesh_revision = 92;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/quality-gates")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["mixed_certificate"]["status"], "stale");
+    assert_eq!(
+        json["mixed_certificate"]["family_gates"],
+        serde_json::json!([])
+    );
+    assert!(json["mixed_certificate"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("fingerprint"));
 }
 
 #[tokio::test]
@@ -6875,6 +7497,149 @@ async fn mesh_shared_domain_topology_returns_binary_fmmt_payload() {
 }
 
 #[tokio::test]
+async fn all_fmmt_v2_topology_routes_serve_mixed_cells() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload_with_manifest();
+        mesh.nodes.extend([[1.0, 1.0, 0.0], [1.0, 0.0, 1.0]]);
+        mesh.cells = fullmag_ir::FemConnectivityIR {
+            types: vec![fullmag_ir::FemCellTypeIR::Prism6],
+            offsets: vec![0, 6],
+            nodes: vec![0, 1, 2, 3, 4, 5],
+            global_ordinals: vec![901],
+            mesh_parts: Vec::new(),
+        };
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let app = build_v2_router().with_state(state);
+
+    for uri in [
+        "/v2/sessions/current/data/domain/topology",
+        "/v2/sessions/current/meshing/meshes/shared-domain/topology",
+        "/v2/sessions/current/meshing/meshes/objects/body/topology",
+        "/v2/sessions/current/meshing/meshes/parts/body/topology",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK, "{uri}");
+        let body = body_bytes(response).await;
+        assert_eq!(&body[0..4], b"FMMT", "{uri}");
+        assert_eq!(body[4], 2, "{uri}");
+        assert_eq!(
+            u32::from_le_bytes(body[12..16].try_into().unwrap()),
+            1,
+            "{uri}"
+        );
+
+        let node_count = u32::from_le_bytes(body[8..12].try_into().unwrap()) as usize;
+        let cell_types_offset = 64 + node_count * 3 * std::mem::size_of::<f64>();
+        assert_eq!(
+            u32::from_le_bytes(
+                body[cell_types_offset..cell_types_offset + 4]
+                    .try_into()
+                    .unwrap()
+            ),
+            2,
+            "{uri}"
+        );
+    }
+}
+
+#[test]
+fn openapi_documents_malformed_topology_without_claiming_fmmt_v1_limitations() {
+    let openapi = crate::openapi_v2::openapi_json();
+    for path in [
+        "/v2/sessions/current/data/domain/topology",
+        "/v2/sessions/current/meshing/meshes/shared-domain/topology",
+        "/v2/sessions/current/meshing/meshes/objects/{object_id}/topology",
+        "/v2/sessions/current/meshing/meshes/parts/{part_id}/topology",
+    ] {
+        let responses = &openapi["paths"][path]["get"]["responses"];
+        assert!(responses
+            .as_object()
+            .is_some_and(|responses| responses.contains_key("409")));
+        assert!(
+            responses["200"]["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("FMMT v2")),
+            "missing FMMT v2 success contract for {path}"
+        );
+        assert!(
+            !responses["409"]["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("FMMT v1")),
+            "stale FMMT v1 limitation documented for {path}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn fmmt_v2_topology_routes_reject_malformed_csr_instead_of_truncating() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload();
+        mesh.cells.offsets[1] = 3;
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/topology")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn scoped_topology_routes_distinguish_missing_resources_from_malformed_topology() {
+    let valid_state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = valid_state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload_with_manifest());
+    }
+    let valid_app = build_v2_router().with_state(valid_state);
+    for uri in [
+        "/v2/sessions/current/meshing/meshes/objects/missing/topology",
+        "/v2/sessions/current/meshing/meshes/parts/missing/topology",
+    ] {
+        let response = valid_app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+    }
+
+    let malformed_state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = malformed_state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload_with_manifest();
+        mesh.cells.offsets[1] = 3;
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let malformed_app = build_v2_router().with_state(malformed_state);
+    for uri in [
+        "/v2/sessions/current/meshing/meshes/objects/body/topology",
+        "/v2/sessions/current/meshing/meshes/parts/body/topology",
+    ] {
+        let response = malformed_app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT, "{uri}");
+    }
+}
+
+#[tokio::test]
 async fn mesh_shared_domain_cross_section_returns_binary_fmcs_payload() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -7205,13 +7970,44 @@ async fn mesh_shared_domain_manifest_includes_topology_fingerprint() {
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["topology_fingerprint"], expected_hash);
+    assert!(json.get("fallbacks_triggered").is_none());
+}
+
+#[tokio::test]
+async fn mesh_shared_domain_manifest_omits_unpublished_fallback_evidence() {
+    let state = test_app_state_with_live_session().await;
+    let mut mesh = sample_fem_mesh_payload_with_manifest();
+    mesh.build_report = Some(
+        serde_json::from_value(serde_json::json!({
+            "build_mode": "component_aware"
+        }))
+        .expect("legacy build report should deserialize"),
+    );
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/manifest")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert!(json.get("fallbacks_triggered").is_none());
 }
 
 #[tokio::test]
 async fn mesh_shared_domain_manifest_includes_derived_surface_node_membership() {
     let state = test_app_state_with_live_session().await;
     let mut mesh = sample_scoped_fem_mesh_payload();
-    mesh.mesh_parts[1].surface_faces.clear();
+    mesh.mesh_parts[1].facet_global_ordinals.clear();
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.fem_mesh = Some(mesh);
     }
@@ -7233,6 +8029,127 @@ async fn mesh_shared_domain_manifest_includes_derived_surface_node_membership() 
         json["mesh_parts"][1]["surface_node_indices"],
         serde_json::json!([4, 5, 6])
     );
+}
+
+#[tokio::test]
+async fn mesh_shared_domain_manifest_projects_quad_surface_faces_without_internal_ids() {
+    let state = test_app_state_with_live_session().await;
+    let mut mesh = sample_fem_mesh_payload_with_manifest();
+    mesh.facets = fullmag_ir::FemFacetConnectivityIR {
+        types: vec![fullmag_ir::FemFacetTypeIR::Quad4; 2],
+        roles: vec![fullmag_ir::FemFacetRoleIR::MaterialInterface; 2],
+        offsets: vec![0, 4, 8],
+        nodes: vec![0, 1, 2, 3, 3, 2, 1, 0],
+        global_ordinals: vec![700, 12],
+    };
+    mesh.boundary_markers = vec![1, 2];
+    mesh.mesh_parts[1].boundary_face_indices.clear();
+    mesh.mesh_parts[1].boundary_face_start = 99;
+    mesh.mesh_parts[1].boundary_face_count = 2;
+    mesh.mesh_parts[1].facet_global_ordinals = vec![12, 700];
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/manifest")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(
+        json["mesh_parts"][1]["surface_faces"],
+        serde_json::json!([[3, 2, 1, 0], [0, 1, 2, 3]])
+    );
+    assert_eq!(
+        json["mesh_parts"][1]["boundary_face_indices"],
+        serde_json::json!([1, 0])
+    );
+    assert!(json["mesh_parts"][1]
+        .as_object()
+        .is_some_and(|part| !part.contains_key("facet_global_ordinals")));
+}
+
+#[test]
+fn openapi_mesh_part_schema_keeps_surface_faces_and_hides_internal_facet_ids() {
+    let openapi = crate::openapi_v2::openapi_json();
+    let properties = openapi["components"]["schemas"]["MeshPartResource"]["properties"]
+        .as_object()
+        .expect("MeshPartResource properties");
+    assert!(properties.contains_key("surface_faces"));
+    assert!(properties.contains_key("element_counts_by_type"));
+    assert!(!properties.contains_key("facet_global_ordinals"));
+}
+
+#[test]
+fn openapi_registers_typed_mixed_topology_truth_fields() {
+    let openapi = crate::openapi_v2::openapi_json();
+    let schemas = openapi["components"]["schemas"]
+        .as_object()
+        .expect("OpenAPI schemas");
+    for schema in [
+        "MeshLayeredPolicyResource",
+        "MeshMixedLayerTopologyCertificateSummaryResource",
+        "MeshMixedCertificateFamilyQualityGateResource",
+        "MeshMixedCertificateQualityEvidenceResource",
+        "MeshMixedP1ExecutionResource",
+        "MeshMixedLayerTopologyRejectionResource",
+        "MeshMixedTopologyProvenanceResource",
+        "MeshSharedDomainBuildReportResource",
+    ] {
+        assert!(schemas.contains_key(schema), "missing schema {schema}");
+    }
+    let manifest = schemas["MeshSharedDomainManifestResource"]["properties"]
+        .as_object()
+        .expect("manifest properties");
+    for field in [
+        "topology_schema_version",
+        "element_counts_by_type",
+        "facet_counts_by_type_and_role",
+        "requested_layered_policy",
+        "resolved_layered_policy",
+        "mixed_layer_topology_certificate",
+        "mixed_topology_provenance",
+        "gmsh_version",
+        "fallbacks_triggered",
+    ] {
+        assert!(
+            manifest.contains_key(field),
+            "missing manifest field {field}"
+        );
+    }
+    let active_build = schemas["MeshActiveBuildResource"]["properties"]
+        .as_object()
+        .expect("active build properties");
+    assert!(active_build.contains_key("mixed_layer_topology_rejection"));
+    let quality_gates = schemas["MeshQualityGatesResource"]["properties"]
+        .as_object()
+        .expect("quality-gates properties");
+    assert!(quality_gates.contains_key("mixed_certificate"));
+    let rejection = schemas["MeshMixedLayerTopologyRejectionResource"]["properties"]
+        .as_object()
+        .expect("mixed rejection properties");
+    for field in [
+        "rejection_category",
+        "rejection_reason",
+        "missing_capabilities",
+        "requested_execution",
+        "resolved_execution",
+        "fallback",
+        "free_tetrahedral_alternative",
+    ] {
+        assert!(
+            rejection.contains_key(field),
+            "missing rejection field {field}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -7646,9 +8563,9 @@ async fn mesh_periodic_pairs_marks_matching_topology_artifact_stale_after_scene_
     let topology_fingerprint = fullmag_ir::MeshIR {
         mesh_name: mesh.mesh_name.clone(),
         nodes: mesh.nodes.clone(),
-        elements: mesh.elements.clone(),
+        cells: mesh.cells.clone(),
         element_markers: mesh.element_markers.clone(),
-        boundary_faces: mesh.boundary_faces.clone(),
+        facets: mesh.facets.clone(),
         boundary_markers: mesh.boundary_markers.clone(),
         periodic_boundary_pairs: mesh.periodic_boundary_pairs.clone(),
         periodic_node_pairs: mesh.periodic_node_pairs.clone(),
@@ -7733,9 +8650,9 @@ async fn mesh_periodic_pairs_rejects_artifact_with_mismatched_marker_certificate
     let mesh_ir = fullmag_ir::MeshIR {
         mesh_name: mesh.mesh_name.clone(),
         nodes: mesh.nodes.clone(),
-        elements: mesh.elements.clone(),
+        cells: mesh.cells.clone(),
         element_markers: mesh.element_markers.clone(),
-        boundary_faces: mesh.boundary_faces.clone(),
+        facets: mesh.facets.clone(),
         boundary_markers: mesh.boundary_markers.clone(),
         periodic_boundary_pairs: mesh.periodic_boundary_pairs.clone(),
         periodic_node_pairs: mesh.periodic_node_pairs.clone(),
@@ -7806,7 +8723,9 @@ async fn mesh_periodic_pairs_does_not_publish_nearest_face_with_excessive_residu
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         let mut mesh = sample_periodic_fem_mesh_payload();
-        mesh.boundary_faces[1] = [1, 5, 4];
+        let mut faces = mesh.require_tri3_boundary_faces().unwrap();
+        faces[1] = [1, 5, 4];
+        mesh.set_tri3_facets(faces);
         snapshot.fem_mesh = Some(mesh);
         snapshot.mesh_revision = 44;
     }
@@ -8374,7 +9293,7 @@ async fn mesh_shared_domain_manifest_returns_tree_metadata() {
             node_start: 0,
             node_count: 4,
             node_indices: vec![0, 1, 2, 3],
-            surface_faces: vec![[0, 1, 2]],
+            facet_global_ordinals: vec![0],
             bounds_min: Some([0.25, 0.25, 0.25]),
             bounds_max: Some([0.75, 0.75, 0.75]),
         });
@@ -8477,7 +9396,7 @@ async fn mesh_region_membership_returns_indices_for_mesh_backed_region() {
             node_start: 0,
             node_count: 4,
             node_indices: vec![0, 1, 2, 3],
-            surface_faces: vec![[0, 1, 2]],
+            facet_global_ordinals: vec![0],
             bounds_min: Some([0.25, 0.25, 0.25]),
             bounds_max: Some([0.75, 0.75, 0.75]),
         });
@@ -8582,7 +9501,7 @@ async fn mesh_region_quality_returns_scoped_size_and_quality_distributions() {
             node_start: 0,
             node_count: 4,
             node_indices: vec![0, 1, 2, 3],
-            surface_faces: vec![[0, 1, 2]],
+            facet_global_ordinals: vec![0],
             bounds_min: Some([0.25, 0.25, 0.25]),
             bounds_max: Some([0.75, 0.75, 0.75]),
         });
@@ -8975,7 +9894,7 @@ async fn mesh_region_memberships_lists_available_authored_region_memberships() {
             node_start: 0,
             node_count: 4,
             node_indices: vec![0, 1, 2, 3],
-            surface_faces: vec![[0, 1, 2]],
+            facet_global_ordinals: vec![0],
             bounds_min: Some([0.25, 0.25, 0.25]),
             bounds_max: Some([0.75, 0.75, 0.75]),
         });
@@ -12861,13 +13780,13 @@ async fn authoring_coupling_resource_resolves_bbox_surface_from_current_fem_mesh
     mesh.nodes[0] = [0.0, 0.0, 1.0];
     mesh.nodes[1] = [1.0, 0.0, 1.0];
     mesh.nodes[2] = [0.0, 1.0, 1.0];
-    mesh.boundary_faces[0] = [0, 1, 2];
+    mesh.set_tri3_facets(vec![[0, 1, 2]]);
     if let Some(body_part) = mesh
         .mesh_parts
         .iter_mut()
         .find(|part| part.object_id.as_deref() == Some("body"))
     {
-        body_part.surface_faces = vec![[0, 1, 2]];
+        body_part.facet_global_ordinals = vec![0];
     }
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(scene);
@@ -12940,7 +13859,6 @@ async fn authoring_coupling_resource_blocks_surface_without_boundary_markers() {
     mesh.nodes[0] = [0.0, 0.0, 1.0];
     mesh.nodes[1] = [1.0, 0.0, 1.0];
     mesh.nodes[2] = [0.0, 1.0, 1.0];
-    mesh.boundary_faces.clear();
     mesh.boundary_markers.clear();
     if let Some(body_part) = mesh
         .mesh_parts
@@ -12950,7 +13868,7 @@ async fn authoring_coupling_resource_blocks_surface_without_boundary_markers() {
         body_part.boundary_face_start = 0;
         body_part.boundary_face_count = 0;
         body_part.boundary_face_indices.clear();
-        body_part.surface_faces = vec![[0, 1, 2]];
+        body_part.facet_global_ordinals = vec![0];
     }
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(scene);
@@ -12983,7 +13901,7 @@ async fn authoring_coupling_resource_blocks_surface_without_boundary_markers() {
     );
     assert_eq!(
         json["couplings"][0]["source_resolution"]["boundary_face_indices"],
-        serde_json::json!([])
+        serde_json::json!([0])
     );
     assert_eq!(
         json["couplings"][0]["source_resolution"]["boundary_marker_ids"],
@@ -13014,7 +13932,7 @@ async fn authoring_coupling_resource_does_not_treat_unknown_mesh_part_as_magneti
     mesh.nodes[0] = [0.0, 0.0, 1.0];
     mesh.nodes[1] = [1.0, 0.0, 1.0];
     mesh.nodes[2] = [0.0, 1.0, 1.0];
-    mesh.boundary_faces[0] = [0, 1, 2];
+    mesh.set_tri3_facets(vec![[0, 1, 2]]);
     mesh.mesh_parts[1].role = "unsupported_role".to_string();
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(scene);
@@ -16824,6 +17742,7 @@ async fn hysteresis_progress_endpoint_averages_only_magnetic_fem_nodes() {
     let (app, state, _repo_root) = test_router_with_session_store_state().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         let mesh = sample_scoped_fem_mesh_payload();
+        snapshot.fem_mesh = Some(mesh);
         snapshot.state_version = 16;
         snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
             "entrypoint_kind": "flat_hysteresis",
@@ -16836,7 +17755,7 @@ async fn hysteresis_progress_endpoint_averages_only_magnetic_fem_nodes() {
             "stage_id": "stage-fem-magnetic-average"
         })));
         if let Some(live_state) = snapshot.live_state.as_mut() {
-            live_state.latest_step.fem_mesh = Some(mesh);
+            live_state.latest_step.fem_mesh = None;
             live_state.latest_step.magnetization = Some(vec![
                 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -16909,6 +17828,7 @@ async fn hysteresis_progress_endpoint_uses_fem_element_volume_weights_for_live_a
         mesh.mesh_parts[1].role = "magnetic_object".to_string();
         mesh.mesh_parts[1].object_id = Some("body-large".to_string());
         mesh.mesh_parts[1].material_id = Some("mat-body".to_string());
+        snapshot.fem_mesh = Some(mesh);
         snapshot.state_version = 17;
         snapshot.scene_document = Some(sample_scene_document_with_stage(serde_json::json!({
             "entrypoint_kind": "flat_hysteresis",
@@ -16921,7 +17841,7 @@ async fn hysteresis_progress_endpoint_uses_fem_element_volume_weights_for_live_a
             "stage_id": "stage-fem-volume-average"
         })));
         if let Some(live_state) = snapshot.live_state.as_mut() {
-            live_state.latest_step.fem_mesh = Some(mesh);
+            live_state.latest_step.fem_mesh = None;
             live_state.latest_step.magnetization = Some(vec![
                 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -18378,9 +19298,9 @@ async fn object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_node
                         [1.0, 1.0, 0.0],
                         [1.0, 0.0, 1.0],
                     ],
-                    elements: vec![[1, 3, 5, 0]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[1, 3, 5, 0]]),
                     element_markers: vec![7],
-                    boundary_faces: vec![[1, 3, 5]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[1, 3, 5]]),
                     boundary_markers: vec![3],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -18409,7 +19329,7 @@ async fn object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_node
                         node_start: 0,
                         node_count: 3,
                         node_indices: vec![1, 3, 5],
-                        surface_faces: vec![[1, 3, 5]],
+                        facet_global_ordinals: vec![0],
                         bounds_min: Some([0.0, 0.0, 0.0]),
                         bounds_max: Some([1.0, 1.0, 1.0]),
                     }],
@@ -18429,6 +19349,10 @@ async fn object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_node
                 finished: false,
             },
         });
+        snapshot.fem_mesh = snapshot
+            .live_state
+            .as_mut()
+            .and_then(|live_state| live_state.latest_step.fem_mesh.take());
         snapshot.scalar_revision = 21;
     }
     let app = build_v2_router().with_state(state);
@@ -20561,9 +21485,9 @@ async fn test_router_with_mock_field_fem_without_topology() -> axum::Router {
             mesh_name: "fem-empty-topology".to_string(),
             mesh_id: "fem-empty-topology:1".to_string(),
             nodes: Vec::new(),
-            elements: Vec::new(),
+            cells: fullmag_ir::FemConnectivityIR::empty(),
             element_markers: Vec::new(),
-            boundary_faces: Vec::new(),
+            facets: fullmag_ir::FemFacetConnectivityIR::empty(),
             boundary_markers: Vec::new(),
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -25381,7 +26305,7 @@ async fn topological_charge_computes_uniform_fem_object_from_native_layer_faces(
     let object_id = scene.objects[0].id.clone();
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         let mut mesh = sample_scoped_fem_mesh_payload();
-        mesh.mesh_parts[0].surface_faces.clear();
+        mesh.mesh_parts[0].facet_global_ordinals.clear();
         snapshot.scene_document = Some(scene);
         snapshot.session.plan_summary = serde_json::json!({ "fe_order": 1 });
         snapshot.mesh_revision = 17;
@@ -25513,7 +26437,7 @@ async fn topological_charge_reports_degenerate_support_when_no_volume_sampler_is
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         let mut mesh = sample_scoped_fem_mesh_payload();
         mesh.mesh_parts[0].element_count = 0;
-        mesh.mesh_parts[0].surface_faces.clear();
+        mesh.mesh_parts[0].facet_global_ordinals.clear();
         snapshot.scene_document = Some(scene);
         snapshot.session.plan_summary = serde_json::json!({ "fe_order": 1 });
         snapshot.fem_mesh = Some(mesh);
@@ -26081,7 +27005,7 @@ async fn v2_field_vector_rejects_airbox_surface_without_surface_membership() {
             .iter_mut()
             .find(|part| part.role == "air")
             .expect("sample mesh should include airbox");
-        airbox.surface_faces.clear();
+        airbox.facet_global_ordinals.clear();
         airbox.boundary_face_indices.clear();
         airbox.boundary_face_count = 0;
         snapshot.fem_mesh = Some(mesh);
@@ -26232,7 +27156,7 @@ async fn v2_field_vector_object_scope_fallback_uses_segment_element_nodes() {
         mesh.mesh_parts.clear();
         mesh.object_segments[0].node_start = 3;
         mesh.object_segments[0].node_count = 1;
-        mesh.elements[0] = [0, 1, 2, 3];
+        mesh.set_tet4_cells(vec![[0, 1, 2, 3]]);
         snapshot.fem_mesh = Some(mesh);
         snapshot.latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
@@ -26380,9 +27304,10 @@ async fn v2_mesh_part_topology_returns_scoped_mesh() {
         &(1u32).to_le_bytes(),
         "airbox topology elements"
     );
-    let full_len = crate::field_store::serialize_fem_mesh_topology_binary_v1(
+    let full_len = crate::field_store::serialize_fem_mesh_topology_binary_v2(
         &sample_scoped_fem_mesh_payload(),
     )
+    .unwrap()
     .len();
     assert!(
         bytes.len() < full_len,

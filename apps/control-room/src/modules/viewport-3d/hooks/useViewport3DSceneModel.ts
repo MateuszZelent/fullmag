@@ -3856,6 +3856,12 @@ export function useViewport3DSceneModel({
       decoded.boundaryMarkers.byteLength +
       decoded.elementMarkers.byteLength +
       decoded.indices.byteLength +
+      (decoded.cellNodes?.byteLength ?? 0) +
+      (decoded.cellOffsets?.byteLength ?? 0) +
+      (decoded.cellTypes?.byteLength ?? 0) +
+      (decoded.facetNodes?.byteLength ?? 0) +
+      (decoded.facetOffsets?.byteLength ?? 0) +
+      (decoded.facetTypes?.byteLength ?? 0) +
       decoded.positions.byteLength
     );
   }, [topology.data]);

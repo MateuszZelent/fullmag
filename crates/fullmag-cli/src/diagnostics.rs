@@ -285,7 +285,7 @@ pub(crate) fn diagnose_initial_fem_plan(plan: &FemPlanIR) -> Result<InitialState
             Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler) => {
                 let mut diagnostic = diagnose_initial_state(
                     plan.mesh.nodes.len(),
-                    Some(plan.mesh.boundary_faces.len()),
+                    Some(plan.mesh.facet_count()),
                     None,
                     None,
                     plan.enable_exchange,
@@ -386,7 +386,7 @@ pub(crate) fn diagnose_initial_backend_plan(
         BackendPlanIR::Fem(plan) => diagnose_initial_fem_plan(plan),
         BackendPlanIR::FemEigen(plan) => diagnose_initial_state(
             plan.mesh.nodes.len(),
-            Some(plan.mesh.boundary_faces.len()),
+            Some(plan.mesh.facet_count()),
             None,
             None,
             plan.enable_exchange,
@@ -402,7 +402,7 @@ pub(crate) fn diagnose_initial_backend_plan(
         ),
         BackendPlanIR::FemFrequencyResponse(plan) => diagnose_initial_state(
             plan.mesh.nodes.len(),
-            Some(plan.mesh.boundary_faces.len()),
+            Some(plan.mesh.facet_count()),
             None,
             None,
             plan.enable_exchange,

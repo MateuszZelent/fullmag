@@ -3374,6 +3374,43 @@ fn runtime_selection_rejects_unimplemented_multi_gpu_requests() {
 }
 
 #[test]
+fn managed_runtime_device_override_has_a_separate_validated_identity() {
+    let mut problem = ProblemIR::bootstrap_example();
+    problem.problem_meta.runtime_metadata.insert(
+        "runtime_selection".into(),
+        serde_json::json!({"device": "auto", "execution_precision": "double"}),
+    );
+    problem.problem_meta.runtime_metadata.insert(
+        "runtime_device_override".into(),
+        serde_json::json!({"device": "cpu", "source": "managed_launcher"}),
+    );
+    problem
+        .validate()
+        .expect("a typed managed launcher override must preserve valid authored intent");
+
+    for invalid in [
+        serde_json::json!({"device": "auto", "source": "managed_launcher"}),
+        serde_json::json!({"device": "cpu", "source": "unknown"}),
+        serde_json::json!("cpu"),
+    ] {
+        let mut rejected = problem.clone();
+        rejected
+            .problem_meta
+            .runtime_metadata
+            .insert("runtime_device_override".into(), invalid);
+        let errors = rejected
+            .validate()
+            .expect_err("malformed launcher override must fail IR validation");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("runtime_device_override")),
+            "{errors:?}",
+        );
+    }
+}
+
+#[test]
 fn random_seeded_initial_magnetization_must_be_positive() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.magnets[0].initial_magnetization = Some(InitialMagnetizationIR::RandomSeeded { seed: 0 });
@@ -4294,9 +4331,9 @@ fn mesh_periodic_pair_validation_allows_shared_boundary_marker_pairs() {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 1, 2], [0, 1, 3]],
+        facets: FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [0, 1, 3]]),
         boundary_markers: vec![99, 99],
         periodic_boundary_pairs: vec![MeshPeriodicBoundaryPairIR {
             pair_id: "x_faces".to_string(),
@@ -4335,9 +4372,9 @@ fn mesh_periodic_pair_validation_allows_fragmented_boundary_pairs_with_same_pair
             [0.0, 1.0, 1.0],
             [1.0, 1.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 4], [3, 5, 6, 7]],
+        cells: FemConnectivityIR::from_tet4(vec![[0, 1, 2, 4], [3, 5, 6, 7]]),
         element_markers: vec![1, 1],
-        boundary_faces: vec![[0, 2, 4], [1, 3, 5], [2, 4, 6], [3, 5, 7]],
+        facets: FemFacetConnectivityIR::from_tri3(vec![[0, 2, 4], [1, 3, 5], [2, 4, 6], [3, 5, 7]]),
         boundary_markers: vec![10, 11, 12, 13],
         periodic_boundary_pairs: vec![
             MeshPeriodicBoundaryPairIR {
@@ -4432,9 +4469,9 @@ fn mesh_periodic_pair_validation_rejects_bad_translation_residual() {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 2, 3], [1, 2, 3]],
+        facets: FemFacetConnectivityIR::from_tri3(vec![[0, 2, 3], [1, 2, 3]]),
         boundary_markers: vec![10, 11],
         periodic_boundary_pairs: vec![MeshPeriodicBoundaryPairIR {
             pair_id: "x_faces".to_string(),
@@ -4474,9 +4511,9 @@ fn mesh_periodic_pair_validation_rejects_duplicate_destination_nodes() {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3]],
+        cells: FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
         element_markers: vec![1],
-        boundary_faces: vec![[0, 2, 3], [1, 2, 3]],
+        facets: FemFacetConnectivityIR::from_tri3(vec![[0, 2, 3], [1, 2, 3]]),
         boundary_markers: vec![10, 11],
         periodic_boundary_pairs: vec![MeshPeriodicBoundaryPairIR {
             pair_id: "x_faces".to_string(),
@@ -4609,7 +4646,7 @@ fn problem_ir_validation_accepts_valid_mesh_semantics() {
             generation_id: Some("mesh-gen-1".to_string()),
             build_report: Some(FemSharedDomainBuildReportIR {
                 build_mode: "shared_domain".to_string(),
-                fallbacks_triggered: Vec::new(),
+                fallbacks_triggered: Some(Vec::new()),
                 effective_airbox_target: None,
                 effective_airbox_hmax: Some(8e-9),
                 effective_per_object_targets: HashMap::new(),
@@ -4626,6 +4663,8 @@ fn problem_ir_validation_accepts_valid_mesh_semantics() {
                 degraded: false,
                 authored_regions_count: None,
                 realized_regions_count: None,
+                mixed_layer_topology_certificate: None,
+                mixed_topology_provenance: None,
             }),
         }),
     });
@@ -4750,6 +4789,31 @@ fn shared_domain_build_report_preserves_full_mesh_v2_fields() {
     assert_eq!(
         round_trip["magnetic_submesh_signatures"][0]["digest"],
         "44067a65a859016cea21ecf2d902837ea7322183d996d420de0ec0d942d29642"
+    );
+}
+
+#[test]
+fn shared_domain_build_report_preserves_fallback_publication_presence() {
+    let omitted: FemSharedDomainBuildReportIR = serde_json::from_value(serde_json::json!({
+        "build_mode": "component_aware"
+    }))
+    .expect("build report without fallback evidence should deserialize");
+    assert_eq!(omitted.fallbacks_triggered, None);
+    assert!(serde_json::to_value(&omitted)
+        .expect("build report should serialize")
+        .get("fallbacks_triggered")
+        .is_none());
+
+    let explicit_empty: FemSharedDomainBuildReportIR = serde_json::from_value(serde_json::json!({
+        "build_mode": "component_aware",
+        "fallbacks_triggered": []
+    }))
+    .expect("build report with strict fallback evidence should deserialize");
+    assert_eq!(explicit_empty.fallbacks_triggered, Some(Vec::new()));
+    assert_eq!(
+        serde_json::to_value(&explicit_empty).expect("build report should serialize")
+            ["fallbacks_triggered"],
+        serde_json::json!([])
     );
 }
 
@@ -5148,4 +5212,288 @@ fn preset_texture_backward_compat_params_alias() {
         }
         other => panic!("expected PresetTexture, got {:?}", other),
     }
+}
+
+fn mixed_topology_mesh() -> MeshIR {
+    MeshIR {
+        mesh_name: "mixed".into(),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [0.0, 1.0, 1.0],
+            [1.0, 1.0, 0.0],
+            [1.0, 1.0, 1.0],
+        ],
+        cells: FemConnectivityIR {
+            types: vec![
+                FemCellTypeIR::Prism6,
+                FemCellTypeIR::Pyramid5,
+                FemCellTypeIR::Tet4,
+            ],
+            offsets: vec![0, 6, 11, 15],
+            nodes: vec![0, 1, 2, 3, 4, 5, 0, 1, 6, 2, 7, 0, 1, 2, 3],
+            global_ordinals: vec![41, 7, 99],
+            mesh_parts: Vec::new(),
+        },
+        element_markers: vec![11, 12, 13],
+        facets: FemFacetConnectivityIR {
+            types: vec![FemFacetTypeIR::Tri3, FemFacetTypeIR::Quad4],
+            roles: vec![FemFacetRoleIR::Exterior, FemFacetRoleIR::MaterialInterface],
+            offsets: vec![0, 3, 7],
+            nodes: vec![0, 1, 2, 0, 1, 4, 3],
+            global_ordinals: vec![88, 12],
+        },
+        boundary_markers: vec![21, 22],
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: HashMap::new(),
+    }
+}
+
+#[test]
+fn fem_topology_enum_wire_strings_are_canonical() {
+    let cases = [
+        (serde_json::to_value(FemCellTypeIR::Tet4).unwrap(), "tet4"),
+        (
+            serde_json::to_value(FemCellTypeIR::Prism6).unwrap(),
+            "prism6",
+        ),
+        (
+            serde_json::to_value(FemCellTypeIR::Pyramid5).unwrap(),
+            "pyramid5",
+        ),
+        (serde_json::to_value(FemCellTypeIR::Hex8).unwrap(), "hex8"),
+        (serde_json::to_value(FemFacetTypeIR::Tri3).unwrap(), "tri3"),
+        (
+            serde_json::to_value(FemFacetTypeIR::Quad4).unwrap(),
+            "quad4",
+        ),
+        (
+            serde_json::to_value(FemFacetRoleIR::Exterior).unwrap(),
+            "exterior",
+        ),
+        (
+            serde_json::to_value(FemFacetRoleIR::MaterialInterface).unwrap(),
+            "material_interface",
+        ),
+        (
+            serde_json::to_value(FemFacetRoleIR::PeriodicSeam).unwrap(),
+            "periodic_seam",
+        ),
+    ];
+    for (actual, expected) in cases {
+        assert_eq!(actual, serde_json::Value::String(expected.into()));
+    }
+}
+
+#[test]
+fn mixed_mesh_serde_round_trip_is_v2_only() {
+    let mesh = mixed_topology_mesh();
+    mesh.validate().expect("valid mixed topology");
+    let value = serde_json::to_value(&mesh).unwrap();
+    assert!(value.get("cells").is_some());
+    assert!(value.get("facets").is_some());
+    assert!(value.get("elements").is_none());
+    assert!(value.get("boundary_faces").is_none());
+    assert_eq!(
+        value["cells"]["global_ordinals"],
+        serde_json::json!([41, 7, 99])
+    );
+    assert_eq!(
+        value["facets"]["global_ordinals"],
+        serde_json::json!([88, 12])
+    );
+    assert_eq!(serde_json::from_value::<MeshIR>(value).unwrap(), mesh);
+}
+
+#[test]
+fn topology_fingerprint_binds_cell_and_facet_global_ordinals() {
+    let mesh = mixed_topology_mesh();
+    let baseline = mesh.topology_fingerprint_v6();
+    let mut changed_cell = mesh.clone();
+    changed_cell.cells.global_ordinals[0] += 1_000;
+    assert_ne!(changed_cell.topology_fingerprint_v6(), baseline);
+    let mut changed_facet = mesh;
+    changed_facet.facets.global_ordinals[0] += 1_000;
+    assert_ne!(changed_facet.topology_fingerprint_v6(), baseline);
+}
+
+#[test]
+fn legacy_tet_mesh_normalizes_and_dual_truth_rejects() {
+    let legacy = serde_json::json!({
+        "mesh_name": "legacy",
+        "nodes": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        "elements": [[0, 1, 2, 3]],
+        "element_markers": [7],
+        "boundary_faces": [[0, 1, 2]],
+        "boundary_markers": [9]
+    });
+    let mesh: MeshIR = serde_json::from_value(legacy.clone()).unwrap();
+    assert_eq!(mesh.cells.types, vec![FemCellTypeIR::Tet4]);
+    assert_eq!(mesh.cells.offsets, vec![0, 4]);
+    assert_eq!(mesh.facets.roles, vec![FemFacetRoleIR::Exterior]);
+    assert_eq!(mesh.cells.global_ordinals, vec![0]);
+    assert_eq!(mesh.facets.global_ordinals, vec![0]);
+    let canonical = serde_json::to_value(mesh).unwrap();
+    assert!(canonical.get("elements").is_none());
+    assert!(canonical.get("boundary_faces").is_none());
+
+    let mut dual = legacy;
+    dual.as_object_mut().unwrap().insert(
+        "cells".into(),
+        serde_json::json!({"types": ["tet4"], "offsets": [0, 4], "nodes": [0, 1, 2, 3]}),
+    );
+    dual.as_object_mut().unwrap().insert(
+        "facets".into(),
+        serde_json::json!({"types": ["tri3"], "roles": ["exterior"], "offsets": [0, 3], "nodes": [0, 1, 2]}),
+    );
+    let error = serde_json::from_value::<MeshIR>(dual).unwrap_err();
+    assert!(error.to_string().contains("both legacy and v2 topology"));
+}
+
+#[test]
+fn mixed_mesh_validation_rejects_each_csr_invariant_and_periodicity() {
+    let mutations: Vec<(&str, Box<dyn Fn(&mut MeshIR)>)> = vec![
+        (
+            "cell offsets",
+            Box::new(|mesh| mesh.cells.offsets = vec![0, 6, 5, 15]),
+        ),
+        ("cell arity", Box::new(|mesh| mesh.cells.offsets[1] = 5)),
+        ("cell index", Box::new(|mesh| mesh.cells.nodes[0] = 99)),
+        (
+            "cell duplicate",
+            Box::new(|mesh| mesh.cells.nodes[1] = mesh.cells.nodes[0]),
+        ),
+        (
+            "cell markers",
+            Box::new(|mesh| mesh.element_markers.pop().map(|_| ()).unwrap()),
+        ),
+        (
+            "cell global ordinals",
+            Box::new(|mesh| mesh.cells.global_ordinals[1] = mesh.cells.global_ordinals[0]),
+        ),
+        (
+            "facet offsets",
+            Box::new(|mesh| mesh.facets.offsets = vec![0, 4, 7]),
+        ),
+        ("facet arity", Box::new(|mesh| mesh.facets.offsets[1] = 2)),
+        ("facet index", Box::new(|mesh| mesh.facets.nodes[0] = 99)),
+        (
+            "facet duplicate",
+            Box::new(|mesh| mesh.facets.nodes[1] = mesh.facets.nodes[0]),
+        ),
+        (
+            "facet roles",
+            Box::new(|mesh| mesh.facets.roles.pop().map(|_| ()).unwrap()),
+        ),
+        (
+            "facet markers",
+            Box::new(|mesh| mesh.boundary_markers.pop().map(|_| ()).unwrap()),
+        ),
+        (
+            "facet global ordinals",
+            Box::new(|mesh| mesh.facets.global_ordinals[1] = mesh.facets.global_ordinals[0]),
+        ),
+    ];
+    for (label, mutate) in mutations {
+        let mut mesh = mixed_topology_mesh();
+        mutate(&mut mesh);
+        assert!(mesh.validate().is_err(), "{label} mutation must reject");
+    }
+
+    let mut periodic = mixed_topology_mesh();
+    periodic
+        .periodic_boundary_pairs
+        .push(MeshPeriodicBoundaryPairIR {
+            pair_id: "x".into(),
+            source_marker: None,
+            destination_marker: None,
+            marker_a: 21,
+            marker_b: 22,
+            axis_hint: Some("x".into()),
+            translation: Some([1.0, 0.0, 0.0]),
+            tolerance: Some(1e-9),
+            orientation: None,
+            pairing_policy: None,
+        });
+    let errors = periodic.validate().unwrap_err().join("\n");
+    assert!(errors.contains("mixed topology"));
+    assert!(errors.contains("periodic"));
+}
+
+#[test]
+fn fixed_family_extractors_reject_malformed_csr_instead_of_shortening_output() {
+    let mut mesh = MeshIR::from_legacy_tet4(
+        "strict-extractors".into(),
+        vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        vec![[0, 1, 2, 3]],
+        vec![7],
+        vec![[0, 1, 2]],
+        vec![9],
+        Vec::new(),
+        Vec::new(),
+        HashMap::new(),
+    );
+
+    mesh.cells.global_ordinals.clear();
+    assert!(mesh
+        .require_tet4_elements()
+        .unwrap_err()
+        .contains("global_ordinals"));
+
+    mesh = MeshIR::from_legacy_tet4(
+        "strict-extractors".into(),
+        mesh.nodes.clone(),
+        vec![[0, 1, 2, 3]],
+        vec![7],
+        vec![[0, 1, 2]],
+        vec![9],
+        Vec::new(),
+        Vec::new(),
+        HashMap::new(),
+    );
+    mesh.element_markers.clear();
+    assert!(mesh
+        .require_tet4_elements()
+        .unwrap_err()
+        .contains("element_markers"));
+
+    mesh = MeshIR::from_legacy_tet4(
+        "strict-extractors".into(),
+        mesh.nodes.clone(),
+        vec![[0, 1, 2, 3]],
+        vec![7],
+        vec![[0, 1, 2]],
+        vec![9],
+        Vec::new(),
+        Vec::new(),
+        HashMap::new(),
+    );
+    mesh.facets.roles.clear();
+    assert!(mesh
+        .require_tri3_boundary_faces()
+        .unwrap_err()
+        .contains("roles"));
+
+    mesh.facets = FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]);
+    mesh.facets.offsets.pop();
+    assert!(mesh
+        .require_tri3_boundary_faces()
+        .unwrap_err()
+        .contains("offsets"));
+
+    mesh.facets = FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]);
+    mesh.boundary_markers.clear();
+    assert!(mesh
+        .require_tri3_boundary_faces()
+        .unwrap_err()
+        .contains("boundary_markers"));
 }

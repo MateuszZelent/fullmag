@@ -956,6 +956,11 @@ class _MeshSpecState:
     through_thickness_element_ratio: float | None = None
     through_thickness_symmetric: bool = False
     sweep_face_meshing: str | None = None
+    topology: str | None = None
+    sweep_direction: str | None = None
+    element_family: str | None = None
+    transition_policy: str | None = None
+    exact_layer_count: bool | None = None
     periodic_pair_ids: list[str] = field(default_factory=list)
 
     def is_configured(self) -> bool:
@@ -1006,8 +1011,21 @@ class _MeshSpecState:
             or self.through_thickness_element_ratio is not None
             or self.through_thickness_symmetric
             or self.sweep_face_meshing is not None
+            or self.topology is not None
+            or self.sweep_direction is not None
+            or self.element_family is not None
+            or self.transition_policy is not None
+            or self.exact_layer_count is not None
             or bool(self.periodic_pair_ids)
         )
+
+
+def _element_layer_count(value: object, *, context: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{context} must be an integer element-layer count")
+    if value < 1:
+        raise ValueError(f"{context} must be >= 1")
+    return value
 
 
 def _unwrap_translated_box(geometry: object) -> Box | None:
@@ -1091,6 +1109,97 @@ def _normalize_transition_distance_value(
         qualifier = "non-negative" if allow_zero else "positive"
         raise ValueError(f"{context} must be {qualifier}")
     return resolved
+
+
+def _clear_layered_mesh_intent(spec: _MeshSpecState) -> None:
+    spec.mesh_strategy = None
+    spec.through_thickness_elements = None
+    spec.through_thickness_distribution = None
+    spec.through_thickness_element_ratio = None
+    spec.through_thickness_symmetric = False
+    spec.sweep_face_meshing = None
+    spec.topology = None
+    spec.sweep_direction = None
+    spec.element_family = None
+    spec.transition_policy = None
+    spec.exact_layer_count = None
+
+
+def _validate_layered_mesh_spec(
+    spec: _MeshSpecState,
+    *,
+    context: str,
+    require_complete: bool,
+) -> None:
+    if spec.topology not in {None, "prismatic", "tetrahedral"}:
+        raise ValueError(f"{context}.topology must be 'prismatic' or 'tetrahedral'")
+    if spec.sweep_direction not in {None, "auto", "x", "y", "z"}:
+        raise ValueError(f"{context}.sweep_direction must be 'auto', 'x', 'y', or 'z'")
+    if spec.element_family not in {None, "prism", "hex"}:
+        raise ValueError(f"{context}.element_family must be 'prism' or 'hex'")
+    if spec.transition_policy not in {None, "pyramid_to_tetrahedra", "reject"}:
+        raise ValueError(
+            f"{context}.transition_policy must be 'pyramid_to_tetrahedra' or 'reject'"
+        )
+    if spec.through_thickness_elements is not None:
+        _element_layer_count(
+            spec.through_thickness_elements,
+            context=f"{context}.through_thickness_elements",
+        )
+
+    if spec.topology == "tetrahedral" and any(
+        value is not None
+        for value in (
+            spec.sweep_direction,
+            spec.element_family,
+            spec.transition_policy,
+            spec.exact_layer_count,
+        )
+    ):
+        raise ValueError(f"{context} tetrahedral topology contradicts swept element intent")
+
+    if spec.element_family == "prism" or spec.topology == "prismatic":
+        if spec.order not in {None, 1}:
+            raise ValueError(f"{context} prismatic topology supports order=1 only")
+        if spec.element_family not in {None, "prism"}:
+            raise ValueError(f"{context} prismatic topology requires element_family='prism'")
+        if spec.sweep_face_meshing not in {None, "triangular"}:
+            raise ValueError(f"{context} prism elements require triangular source faces")
+        if spec.mesh_strategy not in {None, "swept_prism"}:
+            raise ValueError(f"{context} prism elements require mesh_strategy='swept_prism'")
+        if spec.exact_layer_count is False and _state._execution_mode != "extended":
+            raise ValueError(f"{context} strict prismatic mesh requires exact_layer_count=True")
+    if spec.topology == "prismatic" and spec.transition_policy not in {
+        None,
+        "pyramid_to_tetrahedra",
+    }:
+        raise ValueError(
+            f"{context} prismatic thin-film topology requires pyramid_to_tetrahedra transition"
+        )
+    if spec.element_family == "hex":
+        if spec.mesh_strategy not in {None, "swept_hex"}:
+            raise ValueError(f"{context} hex elements require mesh_strategy='swept_hex'")
+        if spec.sweep_face_meshing not in {None, "quadrilateral"}:
+            raise ValueError(f"{context} hex elements require quadrilateral source faces")
+        if spec.transition_policy == "pyramid_to_tetrahedra":
+            raise ValueError(f"{context} hex elements contradict pyramid_to_tetrahedra transition")
+
+    layered_strategy = spec.mesh_strategy in {"swept_prism", "swept_hex"}
+    if require_complete and (layered_strategy or spec.topology == "prismatic"):
+        required = {
+            "through_thickness_elements": spec.through_thickness_elements,
+            "through_thickness_distribution": spec.through_thickness_distribution,
+            "sweep_face_meshing": spec.sweep_face_meshing,
+            "sweep_direction": spec.sweep_direction,
+            "element_family": spec.element_family,
+            "transition_policy": spec.transition_policy,
+            "exact_layer_count": spec.exact_layer_count,
+        }
+        missing = [name for name, value in required.items() if value is None]
+        if missing:
+            raise ValueError(
+                f"{context} layered mesh intent is incomplete: {', '.join(missing)}"
+            )
 
 
 def _normalize_int_tags(value: Sequence[int] | None, *, context: str) -> list[int] | None:
@@ -1330,7 +1439,7 @@ class GeometryMeshHandle:
         per_element_quality : bool, optional
             Include per-element quality arrays (for visualization).
         """
-        spec = self._owner._mesh_spec
+        spec = copy.deepcopy(self._owner._mesh_spec)
         resolved_hmax, resolved_hmin, resolved_growth_rate = _coalesce_mesh_size_controls(
             hmax=hmax,
             hmin=hmin,
@@ -1503,6 +1612,12 @@ class GeometryMeshHandle:
             spec,
             context=f"{self._owner._name}.mesh",
         )
+        _validate_layered_mesh_spec(
+            spec,
+            context=f"{self._owner._name}.mesh",
+            require_complete=True,
+        )
+        self._owner._mesh_spec = spec
         return self
 
     def algorithm(self, *, dim2: int | None = None, dim3: int | None = None) -> "GeometryMeshHandle":
@@ -1569,10 +1684,13 @@ class GeometryMeshHandle:
     def swept(
         self,
         elements: int = 6,
-        distribution: str = "fixed",
+        distribution: Literal["fixed", "linear", "exponential"] = "fixed",
         element_ratio: float = 1.0,
         symmetric: bool = False,
-        face_meshing: str = "triangular",
+        face_meshing: Literal["triangular", "quadrilateral"] = "triangular",
+        sweep_direction: Literal["auto", "x", "y", "z"] = "auto",
+        transition: Literal["pyramid_to_tetrahedra", "reject"] | None = None,
+        exact_layers: bool | None = None,
     ) -> "GeometryMeshHandle":
         """Configure swept (through-thickness) meshing for thin-film geometries.
 
@@ -1588,14 +1706,92 @@ class GeometryMeshHandle:
             Mirror the distribution about the mid-plane.
         face_meshing : str
             Source face mesh type: ``"triangular"`` or ``"quadrilateral"``.
+        sweep_direction : str
+            ``"auto"`` or the explicit sweep axis ``"x"``, ``"y"``, or ``"z"``.
+        transition : str, optional
+            ``"pyramid_to_tetrahedra"`` for prism-to-tet shared-domain
+            transition, or ``"reject"`` when no transition is permitted.
+        exact_layers : bool, optional
+            Require the realized mesh to preserve exactly ``elements`` layers.
         """
-        spec = self._owner._mesh_spec
-        spec.mesh_strategy = "swept_prism" if face_meshing == "triangular" else "swept_hex"
-        spec.through_thickness_elements = elements
+        layer_count = _element_layer_count(
+            elements,
+            context=f"{self._owner._name}.mesh.swept.elements",
+        )
+        if distribution not in {"fixed", "linear", "exponential"}:
+            raise ValueError(
+                f"{self._owner._name}.mesh.swept.distribution must be "
+                "'fixed', 'linear', or 'exponential'"
+            )
+        if face_meshing not in {"triangular", "quadrilateral"}:
+            raise ValueError(
+                f"{self._owner._name}.mesh.swept.face_meshing must be "
+                "'triangular' or 'quadrilateral'"
+            )
+        if sweep_direction not in {"auto", "x", "y", "z"}:
+            raise ValueError(
+                f"{self._owner._name}.mesh.swept.sweep_direction must be "
+                "'auto', 'x', 'y', or 'z'"
+            )
+        if exact_layers is not None and not isinstance(exact_layers, bool):
+            raise TypeError(f"{self._owner._name}.mesh.swept.exact_layers must be bool")
+
+        element_family = "prism" if face_meshing == "triangular" else "hex"
+        resolved_transition = transition or (
+            "pyramid_to_tetrahedra" if element_family == "prism" else "reject"
+        )
+        if resolved_transition not in {"pyramid_to_tetrahedra", "reject"}:
+            raise ValueError(
+                f"{self._owner._name}.mesh.swept.transition must be "
+                "'pyramid_to_tetrahedra' or 'reject'"
+            )
+        if element_family == "hex" and resolved_transition == "pyramid_to_tetrahedra":
+            raise ValueError(
+                f"{self._owner._name}.mesh.swept quadrilateral/hex meshing "
+                "contradicts transition='pyramid_to_tetrahedra'"
+            )
+        resolved_exact_layers = True if exact_layers is None else exact_layers
+        if (
+            element_family == "prism"
+            and not resolved_exact_layers
+            and _state._execution_mode != "extended"
+        ):
+            raise ValueError(
+                f"{self._owner._name}.mesh.swept prismatic strict intent "
+                "requires exact_layers=True"
+            )
+        if resolved_exact_layers and distribution != "fixed":
+            raise ValueError(
+                f"{self._owner._name}.mesh.swept exact layers require distribution='fixed'"
+            )
+        if resolved_exact_layers and (not math.isclose(element_ratio, 1.0) or symmetric):
+            raise ValueError(
+                f"{self._owner._name}.mesh.swept fixed exact layers reject graded or symmetric distribution"
+            )
+
+        spec = copy.deepcopy(self._owner._mesh_spec)
+        _clear_layered_mesh_intent(spec)
+        if element_family == "prism" and spec.order not in {None, 1}:
+            raise ValueError(
+                f"{self._owner._name}.mesh.swept prismatic topology supports order=1 only"
+            )
+        spec.mesh_strategy = "swept_prism" if element_family == "prism" else "swept_hex"
+        spec.through_thickness_elements = layer_count
         spec.through_thickness_distribution = distribution
         spec.through_thickness_element_ratio = element_ratio
         spec.through_thickness_symmetric = symmetric
         spec.sweep_face_meshing = face_meshing
+        spec.topology = None
+        spec.sweep_direction = sweep_direction
+        spec.element_family = element_family
+        spec.transition_policy = resolved_transition
+        spec.exact_layer_count = resolved_exact_layers
+        _validate_layered_mesh_spec(
+            spec,
+            context=f"{self._owner._name}.mesh.swept",
+            require_complete=True,
+        )
+        self._owner._mesh_spec = spec
         return self
 
     def thin_film(
@@ -1609,6 +1805,9 @@ class GeometryMeshHandle:
         curvature_factor: float | None = None,
         narrow_region_resolution: float | None = None,
         layers: int = 1,
+        topology: Literal["tetrahedral", "prismatic"] | None = None,
+        exact_layers: bool | None = None,
+        transition: Literal["pyramid_to_tetrahedra", "reject"] | None = None,
         interface_maximum_element_size: float | None = None,
         surface_maximum_element_size: float | None = None,
         interface_thickness: float | None = None,
@@ -1622,15 +1821,48 @@ class GeometryMeshHandle:
         corner_extent: float | None = None,
         corner_transition_distance: float | str | None = None,
     ) -> "GeometryMeshHandle":
-        """Configure a feature-aware tetrahedral preset for thin-film FEM meshes.
+        """Configure explicit thin-film FEM mesh intent.
 
-        The final shared-domain mesh remains conforming and tetrahedral.  This
-        helper records thin-film intent and fills the canonical surface, edge,
-        corner, and through-thickness mesh controls.
+        Omitting ``topology`` preserves the legacy conforming tetrahedral
+        preset. ``topology="prismatic"`` requests strict P1 prism layers with
+        a pyramid-to-tetrahedra shared-domain transition.
         """
-        layer_count = int(layers)
-        if layer_count < 1:
-            raise ValueError(f"{self._owner._name}.mesh.thin_film.layers must be >= 1")
+        layer_count = _element_layer_count(
+            layers,
+            context=f"{self._owner._name}.mesh.thin_film.layers",
+        )
+        if topology not in {None, "tetrahedral", "prismatic"}:
+            raise ValueError(
+                f"{self._owner._name}.mesh.thin_film.topology must be "
+                "'tetrahedral' or 'prismatic'"
+            )
+        if exact_layers is not None and not isinstance(exact_layers, bool):
+            raise TypeError(f"{self._owner._name}.mesh.thin_film.exact_layers must be bool")
+
+        prismatic = topology == "prismatic"
+        if prismatic:
+            if order not in {None, 1}:
+                raise ValueError(
+                    f"{self._owner._name}.mesh.thin_film prismatic topology supports order=1 only"
+                )
+            if exact_layers is False and _state._execution_mode != "extended":
+                raise ValueError(
+                    f"{self._owner._name}.mesh.thin_film prismatic strict intent "
+                    "requires exact_layers=True"
+                )
+            resolved_transition = transition or "pyramid_to_tetrahedra"
+            if resolved_transition != "pyramid_to_tetrahedra":
+                raise ValueError(
+                    f"{self._owner._name}.mesh.thin_film prismatic topology requires "
+                    "transition='pyramid_to_tetrahedra'"
+                )
+        else:
+            if exact_layers is not None or transition is not None:
+                raise ValueError(
+                    f"{self._owner._name}.mesh.thin_film exact_layers/transition "
+                    "require topology='prismatic'"
+                )
+            resolved_transition = None
 
         spec = self._owner._mesh_spec
         resolved_hmax, resolved_hmin, _ = _coalesce_mesh_size_controls(
@@ -1642,6 +1874,58 @@ class GeometryMeshHandle:
             maximum_element_growth_rate=None,
         )
         body_hmax = _positive_float_or_none(resolved_hmax) or _positive_float_or_none(spec.hmax)
+
+        if prismatic:
+            original_spec = self._owner._mesh_spec
+            candidate = copy.deepcopy(original_spec)
+            _clear_layered_mesh_intent(candidate)
+            candidate.mesh_strategy = "swept_prism"
+            candidate.through_thickness_elements = layer_count
+            candidate.through_thickness_distribution = "fixed"
+            candidate.through_thickness_symmetric = False
+            candidate.sweep_face_meshing = "triangular"
+            candidate.topology = "prismatic"
+            candidate.sweep_direction = "auto"
+            candidate.element_family = "prism"
+            candidate.transition_policy = resolved_transition
+            candidate.exact_layer_count = True if exact_layers is None else exact_layers
+            self._owner._mesh_spec = candidate
+            try:
+                return self.configure(
+                    maximum_element_size=resolved_hmax,
+                    minimum_element_size=resolved_hmin,
+                    order=1,
+                    curvature_factor=curvature_factor,
+                    narrow_region_resolution=narrow_region_resolution,
+                    interface_maximum_element_size=(
+                        surface_maximum_element_size
+                        if surface_maximum_element_size is not None
+                        else interface_maximum_element_size
+                    ),
+                    interface_thickness=(
+                        surface_thickness
+                        if surface_thickness is not None
+                        else interface_thickness
+                    ),
+                    transition_distance=(
+                        surface_transition_distance
+                        if surface_transition_distance is not None
+                        else transition_distance
+                    ),
+                    edge_maximum_element_size=edge_maximum_element_size,
+                    edge_thickness=edge_thickness,
+                    edge_transition_distance=edge_transition_distance,
+                    corner_maximum_element_size=corner_maximum_element_size,
+                    corner_extent=corner_extent,
+                    corner_transition_distance=corner_transition_distance,
+                    mesh_strategy="swept_prism",
+                    through_thickness_elements=layer_count,
+                    through_thickness_distribution="fixed",
+                    sweep_face_meshing="triangular",
+                )
+            except Exception:
+                self._owner._mesh_spec = original_spec
+                raise
 
         thickness = None
         try:
@@ -1701,26 +1985,53 @@ class GeometryMeshHandle:
             resolved_corner_extent = None
             resolved_corner_transition = None
 
-        return self.configure(
-            maximum_element_size=resolved_hmax,
-            minimum_element_size=body_hmin,
-            order=order,
-            curvature_factor=curvature_factor,
-            narrow_region_resolution=narrow_region_resolution,
-            interface_maximum_element_size=surface_hmax,
-            interface_thickness=surface_shell,
-            transition_distance=surface_transition,
-            edge_maximum_element_size=edge_hmax,
-            edge_thickness=edge_shell,
-            edge_transition_distance=edge_transition,
-            corner_maximum_element_size=corner_hmax,
-            corner_extent=resolved_corner_extent,
-            corner_transition_distance=resolved_corner_transition,
-            mesh_strategy="thin_film_tetrahedral",
-            through_thickness_elements=layer_count,
-            through_thickness_distribution="fixed",
-            sweep_face_meshing="triangular",
-        )
+        validation_hmin = body_hmin
+        if (
+            isinstance(body_hmax, (int, float))
+            and body_hmin is not None
+            and body_hmin > float(body_hmax)
+        ):
+            # Preserve the legacy thin-film metadata contract: the inferred
+            # through-thickness target may be larger than the in-plane hmax.
+            validation_hmin = None
+
+        original_spec = self._owner._mesh_spec
+        candidate = copy.deepcopy(original_spec)
+        _clear_layered_mesh_intent(candidate)
+        candidate.mesh_strategy = "thin_film_tetrahedral"
+        candidate.through_thickness_elements = layer_count
+        candidate.through_thickness_distribution = "fixed"
+        candidate.through_thickness_symmetric = False
+        candidate.sweep_face_meshing = "triangular"
+        self._owner._mesh_spec = candidate
+        try:
+            configured = self.configure(
+                maximum_element_size=resolved_hmax,
+                minimum_element_size=validation_hmin,
+                order=order,
+                curvature_factor=curvature_factor,
+                narrow_region_resolution=narrow_region_resolution,
+                interface_maximum_element_size=surface_hmax,
+                interface_thickness=surface_shell,
+                transition_distance=surface_transition,
+                edge_maximum_element_size=edge_hmax,
+                edge_thickness=edge_shell,
+                edge_transition_distance=edge_transition,
+                corner_maximum_element_size=corner_hmax,
+                corner_extent=resolved_corner_extent,
+                corner_transition_distance=resolved_corner_transition,
+                mesh_strategy="thin_film_tetrahedral",
+                through_thickness_elements=layer_count,
+                through_thickness_distribution="fixed",
+                sweep_face_meshing="triangular",
+            )
+        except Exception:
+            self._owner._mesh_spec = original_spec
+            raise
+        spec = self._owner._mesh_spec
+        if validation_hmin is None and body_hmin is not None:
+            spec.hmin = body_hmin
+        return configured
 
     def quality(self) -> object | None:
         """Return the last quality report if ``compute_quality`` was enabled.
@@ -5806,6 +6117,11 @@ def _mesh_spec_declares_override(spec: _MeshSpecState) -> bool:
 
 
 def _mesh_spec_to_metadata(spec: _MeshSpecState) -> dict[str, object]:
+    _validate_layered_mesh_spec(
+        spec,
+        context="mesh",
+        require_complete=True,
+    )
     payload: dict[str, object] = {}
     if spec.hmax is not None:
         payload["hmax"] = spec.hmax
@@ -5906,6 +6222,16 @@ def _mesh_spec_to_metadata(spec: _MeshSpecState) -> dict[str, object]:
         payload["through_thickness_symmetric"] = True
     if spec.sweep_face_meshing is not None:
         payload["sweep_face_meshing"] = spec.sweep_face_meshing
+    if spec.topology is not None:
+        payload["topology"] = spec.topology
+    if spec.sweep_direction is not None:
+        payload["sweep_direction"] = spec.sweep_direction
+    if spec.element_family is not None:
+        payload["element_family"] = spec.element_family
+    if spec.transition_policy is not None:
+        payload["transition_policy"] = spec.transition_policy
+    if spec.exact_layer_count is not None:
+        payload["exact_layer_count"] = spec.exact_layer_count
     if spec.periodic_pair_ids:
         payload["periodic_pair_ids"] = list(spec.periodic_pair_ids)
     if spec.operations:

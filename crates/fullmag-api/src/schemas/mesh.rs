@@ -368,8 +368,8 @@ pub struct MeshThinFilmDiagnosticResource {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshSharedDomainBuildReportResource {
     pub build_mode: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub fallbacks_triggered: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallbacks_triggered: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effective_airbox_target: Option<MeshAirboxTargetResource>,
     #[serde(
@@ -408,6 +408,179 @@ pub struct MeshSharedDomainBuildReportResource {
     pub authored_regions_count: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub realized_regions_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topology_schema_version: Option<u8>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub element_counts_by_type: BTreeMap<String, u64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub facet_counts_by_type_and_role: BTreeMap<String, BTreeMap<String, u64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_layered_policy: Option<MeshLayeredPolicyResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_layered_policy: Option<MeshLayeredPolicyResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mixed_layer_topology_certificate: Option<MeshMixedLayerTopologyCertificateSummaryResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mixed_topology_provenance: Option<MeshMixedTopologyProvenanceResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gmsh_version: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub struct MeshLayeredPolicyResource {
+    pub topology: String,
+    pub sweep_direction: String,
+    pub layers: u32,
+    pub node_planes: u32,
+    pub transition_policy: String,
+    pub exact_layer_count: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub struct MeshMixedLayerTopologyCertificateSummaryResource {
+    pub schema_version: String,
+    pub certificate_status: String,
+    pub topology_fingerprint: String,
+    pub requested_layer_count: u32,
+    pub realized_layer_count: u32,
+    #[serde(default)]
+    pub actual_node_plane_count: u32,
+    pub gmsh_version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rejection_reason: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub struct MeshMixedLayerTopologyRejectionResource {
+    pub schema_version: String,
+    pub certificate_status: String,
+    pub requested_layer_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rejection_category: Option<String>,
+    pub rejection_reason: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing_capabilities: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_execution: Option<MeshMixedP1ExecutionResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_execution: Option<MeshMixedP1ExecutionResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub free_tetrahedral_alternative: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub struct MeshMixedP1ExecutionResource {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub precision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub study: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub struct MeshMixedTopologyProvenanceResource {
+    pub requested_topology: String,
+    pub resolved_topology: String,
+    pub accepted_certificate_fingerprint: String,
+    pub requested_device: String,
+    pub precision: String,
+    pub capability_status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capability_reason: Option<String>,
+}
+
+impl MeshSharedDomainBuildReportResource {
+    pub fn from_ir(report: &fullmag_ir::FemSharedDomainBuildReportIR) -> Option<Self> {
+        let mut resource: Self = serde_json::from_value(serde_json::to_value(report).ok()?).ok()?;
+        let certificate = report.mixed_layer_topology_certificate.as_ref();
+        if let Some(certificate) = certificate {
+            resource.topology_schema_version = Some(2);
+            resource.element_counts_by_type =
+                aggregate_family_counts(certificate.cell_family_counts_by_marker.values());
+            resource.facet_counts_by_type_and_role =
+                aggregate_facet_counts_by_role(&certificate.facet_family_counts_by_role_marker);
+            resource.requested_layered_policy = Some(MeshLayeredPolicyResource {
+                topology: "mixed_p1".to_string(),
+                sweep_direction: certificate.requested_sweep_direction.clone(),
+                layers: certificate.requested_layer_count,
+                node_planes: certificate.requested_layer_count.saturating_add(1),
+                transition_policy: "pyramid_to_tetrahedra".to_string(),
+                exact_layer_count: true,
+            });
+            resource.resolved_layered_policy = Some(MeshLayeredPolicyResource {
+                topology: "mixed_p1".to_string(),
+                sweep_direction: certificate.resolved_sweep_direction.clone(),
+                layers: certificate.realized_layer_count,
+                node_planes: certificate.magnetic_plane_coordinates_m.len() as u32,
+                transition_policy: "pyramid_to_tetrahedra".to_string(),
+                exact_layer_count: true,
+            });
+            if let Some(summary) = resource.mixed_layer_topology_certificate.as_mut() {
+                summary.actual_node_plane_count =
+                    certificate.magnetic_plane_coordinates_m.len() as u32;
+            }
+            resource.gmsh_version = Some(certificate.gmsh_version.clone());
+        }
+        resource.mixed_topology_provenance =
+            report.mixed_topology_provenance.as_ref().map(|provenance| {
+                MeshMixedTopologyProvenanceResource {
+                    requested_topology: json_enum_name(&provenance.requested_topology),
+                    resolved_topology: json_enum_name(&provenance.resolved_topology),
+                    accepted_certificate_fingerprint: provenance
+                        .accepted_certificate_fingerprint
+                        .clone(),
+                    requested_device: json_enum_name(&provenance.requested_device),
+                    precision: json_enum_name(&provenance.precision),
+                    capability_status: json_enum_name(&provenance.capability_status),
+                    capability_reason: None,
+                }
+            });
+        Some(resource)
+    }
+}
+
+fn json_enum_name(value: &impl Serialize) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn aggregate_family_counts<'a>(
+    counts: impl Iterator<Item = &'a BTreeMap<String, u64>>,
+) -> BTreeMap<String, u64> {
+    let mut aggregate = BTreeMap::new();
+    for families in counts {
+        for (family, count) in families {
+            *aggregate.entry(family.clone()).or_default() += count;
+        }
+    }
+    aggregate
+}
+
+fn aggregate_facet_counts_by_role(
+    counts: &BTreeMap<String, BTreeMap<String, u64>>,
+) -> BTreeMap<String, BTreeMap<String, u64>> {
+    let mut aggregate = BTreeMap::<String, BTreeMap<String, u64>>::new();
+    for (role_marker, families) in counts {
+        let role = role_marker
+            .split(':')
+            .next()
+            .unwrap_or(role_marker)
+            .to_string();
+        let role_counts = aggregate.entry(role).or_default();
+        for (family, count) in families {
+            *role_counts.entry(family.clone()).or_default() += count;
+        }
+    }
+    aggregate
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
@@ -449,6 +622,45 @@ pub struct MeshQualityGatesResource {
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gates: Option<Value>,
+    pub mixed_certificate: MeshMixedCertificateQualityEvidenceResource,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MeshMixedCertificateQualityEvidenceStatus {
+    Valid,
+    Stale,
+    Rejected,
+    Unavailable,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct MeshMixedCertificateFamilyQualityGateResource {
+    pub family: String,
+    pub metric: String,
+    pub p05: f64,
+    pub threshold: f64,
+    pub passed: bool,
+    pub minimum_jacobian_m3: f64,
+    pub positive_jacobian: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct MeshMixedCertificateQualityEvidenceResource {
+    pub status: MeshMixedCertificateQualityEvidenceStatus,
+    pub mesh_revision: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topology_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certificate_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certificate_schema_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certificate_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub family_gates: Vec<MeshMixedCertificateFamilyQualityGateResource>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
@@ -600,11 +812,13 @@ pub struct MeshPartResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub surface_node_indices: Option<Vec<u32>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub surface_faces: Vec<[u32; 3]>,
+    pub surface_faces: Vec<Vec<u32>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bounds_min: Option<[f64; 3]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bounds_max: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub element_counts_by_type: BTreeMap<String, u64>,
 }
 
 impl From<&FemMeshPartPayload> for MeshPartResource {
@@ -625,9 +839,10 @@ impl From<&FemMeshPartPayload> for MeshPartResource {
             node_count: value.node_count,
             node_indices: value.node_indices.clone(),
             surface_node_indices: None,
-            surface_faces: value.surface_faces.clone(),
+            surface_faces: Vec::new(),
             bounds_min: value.bounds_min,
             bounds_max: value.bounds_max,
+            element_counts_by_type: BTreeMap::new(),
         }
     }
 }
@@ -740,6 +955,24 @@ pub struct MeshSharedDomainManifestResource {
     pub mesh_name: String,
     pub mesh_id: String,
     pub topology_fingerprint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topology_schema_version: Option<u8>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub element_counts_by_type: BTreeMap<String, u64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub facet_counts_by_type_and_role: BTreeMap<String, BTreeMap<String, u64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_layered_policy: Option<MeshLayeredPolicyResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_layered_policy: Option<MeshLayeredPolicyResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mixed_layer_topology_certificate: Option<MeshMixedLayerTopologyCertificateSummaryResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mixed_topology_provenance: Option<MeshMixedTopologyProvenanceResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gmsh_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallbacks_triggered: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generation_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -891,6 +1124,10 @@ pub struct MeshActiveBuildResource {
     /// Typed shared-domain build report extracted from the latest build summary when present.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shared_domain_build_report: Option<MeshSharedDomainBuildReportResource>,
+    /// Failure evidence from the latest mixed-layer build attempt. This is not
+    /// a solver-accepted topology certificate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mixed_layer_topology_rejection: Option<MeshMixedLayerTopologyRejectionResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_build_error: Option<String>,
 }

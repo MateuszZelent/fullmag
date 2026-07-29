@@ -4,6 +4,33 @@ import { describe, expect, it } from "vitest";
 import { MeshBuildConfirmDialogContent } from "./MeshBuildConfirmDialog";
 
 describe("MeshBuildConfirmDialog", () => {
+  it("makes exact layered prism strict no-fallback and convergence requirements explicit", () => {
+    const html = renderToStaticMarkup(
+      <MeshBuildConfirmDialogContent
+        commandId={null}
+        commandStatus="draft"
+        currentSummary={[]}
+        diffRows={[{
+          currentValue: "tetrahedral",
+          draftValue: "prismatic",
+          impact: "geometry",
+          label: "topology",
+          path: "topology",
+          realizedValue: "tetrahedral",
+          scope: "object",
+          state: "changed",
+        }]}
+        targetLabel="Shared-domain mesh"
+        onApplyBuild={() => undefined}
+        onCancel={() => undefined}
+        onOpenMeshJobs={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("Strict no-fallback");
+    expect(html).toContain("layer-convergence evidence");
+  });
+
   it("renders a lightweight confirmation surface without build log monitoring", () => {
     const html = renderToStaticMarkup(
       <MeshBuildConfirmDialogContent

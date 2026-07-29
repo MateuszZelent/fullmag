@@ -13,6 +13,7 @@
 #include "fem_common.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <memory>
@@ -33,6 +34,7 @@ namespace fullmag::fem {
 #if FULLMAG_HAS_MFEM_STACK
 struct DemagRecoveryWorkspace {
     struct Scratch {
+        mfem::IsoparametricTransformation transformation;
         mfem::Array<int> dofs;
         mfem::Vector u_elem;
         mfem::DenseMatrix dshape;
@@ -55,6 +57,7 @@ struct DemagRecoveryWorkspace {
 
     void prepare(size_t node_count, int recover_threads, bool parallel_recover) {
         reset_vector(node_weight, node_count);
+        reset_vector(visual_node_weight, node_count);
         if (!parallel_recover) {
             return;
         }
@@ -68,6 +71,7 @@ struct DemagRecoveryWorkspace {
     mfem::FiniteElementSpace *fes = nullptr;
     mfem::GridFunction potential;
     std::vector<double> node_weight;
+    std::vector<double> visual_node_weight;
     Scratch serial_scratch;
     std::vector<std::unique_ptr<Scratch>> thread_scratch;
     mfem::Vector robin_boundary_tmp;
@@ -144,18 +148,58 @@ bool recover_demag_poisson_field(
     const size_t node_count = static_cast<size_t>(ctx.mesh.n_nodes);
     const size_t field_len = node_count * 3u;
     h_demag_xyz.assign(field_len, 0.0);
+    ctx.demag.h_visual_xyz.assign(field_len, 0.0);
+    if (!ctx.mesh.magnetic_element_mask.empty() &&
+        ctx.mesh.magnetic_element_mask.size() != static_cast<size_t>(mesh->GetNE())) {
+        error = "Poisson demag recovery magnetic-element mask size mismatch";
+        return false;
+    }
+
+    std::atomic<bool> integration_weights_valid{true};
+
+    auto accumulate_projection = [](std::vector<double> &field_accum,
+                                    std::vector<double> &weight_accum,
+                                    size_t node,
+                                    double hx,
+                                    double hy,
+                                    double hz,
+                                    double weight,
+                                    bool atomic_updates) {
+        const size_t base = node * 3u;
+        if (atomic_updates) {
+#pragma omp atomic update
+            field_accum[base + 0] += hx;
+#pragma omp atomic update
+            field_accum[base + 1] += hy;
+#pragma omp atomic update
+            field_accum[base + 2] += hz;
+#pragma omp atomic update
+            weight_accum[node] += weight;
+        } else {
+            field_accum[base + 0] += hx;
+            field_accum[base + 1] += hy;
+            field_accum[base + 2] += hz;
+            weight_accum[node] += weight;
+        }
+    };
 
     auto accumulate_element = [&](int elem,
                                   std::vector<double> &field_accum,
                                   std::vector<double> &weight_accum,
+                                  std::vector<double> &visual_field_accum,
+                                  std::vector<double> &visual_weight_accum,
                                   const mfem::GridFunction &gf_u,
+                                  mfem::IsoparametricTransformation &transformation,
                                   mfem::Array<int> &dofs,
                                   mfem::Vector &u_elem,
                                   mfem::DenseMatrix &dshape,
                                   mfem::Vector &shape,
                                   bool atomic_updates) {
         const mfem::FiniteElement *fe = fes->GetFE(elem);
-        mfem::ElementTransformation *T = mesh->GetElementTransformation(elem);
+        mesh->GetElementTransformation(elem, &transformation);
+        mfem::ElementTransformation *T = &transformation;
+        const bool magnetic_element = ctx.mesh.magnetic_element_mask.empty() ||
+            ctx.mesh.magnetic_element_mask[static_cast<size_t>(elem)] != 0u;
 
         fes->GetElementDofs(elem, dofs);
         const int local_ndof = dofs.Size();
@@ -169,11 +213,16 @@ bool recover_demag_poisson_field(
         // P1 fast path: grad(u) is constant per element for linear tetrahedra.
         // One CalcPhysDShape call suffices; distribute equally to all 4 nodes
         // weighted by element volume / 4.
-        if (fe->GetOrder() == 1 && local_ndof == 4) {
+        if (fe->GetOrder() == 1 &&
+            fe->GetGeomType() == mfem::Geometry::TETRAHEDRON) {
             const mfem::IntegrationPoint &ip0 =
                 mfem::Geometries.GetCenter(fe->GetGeomType());
             T->SetIntPoint(&ip0);
-            const double elem_volume = std::abs(T->Weight()) / 6.0;
+            const double elem_volume = T->Weight() / 6.0;
+            if (!std::isfinite(elem_volume) || elem_volume <= 0.0) {
+                integration_weights_valid.store(false, std::memory_order_relaxed);
+                return;
+            }
 
             dshape.SetSize(local_ndof, 3);
             fe->CalcPhysDShape(*T, dshape);
@@ -192,24 +241,28 @@ bool recover_demag_poisson_field(
                     continue;
                 }
                 const size_t node = static_cast<size_t>(gdof);
-                const size_t base = node * 3u;
                 const double hx = -grad_u[0] * node_weight;
                 const double hy = -grad_u[1] * node_weight;
                 const double hz = -grad_u[2] * node_weight;
-                if (atomic_updates) {
-#pragma omp atomic update
-                    field_accum[base + 0] += hx;
-#pragma omp atomic update
-                    field_accum[base + 1] += hy;
-#pragma omp atomic update
-                    field_accum[base + 2] += hz;
-#pragma omp atomic update
-                    weight_accum[node] += node_weight;
-                } else {
-                    field_accum[base + 0] += hx;
-                    field_accum[base + 1] += hy;
-                    field_accum[base + 2] += hz;
-                    weight_accum[node] += node_weight;
+                accumulate_projection(
+                    visual_field_accum,
+                    visual_weight_accum,
+                    node,
+                    hx,
+                    hy,
+                    hz,
+                    node_weight,
+                    atomic_updates);
+                if (magnetic_element) {
+                    accumulate_projection(
+                        field_accum,
+                        weight_accum,
+                        node,
+                        hx,
+                        hy,
+                        hz,
+                        node_weight,
+                        atomic_updates);
                 }
             }
             return;
@@ -225,6 +278,10 @@ bool recover_demag_poisson_field(
             const mfem::IntegrationPoint &ip = ir.IntPoint(q);
             T->SetIntPoint(&ip);
             const double w = ip.weight * T->Weight();
+            if (!std::isfinite(w) || w <= 0.0) {
+                integration_weights_valid.store(false, std::memory_order_relaxed);
+                return;
+            }
 
             fe->CalcPhysDShape(*T, dshape);
 
@@ -241,26 +298,30 @@ bool recover_demag_poisson_field(
                 if (gdof < 0 || static_cast<uint32_t>(gdof) >= ctx.mesh.n_nodes) {
                     continue;
                 }
-                const double phi_w = std::abs(shape(i)) * w;
+                const double phi_w = shape(i) * w;
                 const size_t node = static_cast<size_t>(gdof);
-                const size_t base = node * 3u;
                 const double hx = -grad_u[0] * phi_w;
                 const double hy = -grad_u[1] * phi_w;
                 const double hz = -grad_u[2] * phi_w;
-                if (atomic_updates) {
-#pragma omp atomic update
-                    field_accum[base + 0] += hx;
-#pragma omp atomic update
-                    field_accum[base + 1] += hy;
-#pragma omp atomic update
-                    field_accum[base + 2] += hz;
-#pragma omp atomic update
-                    weight_accum[node] += phi_w;
-                } else {
-                    field_accum[base + 0] += hx;
-                    field_accum[base + 1] += hy;
-                    field_accum[base + 2] += hz;
-                    weight_accum[node] += phi_w;
+                accumulate_projection(
+                    visual_field_accum,
+                    visual_weight_accum,
+                    node,
+                    hx,
+                    hy,
+                    hz,
+                    phi_w,
+                    atomic_updates);
+                if (magnetic_element) {
+                    accumulate_projection(
+                        field_accum,
+                        weight_accum,
+                        node,
+                        hx,
+                        hy,
+                        hz,
+                        phi_w,
+                        atomic_updates);
                 }
             }
         }
@@ -288,6 +349,8 @@ bool recover_demag_poisson_field(
     gf_u.SetFromTrueDofs(potential);
     gf_u.HostRead();
     std::vector<double> &node_weight = demag_recovery_workspace->node_weight;
+    std::vector<double> &visual_node_weight =
+        demag_recovery_workspace->visual_node_weight;
 
     if (parallel_recover) {
 #ifdef _OPENMP
@@ -303,7 +366,10 @@ bool recover_demag_poisson_field(
                     elem,
                     h_demag_xyz,
                     node_weight,
+                    ctx.demag.h_visual_xyz,
+                    visual_node_weight,
                     gf_u,
+                    scratch.transformation,
                     scratch.dofs,
                     scratch.u_elem,
                     scratch.dshape,
@@ -321,6 +387,13 @@ bool recover_demag_poisson_field(
                 h_demag_xyz[base + 1] /= weight;
                 h_demag_xyz[base + 2] /= weight;
             }
+            const double visual_weight =
+                visual_node_weight[static_cast<size_t>(node)];
+            if (visual_weight > 0.0) {
+                ctx.demag.h_visual_xyz[base + 0] /= visual_weight;
+                ctx.demag.h_visual_xyz[base + 1] /= visual_weight;
+                ctx.demag.h_visual_xyz[base + 2] /= visual_weight;
+            }
         }
 #endif
     } else {
@@ -330,7 +403,10 @@ bool recover_demag_poisson_field(
                 elem,
                 h_demag_xyz,
                 node_weight,
+                ctx.demag.h_visual_xyz,
+                visual_node_weight,
                 gf_u,
+                scratch.transformation,
                 scratch.dofs,
                 scratch.u_elem,
                 scratch.dshape,
@@ -349,14 +425,27 @@ bool recover_demag_poisson_field(
                 h_demag_xyz[base + 1] /= weight;
                 h_demag_xyz[base + 2] /= weight;
             }
+            const double visual_weight =
+                visual_node_weight[static_cast<size_t>(node)];
+            if (visual_weight > 0.0) {
+                const size_t base = static_cast<size_t>(node) * 3u;
+                ctx.demag.h_visual_xyz[base + 0] /= visual_weight;
+                ctx.demag.h_visual_xyz[base + 1] /= visual_weight;
+                ctx.demag.h_visual_xyz[base + 2] /= visual_weight;
+            }
         }
     }
 
-    // Preserve full-domain H_demag for visualization before zeroing airbox.
-    ctx.demag.h_visual_xyz = h_demag_xyz;
+    if (!integration_weights_valid.load(std::memory_order_relaxed)) {
+        h_demag_xyz.clear();
+        ctx.demag.h_visual_xyz.clear();
+        error = "Poisson demag recovery requires finite positive certified integration weights";
+        return false;
+    }
 
-    // The LLG field is zeroed on non-magnetic nodes before periodic projection
-    // so the energy path consumes the same material-domain field as the solver.
+    // The LLG/energy field contains only magnetic-element contributions and is
+    // zeroed on non-magnetic nodes before periodic projection. The separately
+    // accumulated visual field retains the full-domain Poisson gradient.
     // Periodic classes must not mix magnetic and airbox material classes.
     zero_non_magnetic_nodes_aos(h_demag_xyz, ctx.mesh.magnetic_node_mask);
     finalize_demag_poisson_recovered_field(ctx, h_demag_xyz);

@@ -1446,6 +1446,47 @@ pub(crate) fn is_supported_llg_integrator(integrator: &str) -> bool {
 }
 
 pub(crate) fn validate_runtime_selection(problem: &crate::ProblemIR, errors: &mut Vec<String>) {
+    if let Some(value) = problem
+        .problem_meta
+        .runtime_metadata
+        .get("runtime_device_override")
+    {
+        let Some(override_value) = value.as_object() else {
+            errors.push("runtime_metadata.runtime_device_override must be an object".to_string());
+            return;
+        };
+        if !override_value
+            .get("device")
+            .and_then(|value| value.as_str())
+            .is_some_and(|device| matches!(device, "cpu" | "gpu"))
+        {
+            errors.push(
+                "runtime_metadata.runtime_device_override.device must be 'cpu' or 'gpu'"
+                    .to_string(),
+            );
+        }
+        if override_value
+            .get("source")
+            .and_then(|value| value.as_str())
+            != Some("managed_launcher")
+        {
+            errors.push(
+                "runtime_metadata.runtime_device_override.source must be 'managed_launcher'"
+                    .to_string(),
+            );
+        }
+        let unexpected = override_value
+            .keys()
+            .filter(|key| !matches!(key.as_str(), "device" | "source"))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unexpected.is_empty() {
+            errors.push(format!(
+                "runtime_metadata.runtime_device_override contains unsupported keys: {}",
+                unexpected.join(",")
+            ));
+        }
+    }
     let Some(value) = problem
         .problem_meta
         .runtime_metadata

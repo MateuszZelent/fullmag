@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from fullmag.runtime import helper as runtime_helper
+from fullmag.runtime.loader import load_problem_from_script
 
 
 SCENARIO_ROOT = Path(__file__).with_name("scenarios")
@@ -288,3 +289,47 @@ def test_relaxation_scenario_exports_only_its_physically_applicable_policy(
         7.957747154594767
     )
     assert relaxation["stop"]["max_steps"] == 50_000
+
+
+def test_projected_gradient_scenario_requests_one_exact_prism_layer_with_local_grading() -> None:
+    scenario_path = RELAXATION_SCENARIOS["relax_projected_gradient_bb"]
+    payload = _export_run_config(scenario_path)
+    [stage] = payload["stages"]
+    [mesh] = stage["ir"]["problem_meta"]["runtime_metadata"]["mesh_workflow"][
+        "per_geometry"
+    ]
+
+    assert mesh["topology"] == "prismatic"
+    assert mesh["element_family"] == "prism"
+    assert mesh["mesh_strategy"] == "swept_prism"
+    assert mesh["through_thickness_elements"] == 1
+    assert mesh["exact_layer_count"] is True
+    assert mesh["transition_policy"] == "pyramid_to_tetrahedra"
+    assert mesh["minimum_element_size"] == pytest.approx(1e-9)
+    assert mesh["maximum_element_size"] == pytest.approx(3e-9)
+    assert mesh["edge_hmax"] == pytest.approx(1.5e-9)
+    assert mesh["edge_thickness"] == pytest.approx(12e-9)
+    assert mesh["edge_transition_distance"] == pytest.approx(24e-9)
+    assert mesh["corner_hmax"] == pytest.approx(1e-9)
+    assert mesh["corner_extent"] == pytest.approx(6e-9)
+    assert mesh["corner_transition_distance"] == pytest.approx(12e-9)
+
+    loaded = load_problem_from_script(scenario_path, lightweight_assets=True)
+    [loaded_stage] = loaded.stages
+    assert loaded_stage.autosave is not None
+    assert loaded_stage.autosave.table is not None
+    assert loaded_stage.autosave.table.to_ir() == {
+        "kind": "table_autosave",
+        "table_id": "default",
+        "every_steps": 10,
+        "quantities": [
+            "step",
+            "mx",
+            "my",
+            "mz",
+            "e_ex",
+            "e_demag",
+            "e_total",
+            "max_torque_T",
+        ],
+    }

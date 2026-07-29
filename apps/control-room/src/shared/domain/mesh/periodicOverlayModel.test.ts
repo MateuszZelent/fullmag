@@ -58,6 +58,51 @@ function resource(
 }
 
 describe("periodic viewport overlay model", () => {
+  it("preserves canonical quad facets when legacy boundary aliases are empty", () => {
+    const canonicalTopology: DecodedTopology = {
+      boundaryFaceCount: 0,
+      boundaryFaces: new Uint32Array(),
+      boundaryMarkers: new Uint32Array(),
+      elementCount: 0,
+      elementMarkers: new Uint32Array(),
+      facetCount: 3,
+      facetMarkers: new Uint32Array([1, 1, 3]),
+      facetNodes: new Uint32Array([
+        0, 1, 2, 3,
+        4, 5, 6, 7,
+        0, 1, 4,
+      ]),
+      facetOffsets: new Uint32Array([0, 4, 8, 11]),
+      facetRoles: new Uint32Array([3, 3, 1]),
+      facetTypes: new Uint32Array([2, 2, 1]),
+      formatVersion: 2,
+      indices: new Uint32Array(),
+      nodeCount: 8,
+      positions: new Float64Array([
+        0, 0, 0,
+        1, 0, 0,
+        1, 1, 0,
+        0, 1, 0,
+        0, 0, 1,
+        1, 0, 1,
+        1, 1, 1,
+        0, 1, 1,
+      ]),
+    };
+
+    const model = buildPeriodicOverlayModel({
+      resource: resource(),
+      topology: canonicalTopology,
+    });
+
+    expect(model.status).toBe("valid");
+    expect(model.facePairs[0]).toMatchObject({
+      source: { x: 0.5, y: 0.5, z: 0 },
+      destination: { x: 0.5, y: 0.5, z: 1 },
+    });
+    expect(model.unpaired[0]?.vertices).toHaveLength(3);
+  });
+
   it("builds bounded face, node-link, and translation-arrow glyphs", () => {
     const model = buildPeriodicOverlayModel({
       currentCertificateFingerprint: "cert-1",

@@ -16,6 +16,7 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -152,6 +153,16 @@ bool initialize_exchange_operator_mfem(
         *inv_lumped_mass,
         ctx.integration_weights.mfem_lumped_mass,
         use_device);
+    if (ctx.integration_weights.mfem_lumped_mass.size() !=
+            static_cast<size_t>(fes.GetNDofs()) ||
+        std::any_of(
+            ctx.integration_weights.mfem_lumped_mass.begin(),
+            ctx.integration_weights.mfem_lumped_mass.end(),
+            [](double value) { return !std::isfinite(value) || value < 0.0; })) {
+        error = "assembled MFEM magnetic volume mass row sums are invalid";
+        return false;
+    }
+    ctx.mesh.node_volumes = ctx.integration_weights.mfem_lumped_mass;
     ctx.gpu_state.legacy_exchange.lumped_mass_ready =
         ctx.integration_weights.mfem_lumped_mass.size() == static_cast<size_t>(fes.GetNDofs());
 
@@ -159,9 +170,9 @@ bool initialize_exchange_operator_mfem(
         ctx.integration_weights.mfem_lumped_mass.begin(),
         ctx.integration_weights.mfem_lumped_mass.end(),
         [](double value) { return value > 0.0; });
-    if (ctx.exchange.enabled && !has_nonzero_lumped_mass) {
-        error = "F-01 validation: enable_exchange=true but MFEM lumped "
-                "mass is zero on every node in the resolved magnetic "
+    if (!has_nonzero_lumped_mass) {
+        error = "FEM validation: MFEM magnetic volume mass is zero on every "
+                "node in the resolved magnetic "
                 "domain.  Check element_markers and magnetic region "
                 "resolution.";
         return false;

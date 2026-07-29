@@ -1,80 +1,420 @@
-# Task 3 report: Python DSL automatic sampling
+# Slice 3 report — typed C ABI and native mesh core
 
-## Scope delivered
+## Scope
 
-- `TableAutosave(t_sampl="auto")`, `SaveField(..., every="auto")`, and
-  `SaveScalar(..., every="auto")` now preserve automatic sampling as requested
-  intent.
-- `study.stages.tableautosave("auto", ...)` and
-  `study.stages.autosave(..., every="auto")` accept the canonical literal.
-- One shared cadence normalizer accepts positive finite numeric seconds or the
-  exact lowercase literal `"auto"`; it rejects other strings, booleans, zero,
-  negative values, NaN, and infinity.
-- Automatic table, field, and scalar sampling lower to the Task 2 canonical
-  `auto_sinc_cutoff` policy with guard factor `1.3`.
-- Canonical script export preserves the literal `"auto"` for both flat and
-  ordered-stage surfaces. Import/export reads requested policy and deliberately
-  ignores `resolved_sample_period_s`, so a resolved runtime cadence cannot
-  overwrite author intent.
-- Existing numeric sampling JSON and rendered scripts remain unchanged.
+- One canonical, versioned `fullmag_fem_mesh_desc` boundary.
+- Typed CSR cells and facets with immutable global ordinals and facet roles.
+- Native validation and canonical runtime ownership only; no mixed-element
+  MFEM/libCEED/CUDA physics in this slice.
+- Existing tetrahedral physics remains explicitly gated until later CPU/GPU
+  operator slices.
 
-## TDD record
+## Container-first baseline
 
-RED command:
+The default Compose project could not allocate a new subnet:
 
-```bash
-PYTHONPATH=packages/fullmag-py/src /home/kkingstoun/software/anaconda3/envs/numba_sprawna/bin/python -m pytest packages/fullmag-py/tests/test_table_autosave.py packages/fullmag-py/tests/test_study_stages.py packages/fullmag-py/tests/test_script_builder_roundtrip.py -q
+```text
+failed to create network fem-mixed-prism-pyramid_default:
+all predefined address pools have been fully subnetted
 ```
 
-Expected RED result: 13 failed, 24 passed. Failures were the missing `"auto"`
-acceptance, the previous permissive boolean handling, missing automatic IR
-variants, and exporters requiring only numeric cadence fields.
-
-Final GREEN result for the same focused suite: 38 passed, with one existing
-deprecation warning for legacy run-local sampling arguments.
-
-Additional successful checks:
+No network was removed. The existing `fullmag_default` network was reused via
+the same authoritative recipe:
 
 ```bash
-PYTHONPATH=packages/fullmag-py/src /home/kkingstoun/software/anaconda3/envs/numba_sprawna/bin/python -m compileall -q packages/fullmag-py/src/fullmag/_validation.py packages/fullmag-py/src/fullmag/model/outputs.py packages/fullmag-py/src/fullmag/model/study.py packages/fullmag-py/src/fullmag/world.py packages/fullmag-py/src/fullmag/runtime/script_builder.py
-git diff --check
+COMPOSE_PROJECT_NAME=fullmag just verify-fem-time-domain-native-contract
 ```
 
-## Known unrelated failure
+Pre-change result: exit `0`; all recipe-owned native contracts built and ran.
+The container mounted this worktree at `/workspace`; host `native/build` was
+76 MiB after the run. Free filesystem space remained 3.7 GiB.
 
-The required expanded run including `test_api.py` produced 288 passed and one
-failure in
-`ProblemApiTests.test_fem_backend_forwards_study_universe_to_shared_domain_realization`:
-the mocked FEM domain mesher had call count 0 instead of 1. The same test fails
-identically in isolation. It does not traverse sampling code, so no FEM code was
-changed. Ruff was not available in the selected Python environment.
+## TDD RED evidence
 
-## Commit
-
-`6629c6c3 Accept automatic sampling in the Python DSL`
-
-## Review fix
-
-The importer and ordered-stage renderer now route every present numeric cadence
-through the shared `normalize_sampling_period` validator. Missing cadence keys
-still mean “not configured”, while zero, negative, NaN, infinity, booleans, and
-non-numeric values fail closed. Automatic policy import, resolved-cadence
-handling, and valid legacy numeric rendering are unchanged.
-
-TDD RED: `test_script_builder_roundtrip.py` reported 10 failing subtests that
-demonstrated invalid imported or ordered-stage cadence values being accepted.
-
-GREEN verification:
+Rust ABI layout/wire-code test:
 
 ```bash
-PYTHONPATH=packages/fullmag-py/src /home/kkingstoun/software/anaconda3/envs/numba_sprawna/bin/python -m pytest packages/fullmag-py/tests/test_script_builder_roundtrip.py -q
-# 10 passed, 18 subtests passed
-
-PYTHONPATH=packages/fullmag-py/src /home/kkingstoun/software/anaconda3/envs/numba_sprawna/bin/python -m pytest packages/fullmag-py/tests/test_table_autosave.py packages/fullmag-py/tests/test_study_stages.py packages/fullmag-py/tests/test_script_builder_roundtrip.py -q
-# 40 passed, 1 warning, 18 subtests passed
-
-git diff --check
-# clean
+CARGO_TARGET_DIR=/tmp/fullmag-mixed-topology-target \
+  CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 \
+  cargo test -p fullmag-fem-sys --lib \
+  typed_mesh_v2_abi_layout_and_wire_codes_are_frozen
 ```
 
-Review-fix commit: `cc802582 Validate imported sampling cadences`.
+Expected RED: exit `101`, with missing
+`FULLMAG_FEM_MESH_DESC_ABI_VERSION`, cell/facet/role wire constants, and all
+typed descriptor fields. The old descriptor exposed only fixed
+tetrahedron/triangle fields.
+
+Container-owned C++ contract:
+
+```bash
+COMPOSE_PROJECT_NAME=fullmag just verify-fem-time-domain-native-contract
+```
+
+Expected RED: exit `2` while compiling `fem_mesh_contract.cpp`, with the old
+ABI size/layout, missing typed buffers/runtime state, and missing generic
+`element_topology` face/edge tables. The test is now part of this authoritative
+recipe rather than an unexecuted standalone target.
+
+## Design decision
+
+The ABI boundary is an in-place, managed-runtime rebuild to mesh descriptor
+version 2. There is no parallel v1 descriptor or legacy fixed-connectivity
+field set. The descriptor starts with `abi_version` and `struct_size`, every
+pointer has an explicit scalar length, and C/Rust freeze the exact 64-bit
+layout. Native import validates the complete descriptor before copying into one
+canonical typed runtime state. Mixed topology may cross and be validated by the
+ABI/core, but current tetra-only physics rejects it at an explicit gate until
+the later operator slices.
+
+## Implementation status
+
+- [x] Container-first baseline
+- [x] Rust RED layout/wire-code test
+- [x] C++ RED validation/copy/family-table tests
+- [x] ABI and runner lowering implementation
+- [x] Native typed import, validation, and topology tables
+- [x] Managed manifest ABI fingerprint
+- [x] Focused GREEN
+- [x] Full container and Rust regression gates
+- [x] Review — final independent verdict: Approved; no Critical, Important, or Minor findings
+
+## Implemented contract
+
+- `fullmag_fem_mesh_desc` is ABI v2 with an exact 232-byte LP64 C/Rust
+  layout and pointer-plus-`uint64_t` length for every buffer.
+- Cell wire values are tet4 `1`, prism6 `2`, pyramid5 `3`, and hex8 `4`;
+  facet values are tri3 `1` and quad4 `2`; facet roles are exterior `1`,
+  material interface `2`, and periodic seam `3`.
+- Cells and facets cross the ABI as typed CSR connectivity with immutable
+  global ordinals and markers. Native import validates ABI identity, spans,
+  cardinality, CSR consistency, enum values, arity, indices, duplicate nodes,
+  duplicate ordinals, finite coordinates, periodic-pair cardinality, and
+  positive Jacobians at order-two validation points before copying.
+- Empty optional spans are copied without null-pointer arithmetic. Derived
+  runtime cardinalities are checked against the 32-bit native limit before
+  conversion.
+- The canonical native runtime state owns the typed buffers. Generic
+  face/edge tables cover every supported cell family. The current physics
+  path has one explicit tet4/tri3 fail-closed gate after typed import.
+- The runner lowers canonical IR cell/facet types, roles, CSR offsets,
+  markers, and global ordinals directly. The tet-only helper remains only in
+  explicitly tet-only DG0/frequency-domain adapters.
+- Managed schema-v2 manifests record and validate exactly:
+
+  ```text
+  mesh_desc_abi_version = 2
+  mesh_desc_struct_size = 232
+  mesh_desc_layout_fingerprint = fullmag:fem-mesh-desc:abi:v2:lp64:size232:typed-csr-global-ordinals
+  ```
+
+  Missing or stale values fail closed before a managed bundle is accepted.
+
+## GREEN evidence
+
+Focused manifest tests:
+
+```bash
+python3 -m pytest -q scripts/test_export_fem_gpu_runtime_copy_helpers.py
+```
+
+Result: exit `0`, `34 passed`.
+
+Rust lowering/type check:
+
+```bash
+CARGO_TARGET_DIR=/tmp/fullmag-mixed-topology-target \
+  cargo check -p fullmag-runner -p fullmag-fem-sys
+```
+
+Result: exit `0`; only three pre-existing runner dead-code warnings. The
+owned target was later removed to recover 1.5 GiB while the disk was tight.
+
+Authoritative time-domain/native/ABI gate:
+
+```bash
+COMPOSE_PROJECT_NAME=fullmag just verify-fem-time-domain-native-contract
+```
+
+Result: exit `0`. All recipe-owned native targets built and ran, including
+`fem_mesh_contract` and the relaxation energy derivative matrix. The recipe
+also links `fullmag-fem-sys` against the container-built `libfullmag_fem` and
+the complete managed dependency stack; all `31` Rust sys tests passed,
+including `typed_mesh_v2_abi_layout_and_wire_codes_are_frozen`.
+
+Material regression gate:
+
+```bash
+COMPOSE_PROJECT_NAME=fullmag just verify-fem-material-element-ms-contract
+```
+
+Result: exit `0`; all 14 recipe targets built and ran.
+
+Managed demag gate:
+
+```bash
+COMPOSE_PROJECT_NAME=fullmag just verify-fem-demag-poisson-contract
+```
+
+Result: exit `0`. The recipe rebuilt and exported the real managed FEM
+runtime, wrote the schema-v2 manifest, accepted it with the fail-closed bundle
+validator, and passed the focused Poisson/FEM-BEM/CUDA demag and periodic
+contracts. During the first rebuild it exposed a Slice-2 Rust shadowing error
+in DMI payload construction; the input/output locals were renamed
+`tet_elements`/`dmi_elements`, the runner then compiled in the production
+release build, and a whole-runner scan found no analogous shadowing pair.
+
+## Final scans
+
+- No legacy fixed-connectivity mesh descriptor fields remain in the C ABI,
+  Rust sys binding, runner descriptor construction, or canonical native mesh
+  core.
+- Remaining `element_markers`/`boundary_markers` search hits are canonical
+  upstream IR or regional field-target vocabulary, not legacy ABI fields.
+- ABI version and fingerprint match in the public C header, Rust sys binding,
+  manifest builder, manifest validator, and tests.
+- No commit was created; the diff remains available for controller review.
+
+## Review remediation
+
+The follow-up review required the typed boundary to prove geometry, ABI
+identity, overflow handling, and runner ownership rather than only preserving
+the happy-path layout. The remediation adds:
+
+- finite nonzero tri3 surface-area validation;
+- quad4 boundary-edge, diagonal-orientation, and bilinear 2x2 Gauss-point
+  surface-Jacobian validation, with rejected collinear/collapsed/folded
+  fixtures and an accepted warped fixture;
+- exact per-family face and edge table assertions for tet4, prism6, pyramid5,
+  and hex8;
+- a near-`UINT32_MAX` derived-cardinality rejection before any coordinate
+  access, with node-coordinate indexing promoted to `size_t` before
+  multiplication;
+- an end-to-end `backend_create` mixed-mesh test proving rejection occurs at
+  the explicit tetra-only physics gate after typed import;
+- compile-time C++ and Rust size/offset assertions for the descriptor and ABI
+  query structures;
+- one exported `fullmag_fem_get_mesh_abi_layout` query whose version, size,
+  all 30 field offsets, and fingerprint are produced by the built native
+  library;
+- manifest construction and validation that query the selected/bundled
+  `libfullmag_fem` in an isolated subprocess and fail closed on loader, symbol,
+  query, binary-hash, or manifest mismatch;
+- an owned runner packing object and a container test that dereferences every
+  cell, facet, role, marker, ordinal, and periodic buffer while the owner is
+  alive.
+
+Remediation verification completed before the final managed rebuild:
+
+```bash
+python3 -m pytest -q scripts/test_export_fem_gpu_runtime_copy_helpers.py
+```
+
+Result: exit `0`, `34 passed`.
+
+```bash
+COMPOSE_PROJECT_NAME=fullmag just verify-fem-time-domain-native-contract
+```
+
+Result: exit `0`; all native targets passed and `fullmag-fem-sys` passed
+`31/31` tests.
+
+```bash
+COMPOSE_PROJECT_NAME=fullmag just verify-fem-mesh-runner-abi-contract
+```
+
+Result: exit `0`; the focused Runner -> ABI ownership test passed (`1/1`,
+`782` filtered tests).
+
+### Driver-independent ABI identity
+
+The first post-review managed export exposed a loader dependency that the
+initial `ctypes` query had hidden: the manifest is intentionally built in a
+plain network-isolated container without an NVIDIA driver mount, while the
+complete GPU service resolves `libcuda.so.1` through NVIDIA runtime injection.
+Exact diagnostics against the built library showed the service resolving
+`libcuda.so.1`, CUDA, MFEM, HYPRE, and libCEED correctly, but the plain manifest
+container could not `dlopen` the same library.
+
+The final fail-closed design does not weaken the query and does not introduce
+Python mesh-layout constants or a sidecar. The same `libfullmag_fem.so`
+contains one exported immutable `fullmag_fem_mesh_abi_record_v1` in the
+`.fullmag_fem_abi` ELF section. The record contains a long magic, record
+version/size, endian tag, reserved-zero fields, the query-layout version/size,
+mesh descriptor version/size, every one of the 30 field offsets, and the fixed
+fingerprint. The runtime query copies the layout from this exact record.
+Builder and validator parse the actual library bytes and require exactly one
+magic, in-bounds fixed-size data, supported little-endian/version/size values,
+zero reserved fields, and NUL-terminated zero-filled strings.
+
+Direct artifact evidence:
+
+```bash
+python3 scripts/query_fem_mesh_abi.py native/build/backends/fem/libfullmag_fem.so.0
+readelf -S native/build/backends/fem/libfullmag_fem.so.0 | rg fullmag_fem_abi
+nm -D native/build/backends/fem/libfullmag_fem.so.0 \
+  | rg 'fullmag_fem_mesh_abi_record_v1|fullmag_fem_get_mesh_abi_layout'
+```
+
+Result: the parser returned ABI v2, size 232, all 30 expected offsets, and the
+canonical fingerprint; `.fullmag_fem_abi` was present; both the immutable
+record and runtime-query symbols were exported.
+
+### Isolated managed qualification
+
+The first managed rebuild shared the Compose `fullmag_target-cache` with a
+concurrent build from another worktree. That produced stale cross-worktree
+Rust metadata: the current Runner saw the previous `MeshIR` shape and failed
+with missing `FemConnectivityIR`, `FemCellTypeIR`, `cells`, and `facets`. No
+shared cache was cleaned or modified in response.
+
+All authoritative retries used:
+
+```bash
+COMPOSE_FILE=compose.yaml:/tmp/fullmag-fem-mixed-prism-compose-overlay.yaml
+COMPOSE_PROJECT_NAME=fem-mixed-prism-remediation
+```
+
+Resolved Compose configuration was checked before execution:
+
+- `/workspace` binds this exact worktree;
+- `/workspace/target` is the task-owned
+  `fullmag-fem-mixed-prism-target-cache` volume;
+- cargo registry and pnpm use the existing external `fullmag_cargo-cache` and
+  `fullmag_pnpm-store` volumes;
+- the default network is the existing external `fullmag_default` network.
+
+During disk-pressure recovery, the reproducible 2.8 GiB worktree-local
+`target/` cache was removed after checking that the host path was not itself a
+mount. This was still unsafe while a container used the bind-mounted worktree:
+the deletion removed the nested-volume mountpoint pathname and interrupted one
+retry with `getcwd`/`cd ... /workspace/target: No such file or directory`.
+The empty host mountpoint was restored. Before retry, in-container `stat` and
+`docker inspect` proved that `/workspace/target` was again mounted from
+`fullmag-fem-mixed-prism-target-cache`. The mountpoint was then preserved for
+all active Compose runs. The controller added the corresponding durable
+Project Learning to `AGENTS.md`; that controller-owned change is part of the
+final review scope and must not be reverted.
+
+Final managed qualification:
+
+```bash
+COMPOSE_FILE=compose.yaml:/tmp/fullmag-fem-mixed-prism-compose-overlay.yaml \
+COMPOSE_PROJECT_NAME=fem-mixed-prism-remediation \
+just verify-fem-demag-poisson-contract
+```
+
+Result: exit `0`. The release build completed in 15m19s, the plain GPU-less
+manifest container successfully parsed the embedded ELF record, staging and
+published-bundle validators both accepted the exact binary/manifest identity,
+and all focused Poisson, FEM-BEM, CUDA demag, and periodic contracts passed.
+The published variant hash was
+`candidate-sm89-fda735d7c7b50b543e12cd5e5c74e57c394da705a53cf55ce033c9be013bbaf2`.
+
+Final regression reruns:
+
+```bash
+COMPOSE_FILE=compose.yaml:/tmp/fullmag-fem-mixed-prism-compose-overlay.yaml \
+COMPOSE_PROJECT_NAME=fem-mixed-prism-remediation \
+just verify-fem-material-element-ms-contract
+```
+
+Result: exit `0`; all 14 material/runtime targets built and ran.
+
+```bash
+COMPOSE_FILE=compose.yaml:/tmp/fullmag-fem-mixed-prism-compose-overlay.yaml \
+COMPOSE_PROJECT_NAME=fem-mixed-prism-remediation \
+just verify-fem-mesh-runner-abi-contract
+```
+
+Result: exit `0`; final Runner -> ABI ownership test passed (`1/1`, `782`
+filtered tests).
+
+After all gates completed and no task container remained active, the unused
+task-owned `fullmag-fem-mixed-prism-target-cache` volume (970.2 MiB) was
+removed to recover disk space. The shared `fullmag_target-cache` was never
+cleaned, removed, or otherwise modified by this remediation.
+
+## Final review remediation (2026-07-28)
+
+The post-remediation review required the binary ABI identity path to fail
+closed without scanning arbitrary library bytes. The final implementation now
+uses `scripts/query_fem_mesh_abi.py` as the single common builder/validator
+consumer expectation. It requires exactly mesh ABI v2, descriptor size 232,
+all 30 exact field offsets, and the canonical fingerprint. Its bounded ELF64
+little-endian parser reads the section table and string table with checked
+ranges, requires exactly one `.fullmag_fem_abi` `PROGBITS` section of size 416
+and alignment 8, and parses the immutable record only from that section.
+
+Focused parser proof:
+
+```bash
+python3 -m pytest -q \
+  scripts/test_query_fem_mesh_abi.py \
+  scripts/test_export_fem_gpu_runtime_copy_helpers.py
+```
+
+Result: exit `0`, `46 passed`. The 12 direct ELF tests cover the exact valid
+record, unrelated duplicate magic outside the section, old ABI v1, wrong
+descriptor size, one wrong offset, wrong fingerprint, missing/duplicate
+sections, corrupt record magic, wrong ELF class/endian, truncated input,
+out-of-bounds section-name data, and invalid section type/alignment.
+
+The query layout and immutable record now have complete compile-time
+size/alignment/member-offset assertions in production C++, the native C++
+contract, and Rust. The Runner ownership test directly verifies ABI
+version/size, `nodes_xyz`, every typed CSR pointer and length, and null/zero
+semantics for every empty packed buffer. Its recipe performs CMake configure
+before building, so it no longer assumes an existing `native/build`.
+
+```bash
+COMPOSE_FILE=compose.yaml:/tmp/fullmag-fem-mixed-prism-compose-overlay.yaml \
+COMPOSE_PROJECT_NAME=fem-mixed-prism-remediation \
+just verify-fem-mesh-runner-abi-contract
+```
+
+Result: exit `0`; Runner test `1/1` passed (`782` filtered).
+
+```bash
+COMPOSE_FILE=compose.yaml:/tmp/fullmag-fem-mixed-prism-compose-overlay.yaml \
+COMPOSE_PROJECT_NAME=fem-mixed-prism-remediation \
+just verify-fem-time-domain-native-contract
+```
+
+Result: exit `0`; all requested native contracts passed and
+`fullmag-fem-sys` passed `31/31` tests.
+
+The first final managed rebuild completed its release build and container-side
+export, then host publication failed with `No space left on device`. After
+confirming the active runtime symlink and absence of task-volume containers,
+two obsolete task-owned runtime variants (`571ee...` and later `fda735...`)
+were removed one at a time. The active runtime and the task-owned release
+cache were preserved; the shared `fullmag_target-cache` remained untouched.
+
+The cached retry completed successfully:
+
+```bash
+COMPOSE_FILE=compose.yaml:/tmp/fullmag-fem-mixed-prism-compose-overlay.yaml \
+COMPOSE_PROJECT_NAME=fem-mixed-prism-remediation \
+just verify-fem-demag-poisson-contract
+```
+
+Result: exit `0`. The GPU-less manifest builder and both staging/published
+validators accepted the real ELF section record; all focused Poisson,
+FEM-BEM, CUDA demag, and periodic contracts passed. The final active variant
+is `candidate-sm89-66284f27700bbb78d00d656ad6548a8e9eb7e3e6fb6ffaa4952503f2a642d6d9`.
+
+Direct published-binary proof returned ABI v2, size 232, all expected offsets,
+and the canonical fingerprint. `readelf -SW` reported one
+`.fullmag_fem_abi` `PROGBITS` section with size `0x1a0` and alignment 8.
+
+```bash
+COMPOSE_FILE=compose.yaml:/tmp/fullmag-fem-mixed-prism-compose-overlay.yaml \
+COMPOSE_PROJECT_NAME=fem-mixed-prism-remediation \
+just verify-fem-material-element-ms-contract
+```
+
+Result: exit `0`; all 14 material/runtime targets built and ran.
+
+Final source hygiene: `git diff --check` exited `0`. No commit or staging was
+created.

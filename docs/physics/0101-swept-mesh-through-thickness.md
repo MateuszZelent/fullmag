@@ -1,8 +1,9 @@
 # Swept mesh (through-thickness structured layers)
 
 - Status: implemented for Box, Cylinder, and ArchWaveguide thin-film surface layering
-- Last updated: 2026-05-08
+- Last updated: 2026-07-27
 - Related specs: `docs/physics/0100-mesh-and-region-discretization.md`
+- Mixed-P1 target: `docs/physics/0106-fem-mixed-prism-pyramid-shared-domain.md`
 
 ## 1. Problem statement
 
@@ -66,8 +67,10 @@ Non-uniform distributions concentrate elements near surfaces (interfaces, free b
 exchange and stray-field gradients are strongest.
 
 **Element type:** Swept meshing produces prismatic (wedge) elements from triangular source faces or
-hexahedral elements from quadrilateral source faces. The mesh generator (Gmsh) converts these to
-tetrahedra if the solver requires it.
+hexahedral elements from quadrilateral source faces. The current tetrahedral solver path may convert
+these cells only when the requested contract permits that realized topology. The strict mixed-P1
+target keeps native `prism6` magnetic cells, uses `pyramid5` only in the air transition, and forbids
+silent prism-to-tet conversion; that target is not executable yet.
 
 ### 3.3 Hybrid
 
@@ -121,14 +124,16 @@ Attached to `FemPerObjectTargetIR` as an optional `swept` field.
 - The planner must verify that the geometry is prismatic before accepting swept mesh controls.
 - If `sweep_direction = "auto"`, the planner resolves it from the geometry's bounding box
   (shortest axis).
-- Capability: swept meshing is a Gmsh feature, so it is available everywhere Gmsh is available.
-  No backend restriction.
+- Gmsh availability is sufficient only to author or generate a swept mesh. Native mixed-element
+  execution additionally requires the exact topology, operator, ABI, and lane capabilities in note
+  0106; unsupported combinations reject before backend startup.
 
 ## 5. Validation strategy
 
 ### 5.1 Analytical checks
 
-- Verify element count: exactly `N_\text{surface\_elements} × N_z` prisms (before tet splitting).
+- For a native-prism request, verify exactly
+  `N_\text{surface\_elements} × N_z` magnetic prisms in the realized solver mesh, with no tet split.
 - Verify layer heights match the requested distribution.
 
 ### 5.2 Cross-backend checks
@@ -146,9 +151,11 @@ Attached to `FemPerObjectTargetIR` as an optional `swept` field.
 - [x] Python API — `mesh_strategy`, `through_thickness_*`, and `mesh.swept(...)`
 - [x] ProblemIR/session metadata — mesh workflow preserves swept controls for single-object and mesh-options paths
 - [x] Planner — swept mesh eligibility check for Box, Cylinder, and ArchWaveguide
-- [ ] Capability matrix — no restrictions (Gmsh-only)
+- [ ] Capability matrix — existing swept authoring and native mixed-P1 execution are distinct
 - [ ] FDM backend — N/A
-- [x] FEM backend — Gmsh swept mesh generation for Box/Cylinder; layered ArchWaveguide surface-constrained tetrahedral path
+- [x] FEM backend — Gmsh swept mesh generation for Box/Cylinder and the layered ArchWaveguide
+  surface-constrained tetrahedral path
+- [ ] FEM mixed-P1 backend — native prism/pyramid/tet import and operators
 - [ ] UI — swept mesh controls panel
 - [ ] Round-trip — Python ↔ UI export preservation
 - [x] Validation — ArchWaveguide layered surface topology and runtime metadata regression tests

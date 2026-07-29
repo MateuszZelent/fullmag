@@ -129,4 +129,47 @@ describe("buildMeshQualityVertexColors", () => {
       ),
     ).toBeNull();
   });
+
+  it("fails closed instead of normalizing mixed-family quality together", () => {
+    const topology = topologyFixture();
+    topology.cellCount = 2;
+    topology.cellNodes = new Uint32Array([
+      0, 1, 2, 3,
+      0, 1, 2, 3, 4, 5,
+    ]);
+    topology.cellOffsets = new Uint32Array([0, 4, 10]);
+    topology.cellTypes = new Uint32Array([1, 2]);
+    topology.indices = new Uint32Array();
+    topology.nodeCount = 6;
+    topology.positions = new Float64Array(18);
+
+    const colors = buildMeshQualityVertexColors(
+      topology,
+      qualityFixture(),
+      "gamma",
+    );
+
+    expect(colors).toBeNull();
+  });
+
+  it("maps homogeneous prism quality from canonical CSR", () => {
+    const topology = topologyFixture();
+    topology.cellCount = 2;
+    topology.cellNodes = new Uint32Array([
+      0, 1, 2, 3, 4, 5,
+      1, 2, 3, 4, 5, 6,
+    ]);
+    topology.cellOffsets = new Uint32Array([0, 6, 12]);
+    topology.cellTypes = new Uint32Array([2, 2]);
+    topology.indices = new Uint32Array();
+    topology.nodeCount = 7;
+    topology.positions = new Float64Array(21);
+
+    const colors = buildMeshQualityVertexColors(topology, qualityFixture(), "gamma");
+
+    expect(colors?.range).toEqual({ max: 1, min: 0 });
+    expect(Array.from(colors?.colors.slice(18, 21) ?? [])).toEqual(
+      Array.from(Float32Array.from(magnitudeColorRgb(1))),
+    );
+  });
 });

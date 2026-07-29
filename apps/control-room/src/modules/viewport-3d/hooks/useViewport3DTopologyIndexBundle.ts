@@ -374,6 +374,12 @@ export function useViewport3DTopologyIndexBundle({
       magneticSurfacePartsByPartId,
       topology: {
         boundaryFaces: topology.boundaryFaces,
+        cellNodes: topology.cellNodes,
+        cellOffsets: topology.cellOffsets,
+        cellTypes: topology.cellTypes,
+        facetNodes: topology.facetNodes,
+        facetOffsets: topology.facetOffsets,
+        facetTypes: topology.facetTypes,
         indices: topology.indices,
         nodeCount: topology.nodeCount,
       },
@@ -517,6 +523,7 @@ function estimatePreparedPartTopologyIndexBytes(
   return (
     (indices.edgeIndices?.byteLength ?? 0) +
     (indices.surfaceIndices?.byteLength ?? 0) +
+    (indices.surfaceTriangleFacetIndices?.byteLength ?? 0) +
     (indices.surfaceNodeIndices?.byteLength ?? 0) +
     (indices.volumeEdgeIndices?.byteLength ?? 0)
   );

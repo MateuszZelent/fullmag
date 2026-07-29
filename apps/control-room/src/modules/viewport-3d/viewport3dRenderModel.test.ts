@@ -187,7 +187,7 @@ describe("viewport3dRenderModel performance contracts", () => {
       "fullmag.viewport3d.buildPartVolumeEdgeIndices",
     );
     expect(viewport3dRenderModelSource).toContain(
-      "fullmag.viewport3d.buildSurfaceEdgeIndices",
+      "fullmag.viewport3d.buildPartSurfaceEdgeIndices",
     );
   });
 });
@@ -652,8 +652,9 @@ describe("viewport3dRenderModel", () => {
       id: "part-magnet",
     };
     const interfacePart = {
-      boundary_face_count: 0,
-      boundary_face_start: 0,
+      boundary_face_count: 1,
+      boundary_face_indices: [1],
+      boundary_face_start: 1,
       id: "part-interface",
       surface_faces: [[3, 2, 1]],
     };

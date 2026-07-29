@@ -43,7 +43,12 @@ export function MeshBuildPipelineSection({
           },
           {
             label: "Fallbacks",
-            value: fallbacks?.join(", ") ?? "none",
+            value:
+              fallbacks == null
+                ? "not published"
+                : fallbacks.length
+                  ? fallbacks.join(", ")
+                  : "none (strict)",
           },
           {
             label: "Size field kinds",

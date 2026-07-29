@@ -18,6 +18,9 @@ const std::array<double, 12> kNodes = {
     0.0, 0.0, kEdge,
 };
 const std::array<std::uint32_t, 4> kElements = {0u, 1u, 2u, 3u};
+const std::array<std::uint32_t, 1> kCellTypes = {FULLMAG_FEM_CELL_TET4};
+const std::array<std::uint32_t, 2> kCellOffsets = {0u, 4u};
+const std::array<std::uint64_t, 1> kCellOrdinals = {0u};
 const std::array<std::uint32_t, 1> kElementMarkers = {1u};
 const std::array<std::uint32_t, 12> kBoundaryFaces = {
     0u, 2u, 1u,
@@ -26,6 +29,16 @@ const std::array<std::uint32_t, 12> kBoundaryFaces = {
     1u, 2u, 3u,
 };
 const std::array<std::uint32_t, 4> kBoundaryMarkers = {1u, 1u, 1u, 1u};
+const std::array<std::uint32_t, 4> kFacetTypes = {
+    FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3,
+    FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3,
+};
+const std::array<std::uint32_t, 4> kFacetRoles = {
+    FULLMAG_FEM_FACET_ROLE_EXTERIOR, FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+    FULLMAG_FEM_FACET_ROLE_EXTERIOR, FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+};
+const std::array<std::uint32_t, 5> kFacetOffsets = {0u, 3u, 6u, 9u, 12u};
+const std::array<std::uint64_t, 4> kFacetOrdinals = {0u, 1u, 2u, 3u};
 const std::array<double, 12> kInitialM = {
     1.0, 0.0, 0.0,
     0.9950371902099892, 0.09950371902099892, 0.0,
@@ -52,14 +65,32 @@ const char *last_error(fullmag_fem_backend *backend) {
 
 fullmag_fem_plan_desc make_dg0_plan() {
     fullmag_fem_plan_desc plan{};
+    plan.mesh.abi_version = FULLMAG_FEM_MESH_DESC_ABI_VERSION;
+    plan.mesh.struct_size = sizeof(fullmag_fem_mesh_desc);
     plan.mesh.nodes_xyz = kNodes.data();
-    plan.mesh.n_nodes = 4u;
-    plan.mesh.elements = kElements.data();
-    plan.mesh.n_elements = 1u;
-    plan.mesh.element_markers = kElementMarkers.data();
-    plan.mesh.boundary_faces = kBoundaryFaces.data();
-    plan.mesh.n_boundary_faces = 4u;
-    plan.mesh.boundary_markers = kBoundaryMarkers.data();
+    plan.mesh.nodes_xyz_len = kNodes.size();
+    plan.mesh.cell_types = kCellTypes.data();
+    plan.mesh.cell_types_len = kCellTypes.size();
+    plan.mesh.cell_offsets = kCellOffsets.data();
+    plan.mesh.cell_offsets_len = kCellOffsets.size();
+    plan.mesh.cell_nodes = kElements.data();
+    plan.mesh.cell_nodes_len = kElements.size();
+    plan.mesh.cell_global_ordinals = kCellOrdinals.data();
+    plan.mesh.cell_global_ordinals_len = kCellOrdinals.size();
+    plan.mesh.cell_markers = kElementMarkers.data();
+    plan.mesh.cell_markers_len = kElementMarkers.size();
+    plan.mesh.facet_types = kFacetTypes.data();
+    plan.mesh.facet_types_len = kFacetTypes.size();
+    plan.mesh.facet_roles = kFacetRoles.data();
+    plan.mesh.facet_roles_len = kFacetRoles.size();
+    plan.mesh.facet_offsets = kFacetOffsets.data();
+    plan.mesh.facet_offsets_len = kFacetOffsets.size();
+    plan.mesh.facet_nodes = kBoundaryFaces.data();
+    plan.mesh.facet_nodes_len = kBoundaryFaces.size();
+    plan.mesh.facet_global_ordinals = kFacetOrdinals.data();
+    plan.mesh.facet_global_ordinals_len = kFacetOrdinals.size();
+    plan.mesh.facet_markers = kBoundaryMarkers.data();
+    plan.mesh.facet_markers_len = kBoundaryMarkers.size();
     plan.material.saturation_magnetisation = 8.0e5;
     plan.material.exchange_stiffness = 1.3e-11;
     plan.material.damping = 0.1;

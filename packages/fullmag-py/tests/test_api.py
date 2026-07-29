@@ -3313,7 +3313,7 @@ class ProblemApiTests(unittest.TestCase):
             ],
         )
 
-        stub_mesh = MeshData(
+        stub_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -4055,7 +4055,7 @@ class ProblemApiTests(unittest.TestCase):
             discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, maximum_element_size=2e-9)),
         )
 
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -4101,7 +4101,7 @@ class ProblemApiTests(unittest.TestCase):
         body.alpha = 0.1
         body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -4161,7 +4161,7 @@ class ProblemApiTests(unittest.TestCase):
         right.alpha = 0.1
         right.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -4175,7 +4175,7 @@ class ProblemApiTests(unittest.TestCase):
             boundary_faces=np.asarray([[0, 1, 2]], dtype=np.int32),
             boundary_markers=np.asarray([1], dtype=np.int32),
         )
-        domain_mesh = MeshData(
+        domain_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -4239,7 +4239,7 @@ class ProblemApiTests(unittest.TestCase):
             discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, maximum_element_size=2e-9)),
         )
 
-        surface_mesh = MeshData(
+        surface_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -4274,7 +4274,7 @@ class ProblemApiTests(unittest.TestCase):
             ),
         )
 
-        mesh = MeshData(
+        mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
                     [0.0, 0.0, 0.0],
@@ -9060,6 +9060,103 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(payload["default_until_seconds"], 3e-12)
         self.assertEqual(payload["ir"]["problem_meta"]["name"], "runtime_config_problem")
         self.assertIn("shared_geometry_assets", payload)
+
+    def test_helper_exports_sp4_overlay_without_real_geometry_assets(self) -> None:
+        scenario = Path(
+            "tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py"
+        )
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = runtime_helper.main(
+                [
+                    "export-run-config",
+                    "--script",
+                    str(scenario),
+                    "--runtime-device",
+                    "cpu",
+                    "--skip-geometry-assets",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(stdout.getvalue())
+        base_metadata = payload["ir"]["problem_meta"]["runtime_metadata"]
+        self.assertEqual(base_metadata["runtime_selection"]["device"], "auto")
+        self.assertEqual(
+            base_metadata["model_builder"]["problem"]["runtime"]["device"],
+            "auto",
+        )
+        self.assertEqual(
+            base_metadata["runtime_device_override"],
+            {"device": "cpu", "source": "managed_launcher"},
+        )
+        self.assertEqual(len(payload["stages"]), 1)
+        stage_ir = payload["stages"][0]["ir"]
+        self.assertEqual(stage_ir["study"]["kind"], "relaxation")
+        stage_metadata = stage_ir["problem_meta"]["runtime_metadata"]
+        self.assertEqual(stage_metadata["runtime_selection"]["device"], "auto")
+        self.assertEqual(
+            stage_metadata["model_builder"]["problem"]["runtime"]["device"],
+            "auto",
+        )
+        self.assertEqual(
+            stage_metadata["runtime_device_override"],
+            {"device": "cpu", "source": "managed_launcher"},
+        )
+        self.assertIsNone(stage_ir["geometry_assets"])
+
+    @unittest.skipUnless(
+        os.environ.get("FULLMAG_RUN_SLOW_REAL_ASSET_TESTS") == "1",
+        "set FULLMAG_RUN_SLOW_REAL_ASSET_TESTS=1 for the explicit slow real-asset export",
+    )
+    def test_slow_helper_exports_sp4_real_assets_with_cpu_override(self) -> None:
+        scenario = Path(
+            "tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py"
+        )
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = runtime_helper.main(
+                [
+                    "export-run-config",
+                    "--script",
+                    str(scenario),
+                    "--runtime-device",
+                    "cpu",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(stdout.getvalue())
+        base_metadata = payload["ir"]["problem_meta"]["runtime_metadata"]
+        self.assertEqual(base_metadata["runtime_selection"]["device"], "auto")
+        self.assertEqual(
+            base_metadata["runtime_device_override"],
+            {"device": "cpu", "source": "managed_launcher"},
+        )
+        stage_metadata = payload["stages"][0]["ir"]["problem_meta"]["runtime_metadata"]
+        self.assertEqual(stage_metadata["runtime_selection"]["device"], "auto")
+        self.assertEqual(
+            stage_metadata["runtime_device_override"],
+            {"device": "cpu", "source": "managed_launcher"},
+        )
+
+        domain_asset = payload["shared_geometry_assets"]["fem_domain_mesh_asset"]
+        report = domain_asset["build_report"]
+        certificate = report["mixed_layer_topology_certificate"]
+        self.assertEqual(
+            certificate["schema_version"], "mixed_layer_topology_certificate.v1"
+        )
+        self.assertEqual(certificate["certificate_status"], "accepted")
+        self.assertEqual(
+            certificate["topology_fingerprint"],
+            domain_asset["mesh"]["mixed_layer_topology_certificate"]
+            ["topology_fingerprint"],
+        )
+        self.assertEqual(report["fallbacks_triggered"], [])
+        self.assertFalse(report["degraded"])
+        self.assertEqual(certificate["fallbacks_triggered"], [])
 
     def test_helper_exports_run_config_with_flat_stage_sequence(self) -> None:
         script = """

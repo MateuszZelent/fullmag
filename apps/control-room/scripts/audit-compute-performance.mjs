@@ -1495,7 +1495,7 @@ function checkTopologyIndexBufferCache() {
     "buildCachedTopologySurfaceIndices",
     [
       "topologySurfaceIndexCache.get(topology)",
-      "buildTetraSurfaceIndices(topology.indices)",
+      "buildTopologySurfaceIndices(topology)",
       "topologySurfaceIndexCache.set(topology, surfaceIndices)",
     ],
   );
@@ -1504,7 +1504,7 @@ function checkTopologyIndexBufferCache() {
     "buildCachedTopologyVolumeEdgeIndices",
     [
       "topologyVolumeEdgeIndexCache.get(topology)",
-      "buildTetraVolumeEdgeIndices(topology.indices)",
+      "buildTopologyVolumeEdgeIndices(topology)",
       "topologyVolumeEdgeIndexCache.set(topology, volumeEdgeIndices)",
     ],
   );
@@ -1516,7 +1516,8 @@ function checkTopologyIndexBufferCache() {
     "function lazyValue",
     "buildPartSurfaceIndicesUncached(part, topology)",
     "buildPartVolumeEdgeIndicesUncached(part, topology)",
-    "buildCachedSurfaceEdgeIndices(surfaceIndices())",
+    "buildCachedPartSurfaceEdgeIndicesWithSupplemental(",
+    "buildPartSurfaceEdgeIndicesWithSupplemental(",
   ]);
 }
 

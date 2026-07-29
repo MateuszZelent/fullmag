@@ -54,10 +54,12 @@ Nie ma więc blokady w bibliotekach bazowych:
 [MFEM Mesh API](https://docs.mfem.org/4.8/classmfem_1_1Mesh.html) i
 [MFEM Geometry API](https://docs.mfem.org/4.8/classmfem_1_1Geometry.html).
 
-Fullmag nie obsługuje jeszcze tego przepływu end-to-end. Obecny kod potrafi
-wygenerować swept prism/hex, lecz konwertuje go do `tet4`; importer, ProblemIR,
-runner, ABI, backend i FMMT są zapisane jako stałe tablice 4-węzłowych
-tetraedrów i 3-węzłowych trójkątów.
+Typed topology/transport jest już obecna end-to-end od authoringu do Control
+Room: generator zachowuje `prism6`/`pyramid5`/`tet4`, importer, `MeshIR`,
+runner i ABI używają typów, offsetów oraz connectivity, a FMMT v2 i viewport
+przenoszą tę reprezentację. Nie jest to jednak wykonanie solvera: CPU/GPU
+native operators pozostają tet4/tri3-only, a planner fail-closed odrzuca mixed
+P1 przed startem backendu.
 
 ### 1.2 Lokalny proof-of-concept
 
@@ -187,32 +189,32 @@ Wymagania:
 
 | Obszar | Stan obecny | Konsekwencja |
 |---|---|---|
-| `GeometryMeshHandle.thin_film` w `packages/fullmag-py/src/fullmag/world.py` | zapisuje `mesh_strategy="thin_film_tetrahedral"` | `layers=1` jest intencją rozmiaru, nie gwarancją topologii |
-| `GeometryMeshHandle.swept` | zapisuje `swept_prism` lub `swept_hex` | publiczna semantyka już istnieje, ale realizacja jest degradująca |
-| `_gmsh_swept.py` | generuje prism/hex, potem dzieli je do tet | utrata natywnego typu elementu |
-| `_gmsh_types.py` | `SUPPORTED_VOLUME_ELEMENTS={4: ("tet4", 4)}` | prism6/pyramid5/hex8 są odrzucane |
-| `MeshData` | wymaga `elements.shape == (M,4)` i `boundary_faces.shape == (F,3)` | brak mieszanej connectivity |
-| shared-domain airbox | bieżąca ścieżka produkcyjna jest tetraedryczna | swept body z airboxem nie dochodzi do solvera jako prism |
+| `GeometryMeshHandle.thin_film` / `.swept` | zachowują requested `topology="prismatic"`, exact layers i transition policy | publiczny request jest semantyczny; nie jest legalnym solver runem |
+| `_gmsh_swept.py` i `_gmsh_airbox.py` | zachowują `prism6`/`pyramid5`/`tet4` i wiążą certyfikat | legacy tet conversion pozostaje poza strict mixed path |
+| `_gmsh_types.py` | obsługuje `tet4`, `hex8`, `prism6`, `pyramid5` oraz `tri3`/`quad4` | higher-order pozostaje fail-closed |
+| `MeshData` | używa typed variable-width connectivity | nie stanowi to dowodu operatorów native |
+| shared-domain airbox | generuje conforming mixed mesh z certyfikatem | planner nie dopuszcza go do aktualnego solvera |
 
-Fail-closed importer z planu `MESH-FEM-001` musi pozostać restrykcyjny aż do
-ukończenia typowanej implementacji. Nie wolno po prostu dopisać Gmsh type 6/7
-do mapy bez dalszych warstw.
+Fail-closed path z planu `MESH-FEM-001` nadal chroni unsupported higher-order
+oraz nieznane families. Linear Gmsh types 6/7 są już częścią typowanej
+implementacji; fail-closed execution ma odrzucać mixed P1 na capability gate,
+nie usuwać go podczas importu.
 
 ### 3.2 ProblemIR, runner i ABI
 
-- `crates/fullmag-ir/src/mesh_hints.rs::MeshIR` ma
-  `Vec<[u32; 4]>` i `Vec<[u32; 3]>`.
-- `crates/fullmag-runner/src/types.rs::FemMeshPayload` powtarza ten format.
-- fingerprint używa `update_hash_tets` oraz `update_hash_triangles`.
-- `crates/fullmag-cli/src/python_bridge.rs` deserializuje tylko tet4/tri3.
-- `native/include/fullmag_fem.h::fullmag_fem_mesh_desc` nie przenosi typów ani
-  offsetów connectivity.
-- `crates/fullmag-runner/src/native_fem.rs` spłaszcza zawsze po 4/3 indeksy.
+- `MeshIR`, runner payload i Python bridge przenoszą canonical cell/facet
+  types, offsets i connectivity; legacy tet4/tri3 normalizuje się na granicy.
+- topology fingerprint obejmuje type, offset, connectivity, role i marker.
+- `fullmag_fem_mesh_desc` oraz `native_fem.rs` przenoszą typed,
+  variable-width descriptors do native core.
+- Native core importuje tę topologię, ale aktualne MFEM CPU i GPU operator
+  modules zatrzymują ją na tet4/tri3 gate.
 
 ### 3.3 Backend FEM
 
-- `backends/fem/core/fem_mesh.cpp` waliduje objętość tetraedru i akumuluje
-  `volume/4`.
+- `backends/fem/core/fem_mesh.cpp` waliduje typed connectivity i importuje
+  mixed topology do native state, lecz wymusza tet4/tri3 przed uruchomieniem
+  aktualnych physics modules.
 - `backends/fem/cpu/mfem/runtime/mfem_context.cpp` wywołuje wyłącznie
   `AddTet` i `AddBdrTriangle`.
 - exchange jest składany przez generyczne MFEM `DiffusionIntegrator` i
@@ -229,14 +231,12 @@ do mapy bez dalszych warstw.
 
 ### 3.4 API i Control Room
 
-- binarny format `FMMT v1` zakłada `4 * element_count` oraz
-  `3 * boundary_face_count`.
-- `DecodedTopology` nie przenosi typów ani offsetów.
-- viewport, indeksowanie, przekroje i mesh-size highlighting używają tablic
-  krawędzi/ścian tetraedru.
-- `ObjectMeshPolicyPanel` pokazuje „Swept prism” i „Swept hex”, mimo że runtime
-  nie zachowuje tych typów.
-- `AirboxMeshStatisticsPanel` podpisuje wszystkie komórki jako „Tetrahedra”.
+- FMMT v2 niesie types, offsets, connectivity i markery; FMMT v1 pozostaje
+  readerem tetrahedral compatibility.
+- `DecodedTopology`, viewport, indeksowanie, selection i mesh-size highlighting
+  obsługują typed cells/facets; display triangulation nie zmienia topologii.
+- Inspector pokazuje mixed-topology provenance i certificate. Widoczność tych
+  danych nie oznacza legalności solver execution.
 
 ### 3.5 Aktualny kontrakt SP4
 

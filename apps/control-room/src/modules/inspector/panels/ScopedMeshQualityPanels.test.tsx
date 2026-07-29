@@ -4,6 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import { Accordion } from "@/shared/ui/Accordion";
 
+const mixedTopologyCapabilityStatus = vi.hoisted(() => ({
+  value: "validated",
+}));
+
 vi.mock("../InspectorTabState", () => ({
   useInspectorActiveTab: () => "policy",
 }));
@@ -161,6 +165,21 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
     revision: 3,
     status: "ready",
   }),
+  useMeshCapabilitiesResource: () => ({
+    data: {
+      revision: 3,
+      mesh_capabilities: {
+        "mesh.topology.mixed_p1": { status: mixedTopologyCapabilityStatus.value },
+        "mesh.swept.prism": { status: "production_executable" },
+        "mesh.transition.pyramid_tet": { status: "validated" },
+        "mesh.exact_layer_count": { status: "production_executable" },
+      },
+    },
+    error: null,
+    refetch: vi.fn(),
+    revision: 3,
+    status: "ready",
+  }),
   useMeshBuildCurrent: () => ({
     data: {
       effective_airbox_target: { growth_rate: 1.4, hmax: 2e-8, hmin: 4e-9 },
@@ -194,6 +213,7 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
           boundary_face_indices: [0, 1, 2],
           boundary_face_start: 0,
           element_count: 59_244,
+          element_counts_by_type: { pyramid5: 244, tet4: 59_000 },
           element_start: 0,
           id: "part:__air__",
           label: "Airbox",
@@ -315,6 +335,11 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
         maximum_element_growth_rate: "1.22",
         maximum_element_size: "6e-09",
         minimum_element_size: "1.8e-09",
+        mesh_strategy: "swept_prism",
+        topology: "prismatic",
+        exact_layer_count: true,
+        transition_policy: "pyramid_to_tetrahedra",
+        through_thickness_elements: 1,
         narrow_regions: 2,
         narrow_region_resolution: "1",
         optimize: "Netgen",
@@ -591,6 +616,39 @@ describe("scoped mesh quality panels", () => {
     expect(html).not.toContain("Object Quality Distributions");
   });
 
+  it("renders capability-gated topology authoring without presenting hex as available", () => {
+    const html = renderToStaticMarkup(
+      <ObjectMeshPolicyPanel selection={objectSelection} />,
+    );
+
+    expect(html).toContain("Free tetrahedral");
+    expect(html).toContain("Layered prism (exact)");
+    expect(html).toContain("Swept hex — unsupported");
+    expect(html).toMatch(/<option disabled=""[^>]*value="swept_hex"/);
+    expect(html).not.toMatch(/<option disabled=""[^>]*value="swept_prism"/);
+    expect(html).toContain("Maximum element size");
+    expect(html).toContain("Minimum element size");
+    expect(html).toContain("Resulting node planes");
+    expect(html).toContain("2");
+    expect(html).toContain("pyramid_to_tetrahedra");
+    expect(html).toContain("strict: none");
+    expect(html).toContain("layer-convergence evidence");
+  });
+
+  it("disables layered prism authoring when its capability is semantic-only", () => {
+    mixedTopologyCapabilityStatus.value = "semantic_only";
+    try {
+      const html = renderToStaticMarkup(
+        <ObjectMeshPolicyPanel selection={objectSelection} />,
+      );
+
+      expect(html).toMatch(/<option disabled=""[^>]*value="swept_prism"/);
+      expect(html).toContain("semantic_only");
+    } finally {
+      mixedTopologyCapabilityStatus.value = "validated";
+    }
+  });
+
   it("warns when object mesh policy edits are not applied", () => {
     const html = renderToStaticMarkup(
       <Accordion type="multiple" defaultValue={["transactions"]}>
@@ -637,8 +695,12 @@ describe("scoped mesh quality panels", () => {
     expect(html).toContain("Airbox Mesh Statistics");
     expect(html).toContain("Points / nodes");
     expect(html).toContain("12,345");
-    expect(html).toContain("Tetrahedra");
+    expect(html).toContain("Volume elements");
     expect(html).toContain("59,244");
+    expect(html).toContain("tet4");
+    expect(html).toContain("59,000");
+    expect(html).toContain("pyramid5");
+    expect(html).toContain("244");
     expect(html).toContain("shared, not exclusive Airbox memory");
   });
 

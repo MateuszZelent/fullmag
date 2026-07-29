@@ -229,8 +229,10 @@ When the user corrects your approach, append a one-line rule here before ending 
 - Viewport performance fixes must preserve the currently enabled visualization quality by default; lower quality, lower glyph density, hidden layers, or simplified topology are explicit fallback modes only after quality-preserving optimization fails.
 - Always resolve abbreviated Git commit IDs with `git rev-parse` before using them in verification assertions; never infer missing hash characters.
 - In a shared dirty worktree, inspect `git diff --cached --name-only` in a separate command before every commit; never chain that inspection and `git commit`, because another process may have staged unrelated files between task steps.
+- Before deleting any shared Cargo target cache, obtain an explicit no-active-process confirmation from every running agent that may use it immediately before deletion; a process-list snapshot alone is insufficient.
 - Microwave antenna designs with a taper or constriction must use a full 3D conductor/current solve; never promote a translationally invariant 2.5D cross-section as the production model for width variation along current flow.
 - Ordinary `fullmag x.py` launches without `--output-dir` must replace only the auto-derived sibling `x.zarr` bundle and write final and per-stage scientific artifacts there; never auto-delete an explicit output path or hide the only result under `.fullmag` session history.
+- Never delete a worktree `target/` directory while a Docker Compose container bind-mounts that worktree, even when `/workspace/target` is overmounted by a named volume; stop the container and verify its mounts first.
 
 ---
 

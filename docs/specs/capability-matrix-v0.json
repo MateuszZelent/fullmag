@@ -1,6 +1,6 @@
 {
   "schema_version": "capability_matrix.v0",
-  "updated_at": "2026-07-27",
+  "updated_at": "2026-07-29",
   "status_vocabulary": {
     "unsupported": "The current lane has no legal executable realization for this feature.",
     "source_visible": "Source or planner scaffolding exists, but the lane is not a legal public executable path.",
@@ -8,6 +8,7 @@
     "reference_executable": "Executable on the trusted reference lane used for correctness and validation.",
     "development_executable": "Executable only in an explicitly selected development mode; not production-qualified.",
     "partial_production_executable": "Executable only for the explicitly documented bounded production workload.",
+    "implemented": "Implementation exists, but executable production and validation status are evaluated separately.",
     "production_executable": "Executable on the intended production lane.",
     "validated": "Executable and benchmarked with explicit regression coverage for the documented workload."
   },
@@ -29,6 +30,84 @@
       },
       "validated_workloads": [],
       "notes": "Only requested auto may use an exact schema/hash/device/library-matching qualified FemCrossoverProfileV1. Explicit CPU/GPU never performance-switch and unavailable explicit GPU fails closed. Production activation is unavailable until the selected managed-runtime manifest, actually loaded library hashes, and detected GPU provide one authoritative identity. FULLMAG_FEM_CROSSOVER_RUNTIME_IDENTITY is ignored and untrusted, with no production or diagnostic consumer. No matching qualified profile preserves availability-first GPU preference. Requested/resolved/reason/calibration_id/confidence are provenance. The current RTX 4080 SM89 evidence is unqualified and inactive; missing matrix_nnz is never invented.",
+      "validation_state": "unvalidated"
+    },
+    {
+      "id": "mesh.topology.mixed_p1",
+      "label": "Typed mixed-P1 FEM topology",
+      "lanes": {
+        "fdm_cpu_reference": "unsupported",
+        "fdm_gpu_production": "unsupported",
+        "fem_cpu_public": "implemented",
+        "fem_gpu_public": "semantic_only"
+      },
+      "validated_workloads": [],
+      "notes": "The certificate-bound explicit FEM CPU strict double P1 relaxation tuple is implemented in source and contract tests. Planning validates the complete source report and certificate, packs a clone, rebinds and validates the final fingerprint, and runner/native guards reject every wider scope without fallback. Managed public-runtime evidence is still missing, so CPU is not production_executable; GPU remains semantic-only.",
+      "validation_state": "unvalidated"
+    },
+    {
+      "id": "mesh.swept.prism",
+      "label": "Native swept prism mesh semantics",
+      "lanes": {
+        "fdm_cpu_reference": "unsupported",
+        "fdm_gpu_production": "unsupported",
+        "fem_cpu_public": "implemented",
+        "fem_gpu_public": "semantic_only"
+      },
+      "validated_workloads": [],
+      "notes": "Python authoring, native meshing, planner, runner, and native contract tests preserve prism6 cells without tetrahedral conversion. Managed public execution proof is still pending; GPU remains unavailable.",
+      "validation_state": "unvalidated"
+    },
+    {
+      "id": "mesh.transition.pyramid_tet",
+      "label": "Pyramid-to-tetrahedra air transition semantics",
+      "lanes": {
+        "fdm_cpu_reference": "unsupported",
+        "fdm_gpu_production": "unsupported",
+        "fem_cpu_public": "implemented",
+        "fem_gpu_public": "semantic_only"
+      },
+      "validated_workloads": [],
+      "notes": "The native mesher and certificate preserve a conforming pyramid5 transition and tet4 far-air region through source and contract tests. Public managed execution is not yet proven; wider scopes fail closed.",
+      "validation_state": "unvalidated"
+    },
+    {
+      "id": "mesh.exact_layer_count",
+      "label": "Certified exact through-thickness layer count",
+      "lanes": {
+        "fdm_cpu_reference": "unsupported",
+        "fdm_gpu_production": "unsupported",
+        "fem_cpu_public": "implemented",
+        "fem_gpu_public": "semantic_only"
+      },
+      "validated_workloads": [],
+      "notes": "Authoring, ProblemIR, and the accepted mixed-layer certificate preserve one requested and realized layer and exactly two magnetic node planes. Source and contract tests exist, but managed public execution without fallback is not yet proven.",
+      "validation_state": "unvalidated"
+    },
+    {
+      "id": "fem.cpu.exchange_demag.mixed_p1",
+      "label": "FEM CPU mixed-P1 exchange and demagnetization",
+      "lanes": {
+        "fdm_cpu_reference": "unsupported",
+        "fdm_gpu_production": "unsupported",
+        "fem_cpu_public": "implemented",
+        "fem_gpu_public": "unsupported"
+      },
+      "validated_workloads": [],
+      "notes": "Implemented in source and operator contracts only for explicit FEM CPU strict double P1, one axis-aligned Box, one accepted exact layer, uniform material, exchange, optional uniform Zeeman, Poisson Robin or Dirichlet, and PG-BB, NCG, or overdamped LLG. Managed public-runtime proof and immutable evidence are missing, so this is not production_executable. Auto, GPU, single, extended, FEM-BEM, DMI, STT, DG0, PBC, time/eigen/frequency and wider geometry fail closed without fallback.",
+      "validation_state": "unvalidated"
+    },
+    {
+      "id": "fem.gpu.exchange_demag.mixed_p1",
+      "label": "FEM GPU mixed-P1 exchange and demagnetization",
+      "lanes": {
+        "fdm_cpu_reference": "unsupported",
+        "fdm_gpu_production": "unsupported",
+        "fem_cpu_public": "unsupported",
+        "fem_gpu_public": "unsupported"
+      },
+      "validated_workloads": [],
+      "notes": "The typed runner/native ABI and native core mixed-topology import exist, but mixed GPU exchange/demagnetization operators and executed-device proof do not, so the public GPU lane is unsupported.",
       "validation_state": "unvalidated"
     },
     {

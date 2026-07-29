@@ -16,7 +16,7 @@ double tetrahedron_volume(const Context &ctx, uint32_t element)
 {
     const size_t base = static_cast<size_t>(element) * 4u;
     const auto coordinate = [&](size_t local, size_t axis) {
-        const size_t node = ctx.mesh.elements[base + local];
+        const size_t node = ctx.mesh.cell_nodes[base + local];
         return ctx.mesh.nodes_xyz[3u * node + axis];
     };
     const double ax = coordinate(1, 0) - coordinate(0, 0);
@@ -423,19 +423,19 @@ bool project_regional_field_drive_bases(Context &ctx, std::string &error)
             drive.target_element_markers.begin(), drive.target_element_markers.end());
         for (uint32_t element = 0; element < ctx.mesh.n_elements; ++element) {
             const bool selected = drive.target_kind == FULLMAG_FEM_FIELD_TARGET_GLOBAL ||
-                (!ctx.mesh.element_markers.empty() && markers.count(ctx.mesh.element_markers[element]) != 0u);
+                (!ctx.mesh.cell_markers.empty() && markers.count(ctx.mesh.cell_markers[element]) != 0u);
             if (!selected || (!ctx.mesh.magnetic_element_mask.empty() &&
                 ctx.mesh.magnetic_element_mask[element] == 0u)) continue;
             const size_t ebase = static_cast<size_t>(element) * 4u;
             const double volume = tetrahedron_volume(ctx, element);
             if (drive.spatial_profile_kind == FULLMAG_FEM_SPATIAL_PROFILE_UNIFORM) {
                 for (size_t local = 0; local < 4u; ++local) {
-                    target_mass[ctx.mesh.elements[ebase + local]] += volume * 0.25;
+                    target_mass[ctx.mesh.cell_nodes[ebase + local]] += volume * 0.25;
                 }
             } else {
                 Tetra tetra{};
                 for (size_t local = 0; local < 4; ++local) {
-                    const size_t node = ctx.mesh.elements[ebase + local];
+                    const size_t node = ctx.mesh.cell_nodes[ebase + local];
                     tetra[local] = {
                         ctx.mesh.nodes_xyz[3u * node],
                         ctx.mesh.nodes_xyz[3u * node + 1],
@@ -449,7 +449,7 @@ bool project_regional_field_drive_bases(Context &ctx, std::string &error)
                     return false;
                 }
                 for (size_t local = 0; local < 4; ++local) {
-                    target_mass[ctx.mesh.elements[ebase + local]] += moments[local];
+                    target_mass[ctx.mesh.cell_nodes[ebase + local]] += moments[local];
                 }
             }
         }

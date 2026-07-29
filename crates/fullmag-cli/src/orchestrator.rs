@@ -2881,7 +2881,7 @@ fn current_fem_mesh_workspace(
 
     serde_json::json!({
         "mesh_summary": {
-            "mesh_id": format!("{}:{}:{}", mesh.mesh_name, mesh.nodes.len(), mesh.elements.len()),
+            "mesh_id": format!("{}:{}:{}", mesh.mesh_name, mesh.nodes.len(), mesh.cell_count()),
             "mesh_name": mesh.mesh_name,
             "mesh_source": mesh_source,
             "backend": "fem",
@@ -2889,8 +2889,8 @@ fn current_fem_mesh_workspace(
             "order": fe_order,
             "hmax": hmax,
             "node_count": mesh.nodes.len(),
-            "element_count": mesh.elements.len(),
-            "boundary_face_count": mesh.boundary_faces.len(),
+            "element_count": mesh.cell_count(),
+            "boundary_face_count": mesh.facet_count(),
             "bounds_min": bounds_min,
             "bounds_max": bounds_max,
             "mesh_extent": mesh_extent,
@@ -2899,7 +2899,7 @@ fn current_fem_mesh_workspace(
             "world_extent_source": world_extent_source,
             "domain_frame": domain_frame,
             "domain_mesh_mode": domain_mesh_mode,
-            "generation_id": format!("{}:{}:{}", mesh.mesh_name, mesh.nodes.len(), mesh.elements.len()),
+            "generation_id": format!("{}:{}:{}", mesh.mesh_name, mesh.nodes.len(), mesh.cell_count()),
         },
         "mesh_quality_summary": quality_summary.map(|quality| serde_json::json!({
             "n_elements": quality.n_elements,
@@ -2915,8 +2915,8 @@ fn current_fem_mesh_workspace(
         "mesh_statistics": mesh_statistics.cloned(),
         "mesh_cost_report": {
             "node_count": mesh.nodes.len(),
-            "element_count": mesh.elements.len(),
-            "boundary_face_count": mesh.boundary_faces.len(),
+            "element_count": mesh.cell_count(),
+            "boundary_face_count": mesh.facet_count(),
             "estimated_dense_ram_gb": ram_estimate_gb,
             "available_ram_gb": available_ram_gb,
             "time_seconds": mesh_time_seconds,
@@ -2925,10 +2925,10 @@ fn current_fem_mesh_workspace(
         "mesh_pipeline_status": [
             {"id": "import", "label": "Import", "status": "done", "detail": mesh_source.map(|source| source.to_string()).unwrap_or_else(|| "Inline/generated geometry".to_string())},
             {"id": "classify", "label": "Classify", "status": if source_kind == "stl_surface" { "done" } else { "idle" }, "detail": if source_kind == "stl_surface" { "Surface classification completed for STL import".to_string() } else { "No explicit surface classification stage".to_string() }},
-            {"id": "generate", "label": "Generate", "status": if mesh.elements.is_empty() { "idle" } else { "done" }, "detail": format!("{} nodes, {} tetrahedra", mesh.nodes.len(), mesh.elements.len())},
+            {"id": "generate", "label": "Generate", "status": if mesh.cells.is_empty() { "idle" } else { "done" }, "detail": format!("{} nodes, {} cells", mesh.nodes.len(), mesh.cell_count())},
             {"id": "optimize", "label": "Optimize", "status": "idle", "detail": "Optimization policy depends on remesh request".to_string()},
             {"id": "quality", "label": "Quality", "status": if quality_summary.is_some() { "done" } else { "idle" }, "detail": quality_summary.map(|quality| format!("SICN p5 {:.3}, gamma min {:.3}", quality.sicn_p5, quality.gamma_min)).unwrap_or_else(|| "Quality metrics not extracted yet".to_string())},
-            {"id": "validation", "label": "Validation", "status": if mesh.elements.is_empty() { "warning" } else { "done" }, "detail": if mesh.elements.is_empty() { "Mesh has no tetrahedra".to_string() } else { "Mesh validated and ready for FEM plan lowering".to_string() }},
+            {"id": "validation", "label": "Validation", "status": if mesh.cells.is_empty() { "warning" } else { "done" }, "detail": if mesh.cells.is_empty() { "Mesh has no cells".to_string() } else { "Mesh validated and ready for FEM plan lowering".to_string() }},
             {"id": "readiness", "label": "Solver Readiness", "status": readiness_status, "detail": format!("Estimated dense RAM {:.1} GB / {:.1} GB available · status {}", ram_estimate_gb, available_ram_gb, status)},
         ],
         "mesh_capabilities": {
@@ -4433,8 +4433,8 @@ fn execute_manual_interactive_remesh(
                     validate_periodic_remesh_candidate(previous_mesh, &new_mesh)?;
                 }
                 let node_count = new_mesh.nodes.len();
-                let elem_count = new_mesh.elements.len();
-                let face_count = new_mesh.boundary_faces.len();
+                let elem_count = new_mesh.cell_count();
+                let face_count = new_mesh.facet_count();
                 let remeshed_mesh_source = if shared_domain_remesh {
                     None
                 } else {
@@ -5111,8 +5111,8 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
             "mesh_name": new_mesh.mesh_name,
             "generation_mode": remesh_result.generation_mode,
             "node_count": new_mesh.nodes.len(),
-            "element_count": new_mesh.elements.len(),
-            "boundary_face_count": new_mesh.boundary_faces.len(),
+            "element_count": new_mesh.cell_count(),
+            "boundary_face_count": new_mesh.facet_count(),
             "kind": "adaptive_pass",
             "adaptive_pass": remesh_pass_count,
             "quality": remesh_result.quality.as_ref().map(|quality| serde_json::json!({
@@ -5145,7 +5145,7 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
                 "Adaptive remesh {} complete — {} nodes, {} elements (transfer fallback: {})",
                 remesh_pass_count,
                 new_mesh.nodes.len(),
-                new_mesh.elements.len(),
+                new_mesh.cell_count(),
                 transfer.n_nearest_fallback
             ),
         );
@@ -6447,6 +6447,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let phase1_backend = args.backend;
     let phase1_mode = args.mode;
     let phase1_precision = args.precision;
+    let phase1_runtime_device = crate::python_bridge::managed_fem_execution_device(
+        std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
+    );
     let phase1_handle = own_preparation_boundary_failure(
         &live_workspace,
         "script_materialization_thread_start_failed",
@@ -6480,6 +6483,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             .get_name()
                             .to_string(),
                     );
+                }
+                if let Some(device) = phase1_runtime_device {
+                    helper_args.push("--runtime-device".to_string());
+                    helper_args.push(device.to_string());
                 }
                 let output = run_python_helper_with_progress(&helper_args, None)
                     .context("phase-1 python helper failed")?;
@@ -7594,8 +7601,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                         "mesh_name": new_mesh.mesh_name,
                                         "generation_mode": remesh_result.generation_mode,
                                         "node_count": new_nodes,
-                                        "element_count": new_mesh.elements.len(),
-                                        "boundary_face_count": new_mesh.boundary_faces.len(),
+                                        "element_count": new_mesh.cell_count(),
+                                        "boundary_face_count": new_mesh.facet_count(),
                                         "kind": "auto_coarsen",
                                         "mesh_target": "study_domain",
                                         "mesh_reason": "auto_coarsen",
@@ -10884,9 +10891,9 @@ mod tests {
         let previous = MeshIR {
             mesh_name: "previous".to_string(),
             nodes: Vec::new(),
-            elements: Vec::new(),
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(Vec::new()),
             element_markers: Vec::new(),
-            boundary_faces: Vec::new(),
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
             boundary_markers: Vec::new(),
             periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                 pair_id: "x".to_string(),
@@ -10910,9 +10917,9 @@ mod tests {
         let candidate = MeshIR {
             mesh_name: "candidate".to_string(),
             nodes: Vec::new(),
-            elements: Vec::new(),
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(Vec::new()),
             element_markers: Vec::new(),
-            boundary_faces: Vec::new(),
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
             boundary_markers: Vec::new(),
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -10944,9 +10951,9 @@ mod tests {
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0],
             ],
-            elements: vec![[0, 1, 2, 3]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
             element_markers: vec![1],
-            boundary_faces: vec![[0, 1, 2]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
             boundary_markers: vec![1],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -12913,9 +12920,9 @@ mod tests {
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -13030,9 +13037,9 @@ mod tests {
                     [2.0, 0.0, 1.0],
                     [3.0, 0.0, 0.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [4, 5, 6, 7]]),
                 element_markers: vec![1, 2],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2], [4, 5, 6]]),
                 boundary_markers: vec![1, 2],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
@@ -13188,9 +13195,9 @@ mod tests {
                     mesh: Some(MeshIR {
                         mesh_name: "old_shared".to_string(),
                         nodes: vec![[0.0, 0.0, 0.0]],
-                        elements: Vec::new(),
+                        cells: fullmag_ir::FemConnectivityIR::from_tet4(Vec::new()),
                         element_markers: Vec::new(),
-                        boundary_faces: Vec::new(),
+                        facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
                         boundary_markers: Vec::new(),
                         periodic_boundary_pairs: Vec::new(),
                         periodic_node_pairs: Vec::new(),
@@ -14082,9 +14089,9 @@ mod tests {
                 [0.0, 0.0, 1.0],
                 [2.0, 0.0, 0.0],
             ],
-            elements: vec![[0, 1, 2, 3]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
             element_markers: vec![1],
-            boundary_faces: vec![[0, 1, 2]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
             boundary_markers: vec![1],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -14149,9 +14156,9 @@ mod tests {
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0],
             ],
-            elements: vec![[0, 1, 2, 3]],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
             element_markers: vec![1],
-            boundary_faces: vec![[0, 1, 2]],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
             boundary_markers: vec![7],
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),

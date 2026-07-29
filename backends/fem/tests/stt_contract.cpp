@@ -517,7 +517,7 @@ fullmag::fem::Context make_zhang_li_context() {
         0.0, 1.0, 0.0,
         0.0, 0.0, 1.0,
     };
-    ctx.mesh.elements = {0, 1, 2, 3};
+    ctx.mesh.cell_nodes = {0, 1, 2, 3};
     ctx.mesh.magnetic_element_mask = {1u};
     return ctx;
 }

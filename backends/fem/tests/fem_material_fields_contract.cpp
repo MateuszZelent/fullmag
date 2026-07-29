@@ -422,6 +422,13 @@ fullmag_fem_plan_desc elementwise_material_context_plan(bool include_ms, bool in
     // Two conformal tetrahedra share the face (0, 1, 2).  Their distinct
     // element-owned Ms and A values must never be smeared at those nodes.
     static const uint32_t elements[] = {0u, 1u, 2u, 3u, 0u, 2u, 1u, 4u};
+    static const uint32_t cell_types[] = {
+        FULLMAG_FEM_CELL_TET4, FULLMAG_FEM_CELL_TET4,
+    };
+    static const uint32_t cell_offsets[] = {0u, 4u, 8u};
+    static const uint64_t cell_ordinals[] = {0u, 1u};
+    static const uint32_t cell_markers[] = {1u, 2u};
+    static const uint32_t facet_offsets[] = {0u};
     static const double initial_m[] = {
         1.0, 0.0, 0.0,
         1.0, 0.0, 0.0,
@@ -434,10 +441,22 @@ fullmag_fem_plan_desc elementwise_material_context_plan(bool include_ms, bool in
     static const double element_a[] = {8e-12, 13e-12};
 
     fullmag_fem_plan_desc plan{};
+    plan.mesh.abi_version = FULLMAG_FEM_MESH_DESC_ABI_VERSION;
+    plan.mesh.struct_size = sizeof(fullmag_fem_mesh_desc);
     plan.mesh.nodes_xyz = nodes;
-    plan.mesh.n_nodes = 5;
-    plan.mesh.elements = elements;
-    plan.mesh.n_elements = 2;
+    plan.mesh.nodes_xyz_len = 15;
+    plan.mesh.cell_types = cell_types;
+    plan.mesh.cell_types_len = 2;
+    plan.mesh.cell_offsets = cell_offsets;
+    plan.mesh.cell_offsets_len = 3;
+    plan.mesh.cell_nodes = elements;
+    plan.mesh.cell_nodes_len = 8;
+    plan.mesh.cell_global_ordinals = cell_ordinals;
+    plan.mesh.cell_global_ordinals_len = 2;
+    plan.mesh.cell_markers = cell_markers;
+    plan.mesh.cell_markers_len = 2;
+    plan.mesh.facet_offsets = facet_offsets;
+    plan.mesh.facet_offsets_len = 1;
     plan.material.saturation_magnetisation = 800e3;
     plan.material.exchange_stiffness = 13e-12;
     plan.material.damping = 0.1;

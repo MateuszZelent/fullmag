@@ -7,6 +7,27 @@ import {
 } from "./viewport3dRegionOverlayBuildModel";
 
 describe("viewport3dRegionOverlayBuildModel", () => {
+  it("counts every canonical CSR and facet buffer in the worker input budget", () => {
+    const topology = {
+      cellMarkers: new Uint32Array(1),
+      cellNodes: new Uint32Array(6),
+      cellOffsets: new Uint32Array(2),
+      cellTypes: new Uint32Array(1),
+      facetMarkers: new Uint32Array(1),
+      facetNodes: new Uint32Array(4),
+      facetOffsets: new Uint32Array(2),
+      facetRoles: new Uint32Array(1),
+      facetTypes: new Uint32Array(1),
+      indices: new Uint32Array(),
+      positions: new Float64Array(18),
+    };
+
+    expect(estimateViewport3DRegionOverlayBuildInputBytes({
+      magneticParts: [],
+      regions: [],
+      topology,
+    })).toBe(220);
+  });
   it("builds mesh-backed overlay models from worker-safe structured inputs", () => {
     const result = buildViewport3DRegionOverlayModels({
       magneticParts: [

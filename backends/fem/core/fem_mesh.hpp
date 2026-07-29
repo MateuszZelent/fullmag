@@ -24,10 +24,17 @@ struct FemMeshRuntimeState {
     uint32_t n_elements = 0;
     uint32_t n_boundary_faces = 0;
     std::vector<double> nodes_xyz;
-    std::vector<uint32_t> elements;
-    std::vector<uint32_t> element_markers;
-    std::vector<uint32_t> boundary_faces;
-    std::vector<uint32_t> boundary_markers;
+    std::vector<uint32_t> cell_types;
+    std::vector<uint32_t> cell_offsets;
+    std::vector<uint32_t> cell_nodes;
+    std::vector<uint64_t> cell_global_ordinals;
+    std::vector<uint32_t> cell_markers;
+    std::vector<uint32_t> facet_types;
+    std::vector<uint32_t> facet_roles;
+    std::vector<uint32_t> facet_offsets;
+    std::vector<uint32_t> facet_nodes;
+    std::vector<uint64_t> facet_global_ordinals;
+    std::vector<uint32_t> facet_markers;
     std::vector<uint32_t> periodic_node_pairs;
     std::vector<uint32_t> periodic_reduced_node;
     std::vector<uint32_t> periodic_representative_nodes;
@@ -37,6 +44,21 @@ struct FemMeshRuntimeState {
     std::vector<uint8_t> magnetic_node_mask;
     std::vector<double> node_volumes;
 };
+
+struct LocalEntityTopology {
+    const uint8_t *offsets = nullptr;
+    const uint8_t *nodes = nullptr;
+    uint8_t entity_count = 0;
+    uint8_t node_count = 0;
+};
+
+struct ElementTopology {
+    uint8_t arity = 0;
+    LocalEntityTopology faces{};
+    LocalEntityTopology edges{};
+};
+
+bool element_topology(uint32_t cell_type, ElementTopology &topology);
 
 /*
  * Own FEM mesh topology helpers used while importing a native FEM plan.
@@ -50,6 +72,16 @@ struct FemMeshRuntimeState {
 bool initialize_mesh_plan_fields(
     Context &ctx,
     const fullmag_fem_mesh_desc &mesh,
+    std::string &error);
+
+/*
+ * Admit the legacy tet4/tri3 lane and the narrowly qualified mixed-P1 CPU
+ * operator tuple. All other mixed-topology plans fail closed before backend
+ * operator construction.
+ */
+bool validate_supported_physics_topology(
+    const Context &ctx,
+    const fullmag_fem_plan_desc &plan,
     std::string &error);
 
 /*

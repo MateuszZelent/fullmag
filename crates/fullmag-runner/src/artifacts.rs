@@ -161,10 +161,10 @@ fn mesh_runtime_metadata(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Valu
         BackendPlanIR::Fem(fem) => serde_json::json!({
             "mesh_name": fem.mesh.mesh_name,
             "mesh_generation_id": solver_mesh_signature(&fem.mesh),
-            "topology_fingerprint": solver_mesh_signature(&fem.mesh),
+            "topology_fingerprint": fem.mesh.topology_fingerprint_v6(),
             "node_count": fem.mesh.nodes.len(),
-            "element_count": fem.mesh.elements.len(),
-            "boundary_face_count": fem.mesh.boundary_faces.len(),
+            "element_count": fem.mesh.cell_count(),
+            "boundary_face_count": fem.mesh.facet_count(),
             "periodic_boundary_pair_count": fem.mesh.periodic_boundary_pairs.len(),
             "periodic_node_pair_count": fem.mesh.periodic_node_pairs.len(),
             "periodic_boundary_pair_counts_by_id": count_periodic_pairs_by_id(
@@ -180,10 +180,10 @@ fn mesh_runtime_metadata(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Valu
         BackendPlanIR::FemEigen(fem) => serde_json::json!({
             "mesh_name": fem.mesh.mesh_name,
             "mesh_generation_id": solver_mesh_signature(&fem.mesh),
-            "topology_fingerprint": solver_mesh_signature(&fem.mesh),
+            "topology_fingerprint": fem.mesh.topology_fingerprint_v6(),
             "node_count": fem.mesh.nodes.len(),
-            "element_count": fem.mesh.elements.len(),
-            "boundary_face_count": fem.mesh.boundary_faces.len(),
+            "element_count": fem.mesh.cell_count(),
+            "boundary_face_count": fem.mesh.facet_count(),
             "periodic_boundary_pair_count": fem.mesh.periodic_boundary_pairs.len(),
             "periodic_node_pair_count": fem.mesh.periodic_node_pairs.len(),
             "periodic_boundary_pair_counts_by_id": count_periodic_pairs_by_id(
@@ -199,10 +199,10 @@ fn mesh_runtime_metadata(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Valu
         BackendPlanIR::FemFrequencyResponse(fem) => serde_json::json!({
             "mesh_name": fem.mesh.mesh_name,
             "mesh_generation_id": solver_mesh_signature(&fem.mesh),
-            "topology_fingerprint": solver_mesh_signature(&fem.mesh),
+            "topology_fingerprint": fem.mesh.topology_fingerprint_v6(),
             "node_count": fem.mesh.nodes.len(),
-            "element_count": fem.mesh.elements.len(),
-            "boundary_face_count": fem.mesh.boundary_faces.len(),
+            "element_count": fem.mesh.cell_count(),
+            "boundary_face_count": fem.mesh.facet_count(),
             "periodic_boundary_pair_count": fem.mesh.periodic_boundary_pairs.len(),
             "periodic_node_pair_count": fem.mesh.periodic_node_pairs.len(),
             "periodic_boundary_pair_counts_by_id": count_periodic_pairs_by_id(
@@ -905,9 +905,9 @@ fn fem_physics_terms(fem: &fullmag_ir::FemPlanIR) -> Vec<String> {
 fn solver_mesh_signature(mesh: &fullmag_ir::MeshIR) -> String {
     let payload = serde_json::json!({
         "nodes": mesh.nodes,
-        "elements": mesh.elements,
+        "cells": mesh.cells,
         "element_markers": mesh.element_markers,
-        "boundary_faces": mesh.boundary_faces,
+        "facets": mesh.facets,
         "boundary_markers": mesh.boundary_markers,
         "periodic_boundary_pairs": mesh.periodic_boundary_pairs,
         "periodic_node_pairs": mesh.periodic_node_pairs,
@@ -1412,7 +1412,7 @@ fn write_fem_supercell_node_geometry_artifact(
         "artifact_path": "mesh/node_geometry.v1.json",
         "mesh_name": fem.mesh.mesh_name,
         "node_count": fem.mesh.nodes.len(),
-        "element_count": fem.mesh.elements.len(),
+        "element_count": fem.mesh.cell_count(),
         "nodes_m": fem.mesh.nodes,
         "magnetic_node_mask": magnetic_node_mask,
         "magnetic_node_count": magnetic_node_count,
@@ -2176,12 +2176,12 @@ fn mesh_periodic_pair_residuals(
 
 fn mesh_boundary_nodes_by_marker(mesh: &fullmag_ir::MeshIR) -> HashMap<u32, BTreeSet<u32>> {
     let mut nodes_by_marker = HashMap::<u32, BTreeSet<u32>>::new();
-    for (face_index, face) in mesh.boundary_faces.iter().enumerate() {
-        let Some(marker) = mesh.boundary_markers.get(face_index).copied() else {
+    for facet in mesh.facets.iter() {
+        let Some(marker) = mesh.boundary_markers.get(facet.ordinal).copied() else {
             continue;
         };
         let nodes = nodes_by_marker.entry(marker).or_default();
-        nodes.extend(face.iter().copied());
+        nodes.extend(facet.nodes.iter().copied());
     }
     nodes_by_marker
 }
@@ -2189,18 +2189,14 @@ fn mesh_boundary_nodes_by_marker(mesh: &fullmag_ir::MeshIR) -> HashMap<u32, BTre
 fn mesh_node_domain_sets(mesh: &fullmag_ir::MeshIR) -> (BTreeSet<u32>, BTreeSet<u32>) {
     let mut magnetic_nodes = BTreeSet::new();
     let mut airbox_nodes = BTreeSet::new();
-    for (element_index, element) in mesh.elements.iter().enumerate() {
-        let marker = mesh
-            .element_markers
-            .get(element_index)
-            .copied()
-            .unwrap_or(1);
+    for cell in mesh.cells.iter() {
+        let marker = mesh.element_markers.get(cell.ordinal).copied().unwrap_or(1);
         let target = if marker == 0 {
             &mut airbox_nodes
         } else {
             &mut magnetic_nodes
         };
-        target.extend(element.iter().copied());
+        target.extend(cell.nodes.iter().copied());
     }
     (magnetic_nodes, airbox_nodes)
 }
@@ -2311,14 +2307,13 @@ fn mesh_periodic_boundary_face_index_pairs(
     let mut pairs = Vec::new();
     let mut used_destinations = BTreeSet::new();
     for source_face_index in source_faces {
-        let Some(source_face) = mesh.boundary_faces.get(source_face_index) else {
+        let Some(source_face) = mesh.facets.item_nodes(source_face_index) else {
             continue;
         };
         let Some(mapped_face) = source_face
             .iter()
             .map(|node| node_map.get(node).copied())
             .collect::<Option<Vec<_>>>()
-            .and_then(|nodes| <[u32; 3]>::try_from(nodes).ok())
         else {
             continue;
         };
@@ -2327,10 +2322,10 @@ fn mesh_periodic_boundary_face_index_pairs(
         let Some(destination_face_index) = destination_faces.iter().copied().find(|index| {
             !used_destinations.contains(index)
                 && mesh
-                    .boundary_faces
-                    .get(*index)
+                    .facets
+                    .item_nodes(*index)
                     .map(|face| {
-                        let mut actual = *face;
+                        let mut actual = face.to_vec();
                         actual.sort_unstable();
                         actual == expected
                     })
@@ -2353,18 +2348,21 @@ fn mesh_boundary_face_indices_by_marker(mesh: &fullmag_ir::MeshIR, marker: u32) 
 }
 
 fn mesh_boundary_face_area(mesh: &fullmag_ir::MeshIR, face_index: usize) -> Option<f64> {
-    let face = mesh.boundary_faces.get(face_index)?;
-    let a = mesh.nodes.get(face[0] as usize)?;
-    let b = mesh.nodes.get(face[1] as usize)?;
-    let c = mesh.nodes.get(face[2] as usize)?;
-    let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-    let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
-    let cross = [
-        ab[1] * ac[2] - ab[2] * ac[1],
-        ab[2] * ac[0] - ab[0] * ac[2],
-        ab[0] * ac[1] - ab[1] * ac[0],
-    ];
-    Some(0.5 * (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt())
+    let face = mesh.facets.item_nodes(face_index)?;
+    let &origin_index = face.first()?;
+    let origin = mesh.nodes.get(origin_index as usize)?;
+    face[1..].windows(2).try_fold(0.0, |area, edge| {
+        let b = mesh.nodes.get(edge[0] as usize)?;
+        let c = mesh.nodes.get(edge[1] as usize)?;
+        let ab = [b[0] - origin[0], b[1] - origin[1], b[2] - origin[2]];
+        let ac = [c[0] - origin[0], c[1] - origin[1], c[2] - origin[2]];
+        let cross = [
+            ab[1] * ac[2] - ab[2] * ac[1],
+            ab[2] * ac[0] - ab[0] * ac[2],
+            ab[0] * ac[1] - ab[1] * ac[0],
+        ];
+        Some(area + 0.5 * (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt())
+    })
 }
 
 #[cfg(test)]
@@ -2372,7 +2370,10 @@ fn mesh_boundary_face_unit_normal(
     mesh: &fullmag_ir::MeshIR,
     face_index: usize,
 ) -> Option<[f64; 3]> {
-    let face = mesh.boundary_faces.get(face_index)?;
+    let face = mesh.facets.item_nodes(face_index)?;
+    if face.len() != 3 {
+        return None;
+    }
     let a = mesh.nodes.get(face[0] as usize)?;
     let b = mesh.nodes.get(face[1] as usize)?;
     let c = mesh.nodes.get(face[2] as usize)?;
@@ -2470,7 +2471,7 @@ fn face_magnetic_charge_integral(
     normal: [f64; 3],
     magnetization: &[[f64; 3]],
 ) -> Option<f64> {
-    let face = fem.mesh.boundary_faces.get(face_index)?;
+    let face = fem.mesh.facets.item_nodes(face_index)?;
     let area = mesh_boundary_face_area(&fem.mesh, face_index)?;
     let mut average_m_dot_n = 0.0f64;
     for node in face {
@@ -2533,21 +2534,23 @@ fn fem_part_node_indices_for_artifact(
             let start = *start as usize;
             let end = start
                 .saturating_add(*count as usize)
-                .min(fem.mesh.elements.len());
-            for element in &fem.mesh.elements[start..end] {
-                nodes.extend(element.iter().map(|index| *index as usize));
+                .min(fem.mesh.cell_count());
+            for index in start..end {
+                if let Some(cell_nodes) = fem.mesh.cells.item_nodes(index) {
+                    nodes.extend(cell_nodes.iter().map(|index| *index as usize));
+                }
             }
         }
         fullmag_ir::FemMeshPartSelector::ElementMarkerSet { markers } => {
             let markers = markers.iter().copied().collect::<BTreeSet<_>>();
-            for (index, element) in fem.mesh.elements.iter().enumerate() {
+            for cell in fem.mesh.cells.iter() {
                 if fem
                     .mesh
                     .element_markers
-                    .get(index)
+                    .get(cell.ordinal)
                     .is_some_and(|marker| markers.contains(marker))
                 {
-                    nodes.extend(element.iter().map(|index| *index as usize));
+                    nodes.extend(cell.nodes.iter().map(|index| *index as usize));
                 }
             }
         }
@@ -2555,7 +2558,7 @@ fn fem_part_node_indices_for_artifact(
     }
 
     for face_index in &part.boundary_face_indices {
-        if let Some(face) = fem.mesh.boundary_faces.get(*face_index as usize) {
+        if let Some(face) = fem.mesh.facets.item_nodes(*face_index as usize) {
             nodes.extend(face.iter().map(|index| *index as usize));
         }
     }
@@ -2566,15 +2569,27 @@ fn fem_part_node_indices_for_artifact(
             let start = *start as usize;
             let end = start
                 .saturating_add(*count as usize)
-                .min(fem.mesh.boundary_faces.len());
-            for face in &fem.mesh.boundary_faces[start..end] {
-                nodes.extend(face.iter().map(|index| *index as usize));
+                .min(fem.mesh.facet_count());
+            for index in start..end {
+                if let Some(face) = fem.mesh.facets.item_nodes(index) {
+                    nodes.extend(face.iter().map(|index| *index as usize));
+                }
             }
         }
         _ => {}
     }
-    for face in &part.surface_faces {
-        nodes.extend(face.iter().map(|index| *index as usize));
+    for global_ordinal in &part.facet_global_ordinals {
+        if let Some(face_index) = fem
+            .mesh
+            .facets
+            .global_ordinals
+            .iter()
+            .position(|candidate| candidate == global_ordinal)
+        {
+            if let Some(face) = fem.mesh.facets.item_nodes(face_index) {
+                nodes.extend(face.iter().map(|index| *index as usize));
+            }
+        }
     }
 
     nodes
@@ -3151,7 +3166,7 @@ pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Va
             "fe_order": fem.fe_order,
             "hmax": fem.hmax,
             "n_nodes": fem.mesh.nodes.len(),
-            "n_elements": fem.mesh.elements.len(),
+            "n_elements": fem.mesh.cell_count(),
         }),
         BackendPlanIR::FemEigen(fem) => serde_json::json!({
             "backend": "fem_eigen",
@@ -3160,7 +3175,7 @@ pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Va
             "fe_order": fem.fe_order,
             "hmax": fem.hmax,
             "n_nodes": fem.mesh.nodes.len(),
-            "n_elements": fem.mesh.elements.len(),
+            "n_elements": fem.mesh.cell_count(),
             "mode_count": fem.count,
             "operator": fem.operator,
             "material": {
@@ -3177,7 +3192,7 @@ pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Va
             "fe_order": fem.fe_order,
             "hmax": fem.hmax,
             "n_nodes": fem.mesh.nodes.len(),
-            "n_elements": fem.mesh.elements.len(),
+            "n_elements": fem.mesh.cell_count(),
             "frequency_count": fem.frequencies_hz.values_hz.len(),
             "operator": fem.operator,
         }),
@@ -3196,6 +3211,49 @@ pub(crate) fn field_unit(observable: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn artifact_node_selection_resolves_quad_interface_by_global_ordinal() {
+        let mut plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("test plan must be FEM");
+        };
+        fem.mesh.nodes = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ];
+        fem.mesh.facets = fullmag_ir::FemFacetConnectivityIR {
+            types: vec![fullmag_ir::FemFacetTypeIR::Quad4],
+            roles: vec![fullmag_ir::FemFacetRoleIR::MaterialInterface],
+            offsets: vec![0, 4],
+            nodes: vec![0, 1, 2, 3],
+            global_ordinals: vec![700],
+        };
+        fem.mesh.boundary_markers = vec![27];
+        let part = FemMeshPartIR {
+            id: "part:interface:0:1".into(),
+            label: "Air ↔ film".into(),
+            role: FemMeshPartRole::Interface,
+            object_id: Some("film".into()),
+            geometry_id: Some("film".into()),
+            material_id: None,
+            element_selector: FemMeshPartSelector::ElementRange { start: 0, count: 0 },
+            boundary_face_selector: FemMeshPartSelector::BoundaryFaceRange { start: 0, count: 0 },
+            node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 0 },
+            boundary_face_indices: Vec::new(),
+            node_indices: Vec::new(),
+            facet_global_ordinals: vec![700],
+            bounds_min: None,
+            bounds_max: None,
+            parent_id: None,
+        };
+        assert_eq!(
+            fem_part_node_indices_for_artifact(fem, &part),
+            vec![0, 1, 2, 3]
+        );
+    }
     use crate::types::{
         ExecutedRun, ExecutionProvenance, FieldSnapshot, ResolvedFallback, RunResult, RunStatus,
         SolverAttemptRecord,
@@ -3532,12 +3590,21 @@ mod tests {
             panic!("expected FEM plan");
         };
         fem.mesh_build_report = Some(report.clone());
+        let expected_topology_fingerprint = fem.mesh.topology_fingerprint_v6();
 
         let metadata = mesh_runtime_metadata(&plan);
         assert_eq!(metadata["mesh_generation_id"].as_str().unwrap().len(), 64);
         assert_eq!(
             metadata["topology_fingerprint"],
-            metadata["mesh_generation_id"]
+            serde_json::Value::String(expected_topology_fingerprint)
+        );
+        assert!(metadata["topology_fingerprint"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("sha256:")));
+        assert_ne!(
+            metadata["topology_fingerprint"],
+            metadata["mesh_generation_id"],
+            "canonical topology identity and solver-mesh generation identity are distinct contracts"
         );
         assert_eq!(
             metadata["mesh_build_report"],
@@ -3740,9 +3807,9 @@ mod tests {
                         [0.0, 1.0, 0.0],
                         [0.0, 0.0, 1.0],
                     ],
-                    elements: vec![[0, 1, 2, 3]],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                     element_markers: vec![1],
-                    boundary_faces: vec![[0, 1, 2]],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
                     boundary_markers: vec![1],
                     periodic_boundary_pairs: Vec::new(),
                     periodic_node_pairs: Vec::new(),
@@ -4881,7 +4948,7 @@ mod tests {
                     node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 1 },
                     boundary_face_indices: Vec::new(),
                     node_indices: vec![0],
-                    surface_faces: Vec::new(),
+                    facet_global_ordinals: Vec::new(),
                     bounds_min: None,
                     bounds_max: None,
                     parent_id: None,
@@ -4901,7 +4968,7 @@ mod tests {
                     node_selector: FemMeshPartSelector::NodeRange { start: 1, count: 3 },
                     boundary_face_indices: Vec::new(),
                     node_indices: vec![1, 2, 3],
-                    surface_faces: Vec::new(),
+                    facet_global_ordinals: Vec::new(),
                     bounds_min: None,
                     bounds_max: None,
                     parent_id: None,
@@ -5451,8 +5518,8 @@ mod tests {
             [1.0, 1.0, 0.0],
             [1.0, 0.0, 1.0],
         ];
-        fem.mesh.elements = vec![[1, 3, 5, 4]];
-        fem.mesh.boundary_faces = vec![[1, 3, 5]];
+        fem.mesh.set_tet4_cells(vec![[1, 3, 5, 4]]);
+        fem.mesh.set_tri3_facets(vec![[1, 3, 5]]);
         fem.initial_magnetization = vec![[1.0, 0.0, 0.0]; 6];
         fem.object_segments[0].node_start = 0;
         fem.object_segments[0].node_count = 3;
@@ -5468,7 +5535,7 @@ mod tests {
             node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 3 },
             boundary_face_indices: vec![0],
             node_indices: vec![1, 3, 4, 5],
-            surface_faces: vec![[1, 3, 5]],
+            facet_global_ordinals: vec![0],
             bounds_min: Some([0.0, 0.0, 0.0]),
             bounds_max: Some([1.0, 1.0, 1.0]),
             parent_id: None,
@@ -5530,9 +5597,10 @@ mod tests {
             [1.0e-6, 0.0, 1.0e-6],
             [1.0e-6, 1.0e-6, 0.0],
         ];
-        fem.mesh.elements = vec![[0, 1, 2, 3], [0, 1, 4, 5], [1, 4, 5, 6]];
+        fem.mesh
+            .set_tet4_cells(vec![[0, 1, 2, 3], [0, 1, 4, 5], [1, 4, 5, 6]]);
         fem.mesh.element_markers = vec![1, 0, 0];
-        fem.mesh.boundary_faces = vec![[0, 2, 4], [1, 5, 3]];
+        fem.mesh.set_tri3_facets(vec![[0, 2, 4], [1, 5, 3]]);
         fem.mesh.boundary_markers = vec![10, 11];
         fem.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
             pair_id: "x_periodic".to_string(),
@@ -5639,9 +5707,9 @@ mod tests {
         let mesh = fullmag_ir::MeshIR {
             mesh_name: "identity-test".to_string(),
             nodes: Vec::new(),
-            elements: Vec::new(),
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(Vec::new()),
             element_markers: Vec::new(),
-            boundary_faces: Vec::new(),
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
             boundary_markers: Vec::new(),
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
@@ -5696,8 +5764,8 @@ mod tests {
             [2.0, 1.0, 0.0],
             [3.0, 0.0, 1.0],
         ];
-        fem.mesh.elements.clear();
-        fem.mesh.boundary_faces = vec![[0, 1, 2], [3, 4, 5]];
+        fem.mesh.set_tet4_cells(Vec::new());
+        fem.mesh.set_tri3_facets(vec![[0, 1, 2], [3, 4, 5]]);
         fem.mesh.boundary_markers = vec![10, 11];
         fem.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
             pair_id: "diagonal_faces".to_string(),
@@ -5778,7 +5846,8 @@ mod tests {
             [2.3, 0.5, 0.5],
             [2.5, 0.5, 0.5],
         ];
-        fem.mesh.boundary_faces = vec![[0, 1, 2], [6, 7, 8], [3, 5, 4]];
+        fem.mesh
+            .set_tri3_facets(vec![[0, 1, 2], [6, 7, 8], [3, 5, 4]]);
         fem.mesh.boundary_markers = vec![10, 11, 11];
         let boundary_pair = fullmag_ir::MeshPeriodicBoundaryPairIR {
             pair_id: "diagonal_faces".to_string(),
@@ -5832,7 +5901,7 @@ mod tests {
             [40.0e-9, 20.0e-9, 10.0e-9],
             [0.0, 20.0e-9, 10.0e-9],
         ];
-        fem.mesh.boundary_faces = vec![[0, 3, 7], [1, 6, 2]];
+        fem.mesh.set_tri3_facets(vec![[0, 3, 7], [1, 6, 2]]);
         fem.mesh.boundary_markers = vec![10, 11];
         fem.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
             pair_id: "x_faces".to_string(),
@@ -5981,7 +6050,7 @@ mod tests {
             [40.0e-9, 20.0e-9, 10.0e-9],
             [0.0, 20.0e-9, 10.0e-9],
         ];
-        fem.mesh.boundary_faces = vec![[0, 3, 7], [1, 6, 2]];
+        fem.mesh.set_tri3_facets(vec![[0, 3, 7], [1, 6, 2]]);
         fem.mesh.boundary_markers = vec![10, 11];
         fem.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
             pair_id: "x_faces".to_string(),
@@ -6776,9 +6845,9 @@ mod tests {
             [40.0e-9, 20.0e-9, 10.0e-9],
             [0.0, 20.0e-9, 10.0e-9],
         ];
-        fem.mesh.elements = vec![[0, 1, 2, 4], [3, 5, 6, 7]];
+        fem.mesh.set_tet4_cells(vec![[0, 1, 2, 4], [3, 5, 6, 7]]);
         fem.mesh.element_markers = vec![1, 1];
-        fem.mesh.boundary_faces = vec![
+        fem.mesh.set_tri3_facets(vec![
             [0, 3, 7],
             [0, 7, 4],
             [1, 5, 6],
@@ -6787,7 +6856,7 @@ mod tests {
             [0, 5, 1],
             [3, 2, 6],
             [3, 6, 7],
-        ];
+        ]);
         fem.mesh.boundary_markers = vec![1, 1, 2, 2, 3, 3, 4, 4];
         fem.mesh.periodic_boundary_pairs = vec![
             fullmag_ir::MeshPeriodicBoundaryPairIR {

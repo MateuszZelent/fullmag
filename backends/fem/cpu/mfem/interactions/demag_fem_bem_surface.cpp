@@ -88,10 +88,10 @@ bool build_face_records(const Context &ctx, std::vector<FaceRecord> &records, st
         }
         const size_t base = static_cast<size_t>(elem) * 4u;
         const uint32_t tet[4] = {
-            ctx.mesh.elements[base + 0u],
-            ctx.mesh.elements[base + 1u],
-            ctx.mesh.elements[base + 2u],
-            ctx.mesh.elements[base + 3u],
+            ctx.mesh.cell_nodes[base + 0u],
+            ctx.mesh.cell_nodes[base + 1u],
+            ctx.mesh.cell_nodes[base + 2u],
+            ctx.mesh.cell_nodes[base + 3u],
         };
         for (uint32_t node : tet) {
             if (node >= ctx.mesh.n_nodes) {
@@ -207,16 +207,16 @@ bool build_demag_boundary_surface(
         return false;
     }
 
-    if (!ctx.mesh.boundary_faces.empty()) {
-        if (ctx.mesh.boundary_faces.size() % 3u != 0u) {
+    if (!ctx.mesh.facet_nodes.empty()) {
+        if (ctx.mesh.facet_nodes.size() % 3u != 0u) {
             error = "FEM/BEM demag boundary face buffer length is not a multiple of 3";
             return false;
         }
-        for (size_t i = 0; i < ctx.mesh.boundary_faces.size() / 3u; ++i) {
+        for (size_t i = 0; i < ctx.mesh.facet_nodes.size() / 3u; ++i) {
             const std::array<uint32_t, 3> tri = {
-                ctx.mesh.boundary_faces[i * 3u + 0u],
-                ctx.mesh.boundary_faces[i * 3u + 1u],
-                ctx.mesh.boundary_faces[i * 3u + 2u],
+                ctx.mesh.facet_nodes[i * 3u + 0u],
+                ctx.mesh.facet_nodes[i * 3u + 1u],
+                ctx.mesh.facet_nodes[i * 3u + 2u],
             };
             const FaceRecord *record = find_face_record(records, sorted_key(tri));
             if (record == nullptr) {

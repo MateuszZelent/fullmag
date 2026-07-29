@@ -32,8 +32,54 @@ Every product-facing feature should be described with one of these statuses:
 | **`source_visible`** | Source code or scaffolding exists, but the lane is not publishable as an executable production path. |
 | **`semantic_only`** | Legal in Python API and `ProblemIR`, but not executable on the current public path. |
 | **`reference_executable`** | Executable on the trusted reference lane used for correctness and validation. |
+| **`development_executable`** | Executable only in an explicitly selected development mode; not production-qualified. |
+| **`partial_production_executable`** | Executable only for the explicitly documented bounded production workload. |
+| **`implemented`** | Implementation exists, but production execution and validation are separate states. |
 | **`production_executable`** | Executable on the intended production lane. |
 | **`validated`** | Executable and benchmarked with explicit regression coverage for the documented workload. |
+
+## Mixed-P1 shared-domain target vocabulary
+
+The canonical target is defined by
+`docs/physics/0106-fem-mixed-prism-pyramid-shared-domain.md` and ADR 0021.
+These IDs expose one cross-layer vocabulary without claiming execution or
+validation:
+
+| Capability | Current product status | implementation_state | Evidence now | First promotion scope |
+|---|---|---|---|---|
+| `mesh.topology.mixed_p1` | CPU `implemented`; GPU `semantic_only`; FDM `unsupported` | implemented | complete source-report/certificate validation, deterministic clone packing, final fingerprint rebinding, and runner/native contract gates exist; managed public-runtime proof is missing | one axis-aligned P1 Box in one conforming airbox |
+| `mesh.swept.prism` | CPU `implemented`; GPU `semantic_only`; FDM `unsupported` | implemented | native Python meshing and native contract tests preserve `prism6` without tet conversion; managed public-runtime proof is missing | `prism6` magnetic cells with no tet conversion |
+| `mesh.transition.pyramid_tet` | CPU `implemented`; GPU `semantic_only`; FDM `unsupported` | implemented | conforming `pyramid5` transition and `tet4` far-air topology remain certificate-bound in source and contract tests | `pyramid5` air transition and `tet4` far air |
+| `mesh.exact_layer_count` | CPU `implemented`; GPU `semantic_only`; FDM `unsupported` | implemented | accepted certificate requires `layers=1`, exactly two magnetic planes, empty report/certificate fallbacks, and `degraded=false` | `layers=1` gives exactly two magnetic node planes |
+| `fem.cpu.exchange_demag.mixed_p1` | `implemented` | implemented | bounded CPU/strict/double P1 exchange/Poisson/relaxation source and operator contracts exist, but no immutable managed public-runtime report exists | MFEM/hypre CPU double, exchange + uniform Zeeman + Poisson Robin/Dirichlet |
+| `fem.gpu.exchange_demag.mixed_p1` | `unsupported` | source_visible | typed runner/native ABI and core mixed import exist, but mixed GPU operators and device proof do not | MFEM/libCEED/CUDA GPU double on the same certified mesh |
+
+The current first-slice legality is explicit FEM, explicit CPU, strict mode,
+double precision, P1, one Box, one exact layer, one shared-domain airbox,
+uniform `Ms`/`Aex`, exchange, optional uniform Zeeman, Poisson Robin/Dirichlet,
+and PG-BB, NCG, or overdamped LLG. `auto`, GPU, single, extended, and hidden
+fallback remain illegal.
+Strict execution requires both the certificate and enclosing build report to
+record `fallbacks_triggered=[]`, plus build-report `degraded=false`; no prism-to-tet, GPU-to-CPU,
+or mixed-to-free-tetrahedral fallback is legal.
+
+Until separately qualified, all modes reject before backend startup when a
+mixed-P1 request includes FEM/BEM, PBC/Floquet, DMI, STT, thermal,
+magnetoelasticity, regional projections, eigen/frequency-domain studies,
+DG0/material interfaces, order greater than one, arbitrary OCC shapes,
+multiple bodies, or multilayers. FDM and hybrid lanes are unsupported. The
+Gmsh 4.15.2 fixture is topology feasibility evidence and does not promote any
+row to `production_executable` or `validated`. Promotion requires a fresh
+managed public run of the exact CPU SP4 relaxation stage with immutable
+fingerprint, device/engine, fallback, telemetry, and artifact evidence.
+
+The Control Room may display typed mixed-certificate quality gates and
+structured mixed-P1 rejection evidence without changing any capability row.
+Per-family quality evidence proves only the identity and acceptance checks of
+the current certified mesh. Missing-capability IDs, requested/resolved
+execution, `fallback=none`, and the `free_tetrahedral` alternative are
+diagnostics supplied by the planner/runtime path; rendering them must never be
+used to infer executable availability or validation.
 
 ### Execution-device cardinality
 

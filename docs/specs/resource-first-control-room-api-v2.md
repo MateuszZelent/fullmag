@@ -587,6 +587,7 @@ Current mesh build and object-mesh resource routes:
 | `/v2/sessions/current/meshing/builds` | `GET` | Read mesh build history. |
 | `/v2/sessions/current/meshing/builds/current` | `GET` | Read the active/current mesh build projection. |
 | `/v2/sessions/current/meshing/builds/latest-successful` | `GET` | Read the latest successful mesh build projection. |
+| `/v2/sessions/current/meshing/meshes/shared-domain/quality-gates` | `GET` | Read revision-bound generic mesh gates plus typed mixed-certificate quality evidence. |
 | `/v2/sessions/current/meshing/meshes/shared-domain/quality/per-element` | `GET` | Read binary `FMMQ` per-element quality arrays for heatmap overlays. |
 | `/v2/sessions/current/meshing/meshes/shared-domain/cross-section` | `GET` | Read binary `FMCS` shared-domain cross-section geometry for statistics and advanced inspection. |
 | `/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality` | `GET` | Read binary `FMQS` quality values for a shared-domain cross-section. |
@@ -596,6 +597,31 @@ Current mesh build and object-mesh resource routes:
 | `/v2/sessions/current/meshing/meshes/objects/{object_id}/report` | `GET` | Read object mesh report diagnostics. |
 | `/v2/sessions/current/meshing/meshes/objects/{object_id}/quality` | `GET` | Read object mesh quality diagnostics; when the object marker is known, `quality.global` is the object's mesh-quality scope. |
 | `/v2/sessions/current/meshing/meshes/objects/{object_id}/size-field` | `GET` | Read object realized size-field projection. |
+
+The shared-domain quality-gates resource retains its generic `gates`
+projection for compatibility and separately owns a typed `mixed_certificate`
+sidecar. That sidecar is derived only from the accepted mixed-layer topology
+certificate and binds its evidence to the current mesh `revision` and live
+`topology_fingerprint`. Each family row names the certificate metric, family,
+fifth percentile, acceptance threshold, pass/fail result, minimum order-2
+Jacobian in cubic metres, and positive-Jacobian result. The API must not derive
+or synthesize missing per-family values from generic mesh statistics.
+
+Mixed-certificate evidence is `valid` only when the certificate is accepted,
+its fingerprint matches the live topology, every published family has complete
+finite evidence, and all current mixed-cell families are represented. Missing,
+rejected, malformed, or fingerprint-mismatched evidence returns an explicit
+`unavailable`, `rejected`, or `stale` sidecar with no family rows. Consumers
+must fail closed and must not reuse evidence from an earlier mesh revision.
+
+`meshing/builds/current.mixed_layer_topology_rejection` is the typed failure
+surface for the latest mixed-P1 attempt. It always preserves the rejection
+category and reason when published and may additionally carry backend-supplied
+missing capability IDs, requested/resolved execution tuples, explicit
+no-fallback evidence, and the explicit `free_tetrahedral` alternative. Those
+optional fields are pass-through evidence: the API and frontend must not infer
+them from prose or promote an unsupported execution lane. A rejected build is
+not a solver-accepted topology certificate.
 
 Required field sample scopes:
 

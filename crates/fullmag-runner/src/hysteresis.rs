@@ -3288,13 +3288,16 @@ fn fem_hysteresis_averaging_context(fem: &fullmag_ir::FemPlanIR) -> HysteresisAv
     if fem
         .ms_element_field
         .as_ref()
-        .is_some_and(|values| values.len() != fem.mesh.elements.len())
+        .is_some_and(|values| values.len() != fem.mesh.cell_count())
     {
         return uniform_hysteresis_averaging_context();
     }
+    let Ok(elements) = fem.mesh.require_tet4_elements() else {
+        return uniform_hysteresis_averaging_context();
+    };
 
     let mut weights = vec![0.0; node_count];
-    for (element_idx, element) in fem.mesh.elements.iter().enumerate() {
+    for (element_idx, element) in elements.iter().enumerate() {
         if fem
             .mesh
             .element_markers
@@ -6253,9 +6256,9 @@ mod tests {
                     [0.0, 0.0, 1.0],
                     [2.0, 0.0, 0.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [1, 2, 3, 4]],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [1, 2, 3, 4]]),
                 element_markers: vec![1, 1],
-                boundary_faces: Vec::new(),
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
                 boundary_markers: Vec::new(),
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),

@@ -121,17 +121,17 @@ fullmag::fem::Context unit_tet_context() {
         0.0, 1.0, 0.0,
         0.0, 0.0, 1.0,
     };
-    ctx.mesh.elements = {0, 1, 2, 3};
-    ctx.mesh.element_markers = {1};
+    ctx.mesh.cell_nodes = {0, 1, 2, 3};
+    ctx.mesh.cell_markers = {1};
     ctx.mesh.magnetic_element_mask = {1};
     ctx.mesh.magnetic_node_mask = {1, 1, 1, 1};
-    ctx.mesh.boundary_faces = {
+    ctx.mesh.facet_nodes = {
         0, 2, 1,
         0, 1, 3,
         0, 3, 2,
         1, 2, 3,
     };
-    ctx.mesh.boundary_markers = {1, 1, 1, 1};
+    ctx.mesh.facet_markers = {1, 1, 1, 1};
     ctx.material_fields.material.saturation_magnetisation = 800e3;
     ctx.integration_weights.mfem_lumped_mass = {1.0, 1.0, 1.0, 1.0};
     return ctx;

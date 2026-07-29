@@ -372,7 +372,7 @@ void no_cuda_bootstrap_initializes_host_resident_gpu_metadata() {
         0.0, 1.0, 0.0,
         0.0, 0.0, 1.0,
     };
-    ctx.mesh.elements = {0, 1, 2, 3};
+    ctx.mesh.cell_nodes = {0, 1, 2, 3};
     ctx.mesh.magnetic_element_mask.assign(1, 1);
     ctx.material_fields.material.saturation_magnetisation = 800e3;
     ctx.material_fields.material.exchange_stiffness = 13e-12;

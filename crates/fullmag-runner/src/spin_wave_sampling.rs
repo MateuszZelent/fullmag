@@ -668,13 +668,12 @@ pub(crate) fn requested_finite_k_artifacts(
     }
     let magnetic_nodes = fem
         .mesh
-        .elements
+        .cells
         .iter()
-        .enumerate()
-        .filter(|(index, _)| {
-            fem.mesh.element_markers.is_empty() || fem.mesh.element_markers[*index] != 0
+        .filter(|cell| {
+            fem.mesh.element_markers.is_empty() || fem.mesh.element_markers[cell.ordinal] != 0
         })
-        .flat_map(|(_, element)| element.iter().map(|node| *node as usize))
+        .flat_map(|cell| cell.nodes.iter().map(|node| *node as usize))
         .collect::<std::collections::BTreeSet<_>>();
     let inferred_min = magnetic_nodes
         .iter()
@@ -707,9 +706,14 @@ pub(crate) fn requested_finite_k_artifacts(
         .ms_field
         .clone()
         .unwrap_or_else(|| vec![fem.material.saturation_magnetisation; fem.mesh.nodes.len()]);
+    let tet4_elements = fem.mesh.require_tet4_elements().map_err(|error| {
+        run_error(format!(
+            "finite-k FEM sampling requires tet4 cells; mixed-cell runtime support is unavailable: {error}"
+        ))
+    })?;
     let operator = build_p1_x_cross_section_operator(
         &fem.mesh.nodes,
-        &fem.mesh.elements,
+        &tet4_elements,
         &fem.mesh.element_markers,
         &nodal_ms,
         &x_m,

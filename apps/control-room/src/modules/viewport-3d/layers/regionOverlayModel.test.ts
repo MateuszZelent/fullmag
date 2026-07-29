@@ -303,6 +303,60 @@ describe("regionOverlayModel", () => {
     ]);
   });
 
+  it("builds a prism region overlay from canonical CSR when legacy indices are empty", () => {
+    const topology = {
+      boundaryFaceCount: 0,
+      boundaryFaces: new Uint32Array(),
+      boundaryMarkers: new Uint32Array(),
+      cellCount: 1,
+      cellMarkers: new Uint32Array([1]),
+      cellNodes: new Uint32Array([0, 1, 2, 3, 4, 5]),
+      cellOffsets: new Uint32Array([0, 6]),
+      cellTypes: new Uint32Array([2]),
+      elementCount: 1,
+      elementMarkers: new Uint32Array([1]),
+      indices: new Uint32Array(),
+      nodeCount: 6,
+      positions: Float64Array.from([
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1,
+        1, 0, 1,
+        0, 1, 1,
+      ]),
+    };
+
+    const [model] = buildRegionMeshOverlayModels(
+      [{
+        enabled: true,
+        mesh_part_ids: ["part:film:prism"],
+        name: "Prism",
+        owner_object_id: "film",
+        region_id: "film:prism",
+      }],
+      topology,
+      [{
+        element_count: 1,
+        element_start: 0,
+        id: "part:film:prism",
+        object_id: "film",
+      }],
+    );
+
+    expect(model?.edgeIndices).toHaveLength(18);
+    expect(model?.surfaceIndices).toHaveLength(24);
+    const surfaceEdges = Array.from(model?.surfaceEdgeIndices ?? []);
+    const surfaceEdgeKeys = new Set(
+      Array.from({ length: surfaceEdges.length / 2 }, (_unused, index) =>
+        [surfaceEdges[index * 2], surfaceEdges[index * 2 + 1]]
+          .toSorted((left, right) => (left ?? 0) - (right ?? 0))
+          .join(":"),
+      ),
+    );
+    expect(surfaceEdgeKeys.has("0:4")).toBe(false);
+  });
+
   it("uses realized mesh part ids instead of primitive centroid fallback", () => {
     const topology = {
       boundaryFaceCount: 0,
