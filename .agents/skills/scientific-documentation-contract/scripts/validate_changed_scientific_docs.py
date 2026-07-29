@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import subprocess
+import sys
 from pathlib import Path, PurePosixPath
+from types import ModuleType
 
 from validate_scientific_docs import validate_page
 
@@ -47,6 +50,59 @@ def _page_for(manifest: str) -> str:
     return manifest.removesuffix(".source-map.json") + ".md"
 
 
+def _load_architecture_manifest(repo_root: Path) -> ModuleType | None:
+    manifest_path = repo_root / "scripts" / "public_docs_information_architecture.py"
+    if not manifest_path.is_file():
+        return None
+    module_name = "_fullmag_public_docs_information_architecture"
+    spec = importlib.util.spec_from_file_location(module_name, manifest_path)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        return None
+    finally:
+        sys.modules.pop(module_name, None)
+    return module
+
+
+def is_registered_scaffold(path: Path, repo_root: Path) -> bool:
+    try:
+        relative = path.resolve().relative_to(repo_root.resolve())
+    except ValueError:
+        return False
+    public_root = PurePosixPath("public_docs/site")
+    relative_posix = PurePosixPath(relative.as_posix())
+    try:
+        manifest_path = str(relative_posix.relative_to(public_root))
+    except ValueError:
+        return False
+
+    module = _load_architecture_manifest(repo_root)
+    if module is None:
+        return False
+    page_specs = getattr(module, "PAGE_SPECS", ())
+    render_page = getattr(module, "render_page", None)
+    if not callable(render_page):
+        return False
+    matching = [spec for spec in page_specs if getattr(spec, "path", None) == manifest_path]
+    if len(matching) != 1:
+        return False
+    page_spec = matching[0]
+    if getattr(page_spec, "status", None) != "planned":
+        return False
+    if getattr(page_spec, "doc_kind", None) != "scaffold":
+        return False
+    try:
+        expected = render_page(page_spec, repo_root / public_root)
+        return path.read_bytes() == expected.encode("utf-8")
+    except (OSError, UnicodeError, ValueError, TypeError):
+        return False
+
+
 def validate_changed(repo: Path, base: str, head: str) -> list[str]:
     diff = _git(
         repo,
@@ -68,10 +124,10 @@ def validate_changed(repo: Path, base: str, head: str) -> list[str]:
         if _is_scientific_page(path):
             manifest = _manifest_for(path)
             if _exists(repo, head, path):
-                if not _exists(repo, head, manifest):
-                    errors.append(f"changed scientific page requires sidecar manifest: {manifest}")
-                else:
+                if _exists(repo, head, manifest):
                     manifests.add(manifest)
+                elif not is_registered_scaffold(repo / path, repo):
+                    errors.append(f"changed scientific page requires sidecar manifest: {manifest}")
             elif _exists(repo, head, manifest):
                 errors.append(f"deleted scientific page left an orphan sidecar manifest: {manifest}")
         elif path.endswith(".source-map.json"):
