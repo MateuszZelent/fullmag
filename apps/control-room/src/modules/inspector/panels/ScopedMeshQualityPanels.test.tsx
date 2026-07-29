@@ -635,6 +635,22 @@ describe("scoped mesh quality panels", () => {
     expect(html).toContain("layer-convergence evidence");
   });
 
+  it("gives every native object-policy option an explicit canonical value", () => {
+    const html = renderToStaticMarkup(
+      <ObjectMeshPolicyPanel selection={objectSelection} />,
+    );
+    const optionTags = html.match(/<option\b[^>]*>/g) ?? [];
+
+    expect(optionTags.length).toBeGreaterThan(0);
+    expect(optionTags.every((tag) => /\bvalue=/.test(tag))).toBe(true);
+    expect(html).toContain('<option value="fixed">Fixed</option>');
+    expect(html).toContain('<option value="triangular">Triangular</option>');
+    expect(html).toContain('<option value="true">Enabled</option>');
+    expect(html).toContain('<option value="false">Disabled</option>');
+    expect(html).toContain('<option value="HighOrder">High order</option>');
+    expect(html).toContain('<option value="Relocate3D">Relocate 3D</option>');
+  });
+
   it("disables layered prism authoring when its capability is semantic-only", () => {
     mixedTopologyCapabilityStatus.value = "semantic_only";
     try {

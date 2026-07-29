@@ -184,6 +184,106 @@ class LayeredMeshAuthoringRoundTripTests(unittest.TestCase):
         self.assertIn("exact_layers=True", rendered)
         self.assertEqual(_requested_layered_mesh(rewritten), expected)
 
+    def test_complete_ui_exact_prism_policy_round_trips_scene_python_and_ir(self) -> None:
+        expected_policy = {
+            "mesh_strategy": "swept_prism",
+            "topology": "prismatic",
+            "through_thickness_elements": 1,
+            "through_thickness_distribution": "fixed",
+            "through_thickness_element_ratio": 1.0,
+            "through_thickness_symmetric": False,
+            "sweep_face_meshing": "triangular",
+            "sweep_direction": "auto",
+            "element_family": "prism",
+            "transition_policy": "pyramid_to_tetrahedra",
+            "exact_layer_count": True,
+            "order": 1,
+        }
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = self._load_layered(
+                root,
+                "film.mesh(maximum_element_size=3e-9)",
+                "ui_exact_source.py",
+            )
+            builder = export_builder_draft(loaded)
+            builder["geometries"][0]["mesh"].update(expected_policy)
+            scene = build_scene_document_from_builder(builder)
+            round_tripped_builder = build_builder_from_scene_document(scene)
+            self.assertIs(
+                round_tripped_builder["geometries"][0]["mesh"][
+                    "through_thickness_symmetric"
+                ],
+                False,
+            )
+            rendered = rewrite_loaded_problem_script(
+                loaded,
+                overrides=round_tripped_builder,
+            )["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "ui_exact_rewritten.py")
+
+        actual = _requested_layered_mesh(rewritten)
+        self.assertIn("body.mesh(", rendered)
+        self.assertIn('mesh_strategy="swept_prism"', rendered)
+        self.assertIn('topology="prismatic"', rendered)
+        for key, value in expected_policy.items():
+            actual_value = (
+                actual.get(key, False)
+                if key == "through_thickness_symmetric"
+                else actual[key]
+            )
+            self.assertEqual(actual_value, value, key)
+
+    def test_ui_free_tetra_policy_round_trips_without_layered_intent(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = self._load_layered(
+                root,
+                "film.mesh(maximum_element_size=3e-9)",
+                "ui_tetra_source.py",
+            )
+            builder = export_builder_draft(loaded)
+            mesh = builder["geometries"][0]["mesh"]
+            for key in (
+                "topology",
+                "through_thickness_elements",
+                "through_thickness_distribution",
+                "through_thickness_element_ratio",
+                "through_thickness_symmetric",
+                "sweep_face_meshing",
+                "sweep_direction",
+                "element_family",
+                "transition_policy",
+                "exact_layer_count",
+            ):
+                mesh.pop(key, None)
+            mesh.update({"mesh_strategy": "free_tetrahedral", "order": 1})
+            scene = build_scene_document_from_builder(builder)
+            round_tripped_builder = build_builder_from_scene_document(scene)
+            rendered = rewrite_loaded_problem_script(
+                loaded,
+                overrides=round_tripped_builder,
+            )["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "ui_tetra_rewritten.py")
+
+        actual = _requested_layered_mesh(rewritten)
+        self.assertEqual(actual["mesh_strategy"], "free_tetrahedral")
+        self.assertEqual(actual["order"], 1)
+        for key in (
+            "topology",
+            "through_thickness_elements",
+            "through_thickness_distribution",
+            "through_thickness_element_ratio",
+            "through_thickness_symmetric",
+            "sweep_face_meshing",
+            "sweep_direction",
+            "element_family",
+            "transition_policy",
+            "exact_layer_count",
+        ):
+            self.assertNotIn(key, actual)
+        self.assertNotIn("topology=", rendered)
+
     def test_swept_defaults_and_prismatic_thin_film_lower_to_equivalent_hints(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

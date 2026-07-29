@@ -2416,6 +2416,11 @@ mod tests {
         mesh.element_family = Some("prism".to_string());
         mesh.transition_policy = Some("pyramid_to_tetrahedra".to_string());
         mesh.exact_layer_count = Some(true);
+        mesh.order = Some(1);
+        mesh.through_thickness_distribution = Some("fixed".to_string());
+        mesh.through_thickness_element_ratio = Some(1.0);
+        mesh.through_thickness_symmetric = Some(false);
+        mesh.sweep_face_meshing = Some("triangular".to_string());
 
         let scene = scene_document_from_script_builder(&builder);
         let projection = scene_document_problem_projection(&scene)
@@ -2430,10 +2435,52 @@ mod tests {
             Some("pyramid_to_tetrahedra")
         );
         assert_eq!(mesh.exact_layer_count, Some(true));
+        assert_eq!(mesh.order, Some(1));
+        assert_eq!(mesh.through_thickness_elements, Some(1));
+        assert_eq!(
+            mesh.through_thickness_distribution.as_deref(),
+            Some("fixed")
+        );
+        assert_eq!(mesh.through_thickness_element_ratio, Some(1.0));
+        assert_eq!(mesh.through_thickness_symmetric, Some(false));
+        assert_eq!(mesh.sweep_face_meshing.as_deref(), Some("triangular"));
         assert_eq!(
             projection.rewrite_overrides["geometries"][0]["mesh"]["exact_layer_count"],
             serde_json::json!(true)
         );
+    }
+
+    #[test]
+    fn scene_document_round_trips_free_tetra_without_layered_intent() {
+        let mut builder = sample_builder();
+        let mesh = builder.geometries[0].mesh.as_mut().unwrap();
+        mesh.mesh_strategy = Some("free_tetrahedral".to_string());
+        mesh.topology = None;
+        mesh.through_thickness_elements = None;
+        mesh.through_thickness_distribution = None;
+        mesh.through_thickness_element_ratio = None;
+        mesh.through_thickness_symmetric = None;
+        mesh.sweep_face_meshing = None;
+        mesh.sweep_direction = None;
+        mesh.element_family = None;
+        mesh.transition_policy = None;
+        mesh.exact_layer_count = None;
+
+        let scene = scene_document_from_script_builder(&builder);
+        let projection = scene_document_problem_projection(&scene)
+            .expect("free tetrahedral scene should project");
+        let mesh = projection.builder.geometries[0].mesh.as_ref().unwrap();
+
+        assert_eq!(mesh.mesh_strategy.as_deref(), Some("free_tetrahedral"));
+        assert_eq!(mesh.topology, None);
+        assert_eq!(mesh.through_thickness_elements, None);
+        assert_eq!(mesh.through_thickness_distribution, None);
+        assert_eq!(mesh.sweep_face_meshing, None);
+        assert_eq!(mesh.sweep_direction, None);
+        assert_eq!(mesh.element_family, None);
+        assert_eq!(mesh.transition_policy, None);
+        assert_eq!(mesh.exact_layer_count, None);
+        assert!(projection.rewrite_overrides["geometries"][0]["mesh"]["topology"].is_null());
     }
 
     #[test]

@@ -313,7 +313,7 @@ function ObjectMeshPresetSection({
   );
 }
 
-function ObjectMeshSizeSemanticsSection({
+export function ObjectMeshSizeSemanticsSection({
   draft,
   updateDraft,
 }: {
@@ -329,13 +329,13 @@ function ObjectMeshSizeSemanticsSection({
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.sizeFromCurvature} label="Size from curvature" type="number" value={draft.sizeFromCurvature} onChange={(event) => updateDraft({ sizeFromCurvature: event.target.value })} />
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.narrowRegions} label="Narrow regions" type="number" value={draft.narrowRegions} onChange={(event) => updateDraft({ narrowRegions: event.target.value })} />
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.narrowRegionResolution} label="Narrow region resolution" type="number" value={draft.narrowRegionResolution} onChange={(event) => updateDraft({ narrowRegionResolution: event.target.value })} />
-      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.order} label="FEM order" type="number" value={draft.order} onChange={(event) => updateDraft({ order: event.target.value })} />
+      <FormField disabled={!draft.present || draft.meshStrategy === "swept_prism"} help={OBJECT_MESH_HELP.order} label="FEM order" type="number" value={draft.order} onChange={(event) => updateDraft({ order: event.target.value })} />
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.source} label="Mesh source" type="text" value={draft.source} onChange={(event) => updateDraft({ source: event.target.value })} />
     </InspectorGroup>
   );
 }
 
-function ObjectMeshSweepStrategySection({
+export function ObjectMeshSweepStrategySection({
   capabilities,
   draft,
   updateDraft,
@@ -357,18 +357,28 @@ function ObjectMeshSweepStrategySection({
             ? {
                 exactLayerCount: "true",
                 meshStrategy,
+                order: "1",
+                sweepFaceMeshing: "triangular",
                 throughThicknessDistribution: "fixed",
+                throughThicknessElementRatio: "1",
+                throughThicknessElements: "1",
+                throughThicknessSymmetric: "false",
                 topology: "prismatic",
                 transitionPolicy: "pyramid_to_tetrahedra",
               }
-            : meshStrategy === "free_tetrahedral"
-              ? {
-                  exactLayerCount: "",
-                  meshStrategy,
-                  topology: "tetrahedral",
-                  transitionPolicy: "",
-                }
-              : { meshStrategy },
+            : {
+                exactLayerCount: "",
+                meshStrategy,
+                sweepDestination: "",
+                sweepFaceMeshing: "",
+                sweepSource: "",
+                throughThicknessDistribution: "",
+                throughThicknessElementRatio: "",
+                throughThicknessElements: "",
+                throughThicknessSymmetric: "",
+                topology: "",
+                transitionPolicy: "",
+              },
         );
       }}>
         <option value="">Inherited</option>
@@ -399,22 +409,22 @@ function ObjectMeshSweepStrategySection({
         />
       ) : null}
       <FormField disabled={layeredControlsDisabled} help={OBJECT_MESH_HELP.sweep} label="Element layers" type="number" value={draft.throughThicknessElements} onChange={(event) => updateDraft({ throughThicknessElements: event.target.value })} />
-      <FormField disabled={layeredControlsDisabled} help={OBJECT_MESH_HELP.sweep} label="Thickness distribution" type="select" value={draft.throughThicknessDistribution} onChange={(event) => updateDraft({ throughThicknessDistribution: event.target.value })}>
+      <FormField disabled help={OBJECT_MESH_HELP.sweep} label="Thickness distribution" type="select" value={draft.throughThicknessDistribution} onChange={(event) => updateDraft({ throughThicknessDistribution: event.target.value })}>
         <option value="">Inherited</option>
-        <option>Fixed</option>
-        <option>Linear</option>
-        <option>Exponential</option>
+        <option value="fixed">Fixed</option>
+        <option value="linear">Linear</option>
+        <option value="exponential">Exponential</option>
       </FormField>
-      <FormField disabled={layeredControlsDisabled} help={OBJECT_MESH_HELP.sweep} label="Thickness element ratio" type="number" value={draft.throughThicknessElementRatio} onChange={(event) => updateDraft({ throughThicknessElementRatio: event.target.value })} />
-      <FormField disabled={layeredControlsDisabled} help={OBJECT_MESH_HELP.sweep} label="Symmetric thickness" type="select" value={draft.throughThicknessSymmetric} onChange={(event) => updateDraft({ throughThicknessSymmetric: event.target.value })}>
+      <FormField disabled help={OBJECT_MESH_HELP.sweep} label="Thickness element ratio" type="number" value={draft.throughThicknessElementRatio} onChange={(event) => updateDraft({ throughThicknessElementRatio: event.target.value })} />
+      <FormField disabled help={OBJECT_MESH_HELP.sweep} label="Symmetric thickness" type="select" value={draft.throughThicknessSymmetric} onChange={(event) => updateDraft({ throughThicknessSymmetric: event.target.value })}>
         <option value="">Inherited</option>
-        <option>Enabled</option>
-        <option>Disabled</option>
+        <option value="true">Enabled</option>
+        <option value="false">Disabled</option>
       </FormField>
-      <FormField disabled={layeredControlsDisabled} help={OBJECT_MESH_HELP.sweep} label="Sweep face meshing" type="select" value={draft.sweepFaceMeshing} onChange={(event) => updateDraft({ sweepFaceMeshing: event.target.value })}>
+      <FormField disabled help={OBJECT_MESH_HELP.sweep} label="Sweep face meshing" type="select" value={draft.sweepFaceMeshing} onChange={(event) => updateDraft({ sweepFaceMeshing: event.target.value })}>
         <option value="">Inherited</option>
-        <option>Triangular</option>
-        <option>Quadrilateral</option>
+        <option value="triangular">Triangular</option>
+        <option value="quadrilateral">Quadrilateral</option>
       </FormField>
       <FormField disabled={layeredControlsDisabled} help={OBJECT_MESH_HELP.sweep} label="Sweep source" type="text" value={draft.sweepSource} onChange={(event) => updateDraft({ sweepSource: event.target.value })} />
       <FormField disabled={layeredControlsDisabled} help={OBJECT_MESH_HELP.sweep} label="Sweep destination" type="text" value={draft.sweepDestination} onChange={(event) => updateDraft({ sweepDestination: event.target.value })} />
@@ -457,20 +467,20 @@ function ObjectMeshBackendParametersSection({
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.smoothingSteps} label="Smoothing steps" type="number" value={draft.smoothingSteps} onChange={(event) => updateDraft({ smoothingSteps: event.target.value })} />
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.optimize} label="Optimizer" type="select" value={draft.optimize} onChange={(event) => updateDraft({ optimize: event.target.value })}>
         <option value="">Inherited</option>
-        <option>Netgen</option>
-        <option>High order</option>
-        <option>Relocate 3D</option>
+        <option value="Netgen">Netgen</option>
+        <option value="HighOrder">High order</option>
+        <option value="Relocate3D">Relocate 3D</option>
       </FormField>
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.optimizeIterations} label="Optimizer iterations" type="number" value={draft.optimizeIterations} onChange={(event) => updateDraft({ optimizeIterations: event.target.value })} />
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.computeQuality} label="Compute quality" type="select" value={draft.computeQuality} onChange={(event) => updateDraft({ computeQuality: event.target.value })}>
         <option value="">Inherited</option>
-        <option>Enabled</option>
-        <option>Disabled</option>
+        <option value="true">Enabled</option>
+        <option value="false">Disabled</option>
       </FormField>
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.perElementQuality} label="Per-element quality" type="select" value={draft.perElementQuality} onChange={(event) => updateDraft({ perElementQuality: event.target.value })}>
         <option value="">Inherited</option>
-        <option>Enabled</option>
-        <option>Disabled</option>
+        <option value="true">Enabled</option>
+        <option value="false">Disabled</option>
       </FormField>
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.boundaryLayerCount} label="Boundary-layer count" type="number" value={draft.boundaryLayerCount} onChange={(event) => updateDraft({ boundaryLayerCount: event.target.value })} />
       <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.boundaryLayerThickness} label="Boundary-layer thickness" type="number" unit="m" value={draft.boundaryLayerThickness} onChange={(event) => updateDraft({ boundaryLayerThickness: event.target.value })} />

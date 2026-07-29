@@ -597,11 +597,24 @@ export function buildObjectMeshPolicyReplaceRequest({
   if (meshStrategy === "swept_prism") {
     value.topology = "prismatic";
     value.element_family = "prism";
+    value.order = 1;
     value.sweep_direction = "auto";
+    value.sweep_face_meshing = "triangular";
+    value.through_thickness_distribution = "fixed";
+    value.through_thickness_element_ratio = 1;
+    value.through_thickness_elements ??= 1;
+    value.through_thickness_symmetric = false;
     value.transition_policy = "pyramid_to_tetrahedra";
     value.exact_layer_count = true;
   } else if (meshStrategy === "free_tetrahedral") {
-    value.topology = "tetrahedral";
+    delete value.topology;
+    delete value.through_thickness_elements;
+    delete value.through_thickness_distribution;
+    delete value.through_thickness_element_ratio;
+    delete value.through_thickness_symmetric;
+    delete value.sweep_face_meshing;
+    delete value.sweep_source;
+    delete value.sweep_destination;
     delete value.element_family;
     delete value.sweep_direction;
     delete value.transition_policy;
