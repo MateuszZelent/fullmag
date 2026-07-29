@@ -1,11 +1,13 @@
 ---
 title: Canonical semantic model
-status: draft
+status: partial
+doc_kind: reference
 audience: user
 owner: fullmag-public-docs
 source_of_truth: docs/specs/problem-ir-v0.md
 ---
 
+(public-docs-architecture-semantic-model)=
 # Canonical semantic model
 
 FullMag uses one semantic flow:

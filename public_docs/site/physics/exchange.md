@@ -1,11 +1,13 @@
 ---
 title: Exchange interaction
-status: review-candidate
+status: partial
+doc_kind: reference
 audience: user
 owner: fullmag-public-docs
 source_of_truth: docs/physics/0400-fdm-exchange-demag-zeeman.md
 ---
 
+(public-docs-physics-exchange)=
 # Exchange interaction
 
 :::{admonition} Review candidate

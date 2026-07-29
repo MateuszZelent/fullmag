@@ -1,11 +1,13 @@
 ---
 title: FullMag public documentation
-status: draft
+status: partial
+doc_kind: reference
 audience: user
 owner: fullmag-public-docs
 source_of_truth: public_docs/fullmag_profesjonalna_dokumentacja_architektura.md
 ---
 
+(public-docs-root)=
 # FullMag public documentation
 
 FullMag is a physics-first micromagnetics platform. This site is the curated public documentation
@@ -30,8 +32,12 @@ public status and review.
 :maxdepth: 2
 :caption: Public documentation
 
-architecture/index
+getting-started/index
+python-api/index
 physics/index
+numerical-methods/index
+validation/index
+architecture/index
 ```
 
 ## Publication status
