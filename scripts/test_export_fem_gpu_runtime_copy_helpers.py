@@ -1050,6 +1050,59 @@ def test_export_archive_validation_scratch_contract_uses_task_ext4_target() -> N
     assert "trap 'exit 143' TERM" in exporter
 
 
+def test_failed_export_cleanup_is_best_effort_and_preserves_signal_status(
+    tmp_path: Path,
+) -> None:
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+    function_start = exporter.index("cleanup_failed_export() {")
+    function_end = exporter.index("\n}\n", function_start) + len("\n}")
+    cleanup_function = exporter[function_start:function_end]
+    cleanup_log = tmp_path / "cleanup.log"
+    environment = os.environ.copy()
+    environment["CLEANUP_LOG"] = str(cleanup_log)
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-euo",
+            "pipefail",
+            "-c",
+            (
+                'docker_build_ref="image-ref"\n'
+                'docker_build_ref_marker="marker"\n'
+                'persistent_staging_archive="archive"\n'
+                'persistent_validation_root="validation"\n'
+                'STAGING_ROOT="staging"\n'
+                'remove_managed_fem_build_ref() { printf "image:%s\\n" "$1" >> "$CLEANUP_LOG"; }\n'
+                'rmdir() { printf "rmdir:%s\\n" "$*" >> "$CLEANUP_LOG"; }\n'
+                'rm_calls=0\n'
+                'rm() {\n'
+                '  rm_calls=$((rm_calls + 1))\n'
+                '  printf "rm:%s\\n" "$*" >> "$CLEANUP_LOG"\n'
+                '  [ "$rm_calls" -ne 1 ]\n'
+                '}\n'
+                f"{cleanup_function}\n"
+                'trap cleanup_failed_export EXIT\n'
+                'exit 143\n'
+            ),
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 143, result.stderr
+    assert cleanup_log.read_text(encoding="utf-8").splitlines() == [
+        "image:image-ref",
+        "rmdir:-- marker",
+        "rm:-f -- archive",
+        "rm:-rf -- validation",
+        "rm:-rf -- staging",
+    ]
+
+
 def test_export_archive_validation_scratch_is_unique_and_ignores_tmpdir(
     tmp_path: Path,
 ) -> None:

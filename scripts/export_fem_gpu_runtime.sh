@@ -31,12 +31,12 @@ cleanup_failed_export() {
     rmdir -- "${docker_build_ref_marker}" 2>/dev/null || true
   fi
   if [ -n "${persistent_staging_archive}" ]; then
-    rm -f -- "${persistent_staging_archive}"
+    rm -f -- "${persistent_staging_archive}" || true
   fi
   if [ -n "${persistent_validation_root}" ]; then
-    rm -rf -- "${persistent_validation_root}"
+    rm -rf -- "${persistent_validation_root}" || true
   fi
-  rm -rf -- "${STAGING_ROOT}"
+  rm -rf -- "${STAGING_ROOT}" || true
   exit "${status}"
 }
 trap cleanup_failed_export EXIT
