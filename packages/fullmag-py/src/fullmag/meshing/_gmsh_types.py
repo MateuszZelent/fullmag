@@ -1514,14 +1514,20 @@ class MeshData:
             resolved_eps = (
                 float(eps_volume) * 6.0
                 if eps_volume is not None
-                else FEM_TOPOLOGY_RELATIVE_DETERMINANT_EPS
-                * characteristic_length**3
+                else max(
+                    FEM_TOPOLOGY_VOLUME_EPS * 6.0,
+                    FEM_TOPOLOGY_RELATIVE_DETERMINANT_EPS
+                    * characteristic_length**3,
+                )
             )
             minimum_abs = float(np.min(np.abs(determinants)))
             if minimum_abs <= resolved_eps:
+                volume_context = (
+                    " (degenerate tetra volume)" if cell_type == "tet4" else ""
+                )
                 raise ValueError(
                     f"mesh CSR cell {index} global ordinal {int(self.cell_global_ordinals[index])} "
-                    f"has degenerate {cell_type} Jacobian "
+                    f"has degenerate {cell_type} Jacobian{volume_context} "
                     f"{minimum_abs:.6e} <= eps {resolved_eps:.6e}"
                 )
             if require_positive_orientation and np.any(determinants < 0.0):
