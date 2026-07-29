@@ -23,7 +23,7 @@ Every terminal Markdown page must contain these explicit MyST labels:
 (source-code-index)=
 ```
 
-Store the manifest next to the page as `<page>.source-map.json`. The changed-page CI gate rejects a changed scientific page without this sidecar and rejects an orphaned or deleted sidecar while its page remains. The validator opens the actual page from `document.revision`; declarations in the manifest cannot substitute for page content.
+Store the manifest next to the page as `<page>.source-map.json`; its `document.path` must name that exact adjacent page. The changed-page CI gate rejects a changed scientific page without this sidecar and rejects an orphaned, mismatched, or deleted sidecar while its page remains. The repository-wide contract guard revalidates every existing sidecar on every pull request, including implementation-only changes. The validator opens the actual page from `document.revision`; declarations in the manifest cannot substitute for page content.
 
 ## Equations and symbols
 
