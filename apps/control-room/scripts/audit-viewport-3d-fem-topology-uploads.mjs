@@ -143,8 +143,9 @@ async function verifyViewport3DPreCanvasErrorBoundary({ browser, url }) {
 async function verifySemanticTargetExplorerInvariant({ browser, url }) {
   const page = await browser.newPage({ viewport: { height: 900, width: 1440 } });
   const fixture = createSemanticTargetExplorerFixture();
+  // Keep the enclosing airbox hidden while proving picks for its interior FEM
+  // carriers. Its canonical Explorer identity is asserted separately below.
   const expectedNodeIds = new Set([
-    "model:airbox",
     "model:object:semantic-magnet",
     "model:mesh:unassigned:semantic-orphan",
   ]);
@@ -660,10 +661,10 @@ function createSemanticTargetExplorerFixture() {
         ...createFemTopologyFixture({ partCount: 1, passConfig }).visualizationState.layers,
         airbox: {
           points: { visible: false },
-          surface: { opacity: 0.35, visible: true },
+          surface: { opacity: 0.35, visible: false },
           vectors: { density: 0, domain: "airbox_only", visible: false },
-          visible: true,
-          wireframe: { visible: true },
+          visible: false,
+          wireframe: { visible: false },
         },
       },
       targets: {
@@ -671,7 +672,11 @@ function createSemanticTargetExplorerFixture() {
           label: "Airbox",
           scope: "airbox",
           scope_id: "airbox",
-          settings: targetSettings,
+          settings: femTopologyTargetSettings({
+            points: false,
+            surface: false,
+            wireframe: false,
+          }),
           source: "airbox",
         },
         objects: [

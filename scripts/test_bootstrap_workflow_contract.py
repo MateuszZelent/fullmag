@@ -48,6 +48,10 @@ class BootstrapWorkflowContractTests(unittest.TestCase):
         self.assertIn('"content-range": `bytes ${start}-${end}/${body.byteLength}`', audit)
         self.assertIn('etag: \'"fem-topology-fixture"\'', audit)
         self.assertIn('status: 206', audit)
+        self.assertNotIn(
+            'const expectedNodeIds = new Set([\n    "model:airbox",',
+            audit,
+        )
 
     def test_every_tracked_gitlink_has_submodule_metadata(self) -> None:
         gitmodules = (ROOT / ".gitmodules").read_text()
