@@ -3,6 +3,7 @@ use fullmag_ir::{BackendPlanIR, ExecutionPlanIR};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use std::collections::BTreeSet;
+use std::ops::{Range, RangeInclusive};
 use std::time::{Duration, Instant};
 
 use crate::control_room::{api_base_url, current_live_api_client};
@@ -535,26 +536,37 @@ fn parse_fmmt_v2_header(bytes: &[u8]) -> Result<FmmtHeader> {
     let facet_offset_count = (boundary_face_count as usize)
         .checked_add(1)
         .ok_or_else(|| anyhow!("FMMT v2 facet offset count overflow"))?;
-    let sections = [
-        (position_count, 8, "positions"),
-        (element_count as usize, 4, "cell types"),
-        (cell_offset_count, 4, "cell offsets"),
-        (cell_connectivity_count as usize, 4, "cell connectivity"),
-        (boundary_face_count as usize, 4, "facet types"),
-        (boundary_face_count as usize, 4, "facet roles"),
-        (facet_offset_count, 4, "facet offsets"),
-        (facet_connectivity_count as usize, 4, "facet connectivity"),
-        (element_marker_count as usize, 4, "cell markers"),
-        (boundary_marker_count as usize, 4, "facet markers"),
-    ];
     let mut offset = header_len;
-    let mut cell_types = 0..0;
-    for (index, (count, bytes_per_element, label)) in sections.into_iter().enumerate() {
-        let range = fmmt_v2_section(&mut offset, count, bytes_per_element, label)?;
-        if index == 1 {
-            cell_types = range;
-        }
-    }
+    let positions = fmmt_v2_section(&mut offset, position_count, 8, "positions")?;
+    let cell_types = fmmt_v2_section(&mut offset, element_count as usize, 4, "cell types")?;
+    let cell_offsets = fmmt_v2_section(&mut offset, cell_offset_count, 4, "cell offsets")?;
+    let cell_nodes = fmmt_v2_section(
+        &mut offset,
+        cell_connectivity_count as usize,
+        4,
+        "cell connectivity",
+    )?;
+    let facet_types = fmmt_v2_section(&mut offset, boundary_face_count as usize, 4, "facet types")?;
+    let facet_roles = fmmt_v2_section(&mut offset, boundary_face_count as usize, 4, "facet roles")?;
+    let facet_offsets = fmmt_v2_section(&mut offset, facet_offset_count, 4, "facet offsets")?;
+    let facet_nodes = fmmt_v2_section(
+        &mut offset,
+        facet_connectivity_count as usize,
+        4,
+        "facet connectivity",
+    )?;
+    let _cell_markers = fmmt_v2_section(
+        &mut offset,
+        element_marker_count as usize,
+        4,
+        "cell markers",
+    )?;
+    let _facet_markers = fmmt_v2_section(
+        &mut offset,
+        boundary_marker_count as usize,
+        4,
+        "facet markers",
+    )?;
     if bytes.len() != offset {
         bail!(
             "FMMT byte-length mismatch: expected {}, got {}",
@@ -563,18 +575,36 @@ fn parse_fmmt_v2_header(bytes: &[u8]) -> Result<FmmtHeader> {
         );
     }
 
-    let mut counts = [0u32; 4];
-    for code in bytes[cell_types]
-        .chunks_exact(4)
-        .map(|raw| u32::from_le_bytes(raw.try_into().expect("cell type code length")))
-    {
-        let index = match code {
-            1..=4 => code as usize - 1,
-            _ => bail!("FMMT v2 contains unknown cell type code {code}"),
-        };
-        let count = &mut counts[index];
-        *count += 1;
-    }
+    validate_fmmt_v2_positions(bytes, &positions)?;
+    let counts = validate_fmmt_v2_csr(
+        bytes,
+        "cell",
+        &cell_types,
+        &cell_offsets,
+        &cell_nodes,
+        node_count,
+        |code| match code {
+            1 => Some(4),
+            2 => Some(6),
+            3 => Some(5),
+            4 => Some(8),
+            _ => None,
+        },
+    )?;
+    validate_fmmt_v2_csr(
+        bytes,
+        "facet",
+        &facet_types,
+        &facet_offsets,
+        &facet_nodes,
+        node_count,
+        |code| match code {
+            1 => Some(3),
+            2 => Some(4),
+            _ => None,
+        },
+    )?;
+    validate_fmmt_v2_codes(bytes, &facet_roles, "facet role", 1..=3)?;
 
     Ok(FmmtHeader {
         version: 2,
@@ -592,7 +622,7 @@ fn fmmt_v2_section(
     element_count: usize,
     bytes_per_element: usize,
     label: &str,
-) -> Result<std::ops::Range<usize>> {
+) -> Result<Range<usize>> {
     let start = offset
         .checked_add(7)
         .map(|value| value & !7)
@@ -603,6 +633,85 @@ fn fmmt_v2_section(
         .ok_or_else(|| anyhow!("FMMT v2 {label} byte-length overflow"))?;
     *offset = end;
     Ok(start..end)
+}
+
+fn validate_fmmt_v2_positions(bytes: &[u8], positions: &Range<usize>) -> Result<()> {
+    for (index, raw) in bytes[positions.clone()].chunks_exact(8).enumerate() {
+        let value = f64::from_le_bytes(raw.try_into().expect("position value length"));
+        if !value.is_finite() {
+            bail!("FMMT v2 contains non-finite position at scalar index {index}");
+        }
+    }
+    Ok(())
+}
+
+fn validate_fmmt_v2_csr(
+    bytes: &[u8],
+    label: &str,
+    types: &Range<usize>,
+    offsets: &Range<usize>,
+    nodes: &Range<usize>,
+    node_count: u32,
+    arity: impl Fn(u32) -> Option<usize>,
+) -> Result<[u32; 4]> {
+    let entity_count = types.len() / 4;
+    let connectivity_count = nodes.len() / 4;
+    if read_section_u32(bytes, offsets, 0) != 0 {
+        bail!("FMMT v2 {label} offsets must start at zero");
+    }
+
+    let mut counts = [0u32; 4];
+    for ordinal in 0..entity_count {
+        let code = read_section_u32(bytes, types, ordinal);
+        let expected_arity = arity(code)
+            .ok_or_else(|| anyhow!("FMMT v2 contains unknown {label} type code {code}"))?;
+        let start = read_section_u32(bytes, offsets, ordinal) as usize;
+        let end = read_section_u32(bytes, offsets, ordinal + 1) as usize;
+        if end < start || end > connectivity_count {
+            bail!("FMMT v2 {label} {ordinal} has invalid CSR range {start}..{end}");
+        }
+        if end - start != expected_arity {
+            bail!(
+                "FMMT v2 {label} {ordinal} has arity {}, expected {}",
+                end - start,
+                expected_arity
+            );
+        }
+        counts[code as usize - 1] += 1;
+    }
+
+    let terminal = read_section_u32(bytes, offsets, entity_count) as usize;
+    if terminal != connectivity_count {
+        bail!(
+            "FMMT v2 {label} terminal offset {terminal} does not match connectivity count {connectivity_count}"
+        );
+    }
+    for ordinal in 0..connectivity_count {
+        let node = read_section_u32(bytes, nodes, ordinal);
+        if node >= node_count {
+            bail!("FMMT v2 {label} connectivity contains out-of-range node {node}");
+        }
+    }
+    Ok(counts)
+}
+
+fn validate_fmmt_v2_codes(
+    bytes: &[u8],
+    section: &Range<usize>,
+    label: &str,
+    allowed: RangeInclusive<u32>,
+) -> Result<()> {
+    for index in 0..section.len() / 4 {
+        let code = read_section_u32(bytes, section, index);
+        if !allowed.contains(&code) {
+            bail!("FMMT v2 contains unknown {label} code {code}");
+        }
+    }
+    Ok(())
+}
+
+fn read_section_u32(bytes: &[u8], section: &Range<usize>, index: usize) -> u32 {
+    read_u32(bytes, section.start + index * 4)
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> u32 {
@@ -663,6 +772,79 @@ mod tests {
                 "{error:#}"
             );
         }
+    }
+
+    #[test]
+    fn parse_fmmt_header_rejects_same_length_invalid_v2_positions_types_and_roles() {
+        assert_fmmt_v2_u64_corruption(POSITIONS_OFFSET, f64::NAN.to_bits(), "non-finite");
+        assert_fmmt_v2_u32_corruption(&[(CELL_TYPES_OFFSET, 9)], "unknown cell type code");
+        assert_fmmt_v2_u32_corruption(&[(FACET_TYPES_OFFSET, 9)], "unknown facet type code");
+        assert_fmmt_v2_u32_corruption(&[(FACET_ROLES_OFFSET, 9)], "unknown facet role code");
+    }
+
+    #[test]
+    fn parse_fmmt_header_rejects_same_length_invalid_v2_cell_csr() {
+        assert_fmmt_v2_u32_corruption(&[(CELL_OFFSETS_OFFSET, 1)], "offsets must start");
+        assert_fmmt_v2_u32_corruption(&[(CELL_OFFSETS_OFFSET + 8, 5)], "invalid CSR range");
+        assert_fmmt_v2_u32_corruption(&[(CELL_OFFSETS_OFFSET + 4, 5)], "has arity");
+        assert_fmmt_v2_u32_corruption(
+            &[
+                (CELL_TYPES_OFFSET + 4, 1),
+                (CELL_OFFSETS_OFFSET + 8, 10),
+                (CELL_OFFSETS_OFFSET + 12, 14),
+            ],
+            "terminal offset",
+        );
+    }
+
+    #[test]
+    fn parse_fmmt_header_rejects_same_length_invalid_v2_facet_csr() {
+        assert_fmmt_v2_u32_corruption(&[(FACET_OFFSETS_OFFSET, 1)], "offsets must start");
+        assert_fmmt_v2_u32_corruption(&[(FACET_OFFSETS_OFFSET + 8, 2)], "invalid CSR range");
+        assert_fmmt_v2_u32_corruption(&[(FACET_OFFSETS_OFFSET + 4, 2)], "has arity");
+        assert_fmmt_v2_u32_corruption(
+            &[(FACET_TYPES_OFFSET + 4, 1), (FACET_OFFSETS_OFFSET + 8, 6)],
+            "terminal offset",
+        );
+    }
+
+    #[test]
+    fn parse_fmmt_header_rejects_same_length_out_of_range_v2_nodes() {
+        assert_fmmt_v2_u32_corruption(&[(CELL_NODES_OFFSET, 8)], "out-of-range node");
+        assert_fmmt_v2_u32_corruption(&[(FACET_NODES_OFFSET, 8)], "out-of-range node");
+    }
+
+    const POSITIONS_OFFSET: usize = 64;
+    const CELL_TYPES_OFFSET: usize = 256;
+    const CELL_OFFSETS_OFFSET: usize = 272;
+    const CELL_NODES_OFFSET: usize = 288;
+    const FACET_TYPES_OFFSET: usize = 352;
+    const FACET_ROLES_OFFSET: usize = 360;
+    const FACET_OFFSETS_OFFSET: usize = 368;
+    const FACET_NODES_OFFSET: usize = 384;
+
+    fn assert_fmmt_v2_u64_corruption(offset: usize, value: u64, expected: &str) {
+        let mut bytes = mixed_fmmt_v2_payload();
+        bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+        assert_fmmt_v2_corruption_rejects(bytes, expected);
+    }
+
+    fn assert_fmmt_v2_u32_corruption(writes: &[(usize, u32)], expected: &str) {
+        let mut bytes = mixed_fmmt_v2_payload();
+        for (offset, value) in writes {
+            bytes[*offset..*offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        assert_fmmt_v2_corruption_rejects(bytes, expected);
+    }
+
+    fn assert_fmmt_v2_corruption_rejects(bytes: Vec<u8>, expected: &str) {
+        assert_eq!(
+            bytes.len(),
+            440,
+            "fixture corruption must preserve byte length"
+        );
+        let error = parse_fmmt_header(&bytes).expect_err("corrupt FMMT v2 payload must reject");
+        assert!(error.to_string().contains(expected), "{error:#}");
     }
 
     fn mixed_fmmt_v2_payload() -> Vec<u8> {
