@@ -27,6 +27,7 @@ myst_heading_anchors = 3
 html_theme = "pydata_sphinx_theme"
 html_title = "FullMag public documentation"
 html_static_path = ["_static"]
+html_extra_path = ["CNAME"]
 html_theme_options = {
     "github_url": "https://github.com/MateuszZelent/fullmag",
     "navbar_align": "content",
