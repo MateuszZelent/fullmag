@@ -280,11 +280,17 @@ def _validate_mixed_certificate(
         report.get("mixed_layer_topology_certificate"),
         "mixed layer topology certificate",
     )
+    certificate_fingerprint = certificate.get("topology_fingerprint")
+    if not isinstance(certificate_fingerprint, str) or not TOPOLOGY_FINGERPRINT.fullmatch(
+        certificate_fingerprint
+    ):
+        raise ContractError(
+            "mixed topology certificate topology_fingerprint must be canonical sha256 identity"
+        )
     expected_certificate = {
         "schema_version": "mixed_layer_topology_certificate.v1",
         "certificate_status": "accepted",
         "topology_fingerprint_version": "v3",
-        "topology_fingerprint": topology_fingerprint,
         "fallbacks_triggered": [],
         "requested_layer_count": 1,
         "realized_layer_count": 1,
@@ -317,7 +323,7 @@ def _validate_mixed_certificate(
     expected_mixed = {
         "requested_topology": "mixed_p1",
         "resolved_topology": "mixed_p1",
-        "accepted_certificate_fingerprint": topology_fingerprint,
+        "accepted_certificate_fingerprint": certificate_fingerprint,
         "requested_device": device,
         "precision": "double",
         "capability_status": "implemented",

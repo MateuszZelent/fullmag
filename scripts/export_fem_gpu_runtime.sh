@@ -87,11 +87,11 @@ validate_container_target_dir() {
 cd "${REPO_ROOT}"
 #rm -rf target/* target/.* 2>/dev/null || true
 
-: "${FULLMAG_NATIVE_BUILD_STORAGE_ROOT:=/zfn2/mateuszz/git/fullmag}"
-: "${FULLMAG_NATIVE_BUILD_IMAGE:=${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}/build-volumes/fullmag-native.ext4}"
-: "${FULLMAG_NATIVE_MOUNT_VIEW:=/mnt/fullmag-zfn2-native}"
+readonly FULLMAG_NATIVE_BUILD_STORAGE_ROOT="/zfn2/mateuszz/git/fullmag"
+readonly FULLMAG_NATIVE_BUILD_IMAGE="/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4"
+readonly FULLMAG_NATIVE_MOUNT_VIEW="/mnt/fullmag-zfn2-native"
+readonly FULLMAG_CONTAINER_TARGET_DIR="/mnt/fullmag-zfn2-native/managed-fem-runtime"
 : "${FULLMAG_LOOP_SYSFS_ROOT:=/sys/class/block}"
-: "${FULLMAG_CONTAINER_TARGET_DIR:=${FULLMAG_NATIVE_MOUNT_VIEW}/managed-fem-runtime}"
 : "${FULLMAG_FEM_RUNTIME_CARGO_JOBS:=1}"
 : "${FULLMAG_CUDA_ARCHITECTURES:=80-real;89-real;90-real;90-virtual}"
 : "${FULLMAG_HYPRE_GPU_ARCHITECTURES:=60 70 80 89 90}"

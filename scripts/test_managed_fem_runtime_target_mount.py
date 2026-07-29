@@ -23,7 +23,7 @@ class ManagedFemRuntimeTargetMountTest(unittest.TestCase):
         source = EXPORTER.read_text(encoding="utf-8")
 
         self.assertIn(
-            'FULLMAG_CONTAINER_TARGET_DIR:=${FULLMAG_NATIVE_MOUNT_VIEW}/managed-fem-runtime',
+            f'readonly FULLMAG_CONTAINER_TARGET_DIR="{MOUNT_VIEW}/managed-fem-runtime"',
             source,
         )
         self.assertNotIn(
@@ -31,17 +31,24 @@ class ManagedFemRuntimeTargetMountTest(unittest.TestCase):
             source,
         )
         self.assertIn(
-            f'FULLMAG_NATIVE_BUILD_STORAGE_ROOT:={CANONICAL_STORAGE_ROOT}',
+            f'readonly FULLMAG_NATIVE_BUILD_STORAGE_ROOT="{CANONICAL_STORAGE_ROOT}"',
             source,
         )
         self.assertIn(
-            'FULLMAG_NATIVE_BUILD_IMAGE:=${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}/build-volumes/fullmag-native.ext4',
+            f'readonly FULLMAG_NATIVE_BUILD_IMAGE="{CANONICAL_IMAGE}"',
             source,
         )
         self.assertIn(
-            f'FULLMAG_NATIVE_MOUNT_VIEW:={MOUNT_VIEW}',
+            f'readonly FULLMAG_NATIVE_MOUNT_VIEW="{MOUNT_VIEW}"',
             source,
         )
+        for variable in (
+            "FULLMAG_NATIVE_BUILD_STORAGE_ROOT",
+            "FULLMAG_NATIVE_BUILD_IMAGE",
+            "FULLMAG_NATIVE_MOUNT_VIEW",
+            "FULLMAG_CONTAINER_TARGET_DIR",
+        ):
+            self.assertNotIn(f'"${{{variable}:=', source)
         self.assertIn('findmnt -n -o FSTYPE --target "${FULLMAG_CONTAINER_TARGET_DIR}"', source)
         self.assertIn('findmnt -n -o SOURCE --target "${FULLMAG_CONTAINER_TARGET_DIR}"', source)
         self.assertIn('/loop/backing_file', source)
@@ -96,6 +103,46 @@ class ManagedFemRuntimeTargetMountTest(unittest.TestCase):
             self.assertIn("must be an ext4 filesystem", result.stderr)
             self.assertIn(REMOUNT_COMMAND, result.stderr)
             self.assertFalse(docker_marker.exists(), "Docker ran before target validation")
+
+    def test_caller_cannot_redirect_canonical_native_storage_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            mkdir = fake_bin / "mkdir"
+            mkdir.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            mkdir.chmod(0o755)
+            findmnt = fake_bin / "findmnt"
+            findmnt.write_text("#!/bin/sh\necho xfs\n", encoding="utf-8")
+            findmnt.chmod(0o755)
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "FULLMAG_NATIVE_BUILD_STORAGE_ROOT": "/evil/root",
+                    "FULLMAG_NATIVE_BUILD_IMAGE": "/evil/image.ext4",
+                    "FULLMAG_NATIVE_MOUNT_VIEW": "/evil/mount",
+                    "FULLMAG_CONTAINER_TARGET_DIR": "/evil/target",
+                    "PATH": f"{fake_bin}:{environment['PATH']}",
+                    "TMPDIR": str(root),
+                }
+            )
+
+            result = subprocess.run(
+                ["bash", str(EXPORTER)],
+                cwd=REPO_ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn(
+                f"must be an ext4 filesystem: {MOUNT_VIEW}/managed-fem-runtime",
+                result.stderr,
+            )
+            self.assertIn(CANONICAL_IMAGE, result.stderr)
+            self.assertNotIn("/evil/", result.stderr)
 
     def test_wrong_loop_backing_image_fails_before_any_docker_command(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:

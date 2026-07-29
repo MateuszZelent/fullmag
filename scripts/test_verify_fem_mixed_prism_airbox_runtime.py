@@ -116,12 +116,13 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
         source.write_text("max_steps=50_000\n", encoding="utf-8")
         bounded_text = "max_steps=1\n"
         bounded.write_text(bounded_text, encoding="utf-8")
-        fingerprint = "sha256:" + "a" * 64
+        topology_fingerprint = "sha256:" + "a" * 64
+        certificate_fingerprint = "sha256:" + "c" * 64
         certificate = {
             "schema_version": "mixed_layer_topology_certificate.v1",
             "certificate_status": "accepted",
             "topology_fingerprint_version": "v3",
-            "topology_fingerprint": fingerprint,
+            "topology_fingerprint": certificate_fingerprint,
             "requested_layer_count": 1,
             "realized_layer_count": 1,
             "magnetic_plane_coordinates_m": [-1.5e-9, 1.5e-9],
@@ -140,7 +141,7 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
             "mixed_topology_provenance": {
                 "requested_topology": "mixed_p1",
                 "resolved_topology": "mixed_p1",
-                "accepted_certificate_fingerprint": fingerprint,
+                "accepted_certificate_fingerprint": certificate_fingerprint,
                 "requested_device": device,
                 "precision": "double",
                 "capability_status": "implemented",
@@ -185,7 +186,7 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
             },
             "execution_provenance": execution_provenance,
             "mesh": {
-                "topology_fingerprint": fingerprint,
+                "topology_fingerprint": topology_fingerprint,
                 "mesh_build_report": report,
             },
         }
@@ -305,6 +306,11 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
 
             self.assertEqual(cpu_summary["execution_engine"], "fem_cpu_native")
             self.assertEqual(gpu_summary["execution_engine"], "fem_native_gpu")
+            self.assertNotEqual(
+                cpu_summary["topology_fingerprint"],
+                cpu_summary["certificate_fingerprint"],
+                "global/periodic v6 and mixed-certificate v3 identities are distinct",
+            )
             self.assertEqual(gpu_summary["gpu_transfer_telemetry"]["control_scalar_host_sync_count"], 7)  # type: ignore[index]
             self.assertEqual(comparison["schema_version"], "fem_mixed_prism_airbox_cpu_gpu.v1")
             self.assertEqual(comparison["status"], "pass")
@@ -321,6 +327,7 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
             "resolved_fallback",
             "report_fallback",
             "degraded",
+            "global_topology_fingerprint",
             "certificate_fingerprint",
             "topology_version",
             "layer_count",
@@ -356,6 +363,10 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                     report["fallbacks_triggered"] = ["tet_conversion"]
                 elif case == "degraded":
                     report["degraded"] = True
+                elif case == "global_topology_fingerprint":
+                    mutated["mesh"]["topology_fingerprint"] = (  # type: ignore[index]
+                        "sha256:invalid"
+                    )
                 elif case == "certificate_fingerprint":
                     certificate["topology_fingerprint"] = "sha256:" + "b" * 64
                 elif case == "topology_version":
@@ -431,6 +442,12 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
             ("runtime", lambda summary: summary.__setitem__("runtime_manifest_sha256", "0" * 64)),
             ("source", lambda summary: summary.__setitem__("bounded_source_sha256", "0" * 64)),
             ("topology", lambda summary: summary.__setitem__("topology_fingerprint", "sha256:" + "b" * 64)),
+            (
+                "certificate",
+                lambda summary: summary.__setitem__(
+                    "certificate_fingerprint", "sha256:" + "b" * 64
+                ),
+            ),
             ("state", lambda summary: summary["final_magnetization"][0].__setitem__(0, 1.0 - 2.0e-9)),
             ("energy", lambda summary: summary["final_energy_terms_j"].__setitem__("E_ex", 1.1)),
             ("torque", lambda summary: summary.__setitem__("final_torque_apm", 5.0)),
