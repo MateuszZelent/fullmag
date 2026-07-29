@@ -40,6 +40,7 @@
 #include "src/relaxation_numerics.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -66,9 +67,18 @@ constexpr size_t kNcgAcceptedGradientNormTailSlot = 0;
 constexpr size_t kNcgPreviousGradientEnergyNormTailSlot = 1;
 constexpr size_t kNcgPrPlusNumeratorTailSlot = 2;
 constexpr size_t kNcgScalarTailCount = 3;
+constexpr size_t kNcgCurrentGradientNormTailSlot = 0;
+constexpr size_t kNcgCurrentGradientEnergyNormTailSlot = 1;
+constexpr size_t kNcgCurrentDirectionDotGradientTailSlot = 2;
+constexpr size_t kNcgCurrentDirectionNormTailSlot = 3;
+constexpr size_t kNcgCurrentScalarTailCount = 4;
 static_assert(
     kGpuFinalScalarSlots + kNcgScalarTailCount <= FEM_GPU_SCALAR_RESULT_SLOTS,
     "GPU nonlinear-CG scalar tail must fit in the shared scalar result buffer");
+static_assert(
+    kGpuFinalScalarSlots + kNcgCurrentScalarTailCount <=
+        FEM_GPU_SCALAR_RESULT_SLOTS,
+    "GPU nonlinear-CG packed current metrics must fit in the shared scalar result buffer");
 static_assert(
     kFemGpuAcceptedEnergyTermSlots == kGpuFinalScalarSlots,
     "GPU nonlinear-CG accepted endpoint token must store every energy term");
@@ -509,11 +519,13 @@ bool gpu_relax_compute_effective_field_energy_gradient_and_direction(
                 ctx.state.current_time,
                 "launch GPU nonlinear-CG h_eff accumulation",
                 reason) ||
-            !gpu_rk_reduce_final_energy_terms(ctx, stream, n, blocks, reason) ||
-            !gpu_direct_energy_snapshot(ctx, stream, energy_snapshot, reason)) {
+            !gpu_rk_reduce_final_energy_terms(ctx, stream, n, blocks, reason)) {
             return false;
         }
     }
+    double *const current_scalar_results = evaluate_fields
+        ? gpu.reductions.scalar_result + kGpuFinalScalarSlots
+        : gpu.reductions.scalar_result;
     fullmag_cuda_relax_ncg_gradient_direction_and_norm_blocks(
         gpu.magnetization.m.x,
         gpu.magnetization.m.y,
@@ -543,7 +555,7 @@ bool gpu_relax_compute_effective_field_energy_gradient_and_direction(
             stream,
             gpu.reductions.scalar_workspace,
             blocks,
-            gpu.reductions.scalar_result,
+            current_scalar_results + kNcgCurrentGradientNormTailSlot,
             "launch GPU nonlinear-CG gradient norm reduction",
             reason) ||
         !gpu_relax_reduce_scalar_sum(
@@ -551,7 +563,7 @@ bool gpu_relax_compute_effective_field_energy_gradient_and_direction(
             stream,
             gpu.rk.error.x,
             blocks,
-            gpu.reductions.scalar_result + 1,
+            current_scalar_results + kNcgCurrentGradientEnergyNormTailSlot,
             "launch GPU nonlinear-CG gradient energy norm reduction",
             reason) ||
         !gpu_relax_reduce_scalar_sum(
@@ -559,7 +571,7 @@ bool gpu_relax_compute_effective_field_energy_gradient_and_direction(
             stream,
             gpu.rk.error.y,
             blocks,
-            gpu.reductions.scalar_result + 2,
+            current_scalar_results + kNcgCurrentDirectionDotGradientTailSlot,
             "launch GPU nonlinear-CG direction-dot-gradient reduction",
             reason) ||
         !gpu_relax_reduce_scalar_sum(
@@ -567,20 +579,37 @@ bool gpu_relax_compute_effective_field_energy_gradient_and_direction(
             stream,
             gpu.rk.error.z,
             blocks,
-            gpu.reductions.scalar_result + 3,
+            current_scalar_results + kNcgCurrentDirectionNormTailSlot,
             "launch GPU nonlinear-CG direction norm reduction",
             reason)) {
         return false;
     }
 
     double scalars[4] = {0.0, 0.0, 0.0, 0.0};
-    if (!gpu_rk_read_control_scalar_results(
-            ctx,
-            stream,
-            "cudaMemcpyAsync GPU nonlinear-CG current gradient/direction scalars device->host",
-            scalars,
-            4,
-            reason)) {
+    if (evaluate_fields) {
+        std::array<double, FEM_GPU_SCALAR_RESULT_SLOTS> packed_scalars{};
+        if (!gpu_rk_read_control_scalar_results(
+                ctx,
+                stream,
+                "cudaMemcpyAsync GPU nonlinear-CG packed current metrics device->host",
+                packed_scalars.data(),
+                kGpuFinalScalarSlots + kNcgCurrentScalarTailCount,
+                reason) ||
+            !gpu_unpack_direct_energy_snapshot(
+                ctx, packed_scalars.data(), energy_snapshot, reason)) {
+            return false;
+        }
+        std::copy_n(
+            packed_scalars.data() + kGpuFinalScalarSlots,
+            kNcgCurrentScalarTailCount,
+            scalars);
+    } else if (!gpu_rk_read_control_scalar_results(
+                   ctx,
+                   stream,
+                   "cudaMemcpyAsync GPU nonlinear-CG current gradient/direction scalars device->host",
+                   scalars,
+                   kNcgCurrentScalarTailCount,
+                   reason)) {
         return false;
     }
     total_energy = energy_snapshot.total_energy_j;

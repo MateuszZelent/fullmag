@@ -443,6 +443,20 @@ bool compute_fresh_snapshot(
 
 } // namespace
 
+bool gpu_unpack_direct_energy_snapshot(
+    const Context &ctx,
+    const double *energy_terms,
+    GpuDirectEnergySnapshot &snapshot,
+    std::string &reason)
+{
+    return unpack_energy_snapshot(
+        ctx,
+        energy_terms,
+        snapshot,
+        "GPU direct minimizer produced non-finite snapshot energy",
+        reason);
+}
+
 GpuEnergyIncrementOwner gpu_energy_increment_owner(
     const Context &ctx,
     GpuFinalScalarSlot slot)

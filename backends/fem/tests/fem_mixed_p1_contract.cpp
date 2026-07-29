@@ -5,16 +5,26 @@
 #include "core/fem_mesh.hpp"
 #include "core/fem_material_fields.hpp"
 #include "core/fem_material_runtime.hpp"
+#include "core/fem_field_buffers.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 
 #include "context.hpp"
+#include "cpu/mfem/interactions/demag.hpp"
 #include "cpu/mfem/interactions/demag_poisson_recovery.hpp"
+#include "cpu/mfem/interactions/zeeman_uniform_field.hpp"
 #include "cpu/mfem/runtime/mfem_context.hpp"
 #include "cpu/mfem/runtime/mfem_device.hpp"
+#include "cpu/mfem/runtime/backend_lifecycle.hpp"
+#include "cpu/mfem/runtime/backend_step.hpp"
 #include "cpu/mfem/runtime/mfem_mesh_builder.hpp"
 #include "cpu/mfem/runtime/step_metrics.hpp"
+#include "gpu/cuda/demag_poisson/operators.hpp"
+#include "gpu/cuda/demag_poisson/poisson.hpp"
+#include "gpu/cuda/relaxation/direct_energy_increment.hpp"
 #include "gpu/cuda/runtime/gpu_state_runtime.hpp"
+#include "gpu/cuda/state/gpu_state.hpp"
+#include "gpu/cuda/transfer/transfer_audit.hpp"
 
 #include <mfem.hpp>
 
@@ -1248,6 +1258,478 @@ void post_allocation_gpu_bootstrap_failure_rolls_back_every_owner()
 #endif
 }
 
+struct MixedGpuRuntimeFixture {
+    fullmag::fem::Context context{};
+
+    ~MixedGpuRuntimeFixture()
+    {
+        fullmag::fem::destroy_backend_runtime(context);
+    }
+};
+
+std::unique_ptr<MixedGpuRuntimeFixture> initialize_mixed_gpu_runtime(
+    fullmag_fem_integrator integrator,
+    bool enable_device_hypre_demag)
+{
+    auto fixture = std::make_unique<MixedGpuRuntimeFixture>();
+    auto &context = fixture->context;
+    context.mesh = conforming_prism_pyramid_tet();
+    context.mesh.magnetic_element_mask = {1u, 0u, 0u};
+    context.mesh.magnetic_node_mask = {1u, 1u, 1u, 1u, 1u, 1u, 0u, 0u};
+    initialize_uniform_material(context);
+    context.base_plan.integrator = integrator;
+    context.base_plan.dt_seconds = 1.0e-15;
+    context.base_plan.precession_enabled = false;
+    context.mfem_device.device_string_override = "cuda";
+    context.mfem_device.gpu_device_index = 0;
+    context.demag.enabled = enable_device_hypre_demag;
+    if (enable_device_hypre_demag) {
+        context.demag.realization = FULLMAG_FEM_DEMAG_AIRBOX_ROBIN;
+        context.demag.solver.solver = FULLMAG_FEM_LINEAR_SOLVER_CG;
+        context.demag.solver.preconditioner = FULLMAG_FEM_PRECONDITIONER_NONE;
+        context.demag.solver.relative_tolerance = 1.0e-12;
+        context.demag.solver.max_iterations = 500;
+        context.poisson_demag.boundary_marker = 1;
+        context.poisson_demag.gpu_demag_mode =
+            FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON;
+    }
+
+    for (uint32_t node = 0; node < context.mesh.n_nodes; ++node) {
+        const double y = node < 6u ? 0.12 * static_cast<double>(node + 1u) : 0.0;
+        const double z = node < 6u ? -0.04 * static_cast<double>(node % 3u) : 0.0;
+        const double norm = std::sqrt(1.0 + y * y + z * z);
+        const size_t base = 3u * static_cast<size_t>(node);
+        context.state.m_xyz[base] = 1.0 / norm;
+        context.state.m_xyz[base + 1u] = y / norm;
+        context.state.m_xyz[base + 2u] = z / norm;
+    }
+
+    fullmag::fem::initialize_uniform_zeeman_field(context);
+    fullmag::fem::initialize_context_field_buffers(context);
+    std::string error;
+    if (!fullmag::fem::initialize_material_runtime(context, error)) {
+        std::fprintf(stderr, "mixed GPU material runtime initialization failed: %s\n",
+                     error.c_str());
+        std::exit(1);
+    }
+    if (!fullmag::fem::context_initialize_mfem(context, error)) {
+        std::fprintf(stderr, "mixed GPU MFEM initialization failed: %s\n", error.c_str());
+        std::exit(1);
+    }
+    if (!fullmag::fem::initialize_demag_runtime(context, error)) {
+        std::fprintf(stderr, "mixed GPU demag runtime initialization failed: %s\n",
+                     error.c_str());
+        std::exit(1);
+    }
+    fullmag::fem::context_populate_device_info(context);
+    if (!fullmag::fem::initialize_context_gpu_state(context, error)) {
+        std::fprintf(stderr, "mixed GPU state initialization failed: %s\n", error.c_str());
+        std::exit(1);
+    }
+    check(context.gpu_state.device.lifecycle.allocated,
+          "mixed relaxation fixture requires allocated CUDA state");
+    check(!context.gpu_state.device.mesh_geometry.uploaded &&
+              context.gpu_state.device.mesh_geometry.nodes_xyz == nullptr &&
+              context.gpu_state.device.mesh_geometry.elements == nullptr &&
+              context.gpu_state.device.mesh_geometry.magnetic_element_mask == nullptr,
+          "exchange-only mixed relaxation must not upload flat tetrahedral geometry");
+    check(context.gpu_state.device.legacy_exchange.uploaded,
+          "exchange-only mixed relaxation requires assembled MFEM CSR on CUDA");
+    if (enable_device_hypre_demag) {
+        check(fullmag::fem::gpu_demag_poisson_ready(context),
+              "mixed relaxation with demag requires a ready device-Hypre workspace");
+        check(std::string(fullmag::fem::gpu_demag_poisson_operator_mode(context)) ==
+                  "device_hypre_poisson" &&
+                  std::string(fullmag::fem::gpu_demag_poisson_hypre_policy(context)) ==
+                  "device",
+              "mixed relaxation demag must resolve to device-Hypre execution");
+        const auto *workspace = fullmag::fem::workspace_ptr(context);
+        check(workspace != nullptr && workspace->operator_build_count == 1u &&
+                  workspace->operator_upload_count == 1u &&
+                  workspace->solver_setup_count == 1u,
+              "mixed relaxation demag must build, upload, and set up its operator once");
+    }
+    context.transfer_audit.audit.assert_no_hot_loop_host_sync = true;
+    context.transfer_audit.audit.assert_no_hot_loop_compute_sync = true;
+    return fixture;
+}
+
+enum class RelaxationTransferBudget {
+    ExplicitRk,
+    ProjectedGradientBb,
+    NonlinearCg,
+};
+
+void check_relaxation_hot_loop_delta(
+    const fullmag_fem_transfer_audit &before,
+    const fullmag_fem_transfer_audit &after,
+    RelaxationTransferBudget budget,
+    const char *algorithm)
+{
+    const auto delta = [](uint64_t after_value, uint64_t before_value) {
+        return after_value - before_value;
+    };
+    const uint64_t h2d_bytes =
+        delta(after.hot_loop_h2d_bytes, before.hot_loop_h2d_bytes);
+    const uint64_t d2h_bytes =
+        delta(after.hot_loop_d2h_bytes, before.hot_loop_d2h_bytes);
+    const uint64_t host_syncs =
+        delta(after.hot_loop_host_sync_count, before.hot_loop_host_sync_count);
+    const uint64_t control_bytes = delta(
+        after.hot_loop_control_scalar_d2h_bytes,
+        before.hot_loop_control_scalar_d2h_bytes);
+    const uint64_t control_syncs = delta(
+        after.hot_loop_control_scalar_host_sync_count,
+        before.hot_loop_control_scalar_host_sync_count);
+    const uint64_t max_control_syncs =
+        budget == RelaxationTransferBudget::ProjectedGradientBb ? 4u :
+        budget == RelaxationTransferBudget::NonlinearCg ? 3u : 0u;
+    const uint64_t max_control_bytes = max_control_syncs *
+        static_cast<uint64_t>(fullmag::fem::FEM_GPU_SCALAR_RESULT_SLOTS) *
+        sizeof(double);
+    const bool exact_zero_bulk =
+        delta(after.hot_loop_exchange_h2d_bytes,
+              before.hot_loop_exchange_h2d_bytes) == 0u &&
+        delta(after.hot_loop_exchange_d2h_bytes,
+              before.hot_loop_exchange_d2h_bytes) == 0u &&
+        delta(after.hot_loop_exchange_host_sync_count,
+              before.hot_loop_exchange_host_sync_count) == 0u &&
+        delta(after.hot_loop_compute_h2d_bytes,
+              before.hot_loop_compute_h2d_bytes) == 0u &&
+        delta(after.hot_loop_compute_d2h_bytes,
+              before.hot_loop_compute_d2h_bytes) == 0u &&
+        delta(after.hot_loop_compute_host_sync_count,
+              before.hot_loop_compute_host_sync_count) == 0u &&
+        h2d_bytes == 0u && d2h_bytes == control_bytes &&
+        host_syncs == control_syncs;
+    const bool bounded_control_scalars =
+        control_syncs <= max_control_syncs &&
+        control_bytes <= max_control_bytes &&
+        control_bytes % sizeof(double) == 0u &&
+        ((control_syncs == 0u) == (control_bytes == 0u));
+    if (!(exact_zero_bulk && bounded_control_scalars)) {
+        std::fprintf(
+            stderr,
+            "mixed GPU relaxation transfer delta failed for %s: "
+            "h2d=%llu d2h=%llu syncs=%llu control_bytes=%llu "
+            "control_syncs=%llu budget_syncs=%llu budget_bytes=%llu\n",
+            algorithm,
+            static_cast<unsigned long long>(h2d_bytes),
+            static_cast<unsigned long long>(d2h_bytes),
+            static_cast<unsigned long long>(host_syncs),
+            static_cast<unsigned long long>(control_bytes),
+            static_cast<unsigned long long>(control_syncs),
+            static_cast<unsigned long long>(max_control_syncs),
+            static_cast<unsigned long long>(max_control_bytes));
+        std::exit(1);
+    }
+    std::printf(
+        "PASS: mixed GPU transfer budget %s: h2d=%llu d2h=%llu "
+        "control_syncs=%llu control_bytes=%llu\n",
+        algorithm,
+        static_cast<unsigned long long>(h2d_bytes),
+        static_cast<unsigned long long>(d2h_bytes),
+        static_cast<unsigned long long>(control_syncs),
+        static_cast<unsigned long long>(control_bytes));
+}
+
+double current_device_total_energy(fullmag::fem::Context &context)
+{
+#if FULLMAG_HAS_CUDA_RUNTIME
+    auto &gpu = context.gpu_state.device;
+    cudaStream_t stream = reinterpret_cast<cudaStream_t>(
+        context.gpu_state.cuda.compute_stream);
+    const int nodes = static_cast<int>(gpu.lifecycle.node_count);
+    const int blocks = (nodes + 255) / 256;
+    std::string error;
+    check(fullmag::fem::gpu_relax_compute_effective_field_and_energy_terms(
+              context, stream, nodes, blocks, error),
+          error.c_str());
+    fullmag::fem::GpuDirectEnergySnapshot snapshot{};
+    check(fullmag::fem::gpu_direct_energy_snapshot(
+              context, stream, snapshot, error),
+          error.c_str());
+    check(std::isfinite(snapshot.total_energy_j),
+          "mixed GPU current direct-energy snapshot must be finite");
+    return snapshot.total_energy_j;
+#else
+    (void)context;
+    return 0.0;
+#endif
+}
+
+void check_accepted_armijo_proof(
+    const fullmag::fem::Context &context,
+    double previous_energy_j,
+    double published_energy_j,
+    const char *algorithm)
+{
+    const auto &proof = context.relaxation.accepted_energy_proof;
+    const bool finite = proof.available &&
+        std::isfinite(proof.delta_j) &&
+        std::isfinite(proof.roundoff_bound_j) &&
+        std::isfinite(proof.delta_upper_j) &&
+        std::isfinite(proof.armijo_rhs_j) &&
+        std::isfinite(previous_energy_j) &&
+        std::isfinite(published_energy_j);
+    const double reconstructed_upper =
+        proof.delta_j + proof.roundoff_bound_j;
+    const double upper_scale = std::max({
+        1.0e-300,
+        std::abs(proof.delta_upper_j),
+        std::abs(reconstructed_upper)});
+    const double published_increment = published_energy_j - previous_energy_j;
+    const double increment_scale = std::max({
+        1.0e-300,
+        std::abs(previous_energy_j),
+        std::abs(published_energy_j),
+        std::abs(proof.delta_j)});
+    const double floating_slack =
+        64.0 * std::numeric_limits<double>::epsilon() * increment_scale;
+    const bool valid = finite && proof.roundoff_bound_j >= 0.0 &&
+        std::abs(proof.delta_upper_j - reconstructed_upper) <=
+            8.0 * std::numeric_limits<double>::epsilon() * upper_scale &&
+        proof.delta_upper_j <= proof.armijo_rhs_j &&
+        proof.armijo_rhs_j <= 0.0 &&
+        std::abs(published_increment - proof.delta_j) <=
+            proof.roundoff_bound_j + floating_slack;
+    if (!valid) {
+        std::fprintf(
+            stderr,
+            "mixed GPU Armijo proof failed for %s: previous=%.17g published=%.17g "
+            "increment=%.17g delta=%.17g roundoff=%.17g upper=%.17g rhs=%.17g\n",
+            algorithm,
+            previous_energy_j,
+            published_energy_j,
+            published_increment,
+            proof.delta_j,
+            proof.roundoff_bound_j,
+            proof.delta_upper_j,
+            proof.armijo_rhs_j);
+        std::exit(1);
+    }
+}
+
+void check_device_magnetization_is_finite_unit_and_changed(
+    fullmag::fem::Context &context,
+    const std::vector<double> &initial,
+    const char *algorithm)
+{
+    std::vector<double> current;
+    std::string error;
+    check(fullmag::fem::gpu_state_download_magnetization_aos(
+              context.gpu_state.device,
+              current,
+              context.transfer_audit.audit,
+              error),
+          error.c_str());
+    check(current.size() == initial.size(),
+          "mixed GPU relaxation magnetization extent must remain stable");
+    double max_change = 0.0;
+    double max_norm_defect = 0.0;
+    for (uint32_t node = 0; node < context.mesh.n_nodes; ++node) {
+        const size_t base = 3u * static_cast<size_t>(node);
+        const double mx = current[base];
+        const double my = current[base + 1u];
+        const double mz = current[base + 2u];
+        check(std::isfinite(mx) && std::isfinite(my) && std::isfinite(mz),
+              "mixed GPU relaxation magnetization must remain finite");
+        if (context.mesh.magnetic_node_mask[node] != 0u) {
+            const double norm = std::sqrt(mx * mx + my * my + mz * mz);
+            max_norm_defect = std::max(max_norm_defect, std::abs(norm - 1.0));
+            for (size_t component = 0; component < 3u; ++component) {
+                max_change = std::max(
+                    max_change,
+                    std::abs(current[base + component] - initial[base + component]));
+            }
+        }
+    }
+    if (!(max_norm_defect <= 5.0e-12 && max_change > 0.0)) {
+        std::fprintf(
+            stderr,
+            "mixed GPU relaxation state check failed for %s: norm_defect=%.17g max_change=%.17g\n",
+            algorithm,
+            max_norm_defect,
+            max_change);
+        std::exit(1);
+    }
+}
+
+void check_device_hypre_demag_operator_is_reused(
+    const fullmag::fem::Context &context,
+    const char *algorithm)
+{
+    const auto *workspace = fullmag::fem::workspace_ptr(context);
+    if (!(workspace != nullptr && !workspace->operator_fingerprint.empty() &&
+          workspace->operator_build_count == 1u &&
+          workspace->operator_upload_count == 1u &&
+          workspace->solver_setup_count == 1u &&
+          workspace->fresh_zero_guess_count + workspace->warm_start_count > 0u)) {
+        std::fprintf(stderr, "mixed GPU demag reuse check failed for %s\n", algorithm);
+        std::exit(1);
+    }
+}
+
+void mixed_p1_gpu_direct_minimizers_use_device_armijo_without_tet_geometry()
+{
+    const char *requested_device = std::getenv("FULLMAG_MIXED_P1_ROLLBACK_DEVICE");
+    if (requested_device == nullptr || std::string(requested_device) != "cuda") {
+        return;
+    }
+#if FULLMAG_HAS_CUDA_RUNTIME
+    const struct {
+        fullmag_fem_relax_algorithm algorithm;
+        const char *name;
+    } cases[] = {
+        {FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB, "projected_gradient_bb"},
+        {FULLMAG_FEM_RELAX_NONLINEAR_CG, "nonlinear_cg"},
+    };
+    for (const bool enable_device_hypre_demag : {false, true}) {
+        for (const auto &item : cases) {
+            auto fixture = initialize_mixed_gpu_runtime(
+                FULLMAG_FEM_INTEGRATOR_HEUN, enable_device_hypre_demag);
+            auto &context = fixture->context;
+            const std::string case_name = std::string(item.name) +
+                (enable_device_hypre_demag ? "/device_hypre" : "/exchange_only");
+            const auto initial = context.state.m_xyz;
+            double previous_energy_j = current_device_total_energy(context);
+            const uint32_t accepted_step_count =
+                item.algorithm == FULLMAG_FEM_RELAX_NONLINEAR_CG ? 2u : 1u;
+            auto *const persistent_direction =
+                context.gpu_state.device.relaxation.nonlinear_cg_direction.x;
+            for (uint32_t accepted_step = 0; accepted_step < accepted_step_count;
+                 ++accepted_step) {
+                const std::string step_name = case_name + "/step_" +
+                    std::to_string(accepted_step + 1u);
+                if (item.algorithm == FULLMAG_FEM_RELAX_NONLINEAR_CG &&
+                    accepted_step == 1u) {
+                    check(context.gpu_state.device.relaxation.nonlinear_cg_direction_valid &&
+                              context.relaxation.accepted_steps == 1u &&
+                              context.gpu_state.device.relaxation.accepted_evaluation.valid &&
+                              context.gpu_state.device.relaxation.nonlinear_cg_direction.x ==
+                                  persistent_direction,
+                          "mixed GPU nonlinear-CG second step must reuse persistent PR+ state");
+                }
+                const auto before = fullmag::fem::transfer_audit_snapshot(
+                    context.transfer_audit.audit);
+                fullmag_fem_step_stats stats{};
+                std::string error;
+                const int status = fullmag::fem::run_backend_relaxation_step(
+                    context, item.algorithm, stats, error);
+                if (status != FULLMAG_FEM_OK) {
+                    std::fprintf(stderr, "%s step %u failed: %s\n",
+                                 case_name.c_str(), accepted_step + 1u, error.c_str());
+                }
+                check(status == FULLMAG_FEM_OK,
+                      "mixed GPU direct minimizer must execute on assembled operators");
+                const auto after = fullmag::fem::transfer_audit_snapshot(
+                    context.transfer_audit.audit);
+                check_relaxation_hot_loop_delta(
+                    before,
+                    after,
+                    item.algorithm == FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB
+                        ? RelaxationTransferBudget::ProjectedGradientBb
+                        : RelaxationTransferBudget::NonlinearCg,
+                    step_name.c_str());
+                check(std::isfinite(stats.total_energy_joules) &&
+                          std::isfinite(stats.max_torque_Apm),
+                      "mixed GPU direct minimizer must publish finite energy and torque");
+                check(stats.step == accepted_step + 1u &&
+                          stats.time_seconds == 0.0 && stats.dt_seconds == 0.0,
+                      "mixed GPU direct minimizer must accept the expected non-time step");
+                check_accepted_armijo_proof(
+                    context, previous_energy_j, stats.total_energy_joules,
+                    step_name.c_str());
+                check(context.gpu_state.device.residency.source_of_truth ==
+                          FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH,
+                      "mixed GPU direct minimizer must leave the device authoritative");
+                check_device_magnetization_is_finite_unit_and_changed(
+                    context, initial, case_name.c_str());
+                if (item.algorithm == FULLMAG_FEM_RELAX_NONLINEAR_CG) {
+                    check(context.gpu_state.device.relaxation.nonlinear_cg_direction_valid &&
+                              context.gpu_state.device.relaxation.nonlinear_cg_direction.x ==
+                                  persistent_direction &&
+                              context.relaxation.accepted_steps == accepted_step + 1u,
+                          "mixed GPU nonlinear-CG must preserve accepted PR+ direction state");
+                    if (accepted_step == 1u) {
+                        check(context.gpu_state.device.relaxation
+                                      .accepted_evaluation_cache_hits_current_step > 0u,
+                              "mixed GPU nonlinear-CG second step must consume the accepted endpoint cache");
+                    }
+                }
+                previous_energy_j = stats.total_energy_joules;
+                if (enable_device_hypre_demag) {
+                    check_device_hypre_demag_operator_is_reused(
+                        context, case_name.c_str());
+                }
+            }
+        }
+    }
+#endif
+}
+
+void mixed_p1_gpu_llg_overdamped_runs_every_explicit_rk_without_tet_geometry()
+{
+    const char *requested_device = std::getenv("FULLMAG_MIXED_P1_ROLLBACK_DEVICE");
+    if (requested_device == nullptr || std::string(requested_device) != "cuda") {
+        return;
+    }
+#if FULLMAG_HAS_CUDA_RUNTIME
+    const struct {
+        fullmag_fem_integrator integrator;
+        const char *name;
+    } cases[] = {
+        {FULLMAG_FEM_INTEGRATOR_HEUN, "heun"},
+        {FULLMAG_FEM_INTEGRATOR_RK4, "rk4"},
+        {FULLMAG_FEM_INTEGRATOR_RK23_BS, "rk23"},
+        {FULLMAG_FEM_INTEGRATOR_RK45_DP54, "rk45"},
+    };
+    for (const bool enable_device_hypre_demag : {false, true}) {
+        for (const auto &item : cases) {
+            auto fixture = initialize_mixed_gpu_runtime(
+                item.integrator, enable_device_hypre_demag);
+            auto &context = fixture->context;
+            const std::string case_name = std::string(item.name) +
+                (enable_device_hypre_demag ? "/device_hypre" : "/exchange_only");
+            const auto initial = context.state.m_xyz;
+            const auto before =
+                fullmag::fem::transfer_audit_snapshot(context.transfer_audit.audit);
+            fullmag_fem_step_stats stats{};
+            std::string error;
+            const int status = fullmag::fem::run_backend_step(
+                context, context.base_plan.dt_seconds, stats, error);
+            if (status != FULLMAG_FEM_OK) {
+                std::fprintf(stderr, "llg_overdamped/%s mixed GPU step failed: %s\n",
+                             case_name.c_str(), error.c_str());
+            }
+            check(status == FULLMAG_FEM_OK,
+                  "mixed GPU pure-damping explicit RK must execute on assembled operators");
+            const auto after =
+                fullmag::fem::transfer_audit_snapshot(context.transfer_audit.audit);
+            check_relaxation_hot_loop_delta(
+                before,
+                after,
+                RelaxationTransferBudget::ExplicitRk,
+                case_name.c_str());
+            check(std::isfinite(stats.total_energy_joules) &&
+                      std::isfinite(stats.max_torque_Apm) &&
+                      stats.step == 1u && stats.time_seconds > 0.0 &&
+                      stats.dt_seconds > 0.0,
+                  "mixed GPU pure-damping explicit RK must accept one finite physical-time step");
+            check(context.gpu_state.device.residency.source_of_truth ==
+                      FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH,
+                  "mixed GPU explicit RK must leave the device authoritative");
+            check_device_magnetization_is_finite_unit_and_changed(
+                context, initial, case_name.c_str());
+            if (enable_device_hypre_demag) {
+                check_device_hypre_demag_operator_is_reused(
+                    context, case_name.c_str());
+            }
+        }
+    }
+#endif
+}
+
 } // namespace
 
 int main()
@@ -1267,6 +1749,8 @@ int main()
     repeated_incomplete_facets_fail_before_runtime_publication();
     repeated_post_device_fes_failure_rolls_back_runtime_state();
     post_allocation_gpu_bootstrap_failure_rolls_back_every_owner();
+    mixed_p1_gpu_direct_minimizers_use_device_armijo_without_tet_geometry();
+    mixed_p1_gpu_llg_overdamped_runs_every_explicit_rk_without_tet_geometry();
     mfem_mass_weights_cover_tet_prism_and_mixed_magnetic_domains();
     distorted_prism_mass_weights_match_independent_mfem_oracle();
     mixed_core_measure_over_arity_is_not_published_as_runtime_node_volume();

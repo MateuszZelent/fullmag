@@ -2632,6 +2632,96 @@ void direct_minimizer_accepted_armijo_proof_crosses_native_abi_only_after_accept
         "CPU/GPU NCG must validate and publish the exact accepted Armijo proof for every acceptance route");
 }
 
+void mixed_p1_gpu_relaxators_depend_on_operators_not_tetrahedral_connectivity() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string pgbb = read_text_file(
+        root / "gpu" / "cuda" / "relaxation" / "pgbb.cpp");
+    const std::string nonlinear_cg = read_text_file(
+        root / "gpu" / "cuda" / "relaxation" / "nonlinear_cg.cpp");
+    const std::string direct_energy = read_text_file(
+        root / "gpu" / "cuda" / "relaxation" / "direct_energy_increment.cpp");
+    const std::string rk_plan = read_text_file(
+        root / "gpu" / "cuda" / "integrators" / "rk" / "rk_plan.cpp");
+    const std::string rk_exchange = read_text_file(
+        root / "gpu" / "cuda" / "integrators" / "rk" /
+        "rk_exchange_dispatch.cu");
+    const std::string gpu_state_runtime = read_text_file(
+        root / "gpu" / "cuda" / "runtime" / "gpu_state_runtime.cpp");
+    const std::string direct_energy_header = read_text_file(
+        root / "gpu" / "cuda" / "relaxation" / "direct_energy_increment.hpp");
+    const size_t ncg_current_metrics_start = nonlinear_cg.find(
+        "bool gpu_relax_compute_effective_field_energy_gradient_and_direction(");
+    const size_t ncg_current_metrics_end = nonlinear_cg.find(
+        "\nbool gpu_relax_metric_dot(", ncg_current_metrics_start);
+    const std::string ncg_current_metrics =
+        ncg_current_metrics_start == std::string::npos ||
+            ncg_current_metrics_end == std::string::npos ||
+            ncg_current_metrics_end <= ncg_current_metrics_start
+        ? std::string{}
+        : nonlinear_cg.substr(
+              ncg_current_metrics_start,
+              ncg_current_metrics_end - ncg_current_metrics_start);
+
+    check(
+        pgbb.find("mesh_geometry") == std::string::npos &&
+            pgbb.find("cell_nodes") == std::string::npos &&
+            pgbb.find("n_elements") == std::string::npos &&
+            nonlinear_cg.find("mesh_geometry") == std::string::npos &&
+            nonlinear_cg.find("cell_nodes") == std::string::npos &&
+            nonlinear_cg.find("n_elements") == std::string::npos,
+        "mixed-P1 PG-BB and nonlinear-CG orchestration must consume assembled operators, fields, and nodal metrics without tetrahedral connectivity");
+    check(
+        rk_exchange.find("mesh_geometry") == std::string::npos &&
+            rk_exchange.find("cell_nodes") == std::string::npos &&
+            rk_exchange.find("n_elements") == std::string::npos,
+        "mixed-P1 explicit RK exchange dispatch must consume assembled sparse state without tetrahedral connectivity");
+    check(
+        direct_energy_header.find("gpu_unpack_direct_energy_snapshot(") !=
+                std::string::npos &&
+            direct_energy.find("bool gpu_unpack_direct_energy_snapshot(") !=
+                std::string::npos &&
+            ncg_current_metrics.find("kNcgCurrentScalarTailCount") !=
+                std::string::npos &&
+            ncg_current_metrics.find(
+                "GPU nonlinear-CG packed current metrics device->host") !=
+                std::string::npos &&
+            ncg_current_metrics.find("gpu_unpack_direct_energy_snapshot(") !=
+                std::string::npos &&
+            ncg_current_metrics.find("gpu_direct_energy_snapshot(") ==
+                std::string::npos,
+        "mixed-P1 nonlinear-CG must pack the fresh energy snapshot and current direction scalars into one bounded control readback");
+
+    const auto dmi_gate = direct_energy.find(
+        "if (!(bulk_mode ? ctx.dmi.bulk_enabled : ctx.dmi.interfacial_enabled))");
+    const auto dmi_geometry = direct_energy.find("gpu.mesh_geometry.nodes_xyz");
+    check(
+        dmi_gate != std::string::npos && dmi_geometry != std::string::npos &&
+            dmi_gate < dmi_geometry,
+        "direct energy increments may consume tetrahedral geometry only behind the explicit DMI enablement gate");
+    check(
+        gpu_state_runtime.find(
+            "bool gpu_state_requires_tetrahedral_mesh_geometry(const Context &ctx)") !=
+                std::string::npos &&
+            gpu_state_runtime.find(
+                "return ctx.dmi.interfacial_enabled || ctx.dmi.bulk_enabled ||") !=
+                std::string::npos &&
+            gpu_state_runtime.find("ctx.stt.zhang_li_enabled;") !=
+                std::string::npos,
+        "flat tetrahedral GPU geometry must remain fail-closed to DMI and Zhang-Li owners");
+    check(
+        rk_plan.find("device-resident mesh geometry for DMI") !=
+                std::string::npos &&
+            rk_plan.find("device-resident mesh geometry for Zhang-Li STT") !=
+                std::string::npos &&
+            rk_plan.find(
+                "GPU RK device-resident path requires device-resident mesh geometry for exchange") ==
+                std::string::npos &&
+            rk_plan.find(
+                "GPU RK device-resident path requires device-resident mesh geometry for demag") ==
+                std::string::npos,
+        "GPU RK planning must gate only geometry-owning interactions, not CSR exchange or device Poisson demag");
+}
+
 } // namespace
 
 int main() {
@@ -2643,6 +2733,7 @@ int main() {
     gpu_relaxation_pgbb_building_blocks_live_under_native_cuda();
     gpu_relaxation_ncg_direction_state_is_device_persistent();
     direct_minimizer_accepted_armijo_proof_crosses_native_abi_only_after_acceptance();
+    mixed_p1_gpu_relaxators_depend_on_operators_not_tetrahedral_connectivity();
     fem_relaxation_benchmark_recipes_prepare_required_binaries();
     return 0;
 }

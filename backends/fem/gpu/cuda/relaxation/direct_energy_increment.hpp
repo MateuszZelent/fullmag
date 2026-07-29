@@ -121,6 +121,12 @@ bool gpu_direct_energy_snapshot(
     GpuDirectEnergySnapshot &snapshot,
     std::string &reason);
 
+bool gpu_unpack_direct_energy_snapshot(
+    const Context &ctx,
+    const double *energy_terms,
+    GpuDirectEnergySnapshot &snapshot,
+    std::string &reason);
+
 bool gpu_unpack_pgbb_current_metrics(
     const Context &ctx,
     const std::array<double, FEM_GPU_SCALAR_RESULT_SLOTS> &packed_scalars,
