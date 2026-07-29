@@ -1552,9 +1552,10 @@ fn require_supported_fem_topology(
         && exchange_count == 1
         && demag_count == 1
         && energy_supported
-        && certificate.requested_layer_count == 1
-        && certificate.realized_layer_count == 1
-        && certificate.magnetic_plane_coordinates_m.len() == 2
+        && (1..=3).contains(&certificate.requested_layer_count)
+        && certificate.realized_layer_count == certificate.requested_layer_count
+        && certificate.magnetic_plane_coordinates_m.len()
+            == certificate.requested_layer_count as usize + 1
         && certificate.fallbacks_triggered.is_empty()
         && matches!(
             problem.study,
@@ -4240,7 +4241,8 @@ mod tests {
         (problem, plan)
     }
 
-    fn certified_mixed_cpu_relaxation_guard_fixture(
+    fn certified_mixed_cpu_relaxation_guard_fixture_for_layers(
+        layer_count: u32,
     ) -> (fullmag_ir::ProblemIR, fullmag_ir::ExecutionPlanIR) {
         let mut problem = fem_session_runtime_problem();
         problem.problem_meta.runtime_metadata.insert(
@@ -4266,16 +4268,27 @@ mod tests {
             },
             sampling: problem.study.sampling().clone(),
         };
-        let golden: serde_json::Value = serde_json::from_str(include_str!(
-            "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
-        ))
+        let golden: serde_json::Value = serde_json::from_str(match layer_count {
+            1 => include_str!(
+                "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+            ),
+            2 => include_str!(
+                "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_layers_2_python_golden.json"
+            ),
+            3 => include_str!(
+                "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_layers_3_python_golden.json"
+            ),
+            _ => panic!("mixed runtime fixture exists only for layer counts 1 through 3"),
+        })
         .expect("mixed topology golden fixture should be valid JSON");
         let mesh: fullmag_ir::MeshIR = serde_json::from_value(golden["mesh"].clone())
             .expect("mixed topology golden mesh should deserialize");
         let certificate: fullmag_ir::MixedLayerTopologyCertificateV1IR =
             serde_json::from_value(golden["certificate"].clone())
                 .expect("mixed topology golden certificate should deserialize");
-        let fingerprint = mesh.topology_fingerprint_v6();
+        let fingerprint = mesh
+            .mixed_topology_fingerprint_for_version(&certificate.topology_fingerprint_version)
+            .expect("mixed topology fingerprint version must be supported");
         let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
             panic!("relaxation topology guard fixture must produce a FEM plan");
         };
@@ -4310,6 +4323,11 @@ mod tests {
         });
         fem.mesh_build_report = Some(report);
         (problem, plan)
+    }
+
+    fn certified_mixed_cpu_relaxation_guard_fixture(
+    ) -> (fullmag_ir::ProblemIR, fullmag_ir::ExecutionPlanIR) {
+        certified_mixed_cpu_relaxation_guard_fixture_for_layers(1)
     }
 
     fn topology_guard_error(
@@ -4559,6 +4577,36 @@ mod tests {
             topology_guard_error(&stale_problem, &plan),
             "fem_mixed_p1_runtime_provenance_stale: plan provenance does not match the exact mesh fingerprint/topology/precision; fallback=none"
         );
+    }
+
+    #[test]
+    fn fem_topology_guard_accepts_bound_exact_two_and_three_layer_relaxation_scope() {
+        for layer_count in [2, 3] {
+            let (problem, plan) =
+                certified_mixed_cpu_relaxation_guard_fixture_for_layers(layer_count);
+            let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+                panic!("mixed relaxation fixture must produce a FEM plan");
+            };
+            let certificate = fem
+                .mesh_build_report
+                .as_ref()
+                .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
+                .expect("multi-layer runtime fixture must carry a certificate");
+            assert_eq!(certificate.requested_layer_count, layer_count);
+            assert_eq!(certificate.realized_layer_count, layer_count);
+            assert_eq!(
+                fem.mesh
+                    .cells
+                    .types
+                    .iter()
+                    .filter(|family| **family == fullmag_ir::FemCellTypeIR::Prism6)
+                    .count(),
+                2 * layer_count as usize,
+                "fixture must exercise genuinely stacked magnetic prisms",
+            );
+            require_supported_fem_topology(&problem, &plan)
+                .expect("bound exact multi-layer mixed P1 relaxation must cross the guard");
+        }
     }
 
     #[test]

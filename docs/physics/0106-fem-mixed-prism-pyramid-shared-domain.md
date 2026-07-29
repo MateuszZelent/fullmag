@@ -14,6 +14,7 @@
   - `docs/physics/fem_demag_poisson.md`
   - `docs/physics/0900-native-fem-operator-contracts-and-validation.md`
 
+(problem-statement)=
 ## 1. Problem statement
 
 Thin magnetic films need an exact number of three-dimensional elements through
@@ -35,7 +36,8 @@ precision, device, or workflow tuple remains fail-closed before native operator
 startup.
 
 The first qualification target is deliberately narrow: one axis-aligned
-`Box`, P1, one conforming shared-domain airbox, uniform `Ms` and `Aex`, exchange,
+`Box`, P1, one conforming shared-domain airbox, exact layer count in
+`{1, 2, 3}`, uniform `Ms` and `Aex`, exchange,
 uniform Zeeman, Poisson Robin or Dirichlet demag, explicit FEM CPU or GPU double
 precision, strict execution, and PG-BB, NCG, or overdamped LLG relaxation.
 Those exact certificate-bound device tuples are currently `implemented`, not
@@ -43,80 +45,116 @@ Those exact certificate-bound device tuples are currently `implemented`, not
 CPU/GPU SP4 runtime report exists yet. Device `auto`, single/extended/hybrid
 execution, and wider tuples remain `unsupported`; no fallback is permitted.
 
-## 2. Physical model
+(governing-equations)=
+## 2. Physical model and governing equations
 
 ### 2.1 No-new-physics statement
 
 Mixed topology changes the spatial approximation only. It introduces no new
 energy, field, torque, material law, demagnetization model, or boundary
-condition. The same reduced magnetization is used in the magnetic domain:
+condition. The same reduced magnetization is used in the magnetic domain.
 
-```text
-|m(x)| = 1
-M(x) = Ms m(x)
+```{math}
+:label: eq-mixed-p1-magnetization
+
+\lVert \mathbf m(\mathbf x) \rVert = 1,
+\qquad
+\mathbf M(\mathbf x) = M_s \mathbf m(\mathbf x).
 ```
 
-Exchange and uniform Zeeman retain their existing contracts, for example:
+Exchange and uniform Zeeman retain their existing contracts.
 
-```text
-E_ex = integral_Omega_m Aex |grad(m)|^2 dV
-E_Z  = -mu0 integral_Omega_m M . H_ext dV
+```{math}
+:label: eq-mixed-p1-exchange-zeeman
+
+E_{\mathrm{ex}}
+= \int_{\Omega_m} A_{\mathrm{ex}}\lVert\nabla\mathbf m\rVert^2\,\mathrm dV,
+\qquad
+E_{\mathrm Z}
+= -\mu_0\int_{\Omega_m}\mathbf M\cdot\mathbf H_{\mathrm{ext}}\,\mathrm dV.
 ```
 
 ### 2.2 Scalar Poisson demagnetization and signs
 
-For the shared domain `D = Omega_m union Omega_air`, Fullmag uses magnetic
-scalar potential `phi` with:
+For the shared domain $D=\Omega_m\cup\Omega_{\mathrm{air}}$, Fullmag uses
+magnetic scalar potential $\phi$ with
 
-```text
-laplace(phi) = div(M) in D, with M = 0 in Omega_air
-H_demag = -grad(phi)
+```{math}
+:label: eq-mixed-p1-demag-strong
+
+\nabla^2\phi=\nabla\cdot\mathbf M\quad\text{in }D,
+\qquad
+\mathbf M=\mathbf 0\quad\text{in }\Omega_{\mathrm{air}},
+\qquad
+\mathbf H_{\mathrm{demag}}=-\nabla\phi.
 ```
 
-The corresponding volume weak-form source convention is:
+The corresponding volume weak-form source convention is
 
-```text
-integral_D grad(phi) . grad(v) dV
-  = integral_Omega_m M . grad(v) dV
+```{math}
+:label: eq-mixed-p1-demag-weak
+
+\int_D \nabla\phi\cdot\nabla v\,\mathrm dV
+=\int_{\Omega_m}\mathbf M\cdot\nabla v\,\mathrm dV.
 ```
 
 with the existing Dirichlet or Robin outer-airbox boundary terms applied by the
 selected Poisson boundary policy. Demagnetization energy keeps the existing
 sign:
 
-```text
-E_demag = -0.5 mu0 integral_Omega_m M . H_demag dV
-          + boundary_term
+```{math}
+:label: eq-mixed-p1-demag-energy
+
+E_{\mathrm{demag}}
+=-\frac{\mu_0}{2}\int_{\Omega_m}
+\mathbf M\cdot\mathbf H_{\mathrm{demag}}\,\mathrm dV
++E_{\partial D}.
 ```
 
 where `boundary_term` exists only for the boundary model that requires it.
 Prism, pyramid, and tetrahedron assembly must reproduce these signs exactly.
 
+(symbols-and-si-units)=
 ### 2.3 Symbols and SI units
 
-| Symbol | Meaning | Unit |
+| LaTeX token | Meaning | SI unit |
 |---|---|---|
-| `m` | reduced magnetization | `1` |
-| `M` | magnetization | `A/m` |
-| `Ms` | saturation magnetization | `A/m` |
-| `Aex` | exchange stiffness | `J/m` |
-| `H_ext`, `H_demag` | magnetic field | `A/m` |
-| `phi` | magnetic scalar potential | `A` |
-| `mu0` | vacuum permeability | `N/A^2` |
-| `t` | magnetic film thickness | `m` |
-| `layers` | magnetic elements through thickness | `1` |
-| `tau_plane` | node-plane comparison tolerance | `m` |
-| `J_K` | element-map Jacobian determinant | `m^3` |
+| $\mathbf m$ | reduced magnetization | $1$ |
+| $\mathbf M$ | magnetization | $\mathrm{A\,m^{-1}}$ |
+| $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
+| $A_{\mathrm{ex}}$ | exchange stiffness | $\mathrm{J\,m^{-1}}$ |
+| $\mathbf H_{\mathrm{ext}}$ | external magnetic field | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H_{\mathrm{demag}}$ | demagnetizing field | $\mathrm{A\,m^{-1}}$ |
+| $\phi$ | magnetic scalar potential | $\mathrm{A}$ |
+| $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
+| $\Omega_m$ | magnetic domain | $\mathrm{m^3}$ |
+| $\Omega_{\mathrm{air}}$ | air domain | $\mathrm{m^3}$ |
+| $D$ | conforming shared domain | $\mathrm{m^3}$ |
+| $v$ | scalar H1 test function | $1$ |
+| $E_{\mathrm{ex}}$ | exchange energy | $\mathrm{J}$ |
+| $E_{\mathrm Z}$ | Zeeman energy | $\mathrm{J}$ |
+| $E_{\mathrm{demag}}$ | demagnetization energy | $\mathrm{J}$ |
+| $E_{\partial D}$ | demagnetization boundary contribution | $\mathrm{J}$ |
+| $t$ | magnetic film thickness | $\mathrm{m}$ |
+| $L$ | requested and realized prism-cell layers | $1$ |
+| $\tau_{\mathrm{plane}}$ | node-plane comparison tolerance | $\mathrm{m}$ |
+| $J_K$ | element-map Jacobian determinant | $\mathrm{m^3}$ |
+| $N_i$ | scalar P1 nodal basis function | $1$ |
+| $M_{ij}$ | scalar mass-matrix entry | $\mathrm{m^3}$ |
+| $w_i$ | magnetic nodal volume weight | $\mathrm{m^3}$ |
 
 All public geometry and mesh sizes remain SI metres. The checked-in Gmsh
 fixture uses normalized geometry because it certifies topology, not physical
 scale; production certificates apply the SI tolerances below after realization.
 
+(assumptions-and-validity)=
 ### 2.4 Assumptions and validity limits
 
 - The first geometry is one axis-aligned magnetic Box strictly inside one
   axis-aligned shared-domain airbox.
-- `layers=1` means exactly two magnetic node planes and one prism cell layer.
+- The implemented exact-layer set is $L\in\{1,2,3\}$; a request is accepted
+  only when requested and realized counts both equal $L$ and the magnetic mesh
+  has exactly $L+1$ normal-coordinate node planes.
 - One prism layer is still a three-dimensional P1 discretization. It is not a
   thickness-averaged, 2.5D, shell, or macrospin model.
 - `Ms` and `Aex` are uniform in the first qualification workload.
@@ -129,7 +167,8 @@ scale; production certificates apply the SI tolerances below after realization.
 - Unsupported topology, physics, device, precision, or workflow combinations
   reject before native backend startup.
 
-## 3. Numerical interpretation
+(discrete-realization)=
+## 3. Discrete realization and backend interpretation
 
 ### 3.1 FDM
 
@@ -160,9 +199,12 @@ tetrahedron is invalid.
 For the qualified P1 mixed path, nodal volume weights are the row sums of the
 MFEM scalar mass matrix assembled only over magnetic volume attributes:
 
-```text
-M_ij = integral_Omega_m N_i N_j dV
-w_i  = sum_j M_ij = integral_Omega_m N_i dV
+```{math}
+:label: eq-mixed-p1-mass-weights
+
+M_{ij}=\int_{\Omega_m}N_iN_j\,\mathrm dV,
+\qquad
+w_i=\sum_jM_{ij}=\int_{\Omega_m}N_i\,\mathrm dV.
 ```
 
 The runtime must assemble this operator with the geometry-specific MFEM basis,
@@ -170,8 +212,10 @@ quadrature, and Jacobian for each cell family. It must not substitute
 `cell_volume / local_node_count`, `volume / 4`, or a tetrahedral formula for a
 wedge or pyramid. Partition of unity gives the required conservation check:
 
-```text
-sum_i w_i = volume(Omega_m)
+```{math}
+:label: eq-mixed-p1-volume-conservation
+
+\sum_i w_i=\operatorname{vol}(\Omega_m).
 ```
 
 The canonical runtime weight vector is the MFEM mass-row-sum result. Any
@@ -181,8 +225,11 @@ assembly and cannot remain an independent integration rule.
 For uniform or nodal-P1 saturation magnetization, reported average reduced
 magnetization keeps the existing lumped material/volume policy:
 
-```text
-<m> = sum_i Ms_i w_i m_i / sum_i Ms_i w_i
+```{math}
+:label: eq-mixed-p1-average-magnetization
+
+\langle\mathbf m\rangle
+=\frac{\sum_i M_{s,i}w_i\mathbf m_i}{\sum_i M_{s,i}w_i}.
 ```
 
 The first mixed qualification uses uniform `Ms`, for which this reduction is
@@ -255,7 +302,9 @@ status.
 An accepted realized mesh must emit a certificate bound to the mesh topology
 hash and region/material realization. For the first workload it proves:
 
-1. `layers=1` resolves to exactly two magnetic normal-coordinate node planes;
+1. requested and realized layer counts are the same
+   $L\in\{1,2,3\}$ and resolve to exactly $L+1$ magnetic
+   normal-coordinate node planes;
 2. magnetic cells are all canonical `prism6`;
 3. no `pyramid5` or `tet4` carries a magnetic marker;
 4. the film-air interface uses conforming shared node IDs and one face record;
@@ -264,16 +313,29 @@ hash and region/material realization. For the first workload it proves:
 6. top/bottom magnetic facets are `tri3`, lateral magnetic facets are `quad4`;
 7. the mapped Jacobian is positive at quadrature order at least 2 for every
    cell;
-8. the normal-plane tolerance is
-   `tau_plane = max(1e-15 m, 1e-8 * film_thickness)`;
+8. the normal-plane tolerance is given by the equation below;
 9. relative CAD-versus-shared-domain volume error is at most `1e-8`;
 10. p05 SICN is at least `0.1`, or the report uses an honestly named
     scaled-Jacobian metric and does not label it SICN;
 11. strict execution reports `fallbacks_triggered=[]` in both the certificate
     and enclosing build report, and the build report has `degraded=false`.
 
+```{math}
+:label: eq-mixed-p1-plane-tolerance
+
+\tau_{\mathrm{plane}}
+=\max\!\left(10^{-15}\,\mathrm m,10^{-8}t\right).
+```
+
 The certificate fails closed. A warning, inferred layer count, clipped cell,
 tet conversion, or unversioned connectivity does not satisfy it.
+
+For $L=2$ or $L=3$, the mesher bounds the magnetic source-face target size by
+$2t/L$ before extrusion. This local, deterministic refinement keeps the lateral
+`quad4` prism faces and their incident transition pyramids within the unchanged
+p05 scaled-Jacobian floor without globally refining the far-air tetrahedra. The
+authored `hmax` remains an upper bound; the realized topology and derived local
+refinement remain fingerprint-bound certificate evidence.
 
 Cross-language certificate recomputation admits the bounded binary64
 comparison
@@ -372,15 +434,48 @@ Unsupported. A future hybrid workflow requires explicit projection and
 state-transfer semantics and cannot inherit this capability by sharing a mesh
 file.
 
+(python-api)=
 ## 4. API, IR, planner, runtime, and product impact
 
 ### 4.1 Python API surface
 
-The existing physics-first swept controls remain the intended authoring entry:
-an axis-aligned Box requests a swept prism strategy and exact layer count. A
-later implementation slice must define the canonical enum values and export
-them without exposing Gmsh element IDs or algorithm names. Python-to-IR-to-UI-
-to-Python round-trip must preserve requested topology and exact layer count.
+The existing physics-first swept controls are the authoring entry: an
+axis-aligned Box requests a swept prism strategy and exact layer count without
+exposing Gmsh element IDs or algorithm names. Python-to-IR-to-UI-to-Python
+round-trip preserves requested topology and exact layer count.
+
+The complete bounded controls changed by this capability are:
+
+| Python parameter | Type | Default | SI unit | Validation domain | Meaning | Backend support | ProblemIR destination |
+|---|---|---|---|---|---|---|---|
+| `GeometryMeshHandle.thin_film.layers` | `int` | `1` | $1$ | exact mixed-P1 execution accepts only `1`, `2`, or `3`; other positive values remain authorable only outside this lane and are rejected by its capability gate | prism-cell layers through the same physical film | FEM CPU/GPU only | `mesh_workflow.per_geometry[].through_thickness_elements` |
+| `GeometryMeshHandle.thin_film.topology` | `"tetrahedral" \| "prismatic" \| None` | `None` | $1$ | mixed-P1 requires `"prismatic"` | requested cell topology family | FEM CPU/GPU only | `mesh_workflow.per_geometry[].topology` |
+| `GeometryMeshHandle.thin_film.exact_layers` | `bool \| None` | `None` | $1$ | strict prismatic execution resolves `None` to `True` and rejects `False` | require requested and realized layer equality | FEM CPU/GPU only | `mesh_workflow.per_geometry[].exact_layer_count` |
+| `GeometryMeshHandle.thin_film.transition` | `"pyramid_to_tetrahedra" \| "reject" \| None` | `None` | $1$ | mixed shared-domain execution requires `"pyramid_to_tetrahedra"` | conforming air transition policy | FEM CPU/GPU only | `mesh_workflow.per_geometry[].transition_policy` |
+| `GeometryMeshHandle.thin_film.order` | `int \| None` | `None` | $1$ | prismatic execution accepts only `None` or `1` and resolves to P1 | finite-element order | FEM CPU/GPU only | `mesh_workflow.per_geometry[].order` |
+
+```python
+# %% Author one strict mixed-P1 film.
+import fullmag as fm
+
+fm.reset()
+study = fm.study("mixed-p1-layers")
+study.engine("fem")
+study.mode("strict")
+study.universe(mode="manual", size=(100e-9, 80e-9, 65e-9))
+film = study.geometry(
+    fm.Box(size=(24e-9, 12e-9, 1e-9), name="magnet"),
+    name="magnet",
+)
+film.mesh.thin_film(
+    maximum_element_size=3e-9,
+    layers=3,
+    topology="prismatic",
+    exact_layers=True,
+    transition="pyramid_to_tetrahedra",
+    order=1,
+)
+```
 
 The public Python API and its lowering preserve the requested prismatic
 topology, transition policy, and exact layer count. The bounded mixed-P1 CPU and
@@ -415,6 +510,7 @@ diagnostic, not the sole qualification proof. Authoritative exact-source,
 real-asset, bounded runtime coverage moved to the non-skipping managed `just`
 gate above.
 
+(problem-ir)=
 ### 4.2 ProblemIR representation and normalization
 
 `ProblemIR` uses backend-neutral enums for:
@@ -424,6 +520,23 @@ cell topology: prism6 | pyramid5 | tet4
 facet topology: tri3 | quad4
 mesh topology family: mixed_p1
 exact layer count: positive integer
+```
+
+For the example above, the canonical requested fragment is:
+
+```json
+{
+  "mesh_strategy": "swept_prism",
+  "through_thickness_elements": 3,
+  "through_thickness_distribution": "fixed",
+  "sweep_face_meshing": "triangular",
+  "topology": "prismatic",
+  "sweep_direction": "auto",
+  "element_family": "prism",
+  "transition_policy": "pyramid_to_tetrahedra",
+  "exact_layer_count": true,
+  "order": 1
+}
 ```
 
 Gmsh numeric element IDs are import details and must not enter the public IR.
@@ -451,7 +564,27 @@ environment state, while session provenance continues to report the authored
 request and resolved engine separately. No layer may rewrite the model-builder
 runtime map to make the overlay look authored.
 
-### 4.3 Planner and capability matrix
+(round-trip-and-failure-semantics)=
+### 4.3 Round-trip and failure semantics
+
+Requested intent remains the authored topology, exact layer count, device,
+precision, demag policy, and relaxation algorithm. Resolved execution records
+the certificate-bound topology, the same realized layer count, the explicit
+CPU or GPU lane, and the retained `implemented` capability status. Python and
+UI export must preserve the same requested fields; neither may infer execution
+support from a displayed certificate alone.
+
+Validation errors are fail-closed. The bounded relaxation lane accepts only
+$L\in\{1,2,3\}$ with requested count equal to realized count and exactly
+$L+1$ magnetic planes. Counts `0` and `4`, a non-exact request, a stale or
+mismatched fingerprint, any fallback, or `degraded=true` reject before native
+startup. Unsupported combinations—including `time_evolution`, FEM/BEM,
+PBC/Floquet, DMI, STT, thermal, magnetoelastic, regional projection,
+frequency-domain/eigen studies, DG0 interfaces, high order, multiple bodies,
+and physical multilayers—retain their existing rejection. A free-tetrahedral
+mesh is an explicit alternative configuration, never an automatic fallback.
+
+### 4.4 Planner and capability matrix
 
 The target vocabulary is:
 
@@ -477,7 +610,8 @@ DMI/STT/thermal/magnetoelastic terms, regional projections, eigen/frequency-
 domain studies, DG0/material interfaces, order greater than one, arbitrary OCC
 shapes, multiple bodies, and multilayers.
 
-### 4.4 Runtime, ABI, and native ownership
+(implementation-mapping)=
+### 4.5 Runtime, ABI, and native implementation mapping
 
 Production topology import, basis/quadrature, exchange, Poisson RHS/solve/
 recovery, relaxation, and certificate generation belong under `backends/fem`.
@@ -491,7 +625,7 @@ before allocating solver state. The bounded CPU and GPU mixed-P1 gates admit
 only the certificate-bound tuples in Section 1; every wider physics tuple still
 rejects before unsupported operator allocation.
 
-### 4.5 API, binary transport, and control room
+### 4.6 API, binary transport, and control room
 
 FMMT v2 carries explicit canonical type enums, offsets plus connectivity,
 per-cell/per-facet markers, and versioned byte-range metadata. OpenAPI,
@@ -513,7 +647,7 @@ mesh Inspector/dock displays the certificate and rejection reason. This target
 does not introduce another workspace shell, direct component fetch, or a new
 docking model.
 
-### 4.6 Artifacts and provenance
+### 4.7 Artifacts and provenance
 
 At minimum, artifacts must record:
 
@@ -547,6 +681,7 @@ recomputation; it is not an energy, torque, state-parity, or solver tolerance.
 The checked-in Gmsh 4.15.2 fixture is reproducible feasibility evidence only.
 It is not runtime, MFEM, CPU/GPU, physics, API, or viewport proof.
 
+(validation)=
 ## 5. Validation strategy
 
 ### 5.1 Feasibility and topology checks
@@ -617,6 +752,7 @@ No lower level implies a higher one.
 - [ ] Managed runtime and physics validation
 - [ ] Production qualification report
 
+(limitations)=
 ## 7. Known limits and deferred work
 
 - Arbitrary OCC shapes, cylinders, imported CAD/STL, multiple bodies, and
@@ -629,9 +765,29 @@ No lower level implies a higher one.
 - The feasibility fixture does not select or validate production Gmsh meshing
   algorithms, quality budgets, performance, or runtime memory residency.
 
-## 8. References
+(scientific-bibliography)=
+## 8. Scientific bibliography
 
-- Gmsh 4.15.2 reference manual, structured grids and QuadTri transitions.
-- MFEM first-order H1 finite elements for tetrahedra, wedges, and pyramids.
+- Gmsh 4.15.2 reference manual, structured grids and QuadTri transitions:
+  <https://gmsh.info/doc/texinfo/gmsh.html>.
+- MFEM 4.8 mesh and first-order H1 finite-element documentation:
+  <https://docs.mfem.org/4.8/classmfem_1_1Mesh.html>.
 - `docs/physics/0105-fem-meshing-production-acceptance.md`
 - `docs/physics/0900-native-fem-operator-contracts-and-validation.md`
+
+(source-code-index)=
+## 9. Source-code index
+
+| Claim | Path | Stable symbol | Responsibility | Lane | Tests/evidence status |
+|---|---|---|---|---|---|
+| Public exact-layer authoring | `packages/fullmag-py/src/fullmag/world.py` | `thin_film` | validates and lowers prismatic thin-film intent | FEM CPU/GPU | Python round-trip and real-mesh tests |
+| Shared-domain prism realization | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `generate_swept_box_mesh` | generates exact stacked prisms and conforming air | FEM CPU/GPU | Gmsh 4.15.2 topology/certificate tests |
+| Certificate generation | `packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py` | `_attach_mixed_layer_topology_certificate` | recomputes and binds realized topology evidence | FEM CPU/GPU | Python/Rust cross-language validation |
+| Planner legality | `crates/fullmag-plan/src/mesh.rs` | `validate_mixed_p1_execution_scope` | enforces exact bounded relaxation tuples | FEM CPU/GPU | planner accept/reject matrix |
+| Capability publication | `crates/fullmag-runner/src/capabilities.rs` | `mixed_p1_feature_capabilities` | publishes bounded status and scope wording | FEM CPU/GPU | capability serialization tests |
+| Exchange weak form | `backends/fem/cpu/mfem/interactions/exchange_operator.cpp` | `initialize_exchange_operator_mfem` | assembles topology-aware exchange operator | FEM CPU | native operator contracts; managed proof pending |
+| Uniform Zeeman energy | `backends/fem/cpu/mfem/interactions/zeeman_energy.cpp` | `zeeman_energy_from_field` | evaluates the existing Zeeman energy contract | FEM CPU | native energy contracts |
+| Poisson weak-form source | `backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp` | `assemble_demag_poisson_rhs` | assembles magnetic-cell Poisson RHS | FEM CPU | manufactured/operator contracts; managed proof pending |
+| Demag field recovery | `backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp` | `recover_demag_poisson_field` | recovers $\mathbf H_{\mathrm{demag}}$ on magnetic cells | FEM CPU | manufactured/operator contracts; managed proof pending |
+| Demag energy | `backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp` | `demag_poisson_energy_from_field` | evaluates the existing demag-energy sign contract | FEM CPU | energy contracts; managed proof pending |
+| Magnetic nodal weights | `backends/fem/core/fem_mesh.cpp` | `compute_node_volumes` | synchronizes mixed P1 mass-row-sum volume weights | FEM CPU/GPU shared contract | native material/metric contracts |

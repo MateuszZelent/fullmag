@@ -36,8 +36,11 @@ numeric element IDs. The target vocabulary includes
 `fem.cpu.exchange_demag.mixed_p1`, and
 `fem.gpu.exchange_demag.mixed_p1`.
 
-`layers=1` means exactly two magnetic node planes and one three-dimensional
-prism layer. It is not a shell, 2.5D, or thickness-averaged model.
+The bounded relaxation implementation accepts exact `layers` in `{1, 2, 3}`.
+For any accepted count `L`, requested and realized counts are both `L` and the
+magnetic mesh has exactly `L+1` node planes. In particular, `layers=1` means
+exactly two magnetic node planes and one three-dimensional prism layer. None of
+these meshes is a shell, 2.5D, or thickness-averaged model.
 
 Requested topology, exact layer count, device, precision, demag model, and
 workflow remain distinct from the realized mesh certificate and resolved
@@ -126,9 +129,10 @@ requirements.
 
 ## Validation
 
-- Gmsh 4.15.2 Box-in-Box feasibility: prism-only film, pyramid/tet-only air,
-  two magnetic node planes, tri/quad film facets, conforming enclosure, and
-  manifold face ownership without the production splitter.
+- Gmsh 4.15.2 Box-in-Box feasibility and regression fixtures: prism-only film,
+  pyramid/tet-only air, exact `L+1` magnetic node planes for
+  `L in {1, 2, 3}`, tri/quad film facets, conforming enclosure, and manifold
+  face ownership without the production splitter.
 - Element basis, trace, quadrature, Jacobian, material-mask, and manufactured
   solution tests for every topology.
 - Exchange directional derivative and Poisson sign/convergence gates.

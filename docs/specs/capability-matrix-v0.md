@@ -50,12 +50,12 @@ validation:
 | `mesh.topology.mixed_p1` | CPU/GPU `implemented`; FDM `unsupported` | implemented | complete source-report/certificate validation, deterministic clone packing, final fingerprint rebinding, and runner/native contract gates exist; managed public-runtime proof is missing | one axis-aligned P1 Box in one conforming airbox |
 | `mesh.swept.prism` | CPU/GPU `implemented`; FDM `unsupported` | implemented | native Python meshing and native contract tests preserve `prism6` without tet conversion; managed public-runtime proof is missing | `prism6` magnetic cells with no tet conversion |
 | `mesh.transition.pyramid_tet` | CPU/GPU `implemented`; FDM `unsupported` | implemented | conforming `pyramid5` transition and `tet4` far-air topology remain certificate-bound in source and contract tests | `pyramid5` air transition and `tet4` far air |
-| `mesh.exact_layer_count` | CPU/GPU `implemented`; FDM `unsupported` | implemented | accepted certificate requires `layers=1`, exactly two magnetic planes, empty report/certificate fallbacks, and `degraded=false` | `layers=1` gives exactly two magnetic node planes |
+| `mesh.exact_layer_count` | CPU/GPU `implemented`; FDM `unsupported` | implemented | accepted certificate requires requested = realized = `L`, exact `L+1` magnetic planes for `L in {1,2,3}`, empty report/certificate fallbacks, and `degraded=false` | exact `layers` in `{1,2,3}` for one physical film |
 | `fem.cpu.exchange_demag.mixed_p1` | `implemented` | implemented | bounded CPU/strict/double P1 exchange/Poisson/relaxation source and operator contracts exist, but no immutable managed public-runtime report exists | MFEM/hypre CPU double, exchange + uniform Zeeman + Poisson Robin/Dirichlet |
 | `fem.gpu.exchange_demag.mixed_p1` | `implemented` | implemented | bounded GPU/strict/double P1 exchange/Poisson/relaxation source and operator contracts exist, but no immutable managed public-runtime report exists | MFEM/libCEED/CUDA GPU double on the same certified mesh |
 
 The current first-slice legality is explicit FEM, explicit CPU or GPU, strict mode,
-double precision, P1, one Box, one exact layer, one shared-domain airbox,
+double precision, P1, one Box, an exact layer count in `{1,2,3}`, one shared-domain airbox,
 uniform `Ms`/`Aex`, exchange, optional uniform Zeeman, Poisson Robin/Dirichlet,
 and PG-BB, NCG, or overdamped LLG. `auto`, single, extended, and hidden
 fallback remain illegal.

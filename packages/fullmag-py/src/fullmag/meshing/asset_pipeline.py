@@ -2205,7 +2205,7 @@ def _qualified_mixed_per_geometry_body_hmax(
         and recipe.get("through_thickness_elements") is not None
         and not isinstance(recipe.get("through_thickness_elements"), bool)
         and isinstance(recipe.get("through_thickness_elements"), int)
-        and int(recipe["through_thickness_elements"]) == 1
+        and int(recipe["through_thickness_elements"]) in (1, 2, 3)
         and recipe.get("through_thickness_distribution") == "fixed"
         and recipe.get("sweep_face_meshing") == "triangular"
         and recipe.get("topology") in (None, "prismatic")
@@ -2372,7 +2372,10 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             ("boundary layers", surface_mesh_options.boundary_layer_count is not None),
             ("optimizer", surface_mesh_options.optimize is not None),
             ("periodic pairs", bool(surface_mesh_options.periodic_pair_ids)),
-            ("layer count", surface_mesh_options.through_thickness_elements not in (None, 1)),
+            (
+                "layer count",
+                surface_mesh_options.through_thickness_elements not in (None, 1, 2, 3),
+            ),
             ("non-fixed distribution", surface_mesh_options.through_thickness_distribution not in (None, "fixed")),
             ("graded distribution", surface_mesh_options.through_thickness_element_ratio not in (None, 1.0)),
             ("symmetric distribution", surface_mesh_options.through_thickness_symmetric),

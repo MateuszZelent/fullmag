@@ -1077,6 +1077,10 @@ def generate_swept_box_mesh(
     n_layers = int(n_layers)
     order = int(order)
     thin_axis = int(thin_axis)
+    if airbox is not None and n_layers not in (1, 2, 3):
+        raise ValueError(
+            "mixed shared-domain swept meshing is qualified for exactly 1, 2, or 3 layers"
+        )
     if order != 1:
         raise ValueError(
             f"body-only swept prism meshing supports order=1; requested order={order}"
@@ -1092,10 +1096,6 @@ def generate_swept_box_mesh(
     if opts.periodic_pair_ids:
         raise ValueError("body-only swept prism meshing does not support periodic pairs")
     if airbox is not None:
-        if n_layers != 1:
-            raise ValueError(
-                "mixed shared-domain swept meshing is qualified for exactly one layer"
-            )
         if str(airbox.shape).strip().lower() != "bbox":
             raise ValueError(
                 "mixed shared-domain swept meshing supports only a bbox airbox"
@@ -1197,26 +1197,37 @@ def generate_swept_box_mesh(
         w = face_dims[0] * SCALE
         h = face_dims[1] * SCALE
         hmax_scaled = hmax * SCALE
+        source_hmax_scaled = (
+            min(hmax_scaled, 2.0 * thickness * SCALE / n_layers)
+            if airbox is not None
+            else hmax_scaled
+        )
 
         # Map face_axes to 3D coordinates
         corner = list(origin)
-        p1 = gmsh.model.geo.addPoint(corner[0], corner[1], corner[2], hmax_scaled)
+        p1 = gmsh.model.geo.addPoint(
+            corner[0], corner[1], corner[2], source_hmax_scaled
+        )
 
         corner2 = list(origin)
         corner2[face_axes[0]] += w
-        p2 = gmsh.model.geo.addPoint(corner2[0], corner2[1], corner2[2], hmax_scaled)
+        p2 = gmsh.model.geo.addPoint(
+            corner2[0], corner2[1], corner2[2], source_hmax_scaled
+        )
 
         corner3 = list(origin)
         corner3[face_axes[0]] += w
         corner3[face_axes[1]] += h
-        p3_mesh_size = hmax_scaled * (0.5 if airbox is not None else 1.0)
+        p3_mesh_size = source_hmax_scaled * (0.5 if airbox is not None else 1.0)
         p3 = gmsh.model.geo.addPoint(
             corner3[0], corner3[1], corner3[2], p3_mesh_size
         )
 
         corner4 = list(origin)
         corner4[face_axes[1]] += h
-        p4 = gmsh.model.geo.addPoint(corner4[0], corner4[1], corner4[2], hmax_scaled)
+        p4 = gmsh.model.geo.addPoint(
+            corner4[0], corner4[1], corner4[2], source_hmax_scaled
+        )
 
         l1 = gmsh.model.geo.addLine(p1, p2)
         l2 = gmsh.model.geo.addLine(p2, p3)
@@ -1241,7 +1252,7 @@ def generate_swept_box_mesh(
 
         # The source face must remain triangular. Recombining this face would
         # turn the extrusion into hex8 instead of the requested prism6 family.
-        gmsh.option.setNumber("Mesh.CharacteristicLengthMax", hmax_scaled)
+        gmsh.option.setNumber("Mesh.CharacteristicLengthMax", source_hmax_scaled)
         if opts.hmin is not None:
             gmsh.option.setNumber("Mesh.CharacteristicLengthMin", opts.hmin * SCALE)
         gmsh.option.setNumber("Mesh.Algorithm", opts.algorithm_2d)
@@ -1250,7 +1261,7 @@ def generate_swept_box_mesh(
             source_refinement_field = _apply_mixed_source_face_mesh_options(
                 gmsh,
                 source_surface=source_surf,
-                hmax_scaled=hmax_scaled,
+                hmax_scaled=source_hmax_scaled,
                 order=order,
                 opts=opts,
                 hscale=SCALE,
@@ -1258,6 +1269,41 @@ def generate_swept_box_mesh(
             gmsh.model.mesh.generate(2)
             gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 1)
             gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 1)
+            gmsh.option.setNumber(
+                "Mesh.CharacteristicLengthMax",
+                (
+                    float(airbox.maximum_element_size) * SCALE
+                    if airbox.maximum_element_size is not None
+                    else hmax_scaled
+                ),
+            )
+        elif airbox is not None and source_hmax_scaled < hmax_scaled:
+            # Restrict the quality-preserving target to the magnetic source
+            # face. Letting the fine point size propagate through the 3D
+            # volume over-refines the transition air and can trigger Gmsh
+            # tetrahedral overlaps for L=3.
+            source_size = gmsh.model.mesh.field.add("Constant")
+            gmsh.model.mesh.field.setNumbers(
+                source_size, "SurfacesList", [source_surf]
+            )
+            gmsh.model.mesh.field.setNumber(
+                source_size, "VIn", source_hmax_scaled
+            )
+            gmsh.model.mesh.field.setNumber(source_size, "VOut", 1.0e22)
+            gmsh.model.mesh.field.setNumber(source_size, "IncludeBoundary", 1)
+            source_refinement_field = gmsh.model.mesh.field.add("Restrict")
+            gmsh.model.mesh.field.setNumber(
+                source_refinement_field, "InField", source_size
+            )
+            gmsh.model.mesh.field.setNumbers(
+                source_refinement_field, "SurfacesList", [source_surf]
+            )
+            gmsh.model.mesh.setSize(
+                [(0, tag) for tag in (p1, p2, p3, p4)],
+                hmax_scaled,
+            )
+            gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 1)
+            gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
             gmsh.option.setNumber(
                 "Mesh.CharacteristicLengthMax",
                 (

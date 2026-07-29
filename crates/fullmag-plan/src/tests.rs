@@ -11390,6 +11390,56 @@ fn valid_mixed_certificate_asset() -> fullmag_ir::FemDomainMeshAssetIR {
     valid_mixed_certificate_asset_for_version("v3")
 }
 
+fn python_mixed_certificate_asset_for_layers(layer_count: u32) -> fullmag_ir::FemDomainMeshAssetIR {
+    let payload: serde_json::Value = serde_json::from_str(match layer_count {
+        2 => include_str!(
+            "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_layers_2_python_golden.json"
+        ),
+        3 => include_str!(
+            "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_layers_3_python_golden.json"
+        ),
+        _ => panic!("layered Python fixture exists only for layer counts 2 and 3"),
+    })
+    .expect("layered mixed topology fixture must be valid JSON");
+    let mesh: fullmag_ir::MeshIR = serde_json::from_value(payload["mesh"].clone())
+        .expect("layered mixed topology mesh must deserialize");
+    let certificate: fullmag_ir::MixedLayerTopologyCertificateV1IR =
+        serde_json::from_value(payload["certificate"].clone())
+            .expect("layered mixed topology certificate must deserialize");
+    let region_markers = vec![fullmag_ir::FemDomainRegionMarkerIR {
+        geometry_name: "strip".to_string(),
+        marker: 1,
+    }];
+    fullmag_ir::FemDomainMeshAssetIR {
+        mesh_source: None,
+        mesh: Some(mesh),
+        region_markers: region_markers.clone(),
+        object_region_markers: Vec::new(),
+        build_report: Some(fullmag_ir::FemSharedDomainBuildReportIR {
+            build_mode: "shared_domain".to_string(),
+            fallbacks_triggered: Some(Vec::new()),
+            effective_airbox_target: None,
+            effective_airbox_hmax: None,
+            effective_per_object_targets: std::collections::HashMap::new(),
+            region_markers,
+            object_region_markers: Vec::new(),
+            used_size_field_kinds: Vec::new(),
+            size_fields_realized: Vec::new(),
+            operation_statuses: Vec::new(),
+            thin_film_diagnostics: Vec::new(),
+            magnetic_submesh_signatures: Vec::new(),
+            selector_resolution: Vec::new(),
+            orphan_entities: Vec::new(),
+            rejected_element_types: Vec::new(),
+            degraded: false,
+            authored_regions_count: Some(1),
+            realized_regions_count: Some(1),
+            mixed_layer_topology_certificate: Some(certificate),
+            mixed_topology_provenance: None,
+        }),
+    }
+}
+
 fn mixed_cpu_relaxation_ir(
     algorithm: fullmag_ir::RelaxationAlgorithmIR,
     demag_realization: fullmag_ir::RequestedFemDemagIR,
@@ -11523,6 +11573,52 @@ fn fem_planner_accepts_certified_mixed_p1_cpu_double_and_rebinds_packed_certific
 }
 
 #[test]
+fn fem_planner_accepts_python_certified_exact_two_and_three_layer_topologies() {
+    for layer_count in [2, 3] {
+        let mut ir = mixed_cpu_relaxation_ir(
+            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+        );
+        let asset = python_mixed_certificate_asset_for_layers(layer_count);
+        asset
+            .validate()
+            .expect("Python-emitted stacked prism fixture must bind to its certificate");
+        ir.geometry_assets
+            .as_mut()
+            .expect("geometry assets")
+            .fem_domain_mesh_asset = Some(asset);
+
+        let planned = plan(&ir).expect("qualified exact multi-layer mixed P1 relaxation must plan");
+        let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+            panic!("qualified mixed P1 relaxation must resolve to FEM");
+        };
+        let certificate = fem
+            .mesh_build_report
+            .as_ref()
+            .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
+            .expect("qualified multi-layer plan must retain its certificate");
+        assert_eq!(certificate.requested_layer_count, layer_count);
+        assert_eq!(certificate.realized_layer_count, layer_count);
+        assert_eq!(
+            certificate.magnetic_plane_coordinates_m.len(),
+            layer_count as usize + 1
+        );
+        assert_eq!(
+            fem.mesh
+                .cells
+                .types
+                .iter()
+                .filter(|family| **family == fullmag_ir::FemCellTypeIR::Prism6)
+                .count(),
+            2 * layer_count as usize,
+            "fixture must contain genuine stacked prism topology",
+        );
+        fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(certificate, &fem.mesh)
+            .expect("packed multi-layer certificate must remain bound to the mesh");
+    }
+}
+
+#[test]
 fn fem_planner_accepts_certified_mixed_p1_gpu_double_and_binds_gpu_provenance() {
     let mut ir = mixed_cpu_relaxation_ir(
         fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
@@ -11570,10 +11666,8 @@ fn fem_planner_preserves_legacy_v2_when_rebinding_packed_certificate() {
         fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
         fullmag_ir::RequestedFemDemagIR::PoissonRobin,
     );
-    ir.geometry_assets
-        .as_mut()
-        .unwrap()
-        .fem_domain_mesh_asset = Some(valid_mixed_certificate_asset_for_version("v2"));
+    ir.geometry_assets.as_mut().unwrap().fem_domain_mesh_asset =
+        Some(valid_mixed_certificate_asset_for_version("v2"));
 
     let planned = plan(&ir).expect("legacy v2 mixed certificate must remain plannable");
     let BackendPlanIR::Fem(fem) = planned.backend_plan else {
@@ -11585,7 +11679,10 @@ fn fem_planner_preserves_legacy_v2_when_rebinding_packed_certificate() {
         .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
         .expect("packed plan must retain a certificate");
     assert_eq!(certificate.topology_fingerprint_version, "v2");
-    assert_eq!(certificate.topology_fingerprint, fem.mesh.topology_fingerprint_v6());
+    assert_eq!(
+        certificate.topology_fingerprint,
+        fem.mesh.topology_fingerprint_v6()
+    );
 }
 
 #[test]
