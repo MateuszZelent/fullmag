@@ -188,7 +188,7 @@
       },
       {
         "python": "Problem.excitation_analysis",
-        "type": "analysis or `None`",
+        "type": "analysis or None",
         "default": "None",
         "si_unit": "1",
         "validation": "Optional spin-wave excitation analysis; `excitation_analysis`.",
@@ -208,7 +208,7 @@
       },
       {
         "python": "Problem.spin_torque",
-        "type": "legacy torque or `None`",
+        "type": "legacy torque or None",
         "default": "None",
         "si_unit": "1",
         "validation": "Legacy single-torque compatibility input; normalized into torque modules.",
@@ -288,7 +288,7 @@
       },
       {
         "python": "Problem.pbc",
-        "type": "FdmPbc`, three booleans, or `None",
+        "type": "FdmPbc, three booleans, or None",
         "default": "None",
         "si_unit": "1",
         "validation": "Requested periodic axes; canonical PBC section and backend capability checks.",

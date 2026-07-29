@@ -35,8 +35,8 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
 | `Box.size_or_x` | `three floats, scalar, or `None`` | `None` | $\mathrm{m}$ | Positional size input; when size= is supplied, the implementation uses size and ignores positional size values. | Positional size input; when size= is supplied, the implementation uses size and ignores positional size values. | FEM/FDM CPU/GPU; planner checks combinations | `geometry.entries[].shape.size` |
-| `Box.y` | `float | None` | `None` | $\mathrm{m}$ | Positional $L_y$ when scalar `size_or_x` is used. | Positional $L_y$ when scalar `size_or_x` is used. | FEM/FDM CPU/GPU; planner checks combinations | `geometry.entries[].shape.size` |
-| `Box.z` | `float | None` | `None` | $\mathrm{m}$ | Positional $L_z$ when scalar `size_or_x` is used. | Positional $L_z$ when scalar `size_or_x` is used. | FEM/FDM CPU/GPU; planner checks combinations | `geometry.entries[].shape.size` |
+| `Box.y` | `float \| None` | `None` | $\mathrm{m}$ | Positional $L_y$ when scalar `size_or_x` is used. | Positional $L_y$ when scalar `size_or_x` is used. | FEM/FDM CPU/GPU; planner checks combinations | `geometry.entries[].shape.size` |
+| `Box.z` | `float \| None` | `None` | $\mathrm{m}$ | Positional $L_z$ when scalar `size_or_x` is used. | Positional $L_z$ when scalar `size_or_x` is used. | FEM/FDM CPU/GPU; planner checks combinations | `geometry.entries[].shape.size` |
 | `Box.size` | `three positive floats` | `required in keyword form` | $\mathrm{m}$ | Keyword size; when supplied, it takes precedence and positional size values are ignored. | Keyword size; when supplied, it takes precedence and positional size values are ignored. | FEM/FDM CPU/GPU; planner checks combinations | `geometry.entries[].shape.size` |
 | `Box.name` | `str` | `"box"` | $1$ | Non-empty geometry identity. | Non-empty geometry identity. | FEM/FDM CPU/GPU; planner checks combinations | `geometry.entries[].name` |
 

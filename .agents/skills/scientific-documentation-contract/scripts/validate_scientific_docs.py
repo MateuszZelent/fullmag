@@ -66,7 +66,11 @@ def _required_text(item: dict[str, Any], fields: tuple[str, ...], label: str, er
 
 
 def _table_row(page: str, values: list[str]) -> bool:
-    return any(line.lstrip().startswith("|") and all(value in line for value in values) for line in page.splitlines())
+    return any(
+        line.lstrip().startswith("|")
+        and all(value in line.replace(r"\|", "|") for value in values)
+        for line in page.splitlines()
+    )
 
 
 def _source_symbol_declarations(path: str, text: str, symbol: str) -> list[str]:

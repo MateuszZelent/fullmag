@@ -36,9 +36,9 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 |---|---|---|---|---|---|---|---|
 | `LLG.gamma` | `float` | `221100.0` | $\mathrm{m\,A^{-1}\,s^{-1}}$ | Positive finite gyromagnetic ratio used by the H-field LLG convention. | Positive finite gyromagnetic ratio used by the H-field LLG convention. | FEM/FDM CPU/GPU; planner checks combinations | `study.dynamics.gamma` |
 | `LLG.integrator` | `str` | `"auto"` | $1$ | Canonical supported integrator identifier or `auto`; planner and runtime legality are validated explicitly. | Canonical supported integrator identifier or `auto`; planner and runtime legality are validated explicitly. | FEM/FDM CPU/GPU; planner checks combinations | `study.dynamics.integrator` |
-| `LLG.fixed_timestep` | `float | None` | `None` | $\mathrm{s}$ | Positive fixed step when supplied; mutually constrained with adaptive stepping. | Positive fixed step when supplied; mutually constrained with adaptive stepping. | FEM/FDM CPU/GPU; planner checks combinations | `study.dynamics.fixed_timestep` |
-| `LLG.adaptive_timestep` | `AdaptiveTimestep | None` | `None` | $1$ | Optional adaptive-step contract. | Optional adaptive-step contract. | FEM/FDM CPU/GPU; planner checks combinations | `study.dynamics.adaptive_timestep` |
-| `LLG.field_refresh` | `FieldRefreshPolicy | None` | `None` | $1$ | Optional field-refresh policy. | Optional field-refresh policy. | FEM/FDM CPU/GPU; planner checks combinations | `study.dynamics.field_refresh` |
+| `LLG.fixed_timestep` | `float \| None` | `None` | $\mathrm{s}$ | Positive fixed step when supplied; mutually constrained with adaptive stepping. | Positive fixed step when supplied; mutually constrained with adaptive stepping. | FEM/FDM CPU/GPU; planner checks combinations | `study.dynamics.fixed_timestep` |
+| `LLG.adaptive_timestep` | `AdaptiveTimestep \| None` | `None` | $1$ | Optional adaptive-step contract. | Optional adaptive-step contract. | FEM/FDM CPU/GPU; planner checks combinations | `study.dynamics.adaptive_timestep` |
+| `LLG.field_refresh` | `FieldRefreshPolicy \| None` | `None` | $1$ | Optional field-refresh policy. | Optional field-refresh policy. | FEM/FDM CPU/GPU; planner checks combinations | `study.dynamics.field_refresh` |
 
 ```python
 # %%

@@ -109,7 +109,7 @@ def _independent_scaffold_text(page_spec: object) -> str | None:
     }:
         rendered += (
             "\n## Related pages\n\n"
-            "- {doc}`../../../../../exchange`\n"
+            "- {doc}`../../../../exchange`\n"
             "- {doc}`../../../../../python-api/interactions/exchange`\n"
         )
     return rendered

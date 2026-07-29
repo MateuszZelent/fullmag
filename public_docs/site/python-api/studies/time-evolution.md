@@ -36,7 +36,7 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 |---|---|---|---|---|---|---|---|
 | `TimeEvolution.dynamics` | `LLG` | `required` | $1$ | Time-domain equation and integrator settings. | Time-domain equation and integrator settings. | FEM/FDM CPU/GPU; planner checks combinations | `study.dynamics` |
 | `TimeEvolution.outputs` | `sequence` | `required` | $1$ | Sampling requests. An empty sequence is valid. | Sampling requests. An empty sequence is valid. | FEM/FDM CPU/GPU; planner checks combinations | `study.outputs` |
-| `TimeEvolution.table_autosave` | `TableAutosave | None` | `None` | $1$ | Optional tabular autosave policy. | Optional tabular autosave policy. | FEM/FDM CPU/GPU; planner checks combinations | `study.table_autosave` |
+| `TimeEvolution.table_autosave` | `TableAutosave \| None` | `None` | $1$ | Optional tabular autosave policy. | Optional tabular autosave policy. | FEM/FDM CPU/GPU; planner checks combinations | `study.table_autosave` |
 
 ```python
 # %%

@@ -4,6 +4,7 @@ import inspect
 import importlib.util
 import json
 from pathlib import Path
+import re
 import unittest
 
 import fullmag as fm
@@ -45,6 +46,26 @@ API_CONSTRUCTORS = {
 
 
 class PublicPythonApiDocumentationTests(unittest.TestCase):
+    def test_parameter_tables_have_stable_markdown_columns(self) -> None:
+        malformed: list[str] = []
+        unescaped_pipe = re.compile(r"(?<!\\)\|")
+        for relative_page in sorted(set(API_PARAMETER_OWNERS.values())):
+            lines = (PUBLIC_DOCS_ROOT / relative_page).read_text(encoding="utf-8").splitlines()
+            expected_columns: int | None = None
+            for line_number, line in enumerate(lines, start=1):
+                if not line.startswith("|"):
+                    expected_columns = None
+                    continue
+                separators = len(unescaped_pipe.findall(line))
+                if expected_columns is None:
+                    expected_columns = separators
+                if separators != expected_columns:
+                    malformed.append(
+                        f"{relative_page}:{line_number}: {separators} separators, "
+                        f"expected {expected_columns}"
+                    )
+        self.assertEqual(malformed, [])
+
     def test_each_constructor_signature_is_complete_on_its_owner_page(self) -> None:
         missing: list[str] = []
         duplicate_owners: list[str] = []

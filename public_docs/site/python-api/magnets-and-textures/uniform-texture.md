@@ -35,8 +35,8 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
 | `texture.uniform.direction_or_x` | `three floats or scalar` | `(1, 0, 0)` | $1$ | Direction tuple or first Cartesian component of uniform reduced magnetization. | Direction tuple or first Cartesian component of uniform reduced magnetization. | FEM/FDM CPU/GPU; planner checks combinations | `magnets[].initial_magnetization.params.direction` |
-| `texture.uniform.y` | `float | None` | `None` | $1$ | Second component for scalar-form authoring. | Second component for scalar-form authoring. | FEM/FDM CPU/GPU; planner checks combinations | `magnets[].initial_magnetization.params.direction` |
-| `texture.uniform.z` | `float | None` | `None` | $1$ | Third component for scalar-form authoring. | Third component for scalar-form authoring. | FEM/FDM CPU/GPU; planner checks combinations | `magnets[].initial_magnetization.params.direction` |
+| `texture.uniform.y` | `float \| None` | `None` | $1$ | Second component for scalar-form authoring. | Second component for scalar-form authoring. | FEM/FDM CPU/GPU; planner checks combinations | `magnets[].initial_magnetization.params.direction` |
+| `texture.uniform.z` | `float \| None` | `None` | $1$ | Third component for scalar-form authoring. | Third component for scalar-form authoring. | FEM/FDM CPU/GPU; planner checks combinations | `magnets[].initial_magnetization.params.direction` |
 
 ```python
 # %%

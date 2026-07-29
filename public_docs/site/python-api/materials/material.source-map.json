@@ -98,7 +98,7 @@
       },
       {
         "python": "Material.anisU",
-        "type": "three floats or `None`",
+        "type": "three floats or None",
         "default": "None",
         "si_unit": "1",
         "validation": "Finite three-vector defining the uniaxial axis; normalization and legality are checked downstream.",
@@ -138,7 +138,7 @@
       },
       {
         "python": "Material.anisC1",
-        "type": "three floats or `None`",
+        "type": "three floats or None",
         "default": "None",
         "si_unit": "1",
         "validation": "Finite first cubic-anisotropy axis.",
@@ -148,7 +148,7 @@
       },
       {
         "python": "Material.anisC2",
-        "type": "three floats or `None`",
+        "type": "three floats or None",
         "default": "None",
         "si_unit": "1",
         "validation": "Finite second cubic-anisotropy axis.",

@@ -54,7 +54,7 @@
       },
       {
         "python": "SaveField.every",
-        "type": "positive `float` or `\"auto\"`",
+        "type": "positive float or \"auto\"",
         "default": "required",
         "si_unit": "\\mathrm{s}",
         "validation": "Finite positive sampling period in seconds, or `\"auto\"`; step-count sampling is not accepted here.",
@@ -74,7 +74,7 @@
       },
       {
         "python": "SaveScalar.every",
-        "type": "positive `float` or `\"auto\"`",
+        "type": "positive float or \"auto\"",
         "default": "required",
         "si_unit": "\\mathrm{s}",
         "validation": "Finite positive sampling period in seconds, or `\"auto\"`; step-count sampling is not accepted here.",
