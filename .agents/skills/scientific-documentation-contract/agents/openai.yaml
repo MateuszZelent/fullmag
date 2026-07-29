@@ -1,0 +1,4 @@
+interface:
+  display_name: "Scientific Documentation Contract"
+  short_description: "Enforce publication-grade scientific traceability"
+  default_prompt: "Use $scientific-documentation-contract to create or review FullMag scientific documentation."
