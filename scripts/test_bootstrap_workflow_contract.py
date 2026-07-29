@@ -22,6 +22,10 @@ class BootstrapWorkflowContractTests(unittest.TestCase):
         self.assertIn("actions/setup-python@v7", workflow)
         self.assertIn("actions/upload-artifact@v7", workflow)
         self.assertIn("pnpm/action-setup@v6", workflow)
+        self.assertIn(
+            "pnpm --dir apps/control-room exec playwright install --with-deps chromium",
+            workflow,
+        )
 
     def test_meshing_extra_provides_trimesh_boolean_backend(self) -> None:
         pyproject = (ROOT / "packages/fullmag-py/pyproject.toml").read_text()
