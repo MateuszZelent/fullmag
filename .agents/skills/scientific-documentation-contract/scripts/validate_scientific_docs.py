@@ -134,6 +134,16 @@ def _latex(value: str) -> str:
     return re.sub(r"\s+", "", value)
 
 
+def _symbol_row_present(page: str, latex: str, definition: str, si_unit: str) -> bool:
+    return any(
+        line.lstrip().startswith("|")
+        and latex in line
+        and definition in line
+        and si_unit in line
+        for line in page.splitlines()
+    )
+
+
 def _resolve_anchor(
     *, source_id: str, path: str, identity: Any, end_identity: Any, revision: str,
     repo: Path, repository_url: str, result: ValidationResult, label: str,
@@ -239,8 +249,14 @@ def validate_manifest(manifest: object, repo_root: Path) -> ValidationResult:
         for key in ("latex", "definition", "si_unit"):
             if not isinstance(symbol.get(key), str) or not symbol.get(key):
                 result.errors.append(f"symbol {symbol_id}: {key} is required")
-            elif page is not None and symbol[key] not in page:
-                result.errors.append(f"actual page missing symbol {symbol_id} {key}")
+        if (
+            page is not None
+            and all(isinstance(symbol.get(key), str) and symbol.get(key) for key in ("latex", "definition", "si_unit"))
+            and not _symbol_row_present(page, symbol["latex"], symbol["definition"], symbol["si_unit"])
+        ):
+            result.errors.append(
+                f"actual page missing one symbol-table row for {symbol_id} with LaTeX, definition, and SI unit"
+            )
 
     sources = _objects(manifest.get("sources"), "sources", result.errors)
     sources_by_id = _unique_ids(sources, "source", result.errors)
