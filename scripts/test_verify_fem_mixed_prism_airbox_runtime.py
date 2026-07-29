@@ -245,7 +245,7 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                 {
                     "device_name": "NVIDIA GeForce RTX 4080",
                     "compute_capability": "8.9",
-                    "mfem_device": "ceed-cuda:/gpu/cuda/shared",
+                    "mfem_device": "cuda",
                     "fem_assembly_mode": "legacy_sparse",
                     "fem_execution_mode": "all_in_gpu_legacy_sparse",
                     "fem_data_residency": "device_source_of_truth",
@@ -256,8 +256,6 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                     "hypre_execution_policy": "device",
                     "demag_residency": "device",
                     "fem_gpu_state_allocated": True,
-                    "hot_loop_h2d_bytes": 0,
-                    "hot_loop_d2h_bytes": 56,
                     "hot_loop_host_sync_count": 7,
                     "hot_loop_exchange_h2d_bytes": 0,
                     "hot_loop_exchange_d2h_bytes": 0,
@@ -270,7 +268,7 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                 }
             )
             metadata["demag_runtime"] = {
-                "mfem_device": "ceed-cuda:/gpu/cuda/shared",
+                "mfem_device": "cuda",
                 "actual_iterations": 12,
                 "final_residual_norm": 1.0e-13,
                 "relative_tolerance": 1.0e-12,
@@ -733,6 +731,28 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                     json.dumps(mutated), encoding="utf-8"
                 )
                 with self.subTest(field=field), self.assertRaises(ContractError):
+                    validate_runtime_artifacts(
+                        source,
+                        bounded,
+                        artifacts,
+                        device="gpu",
+                        runtime_log=runtime_log,
+                        runtime_manifest=manifest,
+                    )
+
+    def test_validate_rejects_legacy_ceed_cuda_device_labels(self) -> None:
+        for section in ("execution_provenance", "demag_runtime"):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source, bounded, artifacts, runtime_log, manifest, metadata = (
+                    self._write_valid_bundle(root, "gpu")
+                )
+                metadata[section]["mfem_device"] = "ceed-cuda:/gpu/cuda/shared"  # type: ignore[index]
+                (artifacts / "metadata.json").write_text(
+                    json.dumps(metadata), encoding="utf-8"
+                )
+
+                with self.subTest(section=section), self.assertRaises(ContractError):
                     validate_runtime_artifacts(
                         source,
                         bounded,

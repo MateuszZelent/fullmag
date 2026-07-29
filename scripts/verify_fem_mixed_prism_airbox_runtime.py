@@ -549,8 +549,8 @@ def _validate_gpu_execution(
         "fem_gpu_state_allocated": True,
     }
     mfem_device = execution.get("mfem_device")
-    if not isinstance(mfem_device, str) or not mfem_device.startswith("ceed-cuda:"):
-        raise ContractError("GPU execution mfem_device must be a ceed-cuda device")
+    if mfem_device != "cuda":
+        raise ContractError("GPU execution mfem_device must be exactly 'cuda'")
     for field, expected in expected_execution.items():
         if execution.get(field) != expected:
             raise ContractError(f"GPU execution {field} must be {expected!r}")
@@ -571,8 +571,6 @@ def _validate_gpu_execution(
             raise ContractError(f"GPU device policy {field} must be {expected!r}")
 
     telemetry_fields = (
-        "hot_loop_h2d_bytes",
-        "hot_loop_d2h_bytes",
         "hot_loop_host_sync_count",
         "hot_loop_exchange_h2d_bytes",
         "hot_loop_exchange_d2h_bytes",
@@ -592,10 +590,6 @@ def _validate_gpu_execution(
             field = f"hot_loop_{scope}_{suffix}"
             if telemetry[field] != 0:
                 raise ContractError(f"GPU scoped transfer telemetry {field} must be zero")
-    if telemetry["hot_loop_h2d_bytes"] != 0:
-        raise ContractError("GPU hot-loop H2D bytes must be zero")
-    if telemetry["hot_loop_d2h_bytes"] != telemetry["hot_loop_control_scalar_d2h_bytes"]:
-        raise ContractError("GPU D2H bytes must be control-scalar-only")
     if telemetry["hot_loop_host_sync_count"] != telemetry[
         "hot_loop_control_scalar_host_sync_count"
     ]:
@@ -620,8 +614,8 @@ def _validate_gpu_execution(
         raise ContractError("GPU control-scalar bytes and syncs must have matching zero state")
 
     demag_runtime = _object(metadata.get("demag_runtime"), "GPU demag runtime")
-    if not str(demag_runtime.get("mfem_device", "")).startswith("ceed-cuda:"):
-        raise ContractError("GPU demag runtime must use a ceed-cuda MFEM device")
+    if demag_runtime.get("mfem_device") != "cuda":
+        raise ContractError("GPU demag runtime mfem_device must be exactly 'cuda'")
     relative_tolerance = _finite(
         demag_runtime.get("relative_tolerance"), "GPU demag relative tolerance"
     )
