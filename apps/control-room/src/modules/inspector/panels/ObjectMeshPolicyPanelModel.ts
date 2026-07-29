@@ -145,6 +145,7 @@ export function resolveObjectMeshTopologyCapabilities(
   resource: { mesh_capabilities?: unknown } | null | undefined,
 ): ObjectMeshTopologyCapabilities {
   const capabilities = resource?.mesh_capabilities;
+  let allValidated = true;
   for (const id of LAYERED_PRISM_CAPABILITY_IDS) {
     const value = capabilityValue(capabilities, id);
     const status = capabilityStatus(value);
@@ -162,12 +163,13 @@ export function resolveObjectMeshTopologyCapabilities(
         },
       };
     }
+    allValidated &&= status === "validated";
   }
   return {
     layeredPrism: {
       enabled: true,
       reason: "All exact layered prism capabilities are executable.",
-      status: "validated",
+      status: allValidated ? "validated" : "production_executable",
     },
     sweptHex: {
       enabled: false,

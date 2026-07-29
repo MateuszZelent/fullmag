@@ -36,7 +36,10 @@ describe("ObjectMeshPolicyPanelModel", () => {
       },
     });
 
-    expect(enabled.layeredPrism).toMatchObject({ enabled: true });
+    expect(enabled.layeredPrism).toMatchObject({
+      enabled: true,
+      status: "production_executable",
+    });
     expect(enabled.sweptHex).toMatchObject({ enabled: false, status: "unsupported" });
 
     const semanticOnly = resolveObjectMeshTopologyCapabilities({
@@ -50,6 +53,38 @@ describe("ObjectMeshPolicyPanelModel", () => {
     expect(semanticOnly.layeredPrism).toMatchObject({
       enabled: false,
       status: "semantic_only",
+    });
+  });
+
+  it("preserves production-executable status when every layered-prism input is production-executable", () => {
+    const capabilities = resolveObjectMeshTopologyCapabilities({
+      mesh_capabilities: {
+        "mesh.topology.mixed_p1": { status: "production_executable" },
+        "mesh.swept.prism": { status: "production_executable" },
+        "mesh.transition.pyramid_tet": { status: "production_executable" },
+        "mesh.exact_layer_count": { status: "production_executable" },
+      },
+    });
+
+    expect(capabilities.layeredPrism).toMatchObject({
+      enabled: true,
+      status: "production_executable",
+    });
+  });
+
+  it("reports validated only when every layered-prism input is validated", () => {
+    const capabilities = resolveObjectMeshTopologyCapabilities({
+      mesh_capabilities: {
+        "mesh.topology.mixed_p1": { status: "validated" },
+        "mesh.swept.prism": { status: "validated" },
+        "mesh.transition.pyramid_tet": { status: "validated" },
+        "mesh.exact_layer_count": { status: "validated" },
+      },
+    });
+
+    expect(capabilities.layeredPrism).toMatchObject({
+      enabled: true,
+      status: "validated",
     });
   });
 
