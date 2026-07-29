@@ -89,6 +89,23 @@ def _reference(path: str, title: str, scope: str, children: tuple[str, ...] = ()
     return PageSpec(path, title, _label(path), "partial", "reference", scope, children)
 
 
+PYTHON_API_REFERENCE_PAGES = {
+    "python-api/problem/problem.md",
+    "python-api/problem/problem-ir.md",
+    "python-api/geometry/primitives.md",
+    "python-api/materials/material.md",
+    "python-api/materials/spatial-parameter-fields.md",
+    "python-api/magnets-and-textures/ferromagnet.md",
+    "python-api/magnets-and-textures/uniform-texture.md",
+    "python-api/discretization/discretization-hints.md",
+    "python-api/discretization/fdm.md",
+    "python-api/discretization/fem.md",
+    "python-api/dynamics/llg.md",
+    "python-api/studies/time-evolution.md",
+    "python-api/outputs/fields-and-scalars.md",
+}
+
+
 def _section(
     directory: str,
     title: str,
@@ -99,7 +116,7 @@ def _section(
     return (
         _scaffold(f"{directory}/index.md", title, scope, children),
         *(
-            _scaffold(
+            (_reference if f"{directory}/{page}.md" in PYTHON_API_REFERENCE_PAGES else _scaffold)(
                 f"{directory}/{page}.md",
                 _title(page),
                 f"the {title.lower()} reference for {_title(page)}",

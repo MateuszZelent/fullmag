@@ -221,129 +221,38 @@ the requested execution context.
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| `Material.name` | `str` | `required` | $1$ | `non-empty` | Material identity referenced by magnets. | `all lanes` | `materials[].name` |
 | `Material.Ms` | `float` | `required` | $\mathrm{A\,m^{-1}}$ | `finite and > 0` | Saturation magnetization; exchange field scales through $1/M_s$. | `all lanes; spatial realization differs` | `materials[].saturation_magnetisation` |
 | `Material.A` | `float` | `required` | $\mathrm{J\,m^{-1}}$ | `finite and > 0; unusual-SI warning outside [1e-14, 1e-8]` | Bulk exchange stiffness; no silent unit conversion. | `all lanes; heterogeneous realization differs` | `materials[].exchange_stiffness` |
-| `Material.alpha` | `float` | `required` | $1$ | `finite and >= 0` | Gilbert damping; affects LLG evolution, not the exchange field definition. | `all time-domain lanes` | `materials[].damping` |
 | `Material.Ms_field` | `list[float] \| None` | `None` | $\mathrm{A\,m^{-1}}$ | `mesh cardinality and lane legality validated downstream` | Optional spatial values overriding scalar `Ms`. | `FEM lanes and allocating FDM CPU reference; persistent FDM SoA/native CUDA do not realize it` | `materials[].ms_field` |
 | `Material.A_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-1}}$ | `mesh cardinality and lane legality validated downstream` | Optional spatial values overriding scalar `A`; not an FDM pair-coefficient LUT. | `FEM lanes and allocating FDM CPU reference; persistent FDM SoA/native CUDA do not realize it` | `materials[].a_field` |
 
-The remaining `Material` parameters are not hidden Exchange controls, but they are listed here so
-the constructor used by the example is documented completely.
+### Exchange observables
 
-| Python | Type | Default | SI unit | Validation and meaning | ProblemIR |
-|---|---|---|---|---|---|
-| `Material.Ku1` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Finite signed first-order uniaxial anisotropy; orthogonal to Exchange. | `materials[].uniaxial_anisotropy` |
-| `Material.Ku2` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Finite signed second-order uniaxial anisotropy. | `materials[].uniaxial_anisotropy_k2` |
-| `Material.anisU` | three floats or `None` | `None` | $1$ | Finite three-vector defining the uniaxial axis; normalization/legality is checked downstream. | `materials[].anisotropy_axis` |
-| `Material.Kc1` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | First cubic-anisotropy coefficient; suspicious-SI values warn. | `materials[].cubic_anisotropy_kc1` |
-| `Material.Kc2` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Second cubic-anisotropy coefficient; suspicious-SI values warn. | `materials[].cubic_anisotropy_kc2` |
-| `Material.Kc3` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Third cubic-anisotropy coefficient; suspicious-SI values warn. | `materials[].cubic_anisotropy_kc3` |
-| `Material.anisC1` | three floats or `None` | `None` | $1$ | Finite first cubic-anisotropy axis. | `materials[].cubic_anisotropy_axis1` |
-| `Material.anisC2` | three floats or `None` | `None` | $1$ | Finite second cubic-anisotropy axis. | `materials[].cubic_anisotropy_axis2` |
-| `Material.Dind` | `float \| None` | `None` | $\mathrm{J\,m^{-2}}$ | Finite interfacial-DMI material coefficient; does not enable DMI by itself. | `materials[].interfacial_dmi` |
-| `Material.Dbulk` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Finite bulk-DMI material coefficient; does not enable DMI by itself. | `materials[].bulk_dmi` |
-| `Material.alpha_field` | `list[float] \| None` | `None` | $1$ | Optional mesh-aligned damping values; cardinality and lane support are checked downstream. | `materials[].alpha_field` |
-| `Material.Ku_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Optional spatial `Ku1` values. | `materials[].ku_field` |
-| `Material.Ku2_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Optional spatial `Ku2` values. | `materials[].ku2_field` |
-| `Material.Kc1_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Optional spatial `Kc1` values. | `materials[].kc1_field` |
-| `Material.Kc2_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Optional spatial `Kc2` values. | `materials[].kc2_field` |
-| `Material.Kc3_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Optional spatial `Kc3` values. | `materials[].kc3_field` |
-| `Material.Dind_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-2}}$ | Optional spatial interfacial-DMI values. | `materials[].dind_field` |
-| `Material.Dbulk_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Optional spatial bulk-DMI values. | `materials[].dbulk_field` |
+| Observable | Kind | SI unit | Legality |
+|---|---|---|---|
+| `H_ex` | field | $\mathrm{A\,m^{-1}}$ | Requires `Exchange()` and an executable path that can materialize the field. |
+| `E_ex` | scalar | $\mathrm{J}$ | Requires `Exchange()` and an executable path that can materialize the scalar. |
 
-#### Geometry, magnet, study, and output parameters used above
+### FDM boundary controls relevant to Exchange
 
-| Object.parameter | Type | Default | SI unit | Meaning and validation |
+| Python | Type | Default | SI unit | Meaning and validation |
 |---|---|---|---|---|
-| `Box.size_or_x` | three floats, scalar, or `None` | `None` | $\mathrm{m}$ | Positional tuple or first scalar length; mutually exclusive with conflicting `size=`. |
-| `Box.y` | `float \| None` | `None` | $\mathrm{m}$ | Positional $L_y$ when scalar `size_or_x` is used. |
-| `Box.z` | `float \| None` | `None` | $\mathrm{m}$ | Positional $L_z$ when scalar `size_or_x` is used. |
-| `Box.size` | three positive floats | required in the keyword form | $\mathrm{m}$ | Full box lengths $(L_x,L_y,L_z)$. The positional alternatives are `Box((Lx,Ly,Lz))` or `Box(Lx,Ly,Lz)`; they must not conflict with `size=`. |
-| `Box.name` | `str` | `"box"` | $1$ | Non-empty geometry identity. |
-| `Ferromagnet.name` | `str` | required | $1$ | Non-empty object identity. |
-| `Ferromagnet.geometry` | `Geometry` | required | — | Geometry occupied by the magnetic body. |
-| `Ferromagnet.material` | `Material` | required | — | Material supplying $M_s$, $A$, and damping. |
-| `Ferromagnet.region` | `Region \mid None` | `None` | — | Optional named region; when absent, the geometry name becomes the magnet region. |
-| `Ferromagnet.m0` | `InitialMagnetization \mid None` | `None` | $1$ | Initial reduced magnetization. The example uses a normalized uniform vector. |
-| `Ferromagnet.mesh` | `PerObjectMeshRecipe \mid None` | `None` | — | Optional object-local mesh recipe. |
-| `Ferromagnet.object_regions` | tuple | `()` | — | Authored object-local regions lowered into `object_regions`; names and ownership are validated. |
-| `Ferromagnet.allocated_region_ids` | tuple of strings | `()` | $1$ | Reserved region identities used by builder/round-trip ownership. |
-| `Ferromagnet.material_parameter_fields` | tuple | `()` | — | Object-owned spatial material assignments lowered into `material_parameter_fields`. |
-| `texture.uniform.direction_or_x` | three floats or scalar | `(1, 0, 0)` | $1$ | Direction tuple or first Cartesian component of uniform reduced magnetization. |
-| `texture.uniform.y` | `float \| None` | `None` | $1$ | Second component for scalar-form authoring. |
-| `texture.uniform.z` | `float \| None` | `None` | $1$ | Third component for scalar-form authoring. |
-| `TimeEvolution.dynamics` | `LLG` | required | — | Time-domain equation and integrator settings. |
-| `TimeEvolution.outputs` | sequence | required | — | Sampling requests. An empty sequence is valid. |
-| `TimeEvolution.table_autosave` | `TableAutosave \mid None` | `None` | — | Optional tabular autosave policy. |
-| `LLG.gamma` | `float` | `221100.0` | $\mathrm{m\,A^{-1}\,s^{-1}}$ | Positive finite gyromagnetic ratio used by the H-field LLG convention. |
-| `LLG.integrator` | `str` | `"auto"` | $1$ | Canonical supported integrator identifier or `auto`; planner/runtime legality is validated explicitly. |
-| `LLG.fixed_timestep` | `float \mid None` | `None` | $\mathrm{s}$ | Positive fixed step when supplied; mutually constrained with adaptive stepping. |
-| `LLG.adaptive_timestep` | `AdaptiveTimestep \mid None` | `None` | — | Optional adaptive-step contract. |
-| `LLG.field_refresh` | `FieldRefreshPolicy \mid None` | `None` | — | Optional field-refresh policy; does not change the exchange equation. |
-| `SaveField.field` | `str` | required | $1$ | Canonical field ID. `H_ex` requires `Exchange()`. |
-| `SaveField.every` | positive `float` or `"auto"` | required | $\mathrm{s}$ | Finite positive sampling period in seconds, or `"auto"`; step-count sampling is not accepted here. |
-| `SaveScalar.scalar` | `str` | required | $1$ | Canonical scalar ID. `E_ex` requires `Exchange()`. |
-| `SaveScalar.every` | positive `float` or `"auto"` | required | $\mathrm{s}$ | Finite positive sampling period in seconds, or `"auto"`; step-count sampling is not accepted here. |
-
-#### Discretization parameters used above
-
-| Object.parameter | Type | Default | SI unit | Meaning and validation |
-|---|---|---|---|---|
-| `DiscretizationHints.fdm` | `FDM \mid None` | `None` | — | FDM-specific hint; it does not force FDM when backend selection remains `auto`. |
-| `DiscretizationHints.fem` | `FEM \mid None` | `None` | — | FEM-specific hint; it does not force FEM when backend selection remains `auto`. |
-| `DiscretizationHints.hybrid` | `Hybrid \mid None` | `None` | — | Optional hybrid hint, unused here. |
-| `FDM.cell` | three positive floats or `None` | `None` | $\mathrm{m}$ | Canonical uniform cell size. In the example it also becomes `default_cell`. |
-| `FDM.default_cell` | three positive floats or `None` | `None` | $\mathrm{m}$ | Default cell size when per-magnet grids are present. |
-| `FDM.per_magnet` | mapping or `None` | `None` | — | Optional explicit per-magnet FDM grids. |
-| `FDM.demag` | `FDMDemag \mid None` | `None` | — | Demagnetization hint; unrelated to Exchange. |
 | `FDM.boundary_correction` | `str \mid None` | `None` | $1$ | Optional `T0`/`T1`-family sub-cell policy. Support differs by precision and device as documented below. |
 | `FDM.boundary_phi_floor` | `float \mid None` | `None` | $1$ | Optional lower bound $\varphi_{\mathrm{floor}}$ with strict domain $0<\varphi_{\mathrm{floor}}<1$. |
 | `FDM.boundary_delta_min` | `float \mid None` | `None` | $\mathrm{m}$ | Optional T1 distance floor $\delta_{\min}\geq0$; zero is accepted. |
-| `FEM.order` | `int` | required | $1$ | Positive finite-element order. Current production Exchange uses continuous P1, so execution must resolve to order 1. |
-| `FEM.maximum_element_size` | positive `float` | required unless `hmax` is supplied | $\mathrm{m}$ | Canonical maximum element size. Construction fails if neither spelling is provided. |
-| `FEM.hmax` | positive `float \mid None` | `None` | $\mathrm{m}$ | Alternate input spelling for the same required size; if both are supplied, unequal values are rejected. |
-| `FEM.mesh` | `str \mid None` | `None` | — | Optional imported mesh reference. |
-| `FEM.demag_solver_policy` | policy or `None` | `None` | — | Demagnetization linear-solver policy; unrelated to Exchange. |
 
-`Problem(...)` is the enclosing canonical model. In this example its required parameters are
-`name`, `magnets`, `energy`, and `study`; `discretization` supplies backend hints. Optional
-mechanics, current, coupling, monitor, thermal, PBC, and legacy compatibility parameters retain
-their documented defaults and are orthogonal to Exchange. They are not interpreted as hidden
-exchange settings.
+### Supporting Python API
 
-For completeness, every `Problem` constructor parameter used by this public model type is listed
-below. “Orthogonal” means that the field is serialized independently and does not modify the
-Exchange equation.
-
-| Python | Type | Default | SI unit | Validation, meaning, and ProblemIR destination |
-|---|---|---|---|---|
-| `Problem.name` | `str` | `required` | $1$ | Non-empty problem identity; `problem_meta.name`. |
-| `Problem.magnets` | sequence of `Ferromagnet` | `required` | — | Non-empty magnetic objects; lowers geometry, regions, materials, and `magnets`. |
-| `Problem.energy` | sequence of energy terms | `required` | — | Authored interactions; `energy_terms`. Duplicate legality is checked by planners. |
-| `Problem.study` | study or `None` | `None` | — | Canonical study. One of `study` or legacy `dynamics` must be supplied; `study`. |
-| `Problem.dynamics` | `LLG \| None` | `None` | — | Legacy time-evolution input; conflicts with explicit `study`; normalized into `study.dynamics`. |
-| `Problem.outputs` | sequence or `None` | `None` | — | Legacy output list requiring legacy `dynamics`; normalized into `study.sampling.outputs`. |
-| `Problem.discretization` | hints or `None` | `None` | — | FDM/FEM/hybrid authoring hints; `backend_policy.discretization_hints`. |
-| `Problem.description` | `str \| None` | `None` | $1$ | Optional human description; `problem_meta.description`. |
-| `Problem.runtime` | `RuntimeSelection` | factory default | — | Requested backend/device/precision intent; `backend_policy` and runtime metadata. |
-| `Problem.runtime_metadata` | mapping | `{}` | — | User/runtime provenance metadata; `problem_meta.runtime_metadata`. |
-| `Problem.auxiliary_geometries` | sequence | `()` | — | Nonmagnetic/helper geometry entries; `geometry.entries`. |
-| `Problem.current_modules` | sequence | `()` | — | Current/Oersted modules; `current_modules`. |
-| `Problem.field_drives` | sequence | `()` | — | Regional/time-dependent field drives; `field_drives`. |
-| `Problem.couplings` | sequence | `()` | — | Explicit inter-object or multiphysics couplings; `couplings`. |
-| `Problem.monitors` | sequence | `()` | — | Planar monitor definitions; `planar_monitors`. |
-| `Problem.excitation_analysis` | analysis or `None` | `None` | — | Optional spin-wave excitation analysis; `excitation_analysis`. |
-| `Problem.geometry_asset_cache` | mapping | `{}` | — | Internal deterministic geometry-asset cache used during lowering; `geometry_assets`. |
-| `Problem.spin_torque` | legacy torque or `None` | `None` | — | Legacy single-torque compatibility input; normalized into torque modules. |
-| `Problem.spin_torques` | sequence | `()` | — | Canonical spin-torque modules; serialized into study/runtime contracts. |
-| `Problem.temperature` | `float \| None` | `None` | $\mathrm{K}$ | Optional non-negative thermal temperature; thermal metadata/term consistency is validated. |
-| `Problem.elastic_materials` | sequence | `()` | — | Elastic constitutive materials; `elastic_materials`. |
-| `Problem.elastic_bodies` | sequence | `()` | — | Elastic body assignments; `elastic_bodies`. |
-| `Problem.magnetostriction_laws` | sequence | `()` | — | Magnetostriction constitutive laws; `magnetostriction_laws`. |
-| `Problem.mechanical_bcs` | sequence | `()` | — | Mechanical boundary conditions; `mechanical_bcs`. |
-| `Problem.mechanical_loads` | sequence | `()` | — | Mechanical loads; `mechanical_loads`. |
-| `Problem.pbc` | `FdmPbc`, three booleans, or `None` | `None` | $1$ | Requested periodic axes; canonical PBC section and backend capability checks. |
+The constructors used by the executable example are documented in their canonical owner pages:
+{doc}`../python-api/materials/material`, {doc}`../python-api/geometry/primitives`,
+{doc}`../python-api/magnets-and-textures/ferromagnet`,
+{doc}`../python-api/magnets-and-textures/uniform-texture`,
+{doc}`../python-api/studies/time-evolution`, {doc}`../python-api/dynamics/llg`,
+{doc}`../python-api/outputs/fields-and-scalars`,
+{doc}`../python-api/discretization/discretization-hints`,
+{doc}`../python-api/discretization/fdm`, {doc}`../python-api/discretization/fem`, and
+{doc}`../python-api/problem/problem`. General lowering and canonical-model framing live in
+{doc}`../python-api/problem/problem-ir`.
 
 (problem-ir)=
 ### Canonical ProblemIR excerpt
