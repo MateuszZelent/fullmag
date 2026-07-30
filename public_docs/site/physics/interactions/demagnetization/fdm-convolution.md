@@ -1,5 +1,5 @@
 ---
-title: FDM tensor convolution and FFT demagnetization
+title: FDM Convolution
 status: partial
 doc_kind: reference
 audience: user

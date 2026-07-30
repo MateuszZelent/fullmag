@@ -1,5 +1,5 @@
 {
-  "document": {"path": "public_docs/site/physics/interactions/demagnetization/fem-bem.md", "title": "FEM/BEM Fredkin–Koehler demagnetization", "interaction": "demagnetization"},
+  "document": {"path": "public_docs/site/physics/interactions/demagnetization/fem-bem.md", "title": "FEM Bem", "interaction": "demagnetization"},
   "backend_matrix": [
     {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "FEM/BEM is a body-only FEM realization, not an FDM operator."},
     {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "FEM/BEM is a body-only FEM realization, not an FDM CUDA operator."},

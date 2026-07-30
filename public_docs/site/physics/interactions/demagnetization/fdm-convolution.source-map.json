@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/physics/interactions/demagnetization/fdm-convolution.md",
-    "title": "FDM tensor convolution and FFT demagnetization",
+    "title": "FDM Convolution",
     "interaction": "demagnetization"
   },
   "backend_matrix": [

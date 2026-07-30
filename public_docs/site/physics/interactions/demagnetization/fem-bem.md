@@ -1,5 +1,5 @@
 ---
-title: FEM/BEM Fredkin–Koehler demagnetization
+title: FEM Bem
 status: partial
 doc_kind: reference
 audience: user
