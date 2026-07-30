@@ -18,7 +18,6 @@ from typing import Any, Iterable
 
 import numpy as np
 
-from fullmag.meshing._gmsh_types import MixedLayerTopologyCertificate
 from tests.standard_problems.mumag.sp4.common.metrics import (
     find_first_zero_crossing,
     reference_envelope_metrics,
@@ -27,6 +26,10 @@ from tests.standard_problems.mumag.sp4.common.references import (
     Trajectory,
     parse_albuquerque_trace,
     parse_oommf_odt,
+)
+from tests.standard_problems.mumag.sp4.fem.topology_evidence import (
+    TopologyEvidenceError,
+    mixed_topology_certificate_values,
 )
 
 
@@ -362,211 +365,6 @@ def _validated_timestep_values(
         )
     return values
 
-
-def _mixed_topology_certificate_values(
-    mesh: dict[str, Any],
-    *,
-    required: bool,
-    runtime_metadata: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    empty = {
-        "mesh_certificate_status": None,
-        "mesh_node_plane_count": None,
-        "mesh_magnetic_prism6_count": None,
-        "mesh_magnetic_tet4_count": None,
-        "mesh_magnetic_pyramid5_count": None,
-    }
-    report = mesh.get("mesh_build_report")
-    certificate = (
-        report.get("mixed_layer_topology_certificate")
-        if isinstance(report, dict)
-        else None
-    )
-    if not isinstance(certificate, dict):
-        if required:
-            raise CollectionError("mixed layer topology certificate metadata missing")
-        return empty
-
-    planes = certificate.get("magnetic_plane_coordinates_m")
-    counts_by_marker = certificate.get("cell_family_counts_by_marker")
-    magnetic_counts = counts_by_marker.get("1") if isinstance(counts_by_marker, dict) else None
-    if not isinstance(planes, list) or not isinstance(magnetic_counts, dict):
-        if required:
-            raise CollectionError("mixed layer topology certificate evidence is malformed")
-        return empty
-
-    values = {
-        "mesh_certificate_status": certificate.get("certificate_status"),
-        "mesh_node_plane_count": len(planes),
-        "mesh_magnetic_prism6_count": magnetic_counts.get("prism6", 0),
-        "mesh_magnetic_tet4_count": magnetic_counts.get("tet4", 0),
-        "mesh_magnetic_pyramid5_count": magnetic_counts.get("pyramid5", 0),
-    }
-    if not required:
-        return values
-
-    if report.get("build_mode") != "single_geometry_geo_mixed":
-        raise CollectionError("topology smoke requires single_geometry_geo_mixed build evidence")
-    if report.get("fallbacks_triggered") != []:
-        raise CollectionError("mesh build report fallbacks must be empty")
-    if report.get("degraded") is not False:
-        raise CollectionError("mesh build report must prove degraded=false")
-    if report.get("orphan_entities") != []:
-        raise CollectionError("mesh build report must prove no orphan entities")
-    try:
-        parsed = MixedLayerTopologyCertificate.from_dict(certificate)
-    except (TypeError, ValueError) as exc:
-        raise CollectionError(f"invalid mixed layer topology certificate: {exc}") from exc
-
-    if parsed.topology_fingerprint != mesh.get("topology_fingerprint"):
-        raise CollectionError("mixed layer topology certificate fingerprint differs from mesh")
-    if parsed.requested_layer_count != 1 or parsed.realized_layer_count != 1:
-        raise CollectionError("topology smoke requires exactly one layer and two magnetic node planes")
-    if len(parsed.magnetic_plane_coordinates_m) != 2:
-        raise CollectionError("topology smoke requires exactly one layer and two magnetic node planes")
-    parsed_magnetic_counts = parsed.cell_family_counts_by_marker.get("1", {})
-    if set(parsed_magnetic_counts) != {"prism6"} or parsed_magnetic_counts.get("prism6", 0) <= 0:
-        raise CollectionError("topology smoke requires prism6-only magnetic cells")
-    counts_by_marker = parsed.cell_family_counts_by_marker
-    counts_by_part = parsed.cell_family_counts_by_part
-    if set(counts_by_marker) != {"0", "1"}:
-        raise CollectionError("topology smoke requires exactly markers 0 and 1")
-    if set(counts_by_part) != {"magnetic", "transition_air", "far_air"}:
-        raise CollectionError(
-            "topology smoke requires magnetic, transition_air, and far_air mesh parts"
-        )
-    if counts_by_part["magnetic"] != parsed_magnetic_counts:
-        raise CollectionError("mixed topology marker and mesh-part counts differ")
-    far_air_counts = counts_by_part["far_air"]
-    if set(far_air_counts) != {"tet4"} or far_air_counts.get("tet4", 0) <= 0:
-        raise CollectionError("mixed topology far_air must contain tet4 only")
-    transition_air_counts = counts_by_part["transition_air"]
-    if set(transition_air_counts) != {"pyramid5", "tet4"} or any(
-        transition_air_counts.get(family, 0) <= 0 for family in ("pyramid5", "tet4")
-    ):
-        raise CollectionError(
-            "mixed topology transition_air must contain pyramid5 and tet4 only"
-        )
-    expected_air_counts = {
-        "pyramid5": transition_air_counts["pyramid5"],
-        "tet4": transition_air_counts["tet4"] + far_air_counts["tet4"],
-    }
-    if counts_by_marker["0"] != expected_air_counts:
-        raise CollectionError("mixed topology marker and mesh-part counts differ")
-    required_families = {"prism6", "pyramid5", "tet4"}
-    if set(parsed.scaled_jacobian_p05_by_family) != required_families:
-        raise CollectionError(
-            "mixed topology p05 must cover prism6, pyramid5, and tet4"
-        )
-    element_count = mesh.get("element_count")
-    certificate_element_count = sum(
-        count for families in counts_by_marker.values() for count in families.values()
-    )
-    if (
-        isinstance(element_count, bool)
-        or not isinstance(element_count, int)
-        or element_count != certificate_element_count
-    ):
-        raise CollectionError("mesh element_count differs from certificate")
-    if not isinstance(runtime_metadata, dict):
-        raise CollectionError("topology smoke runtime metadata is malformed")
-    domain_frame = runtime_metadata.get("domain_frame")
-    if not isinstance(domain_frame, dict):
-        raise CollectionError("topology smoke domain frame metadata is missing")
-    magnetic_min = domain_frame.get("object_bounds_min")
-    magnetic_max = domain_frame.get("object_bounds_max")
-    universe = domain_frame.get("declared_universe")
-    if (
-        not isinstance(magnetic_min, (list, tuple))
-        or not isinstance(magnetic_max, (list, tuple))
-        or len(magnetic_min) != 3
-        or len(magnetic_max) != 3
-        or not isinstance(universe, dict)
-    ):
-        raise CollectionError("topology smoke authored bounds metadata is missing")
-    universe_size = universe.get("size")
-    universe_center = universe.get("center")
-    if (
-        not isinstance(universe_size, (list, tuple))
-        or not isinstance(universe_center, (list, tuple))
-        or len(universe_size) != 3
-        or len(universe_center) != 3
-    ):
-        raise CollectionError("topology smoke authored airbox metadata is missing")
-    try:
-        magnetic_min_values = tuple(float(value) for value in magnetic_min)
-        magnetic_max_values = tuple(float(value) for value in magnetic_max)
-        universe_size_values = tuple(float(value) for value in universe_size)
-        universe_center_values = tuple(float(value) for value in universe_center)
-    except (TypeError, ValueError) as exc:
-        raise CollectionError("topology smoke authored bounds metadata is malformed") from exc
-    airbox_min = tuple(
-        center - 0.5 * size
-        for center, size in zip(universe_center_values, universe_size_values, strict=True)
-    )
-    airbox_max = tuple(
-        center + 0.5 * size
-        for center, size in zip(universe_center_values, universe_size_values, strict=True)
-    )
-
-    def bounds_match(actual: tuple[float, ...], expected: tuple[float, ...]) -> bool:
-        return all(
-            math.isclose(left, right, rel_tol=1.0e-8, abs_tol=1.0e-18)
-            for left, right in zip(actual, expected, strict=True)
-        )
-
-    if not bounds_match(parsed.magnetic_bounds_min_m, magnetic_min_values) or not bounds_match(
-        parsed.magnetic_bounds_max_m, magnetic_max_values
-    ):
-        raise CollectionError("mixed topology magnetic bounds differ from runtime metadata")
-    if not bounds_match(parsed.airbox_bounds_min_m, airbox_min) or not bounds_match(
-        parsed.airbox_bounds_max_m, airbox_max
-    ):
-        raise CollectionError("mixed topology airbox bounds differ from runtime metadata")
-    magnetic_volume = math.prod(
-        maximum - minimum
-        for minimum, maximum in zip(magnetic_min_values, magnetic_max_values, strict=True)
-    )
-    shared_domain_volume = math.prod(universe_size_values)
-    air_volume = shared_domain_volume - magnetic_volume
-    if not all(
-        math.isclose(value, magnetic_volume, rel_tol=1.0e-8, abs_tol=0.0)
-        for value in (parsed.magnetic_volume_m3, parsed.expected_magnetic_volume_m3)
-    ):
-        raise CollectionError("mixed topology magnetic volume differs from runtime metadata")
-    if not all(
-        math.isclose(value, shared_domain_volume, rel_tol=1.0e-8, abs_tol=0.0)
-        for value in (
-            parsed.shared_domain_volume_m3,
-            parsed.expected_shared_domain_volume_m3,
-        )
-    ) or not math.isclose(parsed.air_volume_m3, air_volume, rel_tol=1.0e-8, abs_tol=0.0):
-        raise CollectionError("mixed topology shared-domain volume differs from runtime metadata")
-    provenance = report.get("mixed_topology_provenance")
-    if not isinstance(provenance, dict):
-        raise CollectionError("mixed topology provenance missing from mesh build report")
-    expected_provenance = {
-        "requested_topology": "mixed_p1",
-        "resolved_topology": "mixed_p1",
-        "accepted_certificate_fingerprint": parsed.topology_fingerprint,
-        "requested_device": "cpu",
-        "precision": "double",
-        "capability_status": "implemented",
-    }
-    for name, expected in expected_provenance.items():
-        if provenance.get(name) != expected:
-            raise CollectionError(
-                f"mixed topology provenance {name} must be {expected!r}"
-            )
-    return {
-        "mesh_certificate_status": parsed.certificate_status,
-        "mesh_node_plane_count": len(parsed.magnetic_plane_coordinates_m),
-        "mesh_magnetic_prism6_count": parsed_magnetic_counts.get("prism6", 0),
-        "mesh_magnetic_tet4_count": parsed_magnetic_counts.get("tet4", 0),
-        "mesh_magnetic_pyramid5_count": parsed_magnetic_counts.get("pyramid5", 0),
-    }
-
-
 def _relaxation_qualification(metadata: dict[str, Any]) -> dict[str, Any]:
     for key in (
         "fem_cpu_relaxation_qualification",
@@ -736,11 +534,17 @@ def collect_attempt(
         airbox = (None, None, None)
     if not isinstance(magnetic_mesh, dict):
         magnetic_mesh = {}
-    topology_certificate = _mixed_topology_certificate_values(
-        mesh,
-        required=scenario_info.phase == "topology",
-        runtime_metadata=runtime if isinstance(runtime, dict) else None,
-    )
+    topology_required = scenario_info.phase == "topology"
+    try:
+        topology_certificate = mixed_topology_certificate_values(
+            mesh,
+            required=topology_required,
+            expected_layers=1 if topology_required else None,
+            expected_device=requested.get("device") if topology_required else None,
+            runtime_metadata=runtime if isinstance(runtime, dict) else None,
+        )
+    except TopologyEvidenceError as exc:
+        raise CollectionError(str(exc)) from exc
     final = rows[-1] if rows else {}
     direct_minimizer = scenario_info.relaxation_algorithm in {
         "projected_gradient_bb",

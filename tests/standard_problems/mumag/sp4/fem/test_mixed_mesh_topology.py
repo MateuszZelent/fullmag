@@ -344,6 +344,36 @@ def test_topology_collector_records_the_accepted_two_plane_prism_certificate(
     assert row["mesh_magnetic_pyramid5_count"] == "0"
 
 
+def test_topology_smoke_collector_keeps_the_task_8_1_single_layer_scope(
+    tmp_path: Path,
+) -> None:
+    metadata = copy.deepcopy(_topology_metadata())
+    certificate = metadata["mesh"]["mesh_build_report"][
+        "mixed_layer_topology_certificate"
+    ]
+    certificate.update(
+        {
+            "requested_layer_count": 2,
+            "realized_layer_count": 2,
+            "magnetic_plane_coordinates_m": [-1.5e-9, 0.0, 1.5e-9],
+        }
+    )
+    metadata["problem_meta"]["runtime_metadata"]["mesh_workflow"][
+        "per_geometry"
+    ][0]["through_thickness_elements"] = 2
+
+    with pytest.raises(
+        CollectionError,
+        match="requires requested and realized layers=1",
+    ):
+        collect_attempt(
+            _write_topology_artifacts(tmp_path, metadata),
+            tmp_path / "results.csv",
+            scenario="mesh_single_prism_layer",
+            attempt_id="topology-two-layers",
+        )
+
+
 def test_topology_collector_migrates_a_legacy_ledger_header(tmp_path: Path) -> None:
     new_fields = {
         "mesh_certificate_status",
@@ -411,7 +441,7 @@ def test_topology_collector_migrates_a_legacy_ledger_header(tmp_path: Path) -> N
                     "magnetic_plane_coordinates_m": [-1.0, 0.0, 1.0],
                 }
             ),
-            "exactly one layer",
+            "requires requested and realized layers=1",
         ),
         (
             lambda metadata: metadata["mesh"]["mesh_build_report"][
