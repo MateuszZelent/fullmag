@@ -10801,6 +10801,26 @@
         ],
         "type": "object"
       },
+      "MeshOrphanEntityResource": {
+        "properties": {
+          "dimension": {
+            "format": "int32",
+            "maximum": 3,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tag": {
+            "format": "int32",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dimension",
+          "tag"
+        ],
+        "type": "object"
+      },
       "MeshPartResource": {
         "properties": {
           "boundary_face_count": {
@@ -11835,7 +11855,7 @@
           },
           "orphan_entities": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/MeshOrphanEntityResource"
             },
             "type": "array"
           },
@@ -30554,6 +30574,16 @@
           },
           "404": {
             "description": "No active workspace, mesh, or mesh part"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Mixed or otherwise non-tet4 topology is not supported for histogram selection"
           }
         },
         "tags": [

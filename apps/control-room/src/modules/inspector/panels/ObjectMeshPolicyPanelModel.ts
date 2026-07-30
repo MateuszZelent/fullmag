@@ -87,6 +87,7 @@ export interface ObjectMeshTopologyCapabilityOption {
   enabled: boolean;
   reason: string;
   status: string;
+  supportedLayerCounts: readonly number[];
 }
 
 export interface ObjectMeshTopologyCapabilities {
@@ -155,26 +156,58 @@ export function resolveObjectMeshTopologyCapabilities(
           enabled: false,
           reason: capabilityReason(value, id, status),
           status,
+          supportedLayerCounts: [],
         },
         sweptHex: {
           enabled: false,
           reason: "Swept hex has not passed the mixed-P1 capability gate.",
           status: "unsupported",
+          supportedLayerCounts: [],
         },
       };
     }
     allValidated &&= status === "validated";
+  }
+  const exactLayerCount = capabilityRecord(
+    capabilityValue(capabilities, "mesh.exact_layer_count"),
+  );
+  const supportedLayerCounts = Array.isArray(exactLayerCount?.supported_layer_counts)
+    ? exactLayerCount.supported_layer_counts.filter(
+        (value): value is number => Number.isInteger(value) && value > 0,
+      )
+    : [];
+  if (
+    supportedLayerCounts.length !== 3 ||
+    supportedLayerCounts.some((value, index) => value !== index + 1)
+  ) {
+    return {
+      layeredPrism: {
+        enabled: false,
+        reason:
+          "Capability mesh.exact_layer_count must advertise supported_layer_counts=[1,2,3].",
+        status: "invalid_scope",
+        supportedLayerCounts,
+      },
+      sweptHex: {
+        enabled: false,
+        reason: "Swept hex has not passed the mixed-P1 capability gate.",
+        status: "unsupported",
+        supportedLayerCounts: [],
+      },
+    };
   }
   return {
     layeredPrism: {
       enabled: true,
       reason: "All exact layered prism capabilities are executable.",
       status: allValidated ? "validated" : "production_executable",
+      supportedLayerCounts,
     },
     sweptHex: {
       enabled: false,
       reason: "Swept hex has not passed the mixed-P1 capability gate.",
       status: "unsupported",
+      supportedLayerCounts: [],
     },
   };
 }
@@ -595,6 +628,15 @@ export function buildObjectMeshPolicyReplaceRequest({
   );
   applyOptionalBoolean(value, "exact_layer_count", exactLayerCount);
   if (meshStrategy === "swept_prism") {
+    const layerCount = value.through_thickness_elements;
+    if (
+      typeof layerCount === "number" &&
+      ![1, 2, 3].includes(layerCount)
+    ) {
+      return {
+        error: "Exact layered prism supports 1, 2, or 3 through-thickness elements.",
+      };
+    }
     value.topology = "prismatic";
     value.element_family = "prism";
     value.order = 1;

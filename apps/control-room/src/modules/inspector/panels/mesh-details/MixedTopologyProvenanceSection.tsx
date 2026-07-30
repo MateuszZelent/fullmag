@@ -8,6 +8,11 @@ interface MixedTopologyPresentationInput {
   rejectionEvidence?: unknown;
 }
 
+interface MixedTopologyOrphanEntity {
+  dimension: number;
+  tag: number;
+}
+
 export interface MixedTopologyPresentation {
   certificateFingerprint: string;
   certificateReason: string;
@@ -18,6 +23,7 @@ export interface MixedTopologyPresentation {
   gmshVersion: string;
   layers: number | null;
   nodePlanes: number | null;
+  orphanEntities: readonly MixedTopologyOrphanEntity[];
   requestedExactLayers: boolean | null;
   requestedLayers: number | null;
   requestedTopology: string;
@@ -35,6 +41,7 @@ export interface MixedTopologyPresentation {
   resolvedTopology: string;
   topologySchemaVersion: string;
   transitionPolicy: string;
+  topologyIntegrity: "accepted" | "rejected";
   visible: boolean;
 }
 
@@ -100,6 +107,33 @@ function flattenedCounts(
     }
   }
   return rows;
+}
+
+function typedOrphanEntities(value: unknown): {
+  entities: MixedTopologyOrphanEntity[];
+  malformed: boolean;
+} {
+  if (value === undefined) return { entities: [], malformed: false };
+  if (!Array.isArray(value)) return { entities: [], malformed: true };
+  const entities: MixedTopologyOrphanEntity[] = [];
+  for (const candidate of value) {
+    const record = asRecord(candidate);
+    const dimension = record?.dimension;
+    const tag = record?.tag;
+    if (
+      typeof dimension !== "number" ||
+      !Number.isInteger(dimension) ||
+      dimension < 0 ||
+      dimension > 3 ||
+      typeof tag !== "number" ||
+      !Number.isInteger(tag) ||
+      tag <= 0
+    ) {
+      return { entities, malformed: true };
+    }
+    entities.push({ dimension, tag });
+  }
+  return { entities, malformed: false };
 }
 
 export function resolveMixedTopologyPresentation({
@@ -198,6 +232,13 @@ export function resolveMixedTopologyPresentation({
     provenance?.resolved_topology,
     resolvedPolicy?.topology,
   );
+  const orphanEvidence = typedOrphanEntities(
+    report?.orphan_entities ?? manifestRecord?.orphan_entities,
+  );
+  const topologyIntegrity =
+    orphanEvidence.malformed || orphanEvidence.entities.length > 0
+      ? "rejected"
+      : "accepted";
 
   return {
     certificateFingerprint: firstString(
@@ -225,6 +266,7 @@ export function resolveMixedTopologyPresentation({
     gmshVersion: firstString(report?.gmsh_version, manifestRecord?.gmsh_version),
     layers: requestedLayers,
     nodePlanes,
+    orphanEntities: orphanEvidence.entities,
     requestedExactLayers: firstBoolean(requestedPolicy?.exact_layer_count),
     requestedLayers,
     requestedTopology,
@@ -257,13 +299,16 @@ export function resolveMixedTopologyPresentation({
       requestedPolicy?.transition_policy,
       resolvedPolicy?.transition_policy,
     ),
+    topologyIntegrity,
     visible: Boolean(
       provenance ||
         certificate ||
         counts ||
         facetCounts ||
         requestedPolicy ||
-        resolvedPolicy,
+        resolvedPolicy ||
+        orphanEvidence.malformed ||
+        orphanEvidence.entities.length > 0,
     ),
   };
 }
@@ -275,10 +320,11 @@ export function MixedTopologyProvenanceSection({
 }) {
   if (!model.visible) return null;
   const rejected = model.certificateStatus === "rejected";
+  const orphanRejected = model.topologyIntegrity === "rejected";
   return (
     <InspectorGroup
       title="Mixed Topology Provenance"
-      badge={model.certificateStatus}
+      badge={orphanRejected ? "invalid topology" : model.certificateStatus}
       collapsible
       defaultOpen
     >
@@ -286,6 +332,12 @@ export function MixedTopologyProvenanceSection({
         <FeedbackBanner
           kind="error"
           message={`Exact-layer certificate rejected: ${model.certificateReason}.`}
+        />
+      ) : null}
+      {orphanRejected ? (
+        <FeedbackBanner
+          kind="error"
+          message="Orphan topology entities invalidate this mixed mesh; execution and quality conclusions must fail closed."
         />
       ) : null}
       {model.rejection ? (
@@ -330,6 +382,14 @@ export function MixedTopologyProvenanceSection({
           { label: "Fallback", value: model.fallback },
           { label: "Topology schema", value: model.topologySchemaVersion },
           { label: "Gmsh version", value: model.gmshVersion },
+          {
+            label: "Orphan entities",
+            value: model.orphanEntities.length > 0
+              ? model.orphanEntities
+                  .map(({ dimension, tag }) => `dimension ${dimension}, tag ${tag}`)
+                  .join("; ")
+              : "none",
+          },
           ...model.elementCounts.map(({ family, count }) => ({
             label: `Family ${family}`,
             value: formatCount(count),

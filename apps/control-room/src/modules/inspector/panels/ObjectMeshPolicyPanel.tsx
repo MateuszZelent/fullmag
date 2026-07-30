@@ -408,7 +408,20 @@ export function ObjectMeshSweepStrategySection({
           message="One exact prism layer requires layer-convergence evidence (for example 1/2/3 layers) before scientific qualification."
         />
       ) : null}
-      <FormField disabled={layeredControlsDisabled} help={OBJECT_MESH_HELP.sweep} label="Element layers" type="number" value={draft.throughThicknessElements} onChange={(event) => updateDraft({ throughThicknessElements: event.target.value })} />
+      <FormField
+        disabled={layeredControlsDisabled}
+        help={OBJECT_MESH_HELP.sweep}
+        hint={capabilities.layeredPrism.enabled
+          ? `Qualified values: ${capabilities.layeredPrism.supportedLayerCounts.join(", ")}`
+          : capabilities.layeredPrism.reason}
+        label="Element layers"
+        max={capabilities.layeredPrism.supportedLayerCounts.at(-1)}
+        min={capabilities.layeredPrism.supportedLayerCounts[0]}
+        step={1}
+        type="number"
+        value={draft.throughThicknessElements}
+        onChange={(event) => updateDraft({ throughThicknessElements: event.target.value })}
+      />
       <FormField disabled help={OBJECT_MESH_HELP.sweep} label="Thickness distribution" type="select" value={draft.throughThicknessDistribution} onChange={(event) => updateDraft({ throughThicknessDistribution: event.target.value })}>
         <option value="">Inherited</option>
         <option value="fixed">Fixed</option>

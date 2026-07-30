@@ -38,6 +38,8 @@ pub struct FeatureCapability {
     pub status: FeatureCapabilityStatus,
     pub reason: String,
     pub scope: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_layer_counts: Vec<u32>,
 }
 
 pub const MIXED_P1_MESH_FEATURE_CAPABILITY_IDS: [&str; 4] = [
@@ -172,6 +174,7 @@ fn feature_capability(
         status,
         reason: reason.to_string(),
         scope: scope.to_string(),
+        supported_layer_counts: Vec::new(),
     }
 }
 
@@ -227,6 +230,12 @@ fn mixed_p1_feature_capabilities(
             ),
         ),
     ]);
+    for id in MIXED_P1_MESH_FEATURE_CAPABILITY_IDS {
+        features
+            .get_mut(id)
+            .expect("mixed-P1 mesh capability must exist")
+            .supported_layer_counts = vec![1, 2, 3];
+    }
 
     for (id, owner) in [
         ("fem.cpu.exchange_demag.mixed_p1", FemEngine::CpuNative),
@@ -567,6 +576,10 @@ mod tests {
             capabilities.feature_capabilities["mesh.exact_layer_count"].scope,
             "requested_layers=realized_layers={1,2,3}; magnetic_node_planes=requested_layers+1; accepted topology-bound certificate required",
         );
+        assert_eq!(
+            capabilities.feature_capabilities["mesh.exact_layer_count"].supported_layer_counts,
+            vec![1, 2, 3],
+        );
         let cpu_operator = &capabilities.feature_capabilities["fem.cpu.exchange_demag.mixed_p1"];
         assert_eq!(cpu_operator.status, FeatureCapabilityStatus::Implemented);
         assert!(cpu_operator
@@ -601,6 +614,10 @@ mod tests {
         assert_eq!(
             capabilities.feature_capabilities["mesh.exact_layer_count"].scope,
             "requested_layers=realized_layers={1,2,3}; magnetic_node_planes=requested_layers+1; accepted topology-bound certificate required",
+        );
+        assert_eq!(
+            capabilities.feature_capabilities["mesh.exact_layer_count"].supported_layer_counts,
+            vec![1, 2, 3],
         );
         let gpu_operator = &capabilities.feature_capabilities["fem.gpu.exchange_demag.mixed_p1"];
         assert_eq!(gpu_operator.status, FeatureCapabilityStatus::Implemented);

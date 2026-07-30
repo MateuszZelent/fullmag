@@ -5847,6 +5847,12 @@ export interface components {
             scope: string;
             status: string;
         };
+        MeshOrphanEntityResource: {
+            /** Format: int32 */
+            dimension: number;
+            /** Format: int32 */
+            tag: number;
+        };
         MeshPartResource: {
             /** Format: int32 */
             boundary_face_count: number;
@@ -6093,7 +6099,7 @@ export interface components {
             mixed_topology_provenance?: null | components["schemas"]["MeshMixedTopologyProvenanceResource"];
             object_region_markers?: Record<string, never>[];
             operation_statuses?: components["schemas"]["MeshOperationStatusResource"][];
-            orphan_entities?: Record<string, never>[];
+            orphan_entities?: components["schemas"]["MeshOrphanEntityResource"][];
             /** Format: int32 */
             realized_regions_count?: number | null;
             region_markers?: components["schemas"]["MeshDomainRegionMarkerResource"][];
@@ -13487,6 +13493,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Mixed or otherwise non-tet4 topology is not supported for histogram selection */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
             };
         };
     };

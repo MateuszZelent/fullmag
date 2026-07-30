@@ -27,11 +27,13 @@ const capabilities: ObjectMeshTopologyCapabilities = {
     enabled: true,
     reason: "Validated for authoring.",
     status: "validated",
+    supportedLayerCounts: [1, 2, 3],
   },
   sweptHex: {
     enabled: false,
     reason: "Unsupported.",
     status: "unsupported",
+    supportedLayerCounts: [],
   },
 };
 

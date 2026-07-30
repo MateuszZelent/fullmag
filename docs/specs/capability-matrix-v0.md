@@ -59,6 +59,10 @@ double precision, P1, one Box, an exact layer count in `{1,2,3}`, one shared-dom
 uniform `Ms`/`Aex`, exchange, optional uniform Zeeman, Poisson Robin/Dirichlet,
 and PG-BB, NCG, or overdamped LLG. `auto`, single, extended, and hidden
 fallback remain illegal.
+Every mixed-P1 mesh feature capability publishes
+`supported_layer_counts=[1,2,3]`. Control Room authoring fails closed when an
+executable capability omits or changes that machine-readable scope, and the
+canonical object-mesh export rejects exact prism layer counts outside it.
 Strict execution requires both the certificate and enclosing build report to
 record `fallbacks_triggered=[]`, plus build-report `degraded=false`; no prism-to-tet, GPU-to-CPU,
 or mixed-to-free-tetrahedral fallback is legal.
@@ -75,6 +79,10 @@ fingerprint, device/engine, fallback, telemetry, and artifact evidence.
 
 The Control Room may display typed mixed-certificate quality gates and
 structured mixed-P1 rejection evidence without changing any capability row.
+Typed orphan-entity diagnostics invalidate the Inspector topology-integrity
+gate when non-empty. Tet4-only histogram selection returns the typed
+`mixed_topology_not_supported` conflict for mixed topology instead of silently
+omitting prism or pyramid cells.
 Per-family quality evidence proves only the identity and acceptance checks of
 the current certified mesh. Missing-capability IDs, requested/resolved
 execution, `fallback=none`, and the `free_tetrahedral` alternative are

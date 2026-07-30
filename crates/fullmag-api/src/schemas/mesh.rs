@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
 
@@ -396,9 +396,8 @@ pub struct MeshSharedDomainBuildReportResource {
     #[schema(value_type = [Object])]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selector_resolution: Vec<Value>,
-    #[schema(value_type = [Object])]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub orphan_entities: Vec<Value>,
+    pub orphan_entities: Vec<MeshOrphanEntityResource>,
     #[schema(value_type = [Object])]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rejected_element_types: Vec<Value>,
@@ -424,6 +423,36 @@ pub struct MeshSharedDomainBuildReportResource {
     pub mixed_topology_provenance: Option<MeshMixedTopologyProvenanceResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gmsh_version: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub struct MeshOrphanEntityResource {
+    #[schema(minimum = 0, maximum = 3)]
+    #[serde(deserialize_with = "deserialize_orphan_entity_dimension")]
+    pub dimension: u8,
+    #[schema(minimum = 1)]
+    #[serde(deserialize_with = "deserialize_positive_orphan_entity_tag")]
+    pub tag: u32,
+}
+
+fn deserialize_orphan_entity_dimension<'de, D>(deserializer: D) -> Result<u8, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let dimension = u8::deserialize(deserializer)?;
+    (dimension <= 3)
+        .then_some(dimension)
+        .ok_or_else(|| D::Error::custom("orphan entity dimension must be in 0..=3"))
+}
+
+fn deserialize_positive_orphan_entity_tag<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let tag = u32::deserialize(deserializer)?;
+    (tag > 0)
+        .then_some(tag)
+        .ok_or_else(|| D::Error::custom("orphan entity tag must be positive"))
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]

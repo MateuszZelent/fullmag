@@ -6109,6 +6109,34 @@ async fn mixed_shared_domain_resources_publish_typed_topology_truth() {
     assert!(manifest.get("connectivity").is_none());
 }
 
+#[test]
+fn mixed_orphan_entity_schema_rejects_malformed_diagnostics() {
+    let valid: crate::schemas::mesh::MeshOrphanEntityResource =
+        serde_json::from_value(serde_json::json!({ "dimension": 2, "tag": 41 }))
+            .expect("typed orphan entity should deserialize");
+    assert_eq!(valid.dimension, 2);
+    assert_eq!(valid.tag, 41);
+
+    assert!(
+        serde_json::from_value::<crate::schemas::mesh::MeshOrphanEntityResource>(
+            serde_json::json!({ "dimension": "surface", "tag": 41 })
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<crate::schemas::mesh::MeshOrphanEntityResource>(
+            serde_json::json!({ "dimension": 4, "tag": 41 })
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<crate::schemas::mesh::MeshOrphanEntityResource>(
+            serde_json::json!({ "dimension": 2, "tag": 0 })
+        )
+        .is_err()
+    );
+}
+
 #[tokio::test]
 async fn mesh_active_build_publishes_mixed_layer_rejection_evidence() {
     let state = test_app_state_with_live_session().await;
@@ -8165,6 +8193,7 @@ fn openapi_registers_typed_mixed_topology_truth_fields() {
         "MeshMixedP1ExecutionResource",
         "MeshMixedLayerTopologyRejectionResource",
         "MeshMixedTopologyProvenanceResource",
+        "MeshOrphanEntityResource",
         "MeshSharedDomainBuildReportResource",
     ] {
         assert!(schemas.contains_key(schema), "missing schema {schema}");
@@ -8192,6 +8221,18 @@ fn openapi_registers_typed_mixed_topology_truth_fields() {
         .as_object()
         .expect("active build properties");
     assert!(active_build.contains_key("mixed_layer_topology_rejection"));
+    let orphan = schemas["MeshOrphanEntityResource"]["properties"]
+        .as_object()
+        .expect("orphan entity properties");
+    assert_eq!(orphan["dimension"]["minimum"], 0);
+    assert_eq!(orphan["dimension"]["maximum"], 3);
+    assert_eq!(orphan["tag"]["minimum"], 1);
+    let histogram_path = "/v2/sessions/current/meshing/meshes/{mesh_id}/parts/{part_id}/histogram-bins/{metric}/{bin_index}/elements";
+    assert_eq!(
+        openapi["paths"][histogram_path]["get"]["responses"]["409"]["content"]
+            ["application/json"]["schema"]["$ref"],
+        "#/components/schemas/ApiErrorResponse"
+    );
     let quality_gates = schemas["MeshQualityGatesResource"]["properties"]
         .as_object()
         .expect("quality-gates properties");
@@ -27426,6 +27467,31 @@ async fn v2_mesh_histogram_bin_elements_rejects_invalid_bin() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn v2_mesh_histogram_bin_elements_rejects_mixed_topology_with_typed_code() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_scoped_fem_mesh_payload();
+        mesh.cells.types[0] = fullmag_ir::FemCellTypeIR::Prism6;
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/parts/airbox/histogram-bins/volume/0/elements")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let json = body_json(response).await;
+    assert_eq!(json["code"], "mixed_topology_not_supported");
 }
 
 #[tokio::test]

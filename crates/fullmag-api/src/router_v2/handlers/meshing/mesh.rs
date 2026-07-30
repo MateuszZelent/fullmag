@@ -784,6 +784,19 @@ fn require_tet4_cross_section_topology(
     mesh: &FemMeshPayload,
     resource_label: &str,
 ) -> Result<Vec<[u32; 4]>, ApiError> {
+    reject_mixed_topology_for_tet4_only_resource(mesh, resource_label)?;
+
+    mesh.require_tet4_elements().map_err(|error| {
+        ApiError::conflict(format!(
+            "{resource_label} requires valid tet4 topology: {error}"
+        ))
+    })
+}
+
+fn reject_mixed_topology_for_tet4_only_resource(
+    mesh: &FemMeshPayload,
+    resource_label: &str,
+) -> Result<(), ApiError> {
     if mesh
         .cells
         .types
@@ -793,16 +806,11 @@ fn require_tet4_cross_section_topology(
         return Err(ApiError::conflict_code(
             MIXED_TOPOLOGY_NOT_SUPPORTED,
             format!(
-                "{resource_label} is tet4-only; prism, pyramid, and other non-tetrahedral cells require the future generic convex slicer"
+                "{resource_label} is tet4-only; prism, pyramid, and other non-tetrahedral cells are not supported"
             ),
         ));
     }
-
-    mesh.require_tet4_elements().map_err(|error| {
-        ApiError::conflict(format!(
-            "{resource_label} requires valid tet4 topology: {error}"
-        ))
-    })
+    Ok(())
 }
 
 #[utoipa::path(
@@ -2445,6 +2453,7 @@ pub async fn get_mesh_part_topology(
         (status = 204, description = "No FEM mesh available"),
         (status = 400, description = "Invalid histogram metric or bin index"),
         (status = 404, description = "No active workspace, mesh, or mesh part"),
+        (status = 409, description = "Mixed or otherwise non-tet4 topology is not supported for histogram selection", body = crate::schemas::common::ApiErrorResponse),
     ),
     tag = "meshing"
 )]
@@ -3251,6 +3260,7 @@ fn mesh_histogram_samples(
     metric: MeshHistogramMetric,
     quality_values: &[f64],
 ) -> Result<Vec<MeshHistogramSample>, ApiError> {
+    reject_mixed_topology_for_tet4_only_resource(mesh, "mesh histogram selection")?;
     let elements = mesh
         .require_tet4_elements()
         .map_err(|error| ApiError::conflict(format!("tet4 mesh histogram required: {error}")))?;

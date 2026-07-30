@@ -29,7 +29,10 @@ describe("ObjectMeshPolicyPanelModel", () => {
       mesh_capabilities: {
         "mesh.topology.mixed_p1": { status: "validated" },
         mesh: {
-          exact_layer_count: { status: "production_executable" },
+          exact_layer_count: {
+            status: "production_executable",
+            supported_layer_counts: [1, 2, 3],
+          },
           swept: { prism: { status: "production_executable" } },
           transition: { pyramid_tet: { status: "validated" } },
         },
@@ -56,13 +59,33 @@ describe("ObjectMeshPolicyPanelModel", () => {
     });
   });
 
+  it("fails closed when executable exact-layer capability omits machine-readable layer counts", () => {
+    const capabilities = resolveObjectMeshTopologyCapabilities({
+      mesh_capabilities: {
+        "mesh.topology.mixed_p1": { status: "validated" },
+        "mesh.swept.prism": { status: "validated" },
+        "mesh.transition.pyramid_tet": { status: "validated" },
+        "mesh.exact_layer_count": { status: "validated" },
+      },
+    });
+
+    expect(capabilities.layeredPrism).toMatchObject({
+      enabled: false,
+      status: "invalid_scope",
+    });
+    expect(capabilities.layeredPrism.reason).toContain("supported_layer_counts");
+  });
+
   it("preserves production-executable status when every layered-prism input is production-executable", () => {
     const capabilities = resolveObjectMeshTopologyCapabilities({
       mesh_capabilities: {
         "mesh.topology.mixed_p1": { status: "production_executable" },
         "mesh.swept.prism": { status: "production_executable" },
         "mesh.transition.pyramid_tet": { status: "production_executable" },
-        "mesh.exact_layer_count": { status: "production_executable" },
+        "mesh.exact_layer_count": {
+          status: "production_executable",
+          supported_layer_counts: [1, 2, 3],
+        },
       },
     });
 
@@ -78,7 +101,10 @@ describe("ObjectMeshPolicyPanelModel", () => {
         "mesh.topology.mixed_p1": { status: "validated" },
         "mesh.swept.prism": { status: "validated" },
         "mesh.transition.pyramid_tet": { status: "validated" },
-        "mesh.exact_layer_count": { status: "validated" },
+        "mesh.exact_layer_count": {
+          status: "validated",
+          supported_layer_counts: [1, 2, 3],
+        },
       },
     });
 
@@ -254,6 +280,19 @@ describe("ObjectMeshPolicyPanelModel", () => {
           through_thickness_symmetric: false,
         },
       },
+    });
+  });
+
+  it("rejects exact layered prism exports outside the qualified 1..3 layer scope", () => {
+    const result = buildObjectMeshPolicyReplaceRequest(objectMeshPolicyDraft({
+      configText: "{}",
+      meshStrategy: "swept_prism",
+      present: true,
+      throughThicknessElements: "4",
+    }));
+
+    expect(result).toEqual({
+      error: "Exact layered prism supports 1, 2, or 3 through-thickness elements.",
     });
   });
 
