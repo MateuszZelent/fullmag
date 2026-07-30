@@ -8,9 +8,12 @@ import csv
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+import tempfile
 from typing import Sequence
 
 
@@ -39,9 +42,31 @@ MATRIX_CONTRACT_PATH = Path(
     "tests/standard_problems/mumag/sp4/fem/matrix_contract.py"
 )
 RELEVANT_SOURCE_PATHS = (
+    Path("justfile"),
+    Path("scripts/check_fem_sp4_relaxation.py"),
     Path("scripts/plan_fem_sp4_mixed_matrix.py"),
+    Path("scripts/select_fem_sp4_relaxation_state.py"),
+    Path("scripts/verify_fem_standard_problem_4.sh"),
+    Path("scripts/write_fem_magnetic_initial_state_from_shared_domain.py"),
     Path("tests/standard_problems/mumag/sp4/common/contract.py"),
+    Path("tests/standard_problems/mumag/sp4/common/metrics.py"),
+    Path("tests/standard_problems/mumag/sp4/common/references.py"),
+    Path("tests/standard_problems/mumag/sp4/common/reporting.py"),
     MATRIX_CONTRACT_PATH,
+    Path("tests/standard_problems/mumag/sp4/fem/problem.py"),
+    Path(
+        "tests/standard_problems/mumag/sp4/fem/scenarios/"
+        "relax_llg_rk23_adaptive.py"
+    ),
+    Path(
+        "tests/standard_problems/mumag/sp4/fem/scenarios/"
+        "relax_nonlinear_cg.py"
+    ),
+    Path(
+        "tests/standard_problems/mumag/sp4/fem/scenarios/"
+        "relax_projected_gradient_bb.py"
+    ),
+    Path("tests/standard_problems/mumag/sp4/fem/verify.py"),
 )
 PLAN_FILENAME = "matrix-plan.v1.json"
 JSONL_FILENAME = "run-specs.v1.jsonl"
@@ -110,19 +135,64 @@ def _git_output(*arguments: str) -> bytes:
         ) from error
 
 
+def _git_status_records() -> list[dict[str, object]]:
+    raw_status = _git_output(
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+    )
+    parts = raw_status.split(b"\0")
+    records: list[dict[str, object]] = []
+    index = 0
+    try:
+        while index < len(parts) and parts[index]:
+            entry = parts[index]
+            index += 1
+            if len(entry) < 4 or entry[2:3] != b" ":
+                raise PlanError("cannot parse canonical git status entry")
+            status = entry[:2].decode("ascii")
+            paths = [entry[3:].decode("utf-8")]
+            if status[0] in "RC" or status[1] in "RC":
+                if index >= len(parts) or not parts[index]:
+                    raise PlanError("cannot parse canonical git rename status")
+                paths.append(parts[index].decode("utf-8"))
+                index += 1
+            records.append({"status": status, "paths": paths})
+    except UnicodeDecodeError as error:
+        raise PlanError("cannot decode canonical git status") from error
+    return records
+
+
 def _source_identity() -> dict[str, object]:
     source_hashes = {
         path.as_posix(): _sha256_file(REPO_ROOT / path)
         for path in RELEVANT_SOURCE_PATHS
     }
-    return {
-        "source_commit_full": _git_output("rev-parse", "--verify", "HEAD")
-        .decode("ascii")
-        .strip(),
-        "source_tree_sha256": _sha256_bytes(
-            _git_output("ls-tree", "-r", "--full-tree", "HEAD")
-        ),
+    try:
+        head_commit = _git_output("rev-parse", "--verify", "HEAD").decode("ascii").strip()
+    except UnicodeDecodeError as error:
+        raise PlanError("cannot decode git HEAD identity") from error
+    head_tree_sha256 = _sha256_bytes(
+        _git_output("ls-tree", "-r", "--full-tree", "HEAD")
+    )
+    status_records = _git_status_records()
+    snapshot_payload = {
+        "head_commit_full": head_commit,
+        "head_tree_sha256": head_tree_sha256,
+        "git_status_porcelain_v1": status_records,
         "relevant_source_files_sha256": source_hashes,
+    }
+    return {
+        **snapshot_payload,
+        "source_snapshot_dirty": bool(status_records),
+        "dirty_paths": sorted(
+            {path for record in status_records for path in record["paths"]}
+        ),
+        "git_status_sha256": _sha256_bytes(_canonical_json_bytes(status_records)),
+        "source_snapshot_sha256": _sha256_bytes(
+            _canonical_json_bytes(snapshot_payload)
+        ),
         "contract_sha256": source_hashes[MATRIX_CONTRACT_PATH.as_posix()],
     }
 
@@ -220,34 +290,146 @@ def _tsv_bytes(run_specs: Sequence[dict[str, object]]) -> bytes:
     return output.getvalue().encode("utf-8")
 
 
-def _write_immutable(path: Path, payload: bytes) -> None:
-    if path.exists():
-        try:
-            existing = path.read_bytes()
-        except OSError as error:
-            raise PlanError(f"cannot read existing plan output {path}: {error}") from error
-        if existing != payload:
-            raise PlanError(f"refusing to overwrite different plan output {path}")
-        return
+def _output_payloads(plan: dict[str, object]) -> dict[str, bytes]:
+    run_specs = plan["run_specs"]
+    if not isinstance(run_specs, list):
+        raise PlanError("internal error: run_specs must be a list")
+    return {
+        PLAN_FILENAME: _canonical_json_bytes(plan),
+        JSONL_FILENAME: _jsonl_bytes(run_specs),
+        TSV_FILENAME: _tsv_bytes(run_specs),
+    }
+
+
+def _preflight_existing_output(
+    output_dir: Path,
+    payloads: dict[str, bytes],
+) -> bool:
+    if not os.path.lexists(output_dir):
+        return False
+    if output_dir.is_symlink() or not output_dir.is_dir():
+        raise PlanError(f"plan output is not a directory: {output_dir}")
     try:
-        path.write_bytes(payload)
+        entries = {path.name: path for path in output_dir.iterdir()}
+    except OSError as error:
+        raise PlanError(f"cannot inspect existing plan output {output_dir}: {error}") from error
+    if set(entries) != set(payloads):
+        raise PlanError(f"existing plan output is incomplete or conflicting: {output_dir}")
+    try:
+        matches = all(entries[name].read_bytes() == payload for name, payload in payloads.items())
+    except OSError as error:
+        raise PlanError(f"cannot read existing plan output {output_dir}: {error}") from error
+    if not matches:
+        raise PlanError(f"existing plan output is incomplete or conflicting: {output_dir}")
+    return True
+
+
+def _write_staged_output(path: Path, payload: bytes) -> None:
+    try:
+        with path.open("xb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
     except OSError as error:
         raise PlanError(f"cannot write plan output {path}: {error}") from error
 
 
+def _fsync_directory(path: Path) -> None:
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    except OSError as error:
+        raise PlanError(f"cannot synchronize plan directory {path}: {error}") from error
+
+
+def _acquire_output_lock(lock_path: Path) -> int:
+    try:
+        descriptor = os.open(
+            lock_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+            0o600,
+        )
+    except FileExistsError as error:
+        raise PlanError(
+            f"plan emission is already in progress for {lock_path}"
+        ) from error
+    except OSError as error:
+        raise PlanError(f"cannot acquire plan output lock {lock_path}: {error}") from error
+    try:
+        os.write(descriptor, f"pid={os.getpid()}\n".encode("ascii"))
+        os.fsync(descriptor)
+    except OSError as error:
+        os.close(descriptor)
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
+        raise PlanError(f"cannot initialize plan output lock {lock_path}: {error}") from error
+    return descriptor
+
+
+def _release_output_lock(lock_path: Path, descriptor: int) -> None:
+    try:
+        os.close(descriptor)
+        lock_path.unlink()
+    except OSError as error:
+        raise PlanError(f"cannot release plan output lock {lock_path}: {error}") from error
+
+
 def emit_plan(requested_stage: str, output_dir: Path) -> dict[str, object]:
     plan = build_plan(requested_stage)
-    run_specs = plan["run_specs"]
-    if not isinstance(run_specs, list):
-        raise PlanError("internal error: run_specs must be a list")
+    payloads = _output_payloads(plan)
+    output_parent = output_dir.parent
     try:
-        output_dir.mkdir(parents=True, exist_ok=True)
+        output_parent.mkdir(parents=True, exist_ok=True)
     except OSError as error:
-        raise PlanError(f"cannot create plan output directory {output_dir}: {error}") from error
-    _write_immutable(output_dir / PLAN_FILENAME, _canonical_json_bytes(plan))
-    _write_immutable(output_dir / JSONL_FILENAME, _jsonl_bytes(run_specs))
-    _write_immutable(output_dir / TSV_FILENAME, _tsv_bytes(run_specs))
-    return plan
+        raise PlanError(
+            f"cannot create plan output parent {output_parent}: {error}"
+        ) from error
+    if _preflight_existing_output(output_dir, payloads):
+        return plan
+
+    lock_path = output_parent / f".{output_dir.name}.lock"
+    lock_descriptor = _acquire_output_lock(lock_path)
+    staging_dir: Path | None = None
+    try:
+        if _preflight_existing_output(output_dir, payloads):
+            return plan
+        try:
+            staging_dir = Path(
+                tempfile.mkdtemp(
+                    prefix=f".{output_dir.name}.tmp-",
+                    dir=output_parent,
+                )
+            )
+        except OSError as error:
+            raise PlanError(
+                f"cannot create staged plan directory beside {output_dir}: {error}"
+            ) from error
+        for name, payload in payloads.items():
+            _write_staged_output(staging_dir / name, payload)
+        _fsync_directory(staging_dir)
+        try:
+            os.rename(staging_dir, output_dir)
+        except OSError as error:
+            raise PlanError(
+                f"cannot atomically promote plan output {output_dir}: {error}"
+            ) from error
+        staging_dir = None
+        _fsync_directory(output_parent)
+        return plan
+    finally:
+        if staging_dir is not None and staging_dir.exists():
+            try:
+                shutil.rmtree(staging_dir)
+            except OSError as error:
+                raise PlanError(
+                    f"cannot clean staged plan directory {staging_dir}: {error}"
+                ) from error
+        _release_output_lock(lock_path, lock_descriptor)
 
 
 def _parse_arguments(argv: Sequence[str] | None) -> argparse.Namespace:

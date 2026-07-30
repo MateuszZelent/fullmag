@@ -5,11 +5,14 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
+import scripts.plan_fem_sp4_mixed_matrix as planner
 from tests.standard_problems.mumag.sp4.common.contract import (
     PRODUCTION_RELAXATION_ALGORITHMS,
 )
@@ -31,6 +34,25 @@ OUTPUT_FILES = (
     "run-specs.v1.jsonl",
     "run-specs.v1.tsv",
 )
+PROBLEM_SOURCE = "tests/standard_problems/mumag/sp4/fem/problem.py"
+EXPECTED_RELEVANT_SOURCES = (
+    "justfile",
+    "scripts/check_fem_sp4_relaxation.py",
+    "scripts/plan_fem_sp4_mixed_matrix.py",
+    "scripts/select_fem_sp4_relaxation_state.py",
+    "scripts/verify_fem_standard_problem_4.sh",
+    "scripts/write_fem_magnetic_initial_state_from_shared_domain.py",
+    "tests/standard_problems/mumag/sp4/common/contract.py",
+    "tests/standard_problems/mumag/sp4/common/metrics.py",
+    "tests/standard_problems/mumag/sp4/common/references.py",
+    "tests/standard_problems/mumag/sp4/common/reporting.py",
+    "tests/standard_problems/mumag/sp4/fem/matrix_contract.py",
+    PROBLEM_SOURCE,
+    "tests/standard_problems/mumag/sp4/fem/scenarios/relax_llg_rk23_adaptive.py",
+    "tests/standard_problems/mumag/sp4/fem/scenarios/relax_nonlinear_cg.py",
+    "tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py",
+    "tests/standard_problems/mumag/sp4/fem/verify.py",
+)
 
 
 def _canonical_json(value: object) -> bytes:
@@ -47,6 +69,25 @@ def _canonical_json(value: object) -> bytes:
 
 
 class FemSp4MixedMatrixPlannerTest(unittest.TestCase):
+    def _git(self, root: Path, *arguments: str) -> str:
+        return subprocess.check_output(
+            ("git", *arguments),
+            cwd=root,
+        ).decode("utf-8").strip()
+
+    def _source_repo(self, directory: str) -> Path:
+        root = Path(directory) / "source"
+        for relative_path in EXPECTED_RELEVANT_SOURCES:
+            destination = root / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(REPO_ROOT / relative_path, destination)
+        self._git(root, "init", "--quiet")
+        self._git(root, "config", "user.name", "Fullmag Test")
+        self._git(root, "config", "user.email", "fullmag-test@example.invalid")
+        self._git(root, "add", "--all")
+        self._git(root, "commit", "--quiet", "-m", "fixture")
+        return root
+
     def _run(self, stage: str, output_dir: Path) -> dict[str, object]:
         result = subprocess.run(
             [
@@ -241,14 +282,14 @@ class FemSp4MixedMatrixPlannerTest(unittest.TestCase):
         self.assertEqual(plan["qualification_claim"], "implemented_evidence_only")
         self.assertNotIn("capabilities", plan)
         self.assertEqual(
-            plan["source_commit_full"],
+            plan.get("head_commit_full"),
             subprocess.check_output(
                 ["git", "rev-parse", "--verify", "HEAD"],
                 cwd=REPO_ROOT,
             ).decode("ascii").strip(),
         )
         self.assertEqual(
-            plan["source_tree_sha256"],
+            plan.get("head_tree_sha256"),
             hashlib.sha256(
                 subprocess.check_output(
                     ["git", "ls-tree", "-r", "--full-tree", "HEAD"],
@@ -256,18 +297,130 @@ class FemSp4MixedMatrixPlannerTest(unittest.TestCase):
                 )
             ).hexdigest(),
         )
-        expected_sources = (
-            "scripts/plan_fem_sp4_mixed_matrix.py",
-            "tests/standard_problems/mumag/sp4/common/contract.py",
-            contract_relative,
-        )
-        self.assertEqual(tuple(source_hashes), expected_sources)
-        for relative_path in expected_sources:
+        self.assertTrue(set(EXPECTED_RELEVANT_SOURCES).issubset(source_hashes))
+        for relative_path in EXPECTED_RELEVANT_SOURCES:
             self.assertEqual(
                 source_hashes[relative_path],
                 hashlib.sha256((REPO_ROOT / relative_path).read_bytes()).hexdigest(),
             )
         self.assertEqual(plan["contract_sha256"], source_hashes[contract_relative])
+        self.assertNotIn("source_commit_full", plan)
+        self.assertNotIn("source_tree_sha256", plan)
+
+    def test_dirty_execution_source_is_bound_to_explicit_snapshot_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = self._source_repo(directory)
+            with mock.patch.object(planner, "REPO_ROOT", source_root):
+                clean = planner.build_plan("stage1-layers")
+                problem = source_root / PROBLEM_SOURCE
+                problem.write_text(
+                    problem.read_text(encoding="utf-8")
+                    + "\n# dirty execution source\n",
+                    encoding="utf-8",
+                )
+
+                dirty = planner.build_plan("stage1-layers")
+
+        expected_status = [{"status": " M", "paths": [PROBLEM_SOURCE]}]
+        self.assertIs(clean.get("source_snapshot_dirty"), False)
+        self.assertEqual(clean.get("dirty_paths"), [])
+        self.assertIs(dirty["source_snapshot_dirty"], True)
+        self.assertEqual(dirty["git_status_porcelain_v1"], expected_status)
+        self.assertEqual(dirty["dirty_paths"], [PROBLEM_SOURCE])
+        self.assertEqual(
+            dirty["git_status_sha256"],
+            hashlib.sha256(_canonical_json(expected_status)).hexdigest(),
+        )
+        self.assertEqual(dirty["head_commit_full"], clean["head_commit_full"])
+        self.assertEqual(dirty["head_tree_sha256"], clean["head_tree_sha256"])
+        self.assertNotEqual(
+            dirty["relevant_source_files_sha256"][PROBLEM_SOURCE],
+            clean["relevant_source_files_sha256"][PROBLEM_SOURCE],
+        )
+        snapshot_payload = {
+            key: dirty[key]
+            for key in (
+                "head_commit_full",
+                "head_tree_sha256",
+                "git_status_porcelain_v1",
+                "relevant_source_files_sha256",
+            )
+        }
+        self.assertEqual(
+            dirty["source_snapshot_sha256"],
+            hashlib.sha256(_canonical_json(snapshot_payload)).hexdigest(),
+        )
+        self.assertNotEqual(dirty["source_snapshot_sha256"], clean["source_snapshot_sha256"])
+
+    def test_missing_execution_source_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = self._source_repo(directory)
+            (source_root / PROBLEM_SOURCE).unlink()
+
+            with mock.patch.object(planner, "REPO_ROOT", source_root):
+                with self.assertRaisesRegex(planner.PlanError, "required source file"):
+                    planner.build_plan("stage1-layers")
+
+    def test_conflicting_existing_output_set_is_not_partially_modified(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory) / "plan"
+            output_dir.mkdir()
+            conflict = output_dir / OUTPUT_FILES[2]
+            conflict.write_bytes(b"conflicting-tsv\n")
+
+            with self.assertRaisesRegex(planner.PlanError, "incomplete or conflicting"):
+                planner.emit_plan("stage1-layers", output_dir)
+
+            self.assertEqual(
+                {path.name: path.read_bytes() for path in output_dir.iterdir()},
+                {OUTPUT_FILES[2]: b"conflicting-tsv\n"},
+            )
+            self.assertEqual(list(output_dir.parent.glob(".plan.tmp-*")), [])
+
+    def test_staged_write_failure_exposes_no_output_and_cleans_transaction(self) -> None:
+        original_open = Path.open
+
+        def fail_jsonl(path: Path, *args, **kwargs):
+            mode = args[0] if args else kwargs.get("mode", "r")
+            if path.name == OUTPUT_FILES[1] and any(
+                flag in mode for flag in ("w", "x")
+            ):
+                raise OSError("injected JSONL write failure")
+            return original_open(path, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory) / "plan"
+            with mock.patch.object(Path, "open", fail_jsonl):
+                with self.assertRaisesRegex(planner.PlanError, "cannot write plan output"):
+                    planner.emit_plan("stage1-layers", output_dir)
+
+            self.assertFalse(output_dir.exists())
+            self.assertEqual(list(output_dir.parent.glob(".plan.tmp-*")), [])
+            self.assertFalse((output_dir.parent / ".plan.lock").exists())
+
+    def test_existing_complete_plan_is_idempotent_and_lock_blocks_concurrent_writer(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output_dir = root / "complete"
+            first = planner.emit_plan("stage1-layers", output_dir)
+            original = {name: (output_dir / name).read_bytes() for name in OUTPUT_FILES}
+
+            second = planner.emit_plan("stage1-layers", output_dir)
+            self.assertEqual(second, first)
+            self.assertEqual(
+                {name: (output_dir / name).read_bytes() for name in OUTPUT_FILES},
+                original,
+            )
+
+            concurrent_output = root / "concurrent"
+            lock = root / ".concurrent.lock"
+            lock.write_text("occupied\n", encoding="utf-8")
+            with self.assertRaisesRegex(planner.PlanError, "emission is already in progress"):
+                planner.emit_plan("stage1-layers", concurrent_output)
+            self.assertFalse(concurrent_output.exists())
+            self.assertEqual(lock.read_text(encoding="utf-8"), "occupied\n")
 
     def test_unknown_stage_fails_closed_without_writing_a_plan(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
