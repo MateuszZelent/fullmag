@@ -509,6 +509,115 @@ def _validate_cpu_execution(execution: dict[str, Any]) -> dict[str, object]:
     return expected
 
 
+def _validate_persisted_lane_summary(
+    summary: dict[str, object], device: str
+) -> dict[str, object]:
+    if summary.get("schema_version") != RUN_SCHEMA_VERSION:
+        raise ContractError(f"{device.upper()} summary schema is not {RUN_SCHEMA_VERSION}")
+    if summary.get("effective_device") != device:
+        raise ContractError(f"{device.upper()} summary effective device is invalid")
+    if summary.get("fallbacks_triggered") != [] or summary.get("degraded") is not False:
+        raise ContractError(f"{device.upper()} summary must prove no fallback or degradation")
+    if summary.get("qualification_status") != "implemented":
+        raise ContractError(f"{device.upper()} summary qualification status is invalid")
+    if summary.get("accepted_steps") != 1 or summary.get("executed_steps") != 1:
+        raise ContractError(f"{device.upper()} summary must prove one accepted executed step")
+
+    for field in ("initial_norm_defect", "norm_defect"):
+        defect = _finite(summary.get(field), f"{device} summary {field}")
+        if defect < 0.0 or defect > MAX_MAGNETIZATION_NORM_DEFECT:
+            raise ContractError(
+                f"{device.upper()} summary {field} exceeds the frozen norm bound"
+            )
+
+    proof = _object(
+        summary.get("accepted_energy_proof"),
+        f"{device} summary accepted energy proof",
+    )
+    if proof.get("available") is not True:
+        raise ContractError(f"{device.upper()} accepted energy proof must be available")
+    if proof.get("strict_armijo") is not True or proof.get("energy_nonincrease") is not True:
+        raise ContractError(f"{device.upper()} accepted Armijo predicates must be true")
+    delta = _finite(proof.get("delta_j"), f"{device} accepted energy delta")
+    roundoff = _finite(
+        proof.get("roundoff_bound_j"), f"{device} accepted energy roundoff bound"
+    )
+    upper = _finite(
+        proof.get("delta_upper_j"), f"{device} accepted energy upper endpoint"
+    )
+    armijo_rhs = _finite(proof.get("armijo_rhs_j"), f"{device} Armijo RHS")
+    if roundoff < 0.0 or delta + roundoff != upper:
+        raise ContractError(f"{device.upper()} accepted energy proof arithmetic is invalid")
+    if not (upper <= armijo_rhs < 0.0):
+        raise ContractError(f"{device.upper()} accepted Armijo proof is invalid")
+    normalized_proof = {
+        "available": True,
+        "delta_j": delta,
+        "roundoff_bound_j": roundoff,
+        "delta_upper_j": upper,
+        "armijo_rhs_j": armijo_rhs,
+        "strict_armijo": True,
+        "energy_nonincrease": True,
+    }
+
+    residency = _object(summary.get("residency"), f"{device} summary residency")
+    if device == "cpu":
+        normalized_residency = _validate_cpu_execution(residency)
+    else:
+        if residency.get("mode") != "device_source_of_truth":
+            raise ContractError("GPU summary must preserve device source-of-truth residency")
+        telemetry = _object(
+            residency.get("transfer_telemetry"), "GPU summary transfer telemetry"
+        )
+        if telemetry != summary.get("gpu_transfer_telemetry"):
+            raise ContractError("GPU summary residency telemetry identity is invalid")
+        raw = _object(telemetry.get("raw"), "GPU summary raw transfer telemetry")
+        for field in (
+            "hot_loop_compute_h2d_bytes",
+            "hot_loop_compute_d2h_bytes",
+            "hot_loop_compute_host_sync_count",
+            "hot_loop_exchange_h2d_bytes",
+            "hot_loop_exchange_d2h_bytes",
+            "hot_loop_exchange_host_sync_count",
+        ):
+            if _nonnegative_int(raw.get(field), f"GPU summary {field}") != 0:
+                raise ContractError(f"GPU summary {field} must be zero")
+        control_syncs = _nonnegative_int(
+            raw.get("hot_loop_control_scalar_host_sync_count"),
+            "GPU summary control scalar host sync count",
+        )
+        control_bytes = _nonnegative_int(
+            raw.get("hot_loop_control_scalar_d2h_bytes"),
+            "GPU summary control scalar D2H bytes",
+        )
+        if control_syncs != _nonnegative_int(
+            telemetry.get("control_scalar_host_sync_count"),
+            "GPU summary control scalar host sync total",
+        ) or control_bytes != _nonnegative_int(
+            telemetry.get("control_scalar_d2h_bytes"),
+            "GPU summary control scalar D2H total",
+        ):
+            raise ContractError("GPU summary control scalar telemetry is inconsistent")
+        if control_syncs > _nonnegative_int(
+            telemetry.get("allowed_control_scalar_host_sync_count"),
+            "GPU summary allowed control scalar sync count",
+        ) or control_bytes > _nonnegative_int(
+            telemetry.get("allowed_control_scalar_d2h_bytes"),
+            "GPU summary allowed control scalar D2H bytes",
+        ):
+            raise ContractError("GPU summary exceeds the bounded control-scalar budget")
+        normalized_residency = {
+            "mode": "device_source_of_truth",
+            "transfer_telemetry": telemetry,
+        }
+
+    return {
+        "accepted_energy_proof": normalized_proof,
+        "norm_defect": summary["norm_defect"],
+        "residency": normalized_residency,
+    }
+
+
 def _cross_check_final_scalars(
     scalar_evidence: dict[str, object],
     energy_terms: dict[str, Any],
@@ -989,39 +1098,13 @@ def validate_runtime_artifacts(
     }
 
 
-def _close_comparison(
-    name: str,
-    cpu_value: object,
-    gpu_value: object,
-    *,
-    relative_tolerance: float,
-    absolute_tolerance: float,
-    unit: str,
-) -> dict[str, object]:
-    cpu = _finite(cpu_value, f"CPU {name}")
-    gpu = _finite(gpu_value, f"GPU {name}")
-    absolute_delta = abs(cpu - gpu)
-    allowed_delta = absolute_tolerance + relative_tolerance * max(abs(cpu), abs(gpu))
-    if absolute_delta > allowed_delta:
-        raise ContractError(
-            f"CPU/GPU {name} parity failed: delta={absolute_delta}, allowed={allowed_delta}"
-        )
-    return {
-        "name": name,
-        "unit": unit,
-        "cpu": cpu,
-        "gpu": gpu,
-        "absolute_delta": absolute_delta,
-        "relative_tolerance": relative_tolerance,
-        "absolute_tolerance": absolute_tolerance,
-        "allowed_delta": allowed_delta,
-        "status": "pass",
-    }
-
-
 def compare_runtime_summaries(
     cpu: dict[str, object], gpu: dict[str, object]
 ) -> dict[str, object]:
+    lane_evidence = {
+        "cpu": _validate_persisted_lane_summary(cpu, "cpu"),
+        "gpu": _validate_persisted_lane_summary(gpu, "gpu"),
+    }
     exact_fields = (
         "runtime_manifest_sha256",
         "runtime_bundle_path",
@@ -1179,9 +1262,7 @@ def compare_runtime_summaries(
         "cpu": {
             "execution_engine": cpu["execution_engine"],
             "gradient_policy": cpu["gradient_policy"],
-            "accepted_energy_proof": cpu["accepted_energy_proof"],
-            "norm_defect": cpu["norm_defect"],
-            "residency": cpu["residency"],
+            **lane_evidence["cpu"],
             "final_energy_terms_j": cpu["final_energy_terms_j"],
             "final_torque_apm": cpu["final_torque_apm"],
             "final_torque_t": cpu["final_torque_t"],
@@ -1189,9 +1270,7 @@ def compare_runtime_summaries(
         "gpu": {
             "execution_engine": gpu["execution_engine"],
             "gradient_policy": gpu["gradient_policy"],
-            "accepted_energy_proof": gpu["accepted_energy_proof"],
-            "norm_defect": gpu["norm_defect"],
-            "residency": gpu["residency"],
+            **lane_evidence["gpu"],
             "final_energy_terms_j": gpu["final_energy_terms_j"],
             "final_torque_apm": gpu["final_torque_apm"],
             "final_torque_t": gpu["final_torque_t"],
@@ -1228,6 +1307,12 @@ def write_comparison_csv(path: Path, comparison: dict[str, object]) -> None:
     for device in ("cpu", "gpu"):
         lane = _object(comparison.get(device), f"{device} comparison lane")
         proof = _object(lane.get("accepted_energy_proof"), f"{device} energy proof")
+        proof_status = (
+            "pass"
+            if proof.get("strict_armijo") is True
+            and proof.get("energy_nonincrease") is True
+            else "fail"
+        )
         rows.extend(
             (
                 {
@@ -1237,7 +1322,7 @@ def write_comparison_csv(path: Path, comparison: dict[str, object]) -> None:
                     "gpu": proof["delta_upper_j"] if device == "gpu" else "",
                     "absolute_delta": "",
                     "allowed_delta": proof["armijo_rhs_j"],
-                    "status": "pass",
+                    "status": proof_status,
                 },
                 {
                     "quantity": f"{device}_accepted_armijo_rhs",
@@ -1246,7 +1331,7 @@ def write_comparison_csv(path: Path, comparison: dict[str, object]) -> None:
                     "gpu": proof["armijo_rhs_j"] if device == "gpu" else "",
                     "absolute_delta": "",
                     "allowed_delta": 0.0,
-                    "status": "pass",
+                    "status": proof_status,
                 },
             )
         )

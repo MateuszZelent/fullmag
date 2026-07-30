@@ -1083,6 +1083,64 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                 with self.subTest(case=case), self.assertRaises(ContractError):
                     verifier.compare_runtime_summaries(cpu_summary, gpu_summary)
 
+    def test_compare_revalidates_persisted_lane_proofs(self) -> None:
+        mutations = (
+            ("schema", "cpu", lambda summary: summary.__setitem__("schema_version", "stale")),
+            ("fallback", "cpu", lambda summary: summary.__setitem__("fallbacks_triggered", ["hidden"])),
+            ("degraded", "cpu", lambda summary: summary.__setitem__("degraded", True)),
+            ("norm", "cpu", lambda summary: summary.__setitem__("norm_defect", 0.5)),
+            (
+                "armijo_available",
+                "cpu",
+                lambda summary: summary["accepted_energy_proof"].__setitem__(
+                    "available", False
+                ),
+            ),
+            (
+                "armijo_upper",
+                "cpu",
+                lambda summary: summary["accepted_energy_proof"].__setitem__(
+                    "delta_upper_j", 1.0
+                ),
+            ),
+            (
+                "cpu_residency",
+                "cpu",
+                lambda summary: summary.__setitem__(
+                    "residency", {"mode": "hidden_gpu_fallback"}
+                ),
+            ),
+            (
+                "gpu_residency",
+                "gpu",
+                lambda summary: summary["residency"].__setitem__(
+                    "mode", "host_source_of_truth"
+                ),
+            ),
+            (
+                "gpu_transfer",
+                "gpu",
+                lambda summary: summary["residency"]["transfer_telemetry"][
+                    "raw"
+                ].__setitem__("hot_loop_compute_d2h_bytes", 8),
+            ),
+        )
+        for case, device, mutate in mutations:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                cpu = self._write_valid_bundle(root, "cpu")
+                gpu = self._write_valid_bundle(root, "gpu")
+                cpu_summary = validate_runtime_artifacts(
+                    cpu[0], cpu[1], cpu[2], device="cpu", runtime_log=cpu[3], runtime_manifest=cpu[4]
+                )
+                gpu_summary = validate_runtime_artifacts(
+                    gpu[0], gpu[1], gpu[2], device="gpu", runtime_log=gpu[3], runtime_manifest=gpu[4]
+                )
+                mutate(cpu_summary if device == "cpu" else gpu_summary)
+
+                with self.subTest(case=case), self.assertRaises(ContractError):
+                    verifier.compare_runtime_summaries(cpu_summary, gpu_summary)
+
     def test_just_recipe_is_append_only_managed_cpu_gpu_gate(self) -> None:
         justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
         recipe = justfile.split(
@@ -1103,6 +1161,12 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
         )
         self.assertIn("verify_fem_mixed_prism_airbox_runtime.py compare", recipe)
         self.assertIn("runtime-manifest", recipe)
+        self.assertIn('cpu/summary.v3.json', recipe)
+        self.assertIn('gpu/summary.v3.json', recipe)
+        self.assertIn('summary.v2.json', recipe)
+        self.assertIn('comparison.v2.csv', recipe)
+        self.assertNotIn('summary.v1.json', recipe)
+        self.assertNotIn('comparison.v1.csv', recipe)
         self.assertIn("mktemp -d", recipe)
         self.assertNotIn("docker ", recipe)
         self.assertNotIn("--skip-geometry-assets", recipe)
