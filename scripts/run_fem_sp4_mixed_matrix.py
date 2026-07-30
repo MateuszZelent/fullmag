@@ -359,6 +359,7 @@ def _environment(spec: dict[str, object], max_steps: int) -> dict[str, str]:
         "FULLMAG_SP4_CASE": "case-a",
         "FULLMAG_SP4_RELAX_ALGORITHM": str(spec["relaxation_algorithm"]),
         "FULLMAG_SP4_RELAX_MAX_STEPS": str(max_steps),
+        "FULLMAG_SP4_RELAX_TOL_APM": str(spec["torque_tolerance_apm"]),
         "FULLMAG_GMSH_THREADS": "1",
         "FULLMAG_FEM_GPU_DEMAG_MODE": "device_hypre_poisson",
     }
@@ -1276,6 +1277,56 @@ def _validate_case_artifacts(
     )
     if qualification.get("relaxation_algorithm") != spec["relaxation_algorithm"]:
         raise ExecutionError("relaxation algorithm does not match the run spec")
+    if qualification.get("converged") is not True:
+        raise ExecutionError("mixed-P1 relaxation did not converge")
+    requested_tolerance_apm = _finite(
+        spec.get("torque_tolerance_apm"), "planned torque_tolerance_apm"
+    )
+    requested_tolerance_t = _finite(
+        spec.get("torque_tolerance_t"), "planned torque_tolerance_t"
+    )
+    if requested_tolerance_apm <= 0.0 or requested_tolerance_t <= 0.0:
+        raise ExecutionError("planned mixed-P1 torque tolerance must be positive")
+    _equal_float(
+        qualification.get("stop_threshold"),
+        requested_tolerance_apm,
+        "relaxation stop threshold",
+    )
+    expected_stop_provenance = {
+        "stop_reason": "torque",
+        "stop_metric_kind": "max_torque_apm",
+        "stop_metric_unit": "A/m",
+        "stop_metric_name": "max_torque_apm",
+    }
+    for field, expected in expected_stop_provenance.items():
+        if qualification.get(field) != expected:
+            raise ExecutionError(f"relaxation {field} does not prove torque convergence")
+    final_torque_apm = _finite(
+        qualification.get("final_torque_apm"), "final_torque_apm"
+    )
+    final_torque_t = _finite(
+        qualification.get("final_torque_t"), "final_torque_t"
+    )
+    stop_metric_value = _finite(
+        qualification.get("stop_metric_value"), "stop_metric_value"
+    )
+    if final_torque_apm < 0.0 or final_torque_t < 0.0 or stop_metric_value < 0.0:
+        raise ExecutionError("mixed-P1 relaxation torque must be nonnegative")
+    _equal_float(
+        final_torque_t,
+        final_torque_apm * (4e-7 * math.pi),
+        "final torque T/A/m conversion",
+    )
+    _equal_float(
+        stop_metric_value,
+        final_torque_apm,
+        "relaxation stop metric value",
+    )
+    if (
+        final_torque_apm > requested_tolerance_apm
+        or final_torque_t > requested_tolerance_t
+    ):
+        raise ExecutionError("mixed-P1 relaxation torque exceeds 1e-6 T")
     executed_steps = qualification.get("executed_steps")
     if (
         isinstance(executed_steps, bool)
@@ -1295,12 +1346,8 @@ def _validate_case_artifacts(
         "E_total": _finite(
             energy_terms.get("E_total"), "final_energy_terms_j.E_total"
         ),
-        "max_torque_Apm": _finite(
-            qualification.get("final_torque_apm"), "final_torque_apm"
-        ),
-        "max_torque_T": _finite(
-            qualification.get("final_torque_t"), "final_torque_t"
-        ),
+        "max_torque_Apm": final_torque_apm,
+        "max_torque_T": final_torque_t,
     }
     scalar_step, scalar_values = _scalar_final_values(scalars_path)
     if scalar_step != executed_steps:

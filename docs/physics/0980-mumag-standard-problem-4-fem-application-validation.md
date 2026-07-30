@@ -113,6 +113,19 @@ $A_{\mathrm{ex}}=1.3\times10^{-11}\,\mathrm{J\,m^{-1}}$, zero
 magnetocrystalline anisotropy, $\alpha=0.02$ in dynamics, and
 $\gamma_0=2.211\times10^5\,\mathrm{m\,A^{-1}\,s^{-1}}$.
 
+The mixed-P1 relaxation gate deliberately uses the stricter public threshold
+
+```{math}
+:label: sp4-mixed-relaxation-torque-threshold
+T_{\mathrm{tol}}^{T}=10^{-6}\,\mathrm T,
+\qquad
+T_{\mathrm{tol}}^{A/m}=\frac{T_{\mathrm{tol}}^{T}}{\mu_0}
+=0.7957747154594767\,\mathrm{A\,m^{-1}}.
+```
+
+The historical all-tetrahedral SP4 lane keeps its independently authored
+$10^{-5}\,\mathrm T$ threshold; this mixed qualification does not rewrite it.
+
 (assumptions-and-validity)=
 ### 2.3 Assumptions and approximations
 
@@ -345,7 +358,7 @@ study.stages.add_relax(
     stage_id="relax",
     algorithm="projected_gradient_bb",
     max_steps=50_000,
-    tol=7.957747154594767,
+    tolT=1e-6,
 ).autosave(
     fm.StageAutosave(
         table=fm.TableAutosave(
@@ -443,7 +456,8 @@ the example and canonical IR excerpt.
 | `StudyStagesBuilder.add_relax.stage_id` | `str \| None` | `None` | $1$ | non-empty and unique when supplied | stage identity | FEM CPU/GPU | `problem_meta.runtime_metadata.active_stage_id` and `study_pipeline.nodes[].id` |
 | `StudyStagesBuilder.add_relax.algorithm` | `str` | `"llg_overdamped"` | $1$ | bounded values are `llg_overdamped`, `projected_gradient_bb`, and `nonlinear_cg`; other algorithms are rejected by this scope | relaxation family | FEM CPU/GPU bounded scope | `study.algorithm` |
 | `StudyStagesBuilder.add_relax.max_steps` | `int` | `50000` | $1$ | positive integer; production scenario explicitly supplies `50000` | accepted-step ceiling | FEM CPU/GPU | `study.stop.max_steps` |
-| `StudyStagesBuilder.add_relax.tol` | `float` | `1e-4` | $\mathrm{A\,m^{-1}}$ | finite positive torque threshold; scenario supplies `7.957747154594767` | relaxation stop threshold | FEM CPU/GPU | `study.stop.torque_tolerance_apm` |
+| `StudyStagesBuilder.add_relax.tolT` | `float` | `1e-6` | $\mathrm T$ | finite positive torque threshold; mutually exclusive with `tolA`; production scenario supplies `1e-6` | public relaxation stop threshold | FEM CPU/GPU | converted to `study.stop.torque_tolerance_apm` |
+| `StudyStagesBuilder.add_relax.tolA` | `float` | unset | $\mathrm{A\,m^{-1}}$ | finite positive torque threshold; mutually exclusive with `tolT` | explicit A/m relaxation stop threshold | FEM CPU/GPU | `study.stop.torque_tolerance_apm` |
 | `StudyStagesBuilder.add_relax.energy_tolerance` | `float \| None` | `None` | $\mathrm J$ | finite positive when supplied; must agree with explicit `stop` | energy stop threshold | FEM CPU/GPU | `study.stop.energy_tolerance_j` |
 | `StudyStagesBuilder.add_relax.max_relaxation_time_s` | `float \| None` | `None` | $\mathrm s$ | finite positive; LLG-overdamped only; aliases must agree | relaxation pseudotime ceiling | FEM CPU/GPU LLG relaxation | `study.stop.max_relaxation_time_s` |
 | `StudyStagesBuilder.add_relax.max_pseudotime_s` | `float \| None` | `None` | $\mathrm s$ | compatibility alias for `max_relaxation_time_s`; conflicting aliases raise | relaxation pseudotime alias | FEM CPU/GPU LLG relaxation | `study.stop.max_relaxation_time_s` |
@@ -551,7 +565,7 @@ executes current lowering and compares the fields shown here.
     "kind": "relaxation",
     "algorithm": "projected_gradient_bb",
     "stop": {
-      "torque_tolerance_apm": 7.957747154594767,
+      "torque_tolerance_apm": 0.7957747154594767,
       "max_steps": 50000
     },
     "sampling": {
@@ -661,7 +675,7 @@ than being populated with invented values.
 - finite values and `|m| = 1` within the declared tolerance;
 - non-increasing accepted-state relaxation energy within the documented
   energy-evaluation budget, plus explicit stop reason;
-- fresh final `max_torque_T <= 1e-5 T` and `converged=true` for every accepted
+- fresh final `max_torque_T <= 1e-6 T` and `converged=true` for every accepted
   relaxation candidate;
 - agreement of PG-BB, NCG, and stable LLG endpoints in energy, weighted mean
   magnetization, and projected vector field, preventing selection of a
@@ -862,11 +876,13 @@ evidence.
 | SP4 constants and declared mesh/airbox levels | `tests/standard_problems/mumag/sp4/common/contract.py` | `class SP4Contract` | canonical SI application constants and validation | shared SP4 contract | `tests/standard_problems/mumag/sp4/fem/test_contract.py` | implemented and tested | pending publication SHA |
 | Equations {eq}`sp4-fem-symmetric-energy-difference` and {eq}`sp4-fem-energy-acceptance` | `tests/standard_problems/mumag/sp4/common/contract.py` | `class EnergyComparisonTolerance` | fail-closed absolute-plus-relative energy acceptance | shared SP4 qualification | `test_mixed_p1_qualification_rules_are_executable_and_fail_closed` | implemented and tested | pending publication SHA |
 | frozen mixed-P1 energy and temporal acceptance rules | `tests/standard_problems/mumag/sp4/common/contract.py` | `class MixedP1QualificationContract` | immutable tolerances, finest-level pairs, and fail-closed comparisons | shared SP4 qualification | `test_mixed_p1_qualification_contract_freezes_energy_and_temporal_gates`; `test_mixed_p1_qualification_rules_are_executable_and_fail_closed` | implemented and tested; executor integration pending for declared wider axes | pending publication SHA |
+| Equation {eq}`sp4-mixed-relaxation-torque-threshold` | `tests/standard_problems/mumag/sp4/common/contract.py` | `class MixedP1QualificationContract` | own and validate the mixed-P1 acceptance contract, including the frozen T and canonical A/m thresholds | shared mixed-P1 qualification | `test_qualification_defaults_to_monotone_overdamped_llg_relaxation` | implemented and tested | pending publication SHA |
 | public study DSL and requested runtime intent | `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` | public study authoring facade | FEM CPU/GPU authoring | scenario lowering tests | implemented and tested | pending publication SHA |
 | exact-layer prism authoring | `packages/fullmag-py/src/fullmag/world.py` | `thin_film` | validate and lower prismatic thin-film controls | FEM CPU/GPU mixed-P1 | `test_projected_gradient_scenario_requests_one_exact_uniform_prism_layer` | implemented and tested | pending publication SHA |
 | relaxation-stage authoring | `packages/fullmag-py/src/fullmag/world.py` | `add_relax` | validate algorithm, stopping, and stage-local controls | FEM CPU/GPU | relaxation scenario matrix tests | implemented and tested | pending publication SHA |
 | stage-local autosave representation | `packages/fullmag-py/src/fullmag/model/study.py` | `class StageAutosave` | table and field output ownership | FEM CPU/GPU | public scenario lowering test | implemented and tested | pending publication SHA |
 | exact public mixed script lowering | `tests/standard_problems/mumag/sp4/fem/test_scenarios.py` | `test_projected_gradient_scenario_requests_one_exact_uniform_prism_layer` | assert complete mesh entry and autosave IR | FEM CPU/GPU authoring | direct test execution | implemented and tested | pending publication SHA |
+| public mixed-prism scenario threshold | `tests/standard_problems/mumag/sp4/fem/test_scenarios.py` | `test_relaxation_scenario_exports_only_its_physically_applicable_policy` | execute the checked-in projected-gradient scenario and prove its `tolT=1e-6` lowering without changing legacy scenarios | FEM CPU/GPU authoring | direct test execution | implemented and tested | pending publication SHA |
 | dynamics pipeline lowering | `tests/standard_problems/mumag/sp4/fem/test_scenarios.py` | `test_dynamics_scenario_uses_common_mumax_like_relaxation_and_named_run_solver` | assert field, RK policy, stage order, outputs, and runtime intent | FEM CPU/GPU authoring | direct test execution | implemented and tested for all-tet scripts | pending publication SHA |
 | bounded mixed-P1 planner gate | `crates/fullmag-plan/src/mesh.rs` | `validate_mixed_p1_execution_scope` | reject tuples outside strict certificate-bound scope | FEM CPU/GPU | planner mixed-P1 tests | implemented and tested | pending publication SHA |
 | capability status without promotion | `crates/fullmag-runner/src/capabilities.rs` | `mixed_p1_feature_capabilities` | publish implemented scope and pending managed proof | FEM CPU/GPU | capability contract tests | implemented; production qualification pending | pending publication SHA |
@@ -875,9 +891,12 @@ evidence.
 | exchange part of Equation {eq}`sp4-effective-field` | `backends/fem/cpu/mfem/interactions/exchange_operator.cpp` | `initialize_exchange_operator_mfem` | topology-aware exchange operator assembly | FEM CPU/GPU shared operator contract | mixed-P1 operator tests | implemented; full matrix pending | pending publication SHA |
 | demag part of Equation {eq}`sp4-effective-field` | `backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp` | `assemble_demag_poisson_rhs` | magnetic-cell Poisson source assembly | FEM CPU/GPU shared operator contract | bounded same-state runtime comparison | implemented; managed proof pending | pending publication SHA |
 | frozen run enumeration | `tests/standard_problems/mumag/sp4/fem/matrix_contract.py` | `matrix_specs` | deterministic staged relaxation run identities | FEM CPU/GPU | `test_matrix_contract.py` | only stages 1–3 implemented; wider matrix pending | pending publication SHA |
+| topology-scoped relaxation threshold | `tests/standard_problems/mumag/sp4/fem/matrix_contract.py` | `class SP4MatrixRunSpec` | bind mixed-P1 and legacy all-tet thresholds to immutable run specifications | FEM CPU/GPU | `test_matrix_contract.py` | implemented and tested | pending publication SHA |
+| topology-scoped managed study threshold | `tests/standard_problems/mumag/sp4/fem/problem.py` | `build_study` | lower the stricter threshold only for mixed-P1 runs while preserving all-tet history | FEM CPU/GPU | `test_managed_problem_scopes_stricter_torque_threshold_to_mixed_p1` | implemented and tested | pending publication SHA |
 | energy acceptance formula implementation primitive | `scripts/run_fem_sp4_mixed_matrix.py` | `_parity_scalar` | fail-closed absolute-plus-relative scalar comparison | FEM CPU/GPU | `test_run_fem_sp4_mixed_matrix.py` | device-pair primitive implemented; spatial/temporal use pending | pending publication SHA |
 | staged identical-topology device comparison | `scripts/run_fem_sp4_mixed_matrix.py` | `_compare_stage3_pairs` | compare certificate, state, energy, torque, and GPU provenance | FEM CPU/GPU | `test_run_fem_sp4_mixed_matrix.py` | implemented for stage 3; managed execution pending | pending publication SHA |
 | source-bound managed execution | `scripts/run_fem_sp4_mixed_matrix.py` | `execute_matrix` | execute append-only staged evidence under durable storage | FEM CPU/GPU | executor tests | implemented for staged relaxation subset; managed run pending | pending publication SHA |
+| mixed-P1 torque convergence evidence | `scripts/run_fem_sp4_mixed_matrix.py` | `_validate_case_artifacts` | require torque stop provenance, nonnegative unit-consistent residuals, and the planned `1e-6 T` limit | FEM CPU/GPU | `test_binds_every_runtime_artifact_to_planned_axes_and_step_budget` | implemented and tested | pending publication SHA |
 | exact source identity | `scripts/capture_source_snapshot_identity.py` | `capture` | content-address committed, dirty, and untracked source state | build/runtime shared | source identity tests | implemented and tested | pending publication SHA |
 | bounded runtime artifact validation | `scripts/verify_fem_mixed_prism_airbox_runtime.py` | `validate_runtime_artifacts` | verify fields, energies, topology, device, residency, and provenance | FEM CPU/GPU | verifier tests | implemented; managed public run pending | pending publication SHA |
 | trajectory convergence primitive | `tests/standard_problems/mumag/sp4/common/metrics.py` | `trajectory_pair_metrics` | common-grid RMS, endpoint, and crossing differences | shared SP4 analysis | `test_contract.py` | base metrics implemented; frozen p99/energy extension pending | pending publication SHA |

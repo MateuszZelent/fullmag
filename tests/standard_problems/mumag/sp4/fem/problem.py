@@ -10,8 +10,10 @@ import fullmag as fm
 from tests.standard_problems.mumag.sp4.common.contract import (
     CONTRACT,
     DEFAULT_RELAXATION_ALGORITHM,
+    LEGACY_ALL_TET_RELAXATION_TORQUE_TOLERANCE_APM,
     PRODUCTION_RELAXATION_ALGORITHMS,
     RELAXATION_DT_MAX_S,
+    MIXED_P1_RELAXATION_TORQUE_TOLERANCE_APM,
     validate_device,
 )
 from tests.standard_problems.mumag.sp4.fem.matrix_contract import (
@@ -136,7 +138,17 @@ def build_study(request: SP4RunRequest):
     if request.phase == "relax":
         algorithm = os.environ.get("FULLMAG_SP4_RELAX_ALGORITHM", DEFAULT_RELAXATION_ALGORITHM)
         maximum_steps = int(os.environ.get("FULLMAG_SP4_RELAX_MAX_STEPS", "50000"))
-        torque_tolerance_apm = float(os.environ.get("FULLMAG_SP4_RELAX_TOL_APM", "7.957747154594767"))
+        default_torque_tolerance_apm = (
+            MIXED_P1_RELAXATION_TORQUE_TOLERANCE_APM
+            if request.topology_variant == "mixed_p1"
+            else LEGACY_ALL_TET_RELAXATION_TORQUE_TOLERANCE_APM
+        )
+        torque_tolerance_apm = float(
+            os.environ.get(
+                "FULLMAG_SP4_RELAX_TOL_APM",
+                str(default_torque_tolerance_apm),
+            )
+        )
         if algorithm == "llg_overdamped":
             study.stages.add_relax(
                 stage_id="relax",

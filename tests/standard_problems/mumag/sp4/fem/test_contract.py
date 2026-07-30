@@ -10,9 +10,12 @@ from tests.standard_problems.mumag.sp4.common.contract import (
     CANONICAL_RELAXATION_DEVICE,
     CONTRACT,
     DEFAULT_RELAXATION_ALGORITHM,
+    LEGACY_ALL_TET_RELAXATION_TORQUE_TOLERANCE_APM,
     MIXED_P1_QUALIFICATION,
     PRODUCTION_RELAXATION_ALGORITHMS,
     RELAXATION_DT_MAX_S,
+    MIXED_P1_RELAXATION_TORQUE_TOLERANCE_APM,
+    MIXED_P1_RELAXATION_TORQUE_TOLERANCE_T,
     validate_device,
 )
 from tests.standard_problems.mumag.sp4.common.metrics import (
@@ -91,6 +94,14 @@ def test_qualification_defaults_to_monotone_overdamped_llg_relaxation():
         "nonlinear_cg",
     )
     assert RELAXATION_DT_MAX_S == 1e-14
+    assert MIXED_P1_RELAXATION_TORQUE_TOLERANCE_T == 1e-6
+    assert MIXED_P1_RELAXATION_TORQUE_TOLERANCE_APM == pytest.approx(
+        0.7957747154594767
+    )
+    assert MIXED_P1_QUALIFICATION.relaxation_torque_tolerance_t == 1e-6
+    assert MIXED_P1_QUALIFICATION.relaxation_torque_tolerance_apm == pytest.approx(
+        0.7957747154594767
+    )
 
 
 def test_mixed_p1_qualification_contract_freezes_energy_and_temporal_gates():
@@ -194,6 +205,7 @@ def _managed_problem_ir(
     monkeypatch.setenv("FULLMAG_SP4_DEVICE", "cpu")
     monkeypatch.setenv("FULLMAG_SP4_MESH", mesh)
     monkeypatch.setenv("FULLMAG_SP4_AIRBOX", "baseline")
+    monkeypatch.delenv("FULLMAG_SP4_RELAX_TOL_APM", raising=False)
     if topology_variant is None:
         monkeypatch.delenv("FULLMAG_SP4_TOPOLOGY_VARIANT", raising=False)
     else:
@@ -238,6 +250,32 @@ def _managed_mesh_entry(monkeypatch, **kwargs):
         "per_geometry"
     ]
     return mesh
+
+
+def test_managed_problem_scopes_stricter_torque_threshold_to_mixed_p1(
+    monkeypatch,
+):
+    mixed = _managed_problem_ir(
+        monkeypatch,
+        phase="relax",
+        algorithm="projected_gradient_bb",
+        topology_variant="mixed_p1",
+        layers=1,
+    )
+    legacy = _managed_problem_ir(
+        monkeypatch,
+        phase="relax",
+        algorithm="projected_gradient_bb",
+        topology_variant="all_tet",
+        layers=None,
+    )
+
+    assert mixed["study"]["stop"]["torque_tolerance_apm"] == pytest.approx(
+        MIXED_P1_RELAXATION_TORQUE_TOLERANCE_APM
+    )
+    assert legacy["study"]["stop"]["torque_tolerance_apm"] == pytest.approx(
+        LEGACY_ALL_TET_RELAXATION_TORQUE_TOLERANCE_APM
+    )
 
 
 def test_managed_problem_defaults_to_all_tet_without_layer_controls(

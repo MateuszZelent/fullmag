@@ -13,6 +13,14 @@ CANONICAL_RELAXATION_ALGORITHM = "llg_overdamped"
 CANONICAL_RELAXATION_DEVICE = "gpu"
 DEFAULT_RELAXATION_ALGORITHM = CANONICAL_RELAXATION_ALGORITHM
 RELAXATION_DT_MAX_S = 1e-14
+MIXED_P1_RELAXATION_TORQUE_TOLERANCE_T = 1e-6
+MIXED_P1_RELAXATION_TORQUE_TOLERANCE_APM = (
+    MIXED_P1_RELAXATION_TORQUE_TOLERANCE_T / (4e-7 * math.pi)
+)
+LEGACY_ALL_TET_RELAXATION_TORQUE_TOLERANCE_T = 1e-5
+LEGACY_ALL_TET_RELAXATION_TORQUE_TOLERANCE_APM = (
+    LEGACY_ALL_TET_RELAXATION_TORQUE_TOLERANCE_T / (4e-7 * math.pi)
+)
 
 
 @dataclass(frozen=True)
@@ -55,6 +63,8 @@ class EnergyComparisonTolerance:
 
 @dataclass(frozen=True)
 class MixedP1QualificationContract:
+    relaxation_torque_tolerance_t: float
+    relaxation_torque_tolerance_apm: float
     mesh_energy: EnergyComparisonTolerance
     airbox_energy: EnergyComparisonTolerance
     operator_energy: EnergyComparisonTolerance
@@ -68,6 +78,13 @@ class MixedP1QualificationContract:
     temporal_energy_endpoint: EnergyComparisonTolerance
 
     def __post_init__(self) -> None:
+        if (
+            self.relaxation_torque_tolerance_t
+            != MIXED_P1_RELAXATION_TORQUE_TOLERANCE_T
+            or self.relaxation_torque_tolerance_apm
+            != MIXED_P1_RELAXATION_TORQUE_TOLERANCE_APM
+        ):
+            raise ValueError("mixed-P1 relaxation torque threshold is not canonical")
         for name, tolerance in (
             ("mesh_energy", self.mesh_energy),
             ("airbox_energy", self.airbox_energy),
@@ -197,6 +214,8 @@ CONTRACT = SP4Contract(
 
 
 MIXED_P1_QUALIFICATION = MixedP1QualificationContract(
+    relaxation_torque_tolerance_t=MIXED_P1_RELAXATION_TORQUE_TOLERANCE_T,
+    relaxation_torque_tolerance_apm=MIXED_P1_RELAXATION_TORQUE_TOLERANCE_APM,
     mesh_energy=EnergyComparisonTolerance(atol_j=2e-19, rtol=2e-2),
     airbox_energy=EnergyComparisonTolerance(atol_j=1e-19, rtol=1e-2),
     operator_energy=EnergyComparisonTolerance(atol_j=1e-30, rtol=1e-6),

@@ -286,8 +286,13 @@ def test_relaxation_scenario_exports_only_its_physically_applicable_policy(
         assert adaptive["dt_min"] == pytest.approx(1e-17)
         assert adaptive["dt_max"] == pytest.approx(1e-14)
 
+    expected_tolerance_apm = (
+        0.7957747154594767
+        if scenario == "relax_projected_gradient_bb"
+        else 7.957747154594767
+    )
     assert relaxation["stop"]["torque_tolerance_apm"] == pytest.approx(
-        7.957747154594767
+        expected_tolerance_apm
     )
     assert relaxation["stop"]["max_steps"] == 50_000
 

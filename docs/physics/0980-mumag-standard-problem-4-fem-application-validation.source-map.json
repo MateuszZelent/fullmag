@@ -43,6 +43,11 @@
       "sources": ["sp4-contract"]
     },
     {
+      "id": "sp4-mixed-relaxation-torque-threshold",
+      "symbols": ["mu0"],
+      "sources": ["mixed-torque-threshold", "mixed-run-spec", "mixed-artifact-validation"]
+    },
+    {
       "id": "sp4-fem-symmetric-energy-difference",
       "symbols": ["DeltaE", "Ea", "Eb"],
       "sources": ["energy-tolerance", "scalar-parity"]
@@ -85,11 +90,13 @@
     {"id": "sp4-contract", "path": "tests/standard_problems/mumag/sp4/common/contract.py", "symbol": "class SP4Contract", "responsibility": "Define canonical SI application constants, cases, mesh levels, and airboxes."},
     {"id": "energy-tolerance", "path": "tests/standard_problems/mumag/sp4/common/contract.py", "symbol": "class EnergyComparisonTolerance", "responsibility": "Implement the frozen fail-closed absolute-plus-relative energy rule."},
     {"id": "mixed-qualification-contract", "path": "tests/standard_problems/mumag/sp4/common/contract.py", "symbol": "class MixedP1QualificationContract", "responsibility": "Own frozen mixed-P1 spatial, airbox, operator, and temporal acceptance constants and rules."},
+    {"id": "mixed-torque-threshold", "path": "tests/standard_problems/mumag/sp4/common/contract.py", "symbol": "class MixedP1QualificationContract", "responsibility": "Own and validate the mixed-P1 acceptance contract, including its frozen 1e-6 T threshold and canonical A/m conversion."},
     {"id": "study-authoring", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyBuilder", "responsibility": "Expose public study authoring and requested runtime intent."},
     {"id": "thin-film-authoring", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "thin_film", "responsibility": "Validate and lower exact-layer prismatic thin-film controls."},
     {"id": "relax-authoring", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "add_relax", "responsibility": "Validate relaxation algorithm, stopping policy, and stage-local controls."},
     {"id": "stage-autosave", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class StageAutosave", "responsibility": "Represent stage-owned table and field outputs."},
     {"id": "mixed-lowering-test", "path": "tests/standard_problems/mumag/sp4/fem/test_scenarios.py", "symbol": "test_projected_gradient_scenario_requests_one_exact_uniform_prism_layer", "responsibility": "Execute public lowering and assert the exact mixed mesh entry and autosave IR."},
+    {"id": "mixed-public-scenario", "path": "tests/standard_problems/mumag/sp4/fem/test_scenarios.py", "symbol": "test_relaxation_scenario_exports_only_its_physically_applicable_policy", "responsibility": "Execute the checked-in mixed-prism projected-gradient scenario and prove tolT=1e-6 lowering without changing legacy scenarios."},
     {"id": "dynamics-lowering-test", "path": "tests/standard_problems/mumag/sp4/fem/test_scenarios.py", "symbol": "test_dynamics_scenario_uses_common_mumax_like_relaxation_and_named_run_solver", "responsibility": "Assert field, RK policy, stage order, outputs, and strict runtime intent."},
     {"id": "mixed-planner", "path": "crates/fullmag-plan/src/mesh.rs", "symbol": "validate_mixed_p1_execution_scope", "responsibility": "Reject every tuple outside the bounded strict certificate-bound mixed-P1 scope."},
     {"id": "mixed-capabilities", "path": "crates/fullmag-runner/src/capabilities.rs", "symbol": "mixed_p1_feature_capabilities", "responsibility": "Publish implemented scope without claiming managed production qualification."},
@@ -98,9 +105,12 @@
     {"id": "exchange-operator", "path": "backends/fem/cpu/mfem/interactions/exchange_operator.cpp", "symbol": "initialize_exchange_operator_mfem", "responsibility": "Assemble the topology-aware exchange operator."},
     {"id": "demag-rhs", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp", "symbol": "assemble_demag_poisson_rhs", "responsibility": "Assemble the magnetic-cell Poisson demagnetization source."},
     {"id": "matrix-specs", "path": "tests/standard_problems/mumag/sp4/fem/matrix_contract.py", "symbol": "matrix_specs", "responsibility": "Enumerate deterministic staged mixed-relaxation run identities."},
+    {"id": "mixed-run-spec", "path": "tests/standard_problems/mumag/sp4/fem/matrix_contract.py", "symbol": "class SP4MatrixRunSpec", "responsibility": "Bind topology-scoped torque thresholds to immutable run provenance."},
+    {"id": "mixed-problem-builder", "path": "tests/standard_problems/mumag/sp4/fem/problem.py", "symbol": "build_study", "responsibility": "Lower the stricter threshold only for mixed-P1 runs while preserving the legacy all-tet lane."},
     {"id": "scalar-parity", "path": "scripts/run_fem_sp4_mixed_matrix.py", "symbol": "_parity_scalar", "responsibility": "Apply a fail-closed absolute-plus-relative scalar comparison."},
     {"id": "device-pairs", "path": "scripts/run_fem_sp4_mixed_matrix.py", "symbol": "_compare_stage3_pairs", "responsibility": "Compare certificate-bound identical-topology CPU/GPU relaxation pairs."},
     {"id": "matrix-executor", "path": "scripts/run_fem_sp4_mixed_matrix.py", "symbol": "execute_matrix", "responsibility": "Execute source-bound staged evidence under durable storage."},
+    {"id": "mixed-artifact-validation", "path": "scripts/run_fem_sp4_mixed_matrix.py", "symbol": "_validate_case_artifacts", "responsibility": "Require torque stop provenance, nonnegative unit-consistent residuals, and the planned mixed-P1 threshold."},
     {"id": "source-identity", "path": "scripts/capture_source_snapshot_identity.py", "symbol": "capture", "responsibility": "Capture content-addressed committed, dirty, and untracked source identity."},
     {"id": "runtime-verifier", "path": "scripts/verify_fem_mixed_prism_airbox_runtime.py", "symbol": "validate_runtime_artifacts", "responsibility": "Verify mixed topology, fields, energies, device residency, transfers, and provenance."},
     {"id": "trajectory-metrics", "path": "tests/standard_problems/mumag/sp4/common/metrics.py", "symbol": "trajectory_pair_metrics", "responsibility": "Compute common-grid trajectory RMS, endpoint, and crossing differences."},
@@ -772,12 +782,22 @@
         "problem_ir": "`study.stop.max_steps`"
       },
       {
-        "python": "StudyStagesBuilder.add_relax.tol",
+        "python": "StudyStagesBuilder.add_relax.tolT",
         "type": "float",
-        "default": "1e-4",
+        "default": "1e-6",
+        "si_unit": "\\mathrm T",
+        "validation": "finite positive torque threshold; mutually exclusive with `tolA`; production scenario supplies `1e-6`",
+        "meaning": "public relaxation stop threshold",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "converted to `study.stop.torque_tolerance_apm`"
+      },
+      {
+        "python": "StudyStagesBuilder.add_relax.tolA",
+        "type": "float",
+        "default": "unset",
         "si_unit": "\\mathrm{A\\,m^{-1}}",
-        "validation": "finite positive torque threshold; scenario supplies `7.957747154594767`",
-        "meaning": "relaxation stop threshold",
+        "validation": "finite positive torque threshold; mutually exclusive with `tolT`",
+        "meaning": "explicit A/m relaxation stop threshold",
         "backend_support": "FEM CPU/GPU",
         "problem_ir": "`study.stop.torque_tolerance_apm`"
       },

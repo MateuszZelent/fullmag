@@ -69,6 +69,11 @@ def test_stage1_enumerates_exactly_nine_cpu_medium_baseline_relaxations() -> Non
     assert all(spec.device == "cpu" for spec in specs)
     assert all(spec.mesh == MEDIUM for spec in specs)
     assert all(spec.airbox == BASELINE for spec in specs)
+    assert all(spec.torque_tolerance_t == 1e-6 for spec in specs)
+    assert all(
+        spec.torque_tolerance_apm == pytest.approx(0.7957747154594767)
+        for spec in specs
+    )
 
 
 def test_stage2_reuses_only_identity_equal_stage1_baseline_and_adds_three_expanded_runs(
@@ -166,6 +171,8 @@ def test_all_tet_run_identity_uses_explicit_layers_none_key() -> None:
         "relaxations/all_tet/layers-none/cpu/medium/baseline/"
         "nonlinear_cg/artifacts"
     )
+    assert spec.torque_tolerance_t == 1e-5
+    assert spec.torque_tolerance_apm == pytest.approx(7.957747154594767)
 
 
 def test_unknown_matrix_stage_fails_closed() -> None:

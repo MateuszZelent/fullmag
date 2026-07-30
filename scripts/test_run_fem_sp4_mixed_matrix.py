@@ -265,6 +265,13 @@ class MixedSP4MatrixExecutorTests(unittest.TestCase):
             },
             f"fem_{spec['device']}_relaxation_qualification": {
                 "relaxation_algorithm": spec["relaxation_algorithm"],
+                "converged": True,
+                "stop_reason": "torque",
+                "stop_metric_kind": "max_torque_apm",
+                "stop_metric_unit": "A/m",
+                "stop_metric_name": "max_torque_apm",
+                "stop_metric_value": 0.5,
+                "stop_threshold": spec["torque_tolerance_apm"],
                 "executed_steps": 1,
                 "total_rhs_evals": 2,
                 "rejected_attempts": 0,
@@ -277,8 +284,8 @@ class MixedSP4MatrixExecutorTests(unittest.TestCase):
                     "E_dmi": 0.0,
                     "E_total": 0.5,
                 },
-                "final_torque_apm": 2.0,
-                "final_torque_t": 2.5e-6,
+                "final_torque_apm": 0.5,
+                "final_torque_t": 6.283185307179586e-7,
                 "norm_defect": 0.0,
             },
         }
@@ -370,8 +377,8 @@ class MixedSP4MatrixExecutorTests(unittest.TestCase):
                     "E_ex": 0.2,
                     "E_demag": 0.3,
                     "E_total": 0.5,
-                    "max_torque_Apm": 2.0,
-                    "max_torque_T": 2.5e-6,
+                    "max_torque_Apm": 0.5,
+                    "max_torque_T": 6.283185307179586e-7,
                 }
             )
         (artifact_dir / "m_final.json").write_text(
@@ -451,6 +458,10 @@ class MixedSP4MatrixExecutorTests(unittest.TestCase):
                     spec["relaxation_algorithm"],
                 )
                 self.assertEqual(environment["FULLMAG_SP4_RELAX_MAX_STEPS"], "1")
+                self.assertEqual(
+                    environment["FULLMAG_SP4_RELAX_TOL_APM"],
+                    str(spec["torque_tolerance_apm"]),
+                )
                 manifest_path = (
                     root
                     / Path(str(spec["artifact_path"])).parent
@@ -1040,6 +1051,24 @@ class MixedSP4MatrixExecutorTests(unittest.TestCase):
         def mutate_torque(metadata: dict[str, object], _final: dict[str, object]) -> None:
             metadata["fem_cpu_relaxation_qualification"]["final_torque_t"] = 3.0e-6
 
+        def mutate_convergence(metadata: dict[str, object], _final: dict[str, object]) -> None:
+            metadata["fem_cpu_relaxation_qualification"]["converged"] = False
+
+        def mutate_stop_threshold(metadata: dict[str, object], _final: dict[str, object]) -> None:
+            metadata["fem_cpu_relaxation_qualification"]["stop_threshold"] = 7.957747154594767
+
+        def mutate_negative_torque(metadata: dict[str, object], _final: dict[str, object]) -> None:
+            metadata["fem_cpu_relaxation_qualification"]["final_torque_apm"] = -0.5
+
+        def mutate_torque_units(metadata: dict[str, object], _final: dict[str, object]) -> None:
+            metadata["fem_cpu_relaxation_qualification"]["final_torque_apm"] = 0.25
+
+        def mutate_stop_provenance(metadata: dict[str, object], _final: dict[str, object]) -> None:
+            metadata["fem_cpu_relaxation_qualification"]["stop_metric_unit"] = "T"
+
+        def mutate_stop_value(metadata: dict[str, object], _final: dict[str, object]) -> None:
+            metadata["fem_cpu_relaxation_qualification"]["stop_metric_value"] = 0.25
+
         def mutate_norm(metadata: dict[str, object], _final: dict[str, object]) -> None:
             metadata["fem_cpu_relaxation_qualification"]["norm_defect"] = 1.0e-6
 
@@ -1055,6 +1084,12 @@ class MixedSP4MatrixExecutorTests(unittest.TestCase):
             "quality": mutate_quality,
             "energy": mutate_energy,
             "torque": mutate_torque,
+            "convergence": mutate_convergence,
+            "stop_threshold": mutate_stop_threshold,
+            "negative_torque": mutate_negative_torque,
+            "torque_units": mutate_torque_units,
+            "stop_provenance": mutate_stop_provenance,
+            "stop_value": mutate_stop_value,
             "norm_defect": mutate_norm,
         }
         for label, mutate in mutations.items():

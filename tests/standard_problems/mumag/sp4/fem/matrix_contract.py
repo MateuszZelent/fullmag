@@ -9,8 +9,12 @@ from typing import Literal
 from tests.standard_problems.mumag.sp4.common.contract import (
     CONTRACT,
     AirboxVariant,
+    LEGACY_ALL_TET_RELAXATION_TORQUE_TOLERANCE_APM,
+    LEGACY_ALL_TET_RELAXATION_TORQUE_TOLERANCE_T,
     MeshLevel,
     PRODUCTION_RELAXATION_ALGORITHMS,
+    MIXED_P1_RELAXATION_TORQUE_TOLERANCE_APM,
+    MIXED_P1_RELAXATION_TORQUE_TOLERANCE_T,
     validate_device,
 )
 
@@ -66,6 +70,8 @@ class SP4MatrixRunSpec:
     airbox: AirboxVariant
     device: Literal["cpu", "gpu"]
     relaxation_algorithm: str
+    torque_tolerance_t: float | None = None
+    torque_tolerance_apm: float | None = None
 
     def __post_init__(self) -> None:
         if not self.stage_id:
@@ -84,6 +90,25 @@ class SP4MatrixRunSpec:
                 "unsupported SP4 relaxation algorithm: "
                 f"{self.relaxation_algorithm}"
             )
+        expected_t, expected_apm = (
+            (
+                MIXED_P1_RELAXATION_TORQUE_TOLERANCE_T,
+                MIXED_P1_RELAXATION_TORQUE_TOLERANCE_APM,
+            )
+            if self.topology_variant == "mixed_p1"
+            else (
+                LEGACY_ALL_TET_RELAXATION_TORQUE_TOLERANCE_T,
+                LEGACY_ALL_TET_RELAXATION_TORQUE_TOLERANCE_APM,
+            )
+        )
+        if self.torque_tolerance_t is None:
+            object.__setattr__(self, "torque_tolerance_t", expected_t)
+        elif self.torque_tolerance_t != expected_t:
+            raise ValueError("SP4 torque tolerance in T does not match topology policy")
+        if self.torque_tolerance_apm is None:
+            object.__setattr__(self, "torque_tolerance_apm", expected_apm)
+        elif self.torque_tolerance_apm != expected_apm:
+            raise ValueError("SP4 torque tolerance in A/m does not match topology policy")
 
     @property
     def layer_key(self) -> str:
