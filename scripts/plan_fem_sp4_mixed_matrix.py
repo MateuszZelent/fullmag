@@ -326,6 +326,12 @@ def _source_identity(output_dir: Path | None = None) -> dict[str, object]:
         raise PlanError("git source status changed while capturing the snapshot")
     if dirty_content_after != dirty_content:
         raise PlanError("dirty source content changed while capturing the snapshot")
+    source_hashes_after = {
+        path.as_posix(): _sha256_file(REPO_ROOT / path)
+        for path in RELEVANT_SOURCE_PATHS
+    }
+    if source_hashes_after != source_hashes:
+        raise PlanError("relevant source files changed while capturing the snapshot")
     try:
         head_after = _git_output("rev-parse", "--verify", "HEAD").decode("ascii").strip()
     except UnicodeDecodeError as error:
@@ -475,6 +481,17 @@ def _preflight_existing_output(
         raise PlanError(f"cannot inspect existing plan output {output_dir}: {error}") from error
     if set(entries) != set(payloads):
         raise PlanError(f"existing plan output is incomplete or conflicting: {output_dir}")
+    for path in entries.values():
+        try:
+            metadata = path.lstat()
+        except OSError as error:
+            raise PlanError(
+                f"cannot inspect existing plan output entry {path}: {error}"
+            ) from error
+        if not stat.S_ISREG(metadata.st_mode):
+            raise PlanError(
+                f"existing plan output entry is not a regular file: {path}"
+            )
     try:
         matches = all(entries[name].read_bytes() == payload for name, payload in payloads.items())
     except OSError as error:

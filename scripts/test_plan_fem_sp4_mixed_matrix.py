@@ -430,6 +430,38 @@ class FemSp4MixedMatrixPlannerTest(unittest.TestCase):
                 with self.assertRaisesRegex(planner.PlanError, "required source file"):
                     planner.build_plan("stage1-layers")
 
+    def test_relevant_source_change_during_snapshot_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = self._source_repo(directory)
+            problem = source_root / PROBLEM_SOURCE
+            original_hash = planner._sha256_file
+            mutation_injected = False
+
+            def mutate_after_initial_hash(path: Path) -> str:
+                nonlocal mutation_injected
+                digest = original_hash(path)
+                if path == problem and not mutation_injected:
+                    problem.write_text(
+                        problem.read_text(encoding="utf-8")
+                        + "\n# changed during source snapshot\n",
+                        encoding="utf-8",
+                    )
+                    mutation_injected = True
+                return digest
+
+            with mock.patch.object(planner, "REPO_ROOT", source_root), mock.patch.object(
+                planner,
+                "_sha256_file",
+                side_effect=mutate_after_initial_hash,
+            ):
+                with self.assertRaisesRegex(
+                    planner.PlanError,
+                    "relevant source files changed",
+                ):
+                    planner.build_plan("stage1-layers")
+
+            self.assertTrue(mutation_injected)
+
     def test_conflicting_existing_output_set_is_not_partially_modified(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output_dir = Path(directory) / "plan"
@@ -445,6 +477,30 @@ class FemSp4MixedMatrixPlannerTest(unittest.TestCase):
                 {OUTPUT_FILES[2]: b"conflicting-tsv\n"},
             )
             self.assertEqual(list(output_dir.parent.glob(".plan.tmp-*")), [])
+
+    def test_matching_symlink_backed_output_is_rejected_without_modification(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            external = root / "external"
+            planner.emit_plan("stage1-layers", external)
+            output_dir = root / "plan"
+            output_dir.mkdir()
+            for name in OUTPUT_FILES:
+                (output_dir / name).symlink_to(external / name)
+            original_links = {
+                name: os.readlink(output_dir / name) for name in OUTPUT_FILES
+            }
+
+            with self.assertRaisesRegex(planner.PlanError, "regular file"):
+                planner.emit_plan("stage1-layers", output_dir)
+
+            self.assertEqual(
+                {name: os.readlink(output_dir / name) for name in OUTPUT_FILES},
+                original_links,
+            )
+            self.assertEqual(list(root.glob(".plan.tmp-*")), [])
 
     def test_staged_write_failure_exposes_no_output_and_cleans_transaction(self) -> None:
         original_open = Path.open
