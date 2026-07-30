@@ -7692,6 +7692,62 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn("edge_transition_distance=3e-08", rewritten)
         self.assertIn("corner_transition_distance=2e-08", rewritten)
 
+    def test_mixed_p1_publication_example_lowers_complete_mesh_entry_to_problem_ir(self) -> None:
+        script = """
+        import fullmag as fm
+
+        fm.reset()
+        study = fm.study("mixed-p1-layers")
+        study.engine("fem")
+        study.mode("strict")
+        study.universe(mode="manual", size=(100e-9, 80e-9, 65e-9))
+        film = study.geometry(
+            fm.Box(size=(24e-9, 12e-9, 1e-9), name="magnet"),
+            name="magnet",
+        )
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.1
+        film.m = fm.texture.uniform(1, 0, 0)
+        film.mesh.thin_film(
+            maximum_element_size=3e-9,
+            layers=3,
+            topology="prismatic",
+            exact_layers=True,
+            transition="pyramid_to_tetrahedra",
+            order=1,
+        )
+        study.relax(algorithm="projected_gradient_bb", max_steps=1)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "mixed_p1_publication_example.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            with patch("fullmag.world.build_geometry_assets_for_request", return_value=None):
+                loaded = fm.load_problem_from_script(path)
+
+        problem_ir = loaded.problem.to_ir(include_geometry_assets=False)
+        mesh_workflow = problem_ir["problem_meta"]["runtime_metadata"]["mesh_workflow"]
+        self.assertEqual(
+            mesh_workflow["per_geometry"][0],
+            {
+                "geometry": "magnet",
+                "mode": "custom",
+                "hmax": 3e-9,
+                "maximum_element_size": 3e-9,
+                "order": 1,
+                "mesh_strategy": "swept_prism",
+                "through_thickness_elements": 3,
+                "through_thickness_distribution": "fixed",
+                "sweep_face_meshing": "triangular",
+                "topology": "prismatic",
+                "sweep_direction": "auto",
+                "element_family": "prism",
+                "transition_policy": "pyramid_to_tetrahedra",
+                "exact_layer_count": True,
+            },
+        )
+
     def test_thin_film_airbox_boundary_transition_token_round_trips(self) -> None:
         script = """
         import fullmag as fm

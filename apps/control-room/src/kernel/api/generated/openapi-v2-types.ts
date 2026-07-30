@@ -3151,9 +3151,12 @@ export interface components {
             wireframe: components["schemas"]["BasicLayerState"];
         };
         ApiErrorResponse: {
+            capability_reason?: string | null;
+            code: string;
             error: string;
             message: string;
             request_id?: string | null;
+            revision_context?: unknown;
         };
         ArtifactEntry: {
             kind: string;
@@ -5626,10 +5629,17 @@ export interface components {
         MeshCapabilitiesResource: {
             /** @description Meshing adaptivity capability/state only. UI-wide gating remains owned by `status.capabilities`. */
             mesh_adaptivity_state?: unknown;
-            /** @description Meshing policy/build feature matrix only. UI-wide gating remains owned by `status.capabilities`. */
-            mesh_capabilities?: unknown;
+            mesh_capabilities?: null | components["schemas"]["MeshCapabilityMatrixResource"];
             /** Format: int64 */
             revision: number;
+        };
+        MeshCapabilityMatrixResource: {
+            "mesh.exact_layer_count"?: null | components["schemas"]["MeshFeatureCapabilityResource"];
+            "mesh.swept.prism"?: null | components["schemas"]["MeshFeatureCapabilityResource"];
+            "mesh.topology.mixed_p1"?: null | components["schemas"]["MeshFeatureCapabilityResource"];
+            "mesh.transition.pyramid_tet"?: null | components["schemas"]["MeshFeatureCapabilityResource"];
+        } & {
+            [key: string]: unknown;
         };
         MeshCommandTarget: {
             /** @enum {string} */
@@ -5649,6 +5659,12 @@ export interface components {
             geometry_name: string;
             /** Format: int32 */
             marker: number;
+        };
+        MeshFeatureCapabilityResource: {
+            reason?: string | null;
+            scope?: string | null;
+            status: string;
+            supported_layer_counts?: number[];
         };
         MeshHistogramBinElementsResource: {
             /** Format: int32 */
@@ -5844,6 +5860,12 @@ export interface components {
             requested_method?: string | null;
             scope: string;
             status: string;
+        };
+        MeshOrphanEntityResource: {
+            /** Format: int32 */
+            dimension: number;
+            /** Format: int32 */
+            tag: number;
         };
         MeshPartResource: {
             /** Format: int32 */
@@ -6091,7 +6113,7 @@ export interface components {
             mixed_topology_provenance?: null | components["schemas"]["MeshMixedTopologyProvenanceResource"];
             object_region_markers?: Record<string, never>[];
             operation_statuses?: components["schemas"]["MeshOperationStatusResource"][];
-            orphan_entities?: Record<string, never>[];
+            orphan_entities?: components["schemas"]["MeshOrphanEntityResource"][];
             /** Format: int32 */
             realized_regions_count?: number | null;
             region_markers?: components["schemas"]["MeshDomainRegionMarkerResource"][];
@@ -12989,12 +13011,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description FEM topology unavailable for cross-section */
+            /** @description FEM topology unavailable or mixed topology is not supported for cross-section */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
             };
         };
     };
@@ -13057,12 +13081,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description FEM topology unavailable for cross-section */
+            /** @description FEM topology unavailable or mixed topology is not supported for cross-section image */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
             };
         };
     };
@@ -13109,12 +13135,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description FEM topology unavailable for cross-section */
+            /** @description FEM topology unavailable or mixed topology is not supported for cross-section quality */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
             };
         };
     };
@@ -13481,6 +13509,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Mixed or otherwise non-tet4 topology is not supported for histogram selection */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
             };
         };
     };

@@ -287,8 +287,10 @@ Kanoniczny kontrakt dla dokładnej warstwy cienkiej folii definiują
 `docs/physics/0106-fem-mixed-prism-pyramid-shared-domain.md` i ADR 0021.
 Docelowy wspólny mesh solvera używa `prism6` wyłącznie w magnetycznym Boxie,
 `pyramid5` w przejściu powietrznym, `tet4` w dalekim airboxie oraz
-`tri3 | quad4` na fasetach. `layers=1` oznacza dokładnie dwie magnetyczne
-płaszczyzny węzłów i nadal jest pełnym trójwymiarowym P1, nie modelem 2.5D.
+`tri3 | quad4` na fasetach. Ograniczony kontrakt relaksacji akceptuje dokładne
+`layers in {1,2,3}` przy requested = realized = `L` i dokładnie `L+1`
+magnetycznych płaszczyznach węzłów. `layers=1` oznacza więc dokładnie dwie
+płaszczyzny i nadal jest pełnym trójwymiarowym P1, nie modelem 2.5D.
 
 Własność pozostaje backends-first:
 
@@ -309,7 +311,8 @@ DG0/material interfaces, order>1, arbitrary OCC, multi-body i multilayer
 pozostają fail-closed do osobnej kwalifikacji.
 
 Obecny stan jest `implemented` wyłącznie dla jawnego FEM CPU lub GPU/strict/double P1,
-jednego osiowego Boxa i jednej certyfikowanej warstwy, z exchange, opcjonalnym
+jednego osiowego Boxa i certyfikowanej liczby warstw z dokładnego zbioru
+`{1,2,3}`, z exchange, opcjonalnym
 jednorodnym Zeemanem, Poisson Robin/Dirichlet oraz PG-BB/NCG/overdamped LLG.
 Source i operator contract tests nie są dowodem publicznego managed runtime,
 więc `production_executable` i `validated` pozostają nieprzyznane do czasu

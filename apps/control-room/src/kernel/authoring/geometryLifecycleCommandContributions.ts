@@ -19,7 +19,7 @@ import {
   MODEL_GEOMETRY_VALIDATION_PATH,
   MODEL_SCENE_PATH,
 } from "../api/apiPaths";
-import type { JsonObject, JsonValue } from "../api/apiTypes";
+import type { JsonObject, JsonValue, MeshCapabilitiesResource } from "../api/apiTypes";
 import type { CommandDetailResource } from "../api/apiTypes";
 import type { CommandContext, CommandContribution } from "../commands/commandTypes";
 import type { Selection } from "../selection/selectionTypes";
@@ -261,10 +261,7 @@ function meshCapabilityDisabledReason(
     return null;
   }
   const option = resolveMeshEditorCapabilities(
-    context.resourceData[MESHING_CAPABILITIES_PATH] as {
-      mesh_capabilities?: unknown;
-      mesh_adaptivity_state?: unknown;
-    } | null,
+    context.resourceData[MESHING_CAPABILITIES_PATH] as MeshCapabilitiesResource | null,
   ).option(capability);
   return meshEditorCapabilityBlocks(option) ? option.reason : null;
 }
@@ -439,12 +436,13 @@ function qualityRefinementMeshOptions(input: unknown): JsonObject | null {
 function openPrimitiveDraft(
   context: CommandContext,
   primitiveKind: "box" | "cylinder" | "sphere",
+  draftIdentity: "box" | "thin-film" | "cylinder" | "sphere" = primitiveKind,
 ): void {
   context.selection?.set(
     {
       kind: "builder.primitive",
-      label: `New ${primitiveKind}`,
-      nodeId: `geometry:draft:${primitiveKind}`,
+      label: draftIdentity === "thin-film" ? "New thin film" : `New ${primitiveKind}`,
+      nodeId: `geometry:draft:${draftIdentity}`,
       objectId: null,
       ref: null,
     },
@@ -621,6 +619,7 @@ function primitiveDraftCommand(
   id: string,
   title: string,
   primitiveKind: "box" | "cylinder" | "sphere",
+  draftIdentity: "box" | "thin-film" | "cylinder" | "sphere" = primitiveKind,
 ): CommandContribution {
   return {
     id,
@@ -635,7 +634,7 @@ function primitiveDraftCommand(
         ? primitiveCapabilityDisabledReason(primitiveKind)
         : null,
     run: (context) => {
-      openPrimitiveDraft(context, primitiveKind);
+      openPrimitiveDraft(context, primitiveKind, draftIdentity);
       return { status: "completed" };
     },
   };
@@ -643,6 +642,7 @@ function primitiveDraftCommand(
 
 export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
   primitiveDraftCommand("geometry.add-box", "Add Box", "box"),
+  primitiveDraftCommand("geometry.add-thin-film", "Add Thin Film", "box", "thin-film"),
   primitiveDraftCommand("geometry.add-cylinder", "Add Cylinder", "cylinder"),
   primitiveDraftCommand("geometry.add-sphere", "Add Sphere", "sphere"),
   {

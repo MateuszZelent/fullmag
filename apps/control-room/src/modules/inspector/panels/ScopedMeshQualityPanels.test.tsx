@@ -172,7 +172,10 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
         "mesh.topology.mixed_p1": { status: mixedTopologyCapabilityStatus.value },
         "mesh.swept.prism": { status: "production_executable" },
         "mesh.transition.pyramid_tet": { status: "validated" },
-        "mesh.exact_layer_count": { status: "production_executable" },
+        "mesh.exact_layer_count": {
+          status: "production_executable",
+          supported_layer_counts: [1, 2, 3],
+        },
       },
     },
     error: null,

@@ -113,6 +113,36 @@ describe("MixedTopologyProvenanceSection", () => {
     });
   });
 
+  it("fails closed and exposes typed orphan entities in the inspector", () => {
+    const model = resolveMixedTopologyPresentation({
+      buildReport: {
+        mixed_layer_topology_certificate: { status: "accepted" },
+        mixed_topology_provenance: {
+          requested_topology: "mixed_p1",
+          resolved_topology: "mixed_p1",
+        },
+        orphan_entities: [{ dimension: 2, tag: 41 }],
+      },
+      manifest: null,
+    });
+
+    expect(model.orphanEntities).toEqual([{ dimension: 2, tag: 41 }]);
+    expect(model.topologyIntegrity).toBe("rejected");
+
+    const html = renderToStaticMarkup(<MixedTopologyProvenanceSection model={model} />);
+    expect(html).toContain("Orphan topology entities invalidate this mixed mesh");
+    expect(html).toContain("dimension 2, tag 41");
+  });
+
+  it("does not show mixed topology provenance for an otherwise empty report with no orphans", () => {
+    const model = resolveMixedTopologyPresentation({
+      buildReport: { orphan_entities: [] },
+      manifest: null,
+    });
+
+    expect(model.visible).toBe(false);
+  });
+
   it("distinguishes unpublished fallback evidence from an explicit strict empty list", () => {
     const unpublished = resolveMixedTopologyPresentation({
       buildReport: {

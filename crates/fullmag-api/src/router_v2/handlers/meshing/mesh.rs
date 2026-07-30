@@ -27,7 +27,8 @@ use crate::field_slice::{resolve_slice_query, FieldSliceQuery, SlicePlane};
 use crate::schemas::mesh::{
     MeshActiveBuildResource, MeshBuildDiagnosticsResource, MeshBuildHistoryResource,
     MeshBuildPolicyDiffResource, MeshBuildProvenanceResource, MeshBuildPublishedResourcesResource,
-    MeshCapabilitiesResource, MeshHistogramBinElementsResource, MeshInterfaceConfigReplaceRequest,
+    MeshCapabilitiesResource, MeshCapabilityMatrixResource, MeshFeatureCapabilityResource,
+    MeshHistogramBinElementsResource, MeshInterfaceConfigReplaceRequest,
     MeshInterfaceConfigResource, MeshInterfaceQualityResource, MeshInterfaceReportResource,
     MeshLastSuccessfulBuildResource, MeshMixedCertificateFamilyQualityGateResource,
     MeshMixedCertificateQualityEvidenceResource, MeshMixedCertificateQualityEvidenceStatus,
@@ -52,6 +53,8 @@ use fullmag_authoring::{
     ScriptBuilderPerGeometryMeshState, ScriptBuilderUniverseState,
 };
 use fullmag_runner::{FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload};
+
+const MIXED_TOPOLOGY_NOT_SUPPORTED: &str = "mixed_topology_not_supported";
 
 #[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -141,7 +144,7 @@ pub async fn get_mesh_capabilities(
 fn projected_mesh_capabilities(
     snapshot: &SessionStateResponse,
     mesh_workspace: &Value,
-) -> Option<Value> {
+) -> Option<MeshCapabilityMatrixResource> {
     let mut projected = mesh_workspace
         .get("mesh_capabilities")
         .and_then(Value::as_object)
@@ -149,15 +152,33 @@ fn projected_mesh_capabilities(
         .unwrap_or_default();
     for id in fullmag_runner::MIXED_P1_MESH_FEATURE_CAPABILITY_IDS {
         projected.remove(id);
-        if let Some(capabilities) = snapshot.capabilities.as_ref() {
-            if let Some(capability) = capabilities.feature_capabilities.get(id) {
-                if let Ok(value) = serde_json::to_value(capability) {
-                    projected.insert(id.to_string(), value);
-                }
-            }
-        }
     }
-    (!projected.is_empty()).then_some(Value::Object(projected))
+    let feature = |id: &str| {
+        snapshot
+            .capabilities
+            .as_ref()?
+            .feature_capabilities
+            .get(id)
+            .and_then(|capability| {
+                serde_json::from_value::<MeshFeatureCapabilityResource>(
+                    serde_json::to_value(capability).ok()?,
+                )
+                .ok()
+            })
+    };
+    let matrix = MeshCapabilityMatrixResource {
+        mixed_p1: feature("mesh.topology.mixed_p1"),
+        swept_prism: feature("mesh.swept.prism"),
+        pyramid_tet: feature("mesh.transition.pyramid_tet"),
+        exact_layer_count: feature("mesh.exact_layer_count"),
+        additional: projected.into_iter().collect(),
+    };
+    (matrix.mixed_p1.is_some()
+        || matrix.swept_prism.is_some()
+        || matrix.pyramid_tet.is_some()
+        || matrix.exact_layer_count.is_some()
+        || !matrix.additional.is_empty())
+    .then_some(matrix)
 }
 
 #[utoipa::path(
@@ -778,6 +799,39 @@ pub async fn get_mesh_shared_domain_quality(
     }))
 }
 
+fn require_tet4_cross_section_topology(
+    mesh: &FemMeshPayload,
+    resource_label: &str,
+) -> Result<Vec<[u32; 4]>, ApiError> {
+    reject_mixed_topology_for_tet4_only_resource(mesh, resource_label)?;
+
+    mesh.require_tet4_elements().map_err(|error| {
+        ApiError::conflict(format!(
+            "{resource_label} requires valid tet4 topology: {error}"
+        ))
+    })
+}
+
+fn reject_mixed_topology_for_tet4_only_resource(
+    mesh: &FemMeshPayload,
+    resource_label: &str,
+) -> Result<(), ApiError> {
+    if mesh
+        .cells
+        .types
+        .iter()
+        .any(|cell_type| *cell_type != fullmag_ir::FemCellTypeIR::Tet4)
+    {
+        return Err(ApiError::conflict_code(
+            MIXED_TOPOLOGY_NOT_SUPPORTED,
+            format!(
+                "{resource_label} is tet4-only; prism, pyramid, and other non-tetrahedral cells are not supported"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 #[utoipa::path(
     get,
     path = "/v2/sessions/current/meshing/meshes/shared-domain/cross-section",
@@ -787,7 +841,7 @@ pub async fn get_mesh_shared_domain_quality(
         (status = 304, description = "Cross-section geometry not modified for the supplied ETag"),
         (status = 204, description = "Not applicable (FDM)"),
         (status = 404, description = "No active workspace"),
-        (status = 409, description = "FEM topology unavailable for cross-section"),
+        (status = 409, description = "FEM topology unavailable or mixed topology is not supported for cross-section", body = crate::schemas::common::ApiErrorResponse),
     ),
     tag = "meshing"
 )]
@@ -809,11 +863,7 @@ pub async fn get_mesh_shared_domain_cross_section(
     let Some(mesh) = snapshot.fem_mesh.as_ref() else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
-    let elements = mesh.require_tet4_elements().map_err(|error| {
-        ApiError::conflict(format!(
-            "FMMT v1 cross-section requires tet4 topology: {error}"
-        ))
-    })?;
+    let elements = require_tet4_cross_section_topology(mesh, "cross-section")?;
     let cut_norm = query.position_percent / 100.0;
     let resolved = resolve_slice_query(
         &FieldSliceQuery {
@@ -863,7 +913,7 @@ pub async fn get_mesh_shared_domain_cross_section(
         (status = 204, description = "No FEM mesh or no data for the requested metric"),
         (status = 400, description = "Invalid query parameters"),
         (status = 404, description = "No active workspace"),
-        (status = 409, description = "FEM topology unavailable for cross-section"),
+        (status = 409, description = "FEM topology unavailable or mixed topology is not supported for cross-section image", body = crate::schemas::common::ApiErrorResponse),
     ),
     tag = "meshing"
 )]
@@ -893,11 +943,7 @@ pub async fn get_mesh_shared_domain_cross_section_image(
     let Some(mesh) = snapshot.fem_mesh.as_ref() else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
-    let elements = mesh.require_tet4_elements().map_err(|error| {
-        ApiError::conflict(format!(
-            "FMMT v1 cross-section image requires tet4 topology: {error}"
-        ))
-    })?;
+    let elements = require_tet4_cross_section_topology(mesh, "cross-section image")?;
     let artifact = snapshot
         .mesh_workspace
         .as_ref()
@@ -1022,7 +1068,7 @@ pub async fn get_mesh_shared_domain_cross_section_image(
         (status = 304, description = "Cross-section quality not modified for the supplied ETag"),
         (status = 204, description = "No per-element quality data artifact or requested metric available"),
         (status = 404, description = "No active workspace"),
-        (status = 409, description = "FEM topology unavailable for cross-section"),
+        (status = 409, description = "FEM topology unavailable or mixed topology is not supported for cross-section quality", body = crate::schemas::common::ApiErrorResponse),
     ),
     tag = "meshing"
 )]
@@ -1044,11 +1090,7 @@ pub async fn get_mesh_shared_domain_cross_section_quality(
     let Some(mesh) = snapshot.fem_mesh.as_ref() else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
-    let elements = mesh.require_tet4_elements().map_err(|error| {
-        ApiError::conflict(format!(
-            "FMMT v1 cross-section quality requires tet4 topology: {error}"
-        ))
-    })?;
+    let elements = require_tet4_cross_section_topology(mesh, "cross-section quality")?;
     let artifact = snapshot
         .mesh_workspace
         .as_ref()
@@ -2430,6 +2472,7 @@ pub async fn get_mesh_part_topology(
         (status = 204, description = "No FEM mesh available"),
         (status = 400, description = "Invalid histogram metric or bin index"),
         (status = 404, description = "No active workspace, mesh, or mesh part"),
+        (status = 409, description = "Mixed or otherwise non-tet4 topology is not supported for histogram selection", body = crate::schemas::common::ApiErrorResponse),
     ),
     tag = "meshing"
 )]
@@ -3236,6 +3279,7 @@ fn mesh_histogram_samples(
     metric: MeshHistogramMetric,
     quality_values: &[f64],
 ) -> Result<Vec<MeshHistogramSample>, ApiError> {
+    reject_mixed_topology_for_tet4_only_resource(mesh, "mesh histogram selection")?;
     let elements = mesh
         .require_tet4_elements()
         .map_err(|error| ApiError::conflict(format!("tet4 mesh histogram required: {error}")))?;

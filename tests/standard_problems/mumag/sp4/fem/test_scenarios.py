@@ -286,13 +286,18 @@ def test_relaxation_scenario_exports_only_its_physically_applicable_policy(
         assert adaptive["dt_min"] == pytest.approx(1e-17)
         assert adaptive["dt_max"] == pytest.approx(1e-14)
 
+    expected_tolerance_apm = (
+        0.7957747154594767
+        if scenario == "relax_projected_gradient_bb"
+        else 7.957747154594767
+    )
     assert relaxation["stop"]["torque_tolerance_apm"] == pytest.approx(
-        7.957747154594767
+        expected_tolerance_apm
     )
     assert relaxation["stop"]["max_steps"] == 50_000
 
 
-def test_projected_gradient_scenario_requests_one_exact_prism_layer_with_local_grading() -> None:
+def test_projected_gradient_scenario_requests_one_exact_uniform_prism_layer() -> None:
     scenario_path = RELAXATION_SCENARIOS["relax_projected_gradient_bb"]
     payload = _export_run_config(scenario_path)
     [stage] = payload["stages"]
@@ -306,14 +311,14 @@ def test_projected_gradient_scenario_requests_one_exact_prism_layer_with_local_g
     assert mesh["through_thickness_elements"] == 1
     assert mesh["exact_layer_count"] is True
     assert mesh["transition_policy"] == "pyramid_to_tetrahedra"
-    assert mesh["minimum_element_size"] == pytest.approx(1e-9)
+    assert mesh["minimum_element_size"] == pytest.approx(3e-9)
     assert mesh["maximum_element_size"] == pytest.approx(3e-9)
-    assert mesh["edge_hmax"] == pytest.approx(1.5e-9)
-    assert mesh["edge_thickness"] == pytest.approx(12e-9)
-    assert mesh["edge_transition_distance"] == pytest.approx(24e-9)
-    assert mesh["corner_hmax"] == pytest.approx(1e-9)
-    assert mesh["corner_extent"] == pytest.approx(6e-9)
-    assert mesh["corner_transition_distance"] == pytest.approx(12e-9)
+    assert "edge_hmax" not in mesh
+    assert "edge_thickness" not in mesh
+    assert "edge_transition_distance" not in mesh
+    assert "corner_hmax" not in mesh
+    assert "corner_extent" not in mesh
+    assert "corner_transition_distance" not in mesh
 
     loaded = load_problem_from_script(scenario_path, lightweight_assets=True)
     [loaded_stage] = loaded.stages

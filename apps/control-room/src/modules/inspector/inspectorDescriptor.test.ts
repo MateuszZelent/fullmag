@@ -57,6 +57,31 @@ describe("resolveInspectorDescriptor", () => {
     expect(descriptor.metadata.length).toBeLessThanOrEqual(4);
   });
 
+  it("exposes exact picked mesh-cell identity without coercing the ordinal", () => {
+    const descriptor = resolveInspectorDescriptor({
+      ...selection("object.root"),
+      ref: {
+        carrierPartId: "part:film",
+        elementFamily: "prism6",
+        globalCellOrdinal: "9007199254740993",
+        kind: "object.root",
+        nodeId: "model:object:film",
+        objectId: "film",
+        type: "scene-object",
+        visualizationTargetId: "object:film",
+      },
+    });
+
+    expect(descriptor.metadata).toContainEqual({
+      label: "Element family",
+      value: "prism6",
+    });
+    expect(descriptor.metadata).toContainEqual({
+      label: "Global cell ordinal",
+      value: "9007199254740993",
+    });
+  });
+
   it.each([
     "object.material",
     "object.geometry",

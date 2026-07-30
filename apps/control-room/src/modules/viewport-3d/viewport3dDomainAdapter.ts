@@ -11,6 +11,7 @@ import {
 } from "@/kernel/selection/manifestRenderableCarriers";
 import {
   isVisualizationAirboxIdentity,
+  type MeshElementFamily,
   visualizationObjectIdForMeshPartLike,
 } from "@/kernel/selection/selectionTypes";
 
@@ -66,6 +67,8 @@ export interface FemManifestRenderDomain {
 export interface Viewport3DPartSelection {
   boundaryFaceIndex?: number | null;
   carrierPartId: string;
+  elementFamily?: MeshElementFamily | null;
+  globalCellOrdinal?: string | null;
   kind: "mesh-part" | "mesh-part-airbox";
   label: string;
   objectId: string | null;
@@ -328,11 +331,15 @@ export function resolveFemPartSelectionByBoundaryFace(
 export function selectionForMeshPart(
   part: Viewport3DMeshPart,
   boundaryFaceIndex: number | null = null,
+  globalCellOrdinal: string | null = null,
+  elementFamily: MeshElementFamily | null = null,
 ): Viewport3DPartSelection {
   const objectId = visualizationObjectIdForMeshPartLike(part);
   return {
     boundaryFaceIndex,
     carrierPartId: part.id,
+    elementFamily,
+    globalCellOrdinal,
     kind:
       isVisualizationAirboxIdentity(part)
         ? "mesh-part-airbox"

@@ -159,42 +159,60 @@ verify-fem-mixed-prism-airbox-runtime:
       managed_python="$(dirname "$git_common_dir")/.fullmag/local/python/bin/python"; \
       if [ ! -x "$managed_python" ]; then echo "shared Fullmag Python interpreter is missing: $managed_python" >&2; exit 2; fi; \
       "$managed_python" -c "import numpy, scipy, gmsh, meshio, trimesh, h5py, zarr"; \
-      report_root=".fullmag/reports/fem-mixed-prism-airbox-runtime"; \
-      mkdir -p "$report_root/runs"; \
-      run_dir="$(mktemp -d "$report_root/runs/gate.XXXXXXXX")"; \
+      durable_root="${FULLMAG_MIXED_PRISM_AIRBOX_DURABLE_ROOT:-/mnt/fullmag-zfn2-native}"; \
+      report_root="${FULLMAG_MIXED_PRISM_AIRBOX_REPORT_ROOT:-${durable_root}/reports/fullmag/fem-mixed-prism-airbox-runtime}"; \
+      source scripts/lib/managed_fem_runtime_storage.sh; \
+      source scripts/lib/managed_fem_report_storage.sh; \
+      run_dir="$(create_managed_fem_report_run_root \
+        "$durable_root" "$report_root" \
+        "/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4" \
+        "/sys/block")"; \
+      echo "mixed prism-airbox report root: $run_dir"; \
       temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/fullmag-mixed-prism-airbox-runtime.XXXXXX")"; \
       cleanup() { rm -rf "$temp_dir"; }; \
       trap cleanup EXIT INT TERM; \
       bounded="$temp_dir/relax_projected_gradient_bb.max_steps_1.py"; \
       python3 scripts/verify_fem_mixed_prism_airbox_runtime.py prepare \
         "$canonical" "$bounded" --evidence "$run_dir/source.v1.json"; \
+      python3 scripts/capture_source_snapshot_identity.py \
+        --repo-root "{{repo_root}}" --output "$run_dir/source-snapshot.v2.json"; \
       cp "$bounded" "$run_dir/bounded_scenario.py"; \
-      cp -L "$runtime_manifest" "$run_dir/runtime-manifest.v2.json"; \
+      cp -L "$runtime_manifest" "$run_dir/runtime-manifest.v3.json"; \
       mkdir -p "$run_dir/cpu" "$run_dir/gpu"; \
+      python3 scripts/capture_source_snapshot_identity.py \
+        --repo-root "{{repo_root}}" --compare "$run_dir/source-snapshot.v2.json"; \
       FULLMAG_PYTHON="$managed_python" just fem-managed-headless cpu "$bounded" "$run_dir/cpu/artifacts" \
         2>&1 | tee "$run_dir/cpu/runtime.log"; \
-      cmp "$runtime_manifest" "$run_dir/runtime-manifest.v2.json"; \
+      cmp "$runtime_manifest" "$run_dir/runtime-manifest.v3.json"; \
       python3 scripts/verify_fem_mixed_prism_airbox_runtime.py validate \
         "$canonical" "$run_dir/bounded_scenario.py" "$run_dir/cpu/artifacts" \
         --device cpu --runtime-log "$run_dir/cpu/runtime.log" \
         --runtime-manifest "$runtime_manifest" \
-        --output "$run_dir/cpu/summary.v2.json"; \
+        --source-snapshot "$run_dir/source-snapshot.v2.json" \
+        --output "$run_dir/cpu/summary.v4.json"; \
+      python3 scripts/capture_source_snapshot_identity.py \
+        --repo-root "{{repo_root}}" --compare "$run_dir/source-snapshot.v2.json"; \
       FULLMAG_PYTHON="$managed_python" just fem-managed-headless gpu "$bounded" "$run_dir/gpu/artifacts" \
         2>&1 | tee "$run_dir/gpu/runtime.log"; \
-      cmp "$runtime_manifest" "$run_dir/runtime-manifest.v2.json"; \
+      cmp "$runtime_manifest" "$run_dir/runtime-manifest.v3.json"; \
       python3 scripts/verify_fem_mixed_prism_airbox_runtime.py validate \
         "$canonical" "$run_dir/bounded_scenario.py" "$run_dir/gpu/artifacts" \
         --device gpu --runtime-log "$run_dir/gpu/runtime.log" \
         --runtime-manifest "$runtime_manifest" \
-        --output "$run_dir/gpu/summary.v2.json"; \
+        --source-snapshot "$run_dir/source-snapshot.v2.json" \
+        --output "$run_dir/gpu/summary.v4.json"; \
+      python3 scripts/capture_source_snapshot_identity.py \
+        --repo-root "{{repo_root}}" --compare "$run_dir/source-snapshot.v2.json"; \
       python3 scripts/verify_fem_mixed_prism_airbox_runtime.py compare \
-        --cpu-summary "$run_dir/cpu/summary.v2.json" \
-        --gpu-summary "$run_dir/gpu/summary.v2.json" \
+        --cpu-summary "$run_dir/cpu/summary.v4.json" \
+        --gpu-summary "$run_dir/gpu/summary.v4.json" \
+        --cpu-artifacts "$run_dir/cpu/artifacts" \
+        --gpu-artifacts "$run_dir/gpu/artifacts" \
         --runtime-manifest "$runtime_manifest" \
-        --output "$run_dir/summary.v1.json" \
-        --csv-output "$run_dir/comparison.v1.csv"; \
-      cmp "$runtime_manifest" "$run_dir/runtime-manifest.v2.json"; \
-      echo "validated managed CPU/GPU mixed prism-airbox runtime evidence: $run_dir/summary.v1.json"'
+        --output "$run_dir/summary.v3.json" \
+        --csv-output "$run_dir/comparison.v3.csv"; \
+      cmp "$runtime_manifest" "$run_dir/runtime-manifest.v3.json"; \
+      echo "validated managed CPU/GPU mixed prism-airbox runtime evidence: $run_dir/summary.v3.json"'
 
 verify-fem-mixed-p1-native-contract:
     docker compose --profile fem-gpu run --rm \
@@ -3749,25 +3767,35 @@ run-nanoflower-interactive-quadro-gpu:
     FULLMAG_PYTHON="{{repo_python}}" '{{gpu_runtime_bin}}' --dev -i examples/nanoflower_fem_quadro.py
 
 ensure-managed-fem-runtime:
-    if [ ! -x '{{gpu_runtime_bin}}' ] || [ ! -f '{{gpu_runtime_manifest}}' ]; then \
+    bash -euo pipefail -c '\
+      identity_file="$(mktemp "${TMPDIR:-/tmp}/fullmag-current-source.XXXXXXXXXX.json")"; \
+      trap '\''rm -f -- "$identity_file"'\'' EXIT; \
+      python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --output "$identity_file"; \
+      git_commit="$(python3 -c '\''import json,sys; print(json.load(open(sys.argv[1]))["head_commit_full"])'\'' "$identity_file")"; \
+      worktree_state="$(python3 -c '\''import json,sys; print("dirty" if json.load(open(sys.argv[1]))["source_snapshot_dirty"] else "clean")'\'' "$identity_file")"; \
+      source_snapshot="$(python3 -c '\''import json,sys; print(json.load(open(sys.argv[1]))["source_snapshot_sha256"])'\'' "$identity_file")"; \
+      validate_current() { \
+        python3 scripts/validate_managed_fem_runtime_bundle.py \
+          --runtime-root .fullmag/runtimes/fem-gpu-host \
+          --require-git-commit "$git_commit" \
+          --require-worktree-state "$worktree_state" \
+          --require-source-snapshot-sha256 "$source_snapshot"; \
+      }; \
+      if [ ! -x "{{gpu_runtime_bin}}" ] || [ ! -f "{{gpu_runtime_manifest}}" ]; then \
         echo "Managed FEM runtime bundle is missing or incomplete; restoring the persistent build first." >&2; \
-        bash scripts/restore_persistent_fem_runtime.sh || just rebuild-fem-runtime; \
-    fi
-    if ! python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root .fullmag/runtimes/fem-gpu-host >/dev/null 2>&1; then \
-        echo "Managed FEM runtime bundle is invalid; restoring the persistent build first." >&2; \
-        bash scripts/restore_persistent_fem_runtime.sh || just rebuild-fem-runtime; \
-    fi
-    stale_source="$(find crates/fullmag-api crates/fullmag-authoring crates/fullmag-cli crates/fullmag-runner crates/fullmag-quantities crates/fullmag-plan crates/fullmag-ir crates/fullmag-engine crates/fullmag-session crates/fullmag-fdm-demag crates/fullmag-fdm-sys crates/fullmag-fem-sys native/CMakeLists.txt native/include backends/fem backends/fdm docker/fem-gpu/Dockerfile compose.yaml scripts/export_fem_gpu_runtime.sh scripts/build_managed_fem_runtime_manifest.py scripts/inspect_cuda_architectures.py scripts/lib/runtime_bundle_copy.sh Cargo.toml Cargo.lock rust-toolchain.toml \( -path \"*/.fullmag\" -o -path \"*/__pycache__\" \) -prune -o -type f ! -name \"*.pyc\" ! -path \"*/tests/*\" ! -name \"tests.rs\" -newer '{{gpu_runtime_manifest}}' -print -quit 2>/dev/null)"; \
-    if [ -n "$stale_source" ]; then \
-        echo "Managed FEM runtime bundle is stale; newer runtime source detected: $stale_source" >&2; \
-        echo "Rebuilding managed FEM runtime bundle now." >&2; \
-        just rebuild-fem-runtime; \
-    fi
-    if [ ! -x '{{gpu_runtime_bin}}' ] || [ ! -f '{{gpu_runtime_manifest}}' ]; then \
+        bash scripts/restore_persistent_fem_runtime.sh || true; \
+      fi; \
+      if ! validate_current >/dev/null 2>&1; then \
+        echo "Managed FEM runtime bundle is invalid; restoring the persistent build first. Exact source mismatch will rebuild." >&2; \
+        bash scripts/restore_persistent_fem_runtime.sh >/dev/null 2>&1 || true; \
+        validate_current >/dev/null 2>&1 || just rebuild-fem-runtime; \
+      fi; \
+      if [ ! -x "{{gpu_runtime_bin}}" ] || [ ! -f "{{gpu_runtime_manifest}}" ]; then \
         echo "Managed FEM runtime rebuild did not produce {{gpu_runtime_bin}} and {{gpu_runtime_manifest}}" >&2; \
         exit 2; \
-    fi
-    python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root .fullmag/runtimes/fem-gpu-host
+      fi; \
+      python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --compare "$identity_file"; \
+      validate_current'
 
 inspect-managed-fem-frequency-domain-deps:
     just ensure-managed-fem-runtime
@@ -4012,7 +4040,7 @@ run-cofeb-rings-relax-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" 
       printf "  fullmag: %s\n" "$app_log"; \
       printf "  smoke: %s\n" "$smoke_log"'
 
-run-viewport-3d-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" web_port="3193" api_port="8193":
+_run-viewport-3d-browser-smoke fixture smoke_script report_name smoke_log_name smoke_label max_steps_env max_steps_default smoke_timeout_env smoke_timeout_default fem_execution="gpu" cpu_threads="auto" web_port="3193" api_port="8193":
     just ensure-python
     just ensure-managed-fem-runtime
     bash -euo pipefail -c '\
@@ -4020,12 +4048,16 @@ run-viewport-3d-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" web_po
       case "$mode" in 0|cpu|CPU) mode="cpu" ;; gpu|GPU) mode="gpu" ;; *) echo "unsupported FEM execution mode: $mode (expected cpu or gpu)" >&2; exit 2 ;; esac; \
       if [ "{{cpu_threads}}" = "auto" ]; then cpu_threads_env=auto; else cpu_threads_env="{{cpu_threads}}"; fi; \
       api_url="http://localhost:{{api_port}}"; \
+      max_steps="$(printenv "{{max_steps_env}}" || true)"; \
+      if [ -z "$max_steps" ]; then max_steps="{{max_steps_default}}"; fi; \
+      smoke_timeout="$(printenv "{{smoke_timeout_env}}" || true)"; \
+      if [ -z "$smoke_timeout" ]; then smoke_timeout="{{smoke_timeout_default}}"; fi; \
       if command -v pnpm >/dev/null 2>&1; then PNPM_CMD=pnpm; \
       elif command -v corepack >/dev/null 2>&1; then PNPM_CMD="corepack pnpm"; \
       else echo "pnpm or corepack not found on PATH" >&2; exit 127; fi; \
-      report_dir="{{repo_root}}/.fullmag/reports/viewport-3d-mixed-target-smoke"; \
+      report_dir="{{repo_root}}/.fullmag/reports/{{report_name}}"; \
       app_log="$report_dir/fullmag-interactive.log"; \
-      smoke_log="$report_dir/mixed-target-smoke.log"; \
+      smoke_log="$report_dir/{{smoke_log_name}}"; \
       mkdir -p "$report_dir"; \
       sim_pid=""; \
       cleanup() { \
@@ -4041,15 +4073,15 @@ run-viewport-3d-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" web_po
       FULLMAG_RELAX_DEVICE="$mode" \
       FULLMAG_CPU_THREADS="$cpu_threads_env" \
       FULLMAG_API_PORT="{{api_port}}" \
-      FULLMAG_VIEWPORT3D_MIXED_TARGET_MAX_STEPS="${FULLMAG_VIEWPORT3D_MIXED_TARGET_MAX_STEPS:-2000}" \
-      "{{gpu_runtime_bin}}" --dev --web-port "{{web_port}}" -i examples/viewport_3d_mixed_targets_smoke.py \
+      {{max_steps_env}}="$max_steps" \
+      "{{gpu_runtime_bin}}" --dev --web-port "{{web_port}}" -i "{{fixture}}" \
         > "$app_log" 2>&1 & \
       sim_pid=$!; \
       web_url="http://localhost:{{web_port}}/workspace"; \
       for _ in $(seq 1 600); do \
         curl -fsS "$web_url" >/dev/null 2>&1 && break; \
         if ! kill -0 "$sim_pid" >/dev/null 2>&1; then \
-          echo "Viewport 3D mixed-target fixture exited before control room became ready; see $app_log" >&2; \
+          echo "{{smoke_label}} fixture exited before control room became ready; see $app_log" >&2; \
           tail -n 120 "$app_log" >&2 || true; \
           exit 1; \
         fi; \
@@ -4063,11 +4095,17 @@ run-viewport-3d-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" web_po
       fi; \
       CONTROL_ROOM_API_BASE_URL="$api_url" \
       CONTROL_ROOM_URL="$web_url" \
-      CONTROL_ROOM_MIXED_TARGET_SMOKE_TIMEOUT_MS="${CONTROL_ROOM_MIXED_TARGET_SMOKE_TIMEOUT_MS:-180000}" \
-      $PNPM_CMD --dir apps/control-room smoke:viewport-3d-mixed-targets | tee "$smoke_log"; \
-      printf "\nViewport 3D mixed-target smoke logs:\n"; \
+      {{smoke_timeout_env}}="$smoke_timeout" \
+      $PNPM_CMD --dir apps/control-room "{{smoke_script}}" | tee "$smoke_log"; \
+      printf "\n{{smoke_label}} logs:\n"; \
       printf "  fullmag: %s\n" "$app_log"; \
       printf "  smoke: %s\n" "$smoke_log"'
+
+run-viewport-3d-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" web_port="3193" api_port="8193":
+    just _run-viewport-3d-browser-smoke "examples/viewport_3d_mixed_targets_smoke.py" "smoke:viewport-3d-mixed-targets" "viewport-3d-mixed-target-smoke" "mixed-target-smoke.log" "Viewport 3D mixed-target smoke" "FULLMAG_VIEWPORT3D_MIXED_TARGET_MAX_STEPS" "2000" "CONTROL_ROOM_MIXED_TARGET_SMOKE_TIMEOUT_MS" "180000" "{{fem_execution}}" "{{cpu_threads}}" "{{web_port}}" "{{api_port}}"
+
+run-viewport-3d-mixed-topology-smoke fem_execution="gpu" cpu_threads="auto" web_port="3195" api_port="8196":
+    just _run-viewport-3d-browser-smoke "examples/viewport_3d_mixed_topology_smoke.py" "smoke:viewport-3d-mixed-topology" "viewport-3d-mixed-topology-smoke" "mixed-topology-smoke.log" "Viewport 3D mixed-topology smoke" "FULLMAG_VIEWPORT3D_MIXED_TOPOLOGY_MAX_STEPS" "50" "CONTROL_ROOM_MIXED_TOPOLOGY_SMOKE_TIMEOUT_MS" "180000" "{{fem_execution}}" "{{cpu_threads}}" "{{web_port}}" "{{api_port}}"
 
 run-viewport-2d-planar-monitor-smoke backend="fdm" device="cpu" web_port="3194" api_port="8194":
     just ensure-python
@@ -4218,6 +4256,26 @@ verify-fem-standard-problem-4-smoke:
     just verify-fem-time-domain-native-contract
     just ensure-managed-fem-runtime
     FULLMAG_SP4_QUALIFYING=0 FULLMAG_SP4_DEVICES="cpu gpu" FULLMAG_SP4_RELAX_ALGORITHMS=llg_overdamped FULLMAG_SP4_MESH_LEVELS=coarse FULLMAG_SP4_CASES="case-a case-b" FULLMAG_SP4_AIRBOXES=baseline FULLMAG_SP4_DURATION_S=1e-14 FULLMAG_SP4_RELAX_MAX_STEPS=1 ./scripts/verify_fem_standard_problem_4.sh
+
+verify-fem-sp4-mixed-matrix-smoke:
+    just ensure-managed-fem-runtime
+    durable_root="${FULLMAG_SP4_MIXED_MATRIX_DURABLE_ROOT:-/mnt/fullmag-zfn2-native}"; \
+      report_base="${FULLMAG_SP4_MIXED_MATRIX_REPORT_ROOT:-${durable_root}/reports/fullmag/standard-problems/mumag/sp4/fem/mixed-matrix-smoke}"; \
+      source scripts/lib/managed_fem_runtime_storage.sh; \
+      source scripts/lib/managed_fem_report_storage.sh; \
+      report_root="$(create_managed_fem_report_run_root "$durable_root" "$report_base" "/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4" "/sys/block")"; \
+      echo "mixed SP4 matrix report root: $report_root"; \
+      python3 scripts/run_fem_sp4_mixed_matrix.py --durable-root "$durable_root" --report-root "$report_root" --max-steps 1 --evidence-mode one_step_runtime_smoke
+
+verify-fem-sp4-mixed-matrix:
+    just ensure-managed-fem-runtime
+    durable_root="${FULLMAG_SP4_MIXED_MATRIX_DURABLE_ROOT:-/mnt/fullmag-zfn2-native}"; \
+      report_base="${FULLMAG_SP4_MIXED_MATRIX_REPORT_ROOT:-${durable_root}/reports/fullmag/standard-problems/mumag/sp4/fem/mixed-matrix}"; \
+      source scripts/lib/managed_fem_runtime_storage.sh; \
+      source scripts/lib/managed_fem_report_storage.sh; \
+      report_root="$(create_managed_fem_report_run_root "$durable_root" "$report_base" "/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4" "/sys/block")"; \
+      echo "mixed SP4 matrix report root: $report_root"; \
+      python3 scripts/run_fem_sp4_mixed_matrix.py --durable-root "$durable_root" --report-root "$report_root"
 
 fem-managed-container-headless fem_execution script:
     just ensure-managed-fem-runtime

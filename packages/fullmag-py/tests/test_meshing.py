@@ -59,7 +59,10 @@ from fullmag.meshing._mesh_targets import (
     resolve_object_preview_target,
     resolve_shared_domain_targets,
 )
-from fullmag.meshing._gmsh_types import _infer_axis_aligned_periodic_pairs
+from fullmag.meshing._gmsh_types import (
+    FEM_TOPOLOGY_VOLUME_EPS,
+    _infer_axis_aligned_periodic_pairs,
+)
 from fullmag.meshing._gmsh_infra import _GmshProgressLogger, _gmsh_heartbeat_interval
 from fullmag.meshing._gmsh_extraction import (
     _derive_facet_roles,
@@ -546,6 +549,110 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(cleaned.element_markers.tolist(), [7])
         self.assertEqual(fallbacks, ["shared_domain_degenerate_tetra_cleanup"])
 
+    def test_drop_degenerate_tetrahedra_leaves_valid_mixed_mesh_unchanged(self) -> None:
+        mesh = MeshData(
+            nodes=np.asarray(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [2.0, 0.0, 0.0],
+                    [3.0, 0.0, 0.0],
+                    [2.0, 1.0, 0.0],
+                    [2.0, 0.0, 1.0],
+                    [3.0, 0.0, 1.0],
+                    [2.0, 1.0, 1.0],
+                ],
+                dtype=np.float64,
+            ),
+            cell_types=np.asarray(["tet4", "prism6"]),
+            cell_offsets=np.asarray([0, 4, 10]),
+            cell_nodes=np.asarray([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            element_markers=np.asarray([0, 1]),
+            facet_types=np.asarray([], dtype=np.str_),
+            facet_roles=np.asarray([], dtype=np.str_),
+            facet_offsets=np.asarray([0]),
+            facet_nodes=np.asarray([], dtype=np.int32),
+            boundary_markers=np.asarray([], dtype=np.int32),
+            cell_global_ordinals=np.asarray([0, 1]),
+            facet_global_ordinals=np.asarray([], dtype=np.int64),
+        )
+
+        cleaned = _drop_degenerate_tetrahedra(
+            mesh,
+            context="valid mixed mesh",
+            fallbacks_triggered=[],
+        )
+
+        self.assertIs(cleaned, mesh)
+
+    def test_drop_degenerate_tetrahedra_rejects_invalid_mixed_cell_families(self) -> None:
+        reference_cells = {
+            "prism6": np.asarray(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 0.0, 1.0],
+                    [0.0, 1.0, 1.0],
+                ],
+                dtype=np.float64,
+            ),
+            "pyramid5": np.asarray(
+                [
+                    [-1.0, -1.0, 0.0],
+                    [1.0, -1.0, 0.0],
+                    [1.0, 1.0, 0.0],
+                    [-1.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                dtype=np.float64,
+            ),
+        }
+        reversed_order = {
+            "prism6": [0, 2, 1, 3, 5, 4],
+            "pyramid5": [0, 3, 2, 1, 4],
+        }
+        tet = np.asarray(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            dtype=np.float64,
+        )
+
+        for family, coordinates in reference_cells.items():
+            for failure, family_coordinates in (
+                ("degenerate", coordinates * np.asarray([1.0, 1.0, 0.0])),
+                ("negative", coordinates[reversed_order[family]]),
+            ):
+                with self.subTest(family=family, failure=failure):
+                    shifted = family_coordinates + np.asarray([3.0, 0.0, 0.0])
+                    arity = shifted.shape[0]
+                    mesh = MeshData(
+                        nodes=np.concatenate([tet, shifted]),
+                        cell_types=np.asarray(["tet4", family]),
+                        cell_offsets=np.asarray([0, 4, 4 + arity]),
+                        cell_nodes=np.arange(4 + arity, dtype=np.int32),
+                        element_markers=np.asarray([0, 1]),
+                        facet_types=np.asarray([], dtype=np.str_),
+                        facet_roles=np.asarray([], dtype=np.str_),
+                        facet_offsets=np.asarray([0]),
+                        facet_nodes=np.asarray([], dtype=np.int32),
+                        boundary_markers=np.asarray([], dtype=np.int32),
+                        cell_global_ordinals=np.asarray([0, 1]),
+                        facet_global_ordinals=np.asarray([], dtype=np.int64),
+                    )
+
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        rf"{failure} {family} Jacobian",
+                    ):
+                        _drop_degenerate_tetrahedra(
+                            mesh,
+                            context="invalid mixed mesh",
+                            fallbacks_triggered=[],
+                        )
+
     def test_drop_degenerate_tetrahedra_removes_orphan_boundary_faces(self) -> None:
         mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
@@ -634,7 +741,7 @@ class MeshScaffoldTests(unittest.TestCase):
             np.asarray([[0, 1, 2], [0, 2, 3]], dtype=np.int64),
         )
 
-    def test_meshdata_validate_strict_rejects_fem_topology_floor_tets(self) -> None:
+    def test_meshdata_validate_strict_honors_explicit_fem_topology_floor(self) -> None:
         mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
                 [
@@ -652,7 +759,7 @@ class MeshScaffoldTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValueError, "degenerate tet4 Jacobian"):
-            mesh.validate_strict()
+            mesh.validate_strict(eps_volume=FEM_TOPOLOGY_VOLUME_EPS)
 
     def test_meshdata_oriented_copy_flips_negative_tets(self) -> None:
         mesh = MeshData.from_legacy_tet4(

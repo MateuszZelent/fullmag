@@ -6,6 +6,7 @@ import {
   viewportSelectionForObject,
   viewportSelectionForRegion,
 } from "./viewport3dSelection";
+import { selectionRefEquals } from "@/kernel/selection/selectionTypes";
 
 describe("viewport3dSelection", () => {
   it("maps a domain pick to the visible Universe Explorer node", () => {
@@ -75,6 +76,8 @@ describe("viewport3dSelection", () => {
         {
           boundaryFaceIndex: 12,
           carrierPartId: "part:__air__",
+          elementFamily: "tet4",
+          globalCellOrdinal: "9007199254740993",
           label: "Exterior air",
         },
       ),
@@ -86,12 +89,47 @@ describe("viewport3dSelection", () => {
       ref: {
         boundaryFaceIndex: 12,
         carrierPartId: "part:__air__",
+        elementFamily: "tet4",
+        globalCellOrdinal: "9007199254740993",
         kind: "airbox.root",
         nodeId: "model:airbox",
         type: "airbox",
         visualizationTargetId: "airbox",
       },
     });
+  });
+
+  it("treats canonical cell identity as part of selection equality", () => {
+    const base = viewportSelectionForMeshPart(
+      {
+        carrierIds: ["part:film"],
+        explorerNodeId: "model:object:film",
+        explorerTabId: "model",
+        label: "film",
+        targetId: "object:film",
+        targetKind: "object",
+      },
+      {
+        boundaryFaceIndex: 3,
+        carrierPartId: "part:film",
+        elementFamily: "prism6",
+        globalCellOrdinal: "9007199254740993",
+        label: "Film volume",
+      },
+    ).ref;
+    if (!base || base.type !== "scene-object") {
+      throw new Error("Expected a scene-object selection ref");
+    }
+
+    expect(selectionRefEquals(base, { ...base })).toBe(true);
+    expect(selectionRefEquals(
+      base,
+      { ...base, globalCellOrdinal: "9007199254740994" },
+    )).toBe(false);
+    expect(selectionRefEquals(
+      base,
+      { ...base, elementFamily: "pyramid5" },
+    )).toBe(false);
   });
 
   it("maps an owned FEM carrier pick to its authored object Explorer node", () => {

@@ -1550,9 +1550,10 @@ fn require_supported_fem_topology(
         && exchange_count == 1
         && demag_count == 1
         && energy_supported
-        && certificate.requested_layer_count == 1
-        && certificate.realized_layer_count == 1
-        && certificate.magnetic_plane_coordinates_m.len() == 2
+        && (1..=3).contains(&certificate.requested_layer_count)
+        && certificate.realized_layer_count == certificate.requested_layer_count
+        && certificate.magnetic_plane_coordinates_m.len()
+            == certificate.requested_layer_count as usize + 1
         && certificate.fallbacks_triggered.is_empty()
         && matches!(
             problem.study,
@@ -1874,22 +1875,24 @@ pub fn run_planned_problem(
             let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem, false)?;
             let crossover_decision = resolution.fem_crossover_decision.clone();
             let mut executed = if fem.relaxation.is_some() {
-                fem::relax::execute_fem_relax(
+                fem::relax::execute_fem_relax_in_mode(
                     fem_engine_kind(resolution.engine),
                     fem,
                     until_seconds,
                     &plan.output_plan.outputs,
                     None,
                     artifact_writer.clone(),
+                    plan.common.execution_mode,
                 )
             } else {
-                dispatch::execute_fem(
+                dispatch::execute_fem_in_mode(
                     resolution.engine,
                     fem,
                     until_seconds,
                     &plan.output_plan.outputs,
                     None,
                     artifact_writer.clone(),
+                    plan.common.execution_mode,
                 )
             }?;
             attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
@@ -2207,7 +2210,7 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
                 on_step: &mut on_step,
             });
             let mut executed = if fem.relaxation.is_some() {
-                fem::relax::execute_fem_relax_with_context(
+                fem::relax::execute_fem_relax_with_context_in_mode(
                     fem_engine_kind(resolution.engine),
                     fem,
                     fem_stage_context.as_ref().expect("FEM stage context"),
@@ -2215,9 +2218,10 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
                     &plan.output_plan.outputs,
                     live,
                     artifact_writer.clone(),
+                    plan.common.execution_mode,
                 )
             } else {
-                dispatch::execute_fem_with_context(
+                dispatch::execute_fem_with_context_in_mode(
                     resolution.engine,
                     fem,
                     fem_stage_context.as_ref().expect("FEM stage context"),
@@ -2225,6 +2229,7 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
                     &plan.output_plan.outputs,
                     live,
                     artifact_writer.clone(),
+                    plan.common.execution_mode,
                 )
             }?;
             attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
@@ -2612,7 +2617,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                 on_step: &mut on_step,
             });
             let mut executed = if fem.relaxation.is_some() {
-                fem::relax::execute_fem_relax_with_context(
+                fem::relax::execute_fem_relax_with_context_in_mode(
                     fem_engine_kind(resolution.engine),
                     fem,
                     fem_stage_context.as_ref().expect("FEM stage context"),
@@ -2620,9 +2625,10 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                     &plan.output_plan.outputs,
                     live,
                     artifact_writer.clone(),
+                    plan.common.execution_mode,
                 )
             } else {
-                dispatch::execute_fem_with_context(
+                dispatch::execute_fem_with_context_in_mode(
                     resolution.engine,
                     fem,
                     fem_stage_context.as_ref().expect("FEM stage context"),
@@ -2630,6 +2636,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                     &plan.output_plan.outputs,
                     live,
                     artifact_writer.clone(),
+                    plan.common.execution_mode,
                 )
             }?;
             attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
@@ -4238,12 +4245,19 @@ mod tests {
         (problem, plan)
     }
 
-    fn certified_mixed_cpu_relaxation_guard_fixture(
+    fn certified_mixed_relaxation_guard_fixture_for_layers_and_device(
+        layer_count: u32,
+        requested_device: fullmag_ir::ExecutionDevice,
     ) -> (fullmag_ir::ProblemIR, fullmag_ir::ExecutionPlanIR) {
+        let device = match requested_device {
+            fullmag_ir::ExecutionDevice::Cpu => "cpu",
+            fullmag_ir::ExecutionDevice::Gpu => "gpu",
+            _ => panic!("mixed runtime fixture requires explicit CPU or GPU"),
+        };
         let mut problem = fem_session_runtime_problem();
         problem.problem_meta.runtime_metadata.insert(
             "runtime_selection".to_string(),
-            json!({"device": "cpu", "precision": "double"}),
+            json!({"device": device, "precision": "double"}),
         );
         let mut plan =
             fullmag_plan::plan(&problem).expect("tetrahedral FEM runtime fixture should plan");
@@ -4264,16 +4278,30 @@ mod tests {
             },
             sampling: problem.study.sampling().clone(),
         };
-        let golden: serde_json::Value = serde_json::from_str(include_str!(
-            "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
-        ))
+        let golden: serde_json::Value = serde_json::from_str(match layer_count {
+            1 => include_str!(
+                "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_python_golden.json"
+            ),
+            2 => include_str!(
+                "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_layers_2_python_golden.json"
+            ),
+            3 => include_str!(
+                "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_layers_3_python_golden.json"
+            ),
+            4 => include_str!(
+                "../../fullmag-ir/tests/fixtures/mixed_layer_topology_certificate_v1_layers_4_python_golden.json"
+            ),
+            _ => panic!("mixed runtime fixture exists only for layer counts 1 through 4"),
+        })
         .expect("mixed topology golden fixture should be valid JSON");
         let mesh: fullmag_ir::MeshIR = serde_json::from_value(golden["mesh"].clone())
             .expect("mixed topology golden mesh should deserialize");
         let certificate: fullmag_ir::MixedLayerTopologyCertificateV1IR =
             serde_json::from_value(golden["certificate"].clone())
                 .expect("mixed topology golden certificate should deserialize");
-        let fingerprint = mesh.topology_fingerprint_v6();
+        let fingerprint = mesh
+            .mixed_topology_fingerprint_for_version(&certificate.topology_fingerprint_version)
+            .expect("mixed topology fingerprint version must be supported");
         let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
             panic!("relaxation topology guard fixture must produce a FEM plan");
         };
@@ -4288,7 +4316,7 @@ mod tests {
                 max_relaxation_time_s: None,
             },
         });
-        fem.mfem_device_string = Some("cpu".to_string());
+        fem.mfem_device_string = Some(device.to_string());
         fem.mesh = mesh;
         fem.initial_magnetization = vec![[1.0, 0.0, 0.0]; fem.mesh.nodes.len()];
         let mut report: fullmag_ir::FemSharedDomainBuildReportIR = serde_json::from_value(json!({
@@ -4302,12 +4330,26 @@ mod tests {
             requested_topology: fullmag_ir::FemMeshTopologyFamilyIR::MixedP1,
             resolved_topology: fullmag_ir::FemMeshTopologyFamilyIR::MixedP1,
             accepted_certificate_fingerprint: fingerprint,
-            requested_device: fullmag_ir::ExecutionDevice::Cpu,
+            requested_device,
             precision: fem.precision,
             capability_status: fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented,
         });
         fem.mesh_build_report = Some(report);
         (problem, plan)
+    }
+
+    fn certified_mixed_cpu_relaxation_guard_fixture_for_layers(
+        layer_count: u32,
+    ) -> (fullmag_ir::ProblemIR, fullmag_ir::ExecutionPlanIR) {
+        certified_mixed_relaxation_guard_fixture_for_layers_and_device(
+            layer_count,
+            fullmag_ir::ExecutionDevice::Cpu,
+        )
+    }
+
+    fn certified_mixed_cpu_relaxation_guard_fixture(
+    ) -> (fullmag_ir::ProblemIR, fullmag_ir::ExecutionPlanIR) {
+        certified_mixed_cpu_relaxation_guard_fixture_for_layers(1)
     }
 
     fn topology_guard_error(
@@ -4557,6 +4599,80 @@ mod tests {
             topology_guard_error(&stale_problem, &plan),
             "fem_mixed_p1_runtime_provenance_stale: plan provenance does not match the exact mesh fingerprint/topology/precision; fallback=none"
         );
+    }
+
+    #[test]
+    fn fem_topology_guard_accepts_bound_cpu_and_gpu_exact_layer_matrix() {
+        for requested_device in [
+            fullmag_ir::ExecutionDevice::Cpu,
+            fullmag_ir::ExecutionDevice::Gpu,
+        ] {
+            for layer_count in [1, 2, 3] {
+                let (problem, plan) =
+                    certified_mixed_relaxation_guard_fixture_for_layers_and_device(
+                        layer_count,
+                        requested_device,
+                    );
+                let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+                    panic!("mixed relaxation fixture must produce a FEM plan");
+                };
+                let certificate = fem
+                    .mesh_build_report
+                    .as_ref()
+                    .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
+                    .expect("multi-layer runtime fixture must carry a certificate");
+                assert_eq!(certificate.requested_layer_count, layer_count);
+                assert_eq!(certificate.realized_layer_count, layer_count);
+                assert_eq!(
+                    fem.mesh
+                        .cells
+                        .types
+                        .iter()
+                        .filter(|family| **family == fullmag_ir::FemCellTypeIR::Prism6)
+                        .count(),
+                    2 * layer_count as usize,
+                    "fixture must exercise genuinely stacked magnetic prisms",
+                );
+                require_supported_fem_topology(&problem, &plan).unwrap_or_else(|error| {
+                    panic!(
+                        "bound {requested_device:?} exact layer {layer_count} mixed P1 relaxation must cross the guard: {error:?}"
+                    )
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn fem_topology_guard_rejects_correctly_bound_exact_four_layer_cpu_and_gpu() {
+        for requested_device in [
+            fullmag_ir::ExecutionDevice::Cpu,
+            fullmag_ir::ExecutionDevice::Gpu,
+        ] {
+            let (problem, plan) =
+                certified_mixed_relaxation_guard_fixture_for_layers_and_device(4, requested_device);
+            let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+                panic!("mixed relaxation fixture must produce a FEM plan");
+            };
+            let certificate = fem
+                .mesh_build_report
+                .as_ref()
+                .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
+                .expect("L=4 rejection fixture must carry a certificate");
+            fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(
+                certificate,
+                &fem.mesh,
+            )
+            .expect("L=4 rejection fixture must be correctly certificate-bound");
+            let expected = topology_guard_error(&problem, &plan);
+            assert!(expected.contains("fem_mixed_p1_runtime_scope_rejected"));
+            assert!(expected.contains("fallback=none"));
+            assert_eq!(
+                resolve_planned_runtime_engine(&problem, &plan)
+                    .expect_err("L=4 must reject before backend engine resolution")
+                    .message,
+                expected,
+            );
+        }
     }
 
     #[test]
@@ -4827,9 +4943,9 @@ mod tests {
     fn fem_relaxation_entrypoints_route_through_fem_relax_module() {
         let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
             .expect("read lib.rs");
-        let route_count = source.matches("fem::relax::execute_fem_relax(").count()
+        let route_count = source.matches("fem::relax::execute_fem_relax_in_mode(").count()
             + source
-                .matches("fem::relax::execute_fem_relax_with_context(")
+                .matches("fem::relax::execute_fem_relax_with_context_in_mode(")
                 .count();
         assert!(
             route_count >= 3,

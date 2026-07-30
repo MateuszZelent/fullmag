@@ -22,6 +22,50 @@ use std::path::Path;
 
 const MU0_H_PER_M: f64 = 1.256_637_062_12e-6;
 
+fn execution_provenance_json(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    execution_provenance: &crate::types::ExecutionProvenance,
+) -> std::io::Result<serde_json::Value> {
+    if plan.common.execution_mode == fullmag_ir::ExecutionMode::Strict
+        && execution_provenance.execution_engine == "fem_native_gpu"
+        && (execution_provenance.mfem_version.is_none()
+            || execution_provenance.hypre_version.is_none())
+    {
+        return Err(Error::new(
+            ErrorKind::Other,
+            "strict native FEM GPU artifacts require MFEM and HYPRE versions from the loaded runtime",
+        ));
+    }
+    Ok(serde_json::to_value(execution_provenance).expect("ExecutionProvenance must serialize"))
+}
+
+pub(crate) fn artifact_provenance_json(
+    context: &FieldArtifactContext,
+    provenance: &crate::types::ExecutionProvenance,
+) -> serde_json::Value {
+    let mut value = serde_json::to_value(provenance).expect("ExecutionProvenance must serialize");
+    let object = value
+        .as_object_mut()
+        .expect("ExecutionProvenance must serialize to an object");
+    object.insert(
+        "problem_name".to_string(),
+        serde_json::Value::String(context.problem_name.clone()),
+    );
+    object.insert(
+        "ir_version".to_string(),
+        serde_json::Value::String(context.ir_version.clone()),
+    );
+    object.insert(
+        "source_hash".to_string(),
+        serde_json::to_value(&context.source_hash).expect("source hash must serialize"),
+    );
+    object.insert(
+        "execution_mode".to_string(),
+        serde_json::to_value(context.execution_mode).expect("execution mode must serialize"),
+    );
+    value
+}
+
 fn runtime_threading_summary(problem: &fullmag_ir::ProblemIR) -> serde_json::Value {
     let resolved_cpu_threads = u32::try_from(crate::configured_cpu_threads(problem)).ok();
     serde_json::json!({
@@ -361,6 +405,26 @@ fn demag_runtime_metadata(
             let max_iterations =
                 resolved_policy.map_or(policy.max_iterations, |entry| entry.max_iterations);
             let amg_profile = demag_amg_profile_metadata(&preconditioner, last);
+            let (runtime_solver, runtime_preconditioner) = if provenance
+                .fem_demag_operator_mode
+                .as_deref()
+                == Some("device_hypre_poisson")
+            {
+                let solver = match linear_solver.as_str() {
+                    "CG" => Some("HyprePCG"),
+                    "GMRES" => Some("HypreGMRES"),
+                    _ => None,
+                };
+                let preconditioner = match preconditioner.as_str() {
+                    "AMG" => Some("HypreBoomerAMG"),
+                    "JACOBI" => Some("HypreDiagScale"),
+                    "NONE" => Some("HypreIdentity"),
+                    _ => None,
+                };
+                (solver, preconditioner)
+            } else {
+                (None, None)
+            };
 
             serde_json::json!({
                 "model": resolved_demag.model_name(),
@@ -384,6 +448,8 @@ fn demag_runtime_metadata(
                 },
                 "linear_solver": linear_solver,
                 "preconditioner": preconditioner,
+                "runtime_solver": runtime_solver,
+                "runtime_preconditioner": runtime_preconditioner,
                 "amg_profile": amg_profile,
                 "relative_tolerance": relative_tolerance,
                 "absolute_tolerance": policy.atol,
@@ -401,6 +467,7 @@ fn demag_runtime_metadata(
                 "solver_setup_reused": last.map(|entry| entry.demag_solver_setup_reused),
                 "timings_ns": timings_ns,
                 "mfem_device": provenance.mfem_device,
+                "hypre_version": provenance.hypre_version,
                 "fem_assembly_mode": provenance.fem_assembly_mode,
                 "requested_fem_omp_threads": provenance.requested_fem_omp_threads,
                 "effective_fem_omp_threads": provenance.effective_fem_omp_threads,
@@ -1024,8 +1091,7 @@ pub(crate) fn write_artifacts(
     let mesh_metadata = mesh_runtime_metadata(plan);
     let region_realization_revisions = region_realization_revisions_metadata(problem);
     let material_field_assets = write_material_field_artifacts(output_dir, plan)?;
-    let mut execution_provenance_json =
-        serde_json::to_value(&execution_provenance).expect("ExecutionProvenance must serialize");
+    let mut execution_provenance_json = execution_provenance_json(plan, &execution_provenance)?;
     if let Some(thermal) =
         thermal_execution_provenance(plan, &executed.result.steps, &execution_provenance)
     {
@@ -2703,14 +2769,7 @@ fn write_prescribed_current_transport_artifacts(
             "coverage": coverage,
             "solve_region": solve_region,
             "layout": context.layout.clone(),
-            "provenance": {
-                "problem_name": context.problem_name,
-                "ir_version": context.ir_version,
-                "source_hash": context.source_hash,
-                "execution_mode": context.execution_mode,
-                "execution_engine": provenance.execution_engine,
-                "precision": provenance.precision,
-            },
+            "provenance": artifact_provenance_json(context, provenance),
             "values": values,
         });
         let artifact_path = output_dir
@@ -2860,14 +2919,7 @@ pub(crate) fn write_field_file(
         "time": time,
         "solver_dt": solver_dt,
         "layout": context.layout,
-        "provenance": {
-            "problem_name": context.problem_name,
-            "ir_version": context.ir_version,
-            "source_hash": context.source_hash,
-            "execution_mode": context.execution_mode,
-            "execution_engine": provenance.execution_engine,
-            "precision": provenance.precision,
-        },
+        "provenance": artifact_provenance_json(context, provenance),
         "values": values,
     });
     fs::write(path, serde_json::to_string_pretty(&field_json).unwrap())
@@ -3052,14 +3104,7 @@ fn write_layer_field_file(
         "solver_dt": solver_dt,
         "layer": layer.manifest_entry.clone(),
         "layout": context.layout.clone(),
-        "provenance": {
-            "problem_name": context.problem_name,
-            "ir_version": context.ir_version,
-            "source_hash": context.source_hash,
-            "execution_mode": context.execution_mode,
-            "execution_engine": provenance.execution_engine,
-            "precision": provenance.precision,
-        },
+        "provenance": artifact_provenance_json(context, provenance),
         "values": values,
     });
     fs::write(path, serde_json::to_string_pretty(&field_json).unwrap())
@@ -3211,6 +3256,118 @@ pub(crate) fn field_unit(observable: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strict_gpu_artifact_provenance_requires_loaded_mfem_version() {
+        let plan = test_fem_execution_plan();
+        let provenance = ExecutionProvenance {
+            execution_engine: "fem_native_gpu".to_string(),
+            ..ExecutionProvenance::default()
+        };
+
+        assert!(execution_provenance_json(&plan, &provenance).is_err());
+    }
+
+    #[test]
+    fn field_and_current_artifact_provenance_preserves_optional_mfem_version() {
+        let problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let plan = test_fem_execution_plan();
+        let context = build_field_context(&problem, &plan);
+        let mut provenance = ExecutionProvenance {
+            execution_engine: "fem_native_gpu".to_string(),
+            mfem_version: Some("4.9".to_string()),
+            hypre_version: Some("3.1.0".to_string()),
+            ..ExecutionProvenance::default()
+        };
+
+        assert_eq!(
+            artifact_provenance_json(&context, &provenance)["mfem_version"],
+            "4.9"
+        );
+        assert!(artifact_provenance_json(&context, &provenance)
+            .as_object()
+            .expect("artifact provenance must be an object")
+            .contains_key("hypre_version"));
+
+        provenance.mfem_version = None;
+        assert!(!artifact_provenance_json(&context, &provenance)
+            .as_object()
+            .expect("artifact provenance must be an object")
+            .contains_key("mfem_version"));
+    }
+
+    #[test]
+    fn gpu_demag_runtime_metadata_keeps_loaded_hypre_identity_and_provider_labels() {
+        let mut plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("test plan must be FEM");
+        };
+        fem.enable_demag = true;
+        fem.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+        let provenance = ExecutionProvenance {
+            execution_engine: "fem_native_gpu".to_string(),
+            hypre_version: Some("3.1.0".to_string()),
+            fem_demag_operator_mode: Some("device_hypre_poisson".to_string()),
+            ..ExecutionProvenance::default()
+        };
+
+        let metadata = demag_runtime_metadata(&plan, &provenance, &[]);
+        assert_eq!(metadata["hypre_version"], "3.1.0");
+        assert_eq!(metadata["linear_solver"], "CG");
+        assert_eq!(metadata["preconditioner"], "AMG");
+        assert_eq!(metadata["runtime_solver"], "HyprePCG");
+        assert_eq!(metadata["runtime_preconditioner"], "HypreBoomerAMG");
+    }
+
+    #[test]
+    fn gpu_demag_runtime_metadata_maps_resolved_nondefault_hypre_provider_labels() {
+        let mut plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("test plan must be FEM");
+        };
+        fem.enable_demag = true;
+        fem.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+        let provenance = ExecutionProvenance {
+            execution_engine: "fem_native_gpu".to_string(),
+            fem_demag_operator_mode: Some("device_hypre_poisson".to_string()),
+            fem_poisson_demag: Some(crate::types::FemPoissonDemagProvenance {
+                linear_solver: "GMRES".to_string(),
+                preconditioner: "JACOBI".to_string(),
+                ..Default::default()
+            }),
+            ..ExecutionProvenance::default()
+        };
+
+        let metadata = demag_runtime_metadata(&plan, &provenance, &[]);
+        assert_eq!(metadata["linear_solver"], "GMRES");
+        assert_eq!(metadata["preconditioner"], "JACOBI");
+        assert_eq!(metadata["runtime_solver"], "HypreGMRES");
+        assert_eq!(metadata["runtime_preconditioner"], "HypreDiagScale");
+    }
+
+    #[test]
+    fn gpu_demag_runtime_metadata_maps_no_preconditioner_to_hypre_identity() {
+        let mut plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("test plan must be FEM");
+        };
+        fem.enable_demag = true;
+        fem.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+        let provenance = ExecutionProvenance {
+            execution_engine: "fem_native_gpu".to_string(),
+            fem_demag_operator_mode: Some("device_hypre_poisson".to_string()),
+            fem_poisson_demag: Some(crate::types::FemPoissonDemagProvenance {
+                linear_solver: "CG".to_string(),
+                preconditioner: "NONE".to_string(),
+                ..Default::default()
+            }),
+            ..ExecutionProvenance::default()
+        };
+
+        let metadata = demag_runtime_metadata(&plan, &provenance, &[]);
+        assert_eq!(metadata["runtime_solver"], "HyprePCG");
+        assert_eq!(metadata["runtime_preconditioner"], "HypreIdentity");
+    }
 
     #[test]
     fn artifact_node_selection_resolves_quad_interface_by_global_ordinal() {
@@ -3609,6 +3766,10 @@ mod tests {
         assert_eq!(
             metadata["mesh_build_report"],
             serde_json::to_value(report).unwrap()
+        );
+        assert_eq!(
+            metadata["mesh_build_report"]["orphan_entities"],
+            serde_json::json!([]),
         );
     }
 
@@ -5034,6 +5195,7 @@ mod tests {
                 },
             });
         }
+        plan.common.execution_mode = ExecutionMode::Extended;
         let provenance = ExecutionProvenance {
             execution_engine: "fem_native_gpu".to_string(),
             precision: "double".to_string(),
@@ -5177,6 +5339,7 @@ mod tests {
                 },
             });
         }
+        gpu_plan.common.execution_mode = ExecutionMode::Extended;
         let executed = ExecutedRun {
             result: RunResult {
                 status: RunStatus::Completed,
@@ -5419,6 +5582,8 @@ mod tests {
             dt_policy: None,
             llg_mode: None,
             mfem_device: None,
+            mfem_version: None,
+            hypre_version: None,
             demag_refresh_interval_s: None,
             fem_assembly_mode: None,
             fem_execution_mode: None,
@@ -6292,6 +6457,8 @@ mod tests {
             dt_policy: None,
             llg_mode: None,
             mfem_device: None,
+            mfem_version: None,
+            hypre_version: None,
             demag_refresh_interval_s: None,
             fem_assembly_mode: None,
             fem_execution_mode: None,

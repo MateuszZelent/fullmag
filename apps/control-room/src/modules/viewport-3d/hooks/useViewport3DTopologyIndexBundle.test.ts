@@ -134,6 +134,29 @@ describe("useViewport3DTopologyIndexBundle", () => {
     });
   });
 
+  it("accounts for aligned surface cell identity buffers in cache memory", () => {
+    const bundle = makeTopologyIndexBundle(0);
+    bundle.magneticPartsById.set("film", {
+      edgeIndices: null,
+      surfaceIndices: null,
+      surfaceNodeIndices: null,
+      surfaceNodeSelection: null,
+      surfaceTriangleCellTypes: new Uint32Array([2, 2]),
+      surfaceTriangleFacetIndices: null,
+      surfaceTriangleGlobalCellOrdinals: new BigUint64Array([BigInt(7), BigInt(7)]),
+      volumeEdgeIndices: null,
+    });
+    const handle = putViewport3DTopologyIndexBundleInCache({
+      bundle,
+      key: "topology-index:identity-memory",
+    });
+
+    expect(
+      getViewport3DTopologyIndexBundleCacheSnapshotForTests().estimatedBytes,
+    ).toBe(56);
+    handle.release();
+  });
+
   it("uses semantic cache handles instead of storing topology bundles in React state", () => {
     const reducerStateSource = topologyIndexHookSource.slice(
       topologyIndexHookSource.indexOf("interface Viewport3DTopologyIndexReducerState"),

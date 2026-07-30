@@ -1429,15 +1429,16 @@ fn validate_mixed_p1_execution_scope(
         && exchange_count == 1
         && demag_count == 1
         && energy_supported
-        && certificate.requested_layer_count == 1
-        && certificate.realized_layer_count == 1
-        && certificate.magnetic_plane_coordinates_m.len() == 2
+        && (1..=3).contains(&certificate.requested_layer_count)
+        && certificate.realized_layer_count == certificate.requested_layer_count
+        && certificate.magnetic_plane_coordinates_m.len()
+            == certificate.requested_layer_count as usize + 1
         && certificate.fallbacks_triggered.is_empty();
     if qualified {
         Ok(())
     } else {
         Err(format!(
-            "fem_mixed_p1_scope_rejected: required=explicit_fem+explicit_cpu_or_gpu+strict+double+P1+one_axis_aligned_box+one_exact_layer+uniform_material+exchange+poisson_robin_or_dirichlet+PG_BB_or_NCG_or_LLG_overdamped; requested_backend={:?}; requested_device={}; requested_precision={:?}; execution_mode={:?}; fe_order={fem_order:?}; study={:?}; energy_terms={:?}; fallback=none",
+            "fem_mixed_p1_scope_rejected: required=explicit_fem+explicit_cpu_or_gpu+strict+double+P1+one_axis_aligned_box+exact_1_to_3_layers+uniform_material+exchange+poisson_robin_or_dirichlet+PG_BB_or_NCG_or_LLG_overdamped; requested_backend={:?}; requested_device={}; requested_precision={:?}; execution_mode={:?}; fe_order={fem_order:?}; study={:?}; energy_terms={:?}; fallback=none",
             problem.backend_policy.requested_backend,
             effective_runtime_device(problem),
             problem.backend_policy.execution_precision,

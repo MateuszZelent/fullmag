@@ -1,5 +1,6 @@
 from pathlib import Path
 import contextlib
+from dataclasses import replace
 import io
 import json
 
@@ -9,8 +10,12 @@ from tests.standard_problems.mumag.sp4.common.contract import (
     CANONICAL_RELAXATION_DEVICE,
     CONTRACT,
     DEFAULT_RELAXATION_ALGORITHM,
+    LEGACY_ALL_TET_RELAXATION_TORQUE_TOLERANCE_APM,
+    MIXED_P1_QUALIFICATION,
     PRODUCTION_RELAXATION_ALGORITHMS,
     RELAXATION_DT_MAX_S,
+    MIXED_P1_RELAXATION_TORQUE_TOLERANCE_APM,
+    MIXED_P1_RELAXATION_TORQUE_TOLERANCE_T,
     validate_device,
 )
 from tests.standard_problems.mumag.sp4.common.metrics import (
@@ -89,14 +94,126 @@ def test_qualification_defaults_to_monotone_overdamped_llg_relaxation():
         "nonlinear_cg",
     )
     assert RELAXATION_DT_MAX_S == 1e-14
+    assert MIXED_P1_RELAXATION_TORQUE_TOLERANCE_T == 1e-6
+    assert MIXED_P1_RELAXATION_TORQUE_TOLERANCE_APM == pytest.approx(
+        0.7957747154594767
+    )
+    assert MIXED_P1_QUALIFICATION.relaxation_torque_tolerance_t == 1e-6
+    assert MIXED_P1_QUALIFICATION.relaxation_torque_tolerance_apm == pytest.approx(
+        0.7957747154594767
+    )
 
 
-def _managed_problem_ir(monkeypatch, *, phase: str, algorithm: str, state=None):
+def test_mixed_p1_qualification_contract_freezes_energy_and_temporal_gates():
+    contract = MIXED_P1_QUALIFICATION
+
+    assert (contract.mesh_energy.atol_j, contract.mesh_energy.rtol) == (2e-19, 2e-2)
+    assert (contract.airbox_energy.atol_j, contract.airbox_energy.rtol) == (1e-19, 1e-2)
+    assert (contract.operator_energy.atol_j, contract.operator_energy.rtol) == (1e-30, 1e-6)
+    assert contract.fixed_finest_dt_pair_s == (2e-14, 1e-14)
+    assert contract.adaptive_finest_max_err_pair == (1e-6, 1e-7)
+    assert contract.component_rms_max == 0.01
+    assert contract.component_p99_max == 0.03
+    assert contract.component_endpoint_max == 0.01
+    assert contract.crossing_delta_max_s == 5e-12
+    assert contract.energy_trajectory_relative_rms_max == 0.01
+    assert (
+        contract.temporal_energy_endpoint.atol_j,
+        contract.temporal_energy_endpoint.rtol,
+    ) == (1e-19, 1e-2)
+
+
+def test_mixed_p1_qualification_rules_are_executable_and_fail_closed():
+    contract = MIXED_P1_QUALIFICATION
+
+    assert contract.operator_energy.accepts(1e-18, 1e-18 + 1e-24)
+    assert not contract.operator_energy.accepts(1e-18, 1e-18 + 3e-24)
+    assert not contract.operator_energy.accepts(float("nan"), 0.0)
+    assert contract.temporal_accepts(
+        component_rms=(0.01, 0.0, 0.0),
+        component_p99=(0.03, 0.0, 0.0),
+        component_endpoint=(0.01, 0.0, 0.0),
+        crossing_delta_s=5e-12,
+        energy_relative_rms=(0.01, 0.0, 0.0),
+        energy_endpoint_pairs_j=((1e-18, 1e-18),) * 3,
+    )
+    assert not contract.temporal_accepts(
+        component_rms=(0.0100001, 0.0, 0.0),
+        component_p99=(0.0, 0.0, 0.0),
+        component_endpoint=(0.0, 0.0, 0.0),
+        crossing_delta_s=0.0,
+        energy_relative_rms=(0.0, 0.0, 0.0),
+        energy_endpoint_pairs_j=((0.0, 0.0),) * 3,
+    )
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "component_rms",
+        "component_p99",
+        "component_endpoint",
+        "energy_relative_rms",
+        "energy_endpoint_pairs_j",
+    ),
+)
+@pytest.mark.parametrize("length", (0, 2, 4))
+def test_mixed_p1_temporal_gate_rejects_non_triplet_metrics(field, length):
+    kwargs = {
+        "component_rms": (0.0, 0.0, 0.0),
+        "component_p99": (0.0, 0.0, 0.0),
+        "component_endpoint": (0.0, 0.0, 0.0),
+        "crossing_delta_s": 0.0,
+        "energy_relative_rms": (0.0, 0.0, 0.0),
+        "energy_endpoint_pairs_j": ((0.0, 0.0),) * 3,
+    }
+    kwargs[field] = ((0.0, 0.0),) * length if field == "energy_endpoint_pairs_j" else (0.0,) * length
+
+    assert not MIXED_P1_QUALIFICATION.temporal_accepts(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    (
+        {"fixed_finest_dt_pair_s": (1e-14,)},
+        {"fixed_finest_dt_pair_s": [2e-14, 1e-14]},
+        {"fixed_finest_dt_pair_s": (1e-14, 2e-14)},
+        {"adaptive_finest_max_err_pair": [1e-6, 1e-7]},
+        {"adaptive_finest_max_err_pair": (1e-7, 1e-6)},
+        {"component_rms_max": -1.0},
+        {"component_p99_max": float("nan")},
+        {"crossing_delta_max_s": float("inf")},
+    ),
+)
+def test_mixed_p1_qualification_contract_rejects_invalid_frozen_values(changes):
+    with pytest.raises((TypeError, ValueError)):
+        replace(MIXED_P1_QUALIFICATION, **changes)
+
+
+def _managed_problem_ir(
+    monkeypatch,
+    *,
+    phase: str,
+    algorithm: str,
+    state=None,
+    mesh: str = "coarse",
+    topology_variant: str | None = None,
+    layers: int | None = None,
+):
     monkeypatch.setenv("FULLMAG_SP4_PHASE", phase)
     monkeypatch.setenv("FULLMAG_SP4_RELAX_ALGORITHM", algorithm)
     monkeypatch.setenv("FULLMAG_SP4_DEVICE", "cpu")
-    monkeypatch.setenv("FULLMAG_SP4_MESH", "coarse")
+    monkeypatch.setenv("FULLMAG_SP4_MESH", mesh)
     monkeypatch.setenv("FULLMAG_SP4_AIRBOX", "baseline")
+    monkeypatch.delenv("FULLMAG_SP4_RELAX_TOL_APM", raising=False)
+    if topology_variant is None:
+        monkeypatch.delenv("FULLMAG_SP4_TOPOLOGY_VARIANT", raising=False)
+    else:
+        monkeypatch.setenv("FULLMAG_SP4_TOPOLOGY_VARIANT", topology_variant)
+    if layers is None:
+        monkeypatch.delenv("FULLMAG_SP4_LAYERS", raising=False)
+    else:
+        monkeypatch.setenv("FULLMAG_SP4_LAYERS", str(layers))
     if state is None:
         monkeypatch.delenv("FULLMAG_SP4_INITIAL_STATE", raising=False)
     else:
@@ -120,6 +237,106 @@ def _managed_problem_ir(monkeypatch, *, phase: str, algorithm: str, state=None):
     assert status == 0
     payload = json.loads(stdout.getvalue())
     return payload["stages"][0]["ir"]
+
+
+def _managed_mesh_entry(monkeypatch, **kwargs):
+    ir = _managed_problem_ir(
+        monkeypatch,
+        phase="relax",
+        algorithm="projected_gradient_bb",
+        **kwargs,
+    )
+    [mesh] = ir["problem_meta"]["runtime_metadata"]["mesh_workflow"][
+        "per_geometry"
+    ]
+    return mesh
+
+
+def test_managed_problem_scopes_stricter_torque_threshold_to_mixed_p1(
+    monkeypatch,
+):
+    mixed = _managed_problem_ir(
+        monkeypatch,
+        phase="relax",
+        algorithm="projected_gradient_bb",
+        topology_variant="mixed_p1",
+        layers=1,
+    )
+    legacy = _managed_problem_ir(
+        monkeypatch,
+        phase="relax",
+        algorithm="projected_gradient_bb",
+        topology_variant="all_tet",
+        layers=None,
+    )
+
+    assert mixed["study"]["stop"]["torque_tolerance_apm"] == pytest.approx(
+        MIXED_P1_RELAXATION_TORQUE_TOLERANCE_APM
+    )
+    assert legacy["study"]["stop"]["torque_tolerance_apm"] == pytest.approx(
+        LEGACY_ALL_TET_RELAXATION_TORQUE_TOLERANCE_APM
+    )
+
+
+def test_managed_problem_defaults_to_all_tet_without_layer_controls(
+    monkeypatch,
+) -> None:
+    mesh = _managed_mesh_entry(monkeypatch)
+
+    assert mesh["hmax"] == pytest.approx(3e-9)
+    assert mesh["order"] == 1
+    assert "topology" not in mesh
+    assert "through_thickness_elements" not in mesh
+    assert "exact_layer_count" not in mesh
+    assert "transition_policy" not in mesh
+
+
+@pytest.mark.parametrize("layers", (1, 2, 3))
+def test_managed_problem_mixed_p1_lowers_hmax_and_exact_layers_1_2_3(
+    monkeypatch,
+    layers,
+) -> None:
+    mesh = _managed_mesh_entry(
+        monkeypatch,
+        mesh="medium",
+        topology_variant="mixed_p1",
+        layers=layers,
+    )
+
+    assert mesh["hmin"] == pytest.approx(2e-9)
+    assert mesh["hmax"] == pytest.approx(2e-9)
+    assert mesh["minimum_element_size"] == pytest.approx(2e-9)
+    assert mesh["maximum_element_size"] == pytest.approx(2e-9)
+    assert mesh["order"] == 1
+    assert mesh["mesh_strategy"] == "swept_prism"
+    assert mesh["topology"] == "prismatic"
+    assert mesh["element_family"] == "prism"
+    assert mesh["through_thickness_elements"] == layers
+    assert mesh["exact_layer_count"] is True
+    assert mesh["transition_policy"] == "pyramid_to_tetrahedra"
+
+
+@pytest.mark.parametrize(
+    ("topology_variant", "layers"),
+    [
+        ("mixed_p1", None),
+        ("mixed_p1", 0),
+        ("mixed_p1", 4),
+        ("all_tet", 1),
+        ("unsupported", None),
+    ],
+)
+def test_managed_problem_rejects_invalid_topology_layer_combinations(
+    monkeypatch,
+    topology_variant,
+    layers,
+) -> None:
+    with pytest.raises(ValueError):
+        _managed_mesh_entry(
+            monkeypatch,
+            topology_variant=topology_variant,
+            layers=layers,
+        )
 
 
 @pytest.mark.parametrize("algorithm", PRODUCTION_RELAXATION_ALGORITHMS)

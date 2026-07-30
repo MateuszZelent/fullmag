@@ -592,6 +592,13 @@ Current mesh build and object-mesh resource routes:
 | `/v2/sessions/current/meshing/meshes/shared-domain/cross-section` | `GET` | Read binary `FMCS` shared-domain cross-section geometry for statistics and advanced inspection. |
 | `/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality` | `GET` | Read binary `FMQS` quality values for a shared-domain cross-section. |
 | `/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image` | `GET` | Read a server-rendered PNG preview/export for a shared-domain cross-section. |
+
+The three cross-section resources are currently tet4-only. When the active FEM
+mesh contains prism, pyramid, or another non-tetrahedral cell, they return HTTP
+`409` with the typed `ApiErrorResponse.code` value
+`mixed_topology_not_supported`. Clients must present that state explicitly and
+must not reinterpret the first four nodes as a tetrahedron or repeatedly retry
+the unsupported request at the same mesh revision.
 | `/v2/sessions/current/meshing/meshes/universe/quality` | `GET` | Read universe/airbox mesh quality diagnostics; when the airbox scope exists, `quality.global` is the airbox quality scope. |
 | `/v2/sessions/current/meshing/meshes/objects/{object_id}/topology` | `GET` | Read object-scoped binary topology when available. |
 | `/v2/sessions/current/meshing/meshes/objects/{object_id}/report` | `GET` | Read object mesh report diagnostics. |

@@ -905,14 +905,7 @@ impl ZarrFieldSeriesWriter {
                 "storage_layout": "soa_component_major",
                 "sample_index_file": "samples.csv",
                 "layout": context.layout.clone(),
-                "provenance": {
-                    "problem_name": context.problem_name.clone(),
-                    "ir_version": context.ir_version.clone(),
-                    "source_hash": context.source_hash.clone(),
-                    "execution_mode": context.execution_mode,
-                    "execution_engine": provenance.execution_engine.clone(),
-                    "precision": provenance.precision.clone(),
-                },
+                "provenance": crate::artifacts::artifact_provenance_json(context, provenance),
             }))
             .map_err(|error| format!("failed to serialize Zarr attrs: {}", error))?,
         )
@@ -1417,6 +1410,47 @@ mod stage_autosave_tests {
         .unwrap()
     }
 
+    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+    #[test]
+    fn zarr_field_attrs_preserve_optional_mfem_version() {
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-zarr-mfem-provenance-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let mut provenance = ExecutionProvenance {
+            mfem_version: Some("4.9".into()),
+            ..ExecutionProvenance::default()
+        };
+        let info = NativeVectorSnapshotInfo {
+            cell_count: 1,
+            component_count: 3,
+            scalar_bytes: 8,
+            scalar_type: NativeSnapshotScalarType::F64,
+        };
+
+        ZarrFieldSeriesWriter::open(&root, &context(), &provenance, "m", info)
+            .expect("Zarr attrs must be created");
+        let attrs: serde_json::Value = serde_json::from_slice(
+            &fs::read(root.join("m.zarr/.zattrs")).expect("Zarr attrs must be readable"),
+        )
+        .expect("Zarr attrs must be valid JSON");
+        assert_eq!(attrs["provenance"]["mfem_version"], "4.9");
+
+        provenance.mfem_version = None;
+        ZarrFieldSeriesWriter::open(&root, &context(), &provenance, "H_eff", info)
+            .expect("Zarr attrs without MFEM identity must be created");
+        let attrs: serde_json::Value = serde_json::from_slice(
+            &fs::read(root.join("H_eff.zarr/.zattrs")).expect("Zarr attrs must be readable"),
+        )
+        .expect("Zarr attrs must be valid JSON");
+        assert!(!attrs["provenance"]
+            .as_object()
+            .expect("Zarr provenance must be an object")
+            .contains_key("mfem_version"));
+
+        fs::remove_dir_all(root).expect("Zarr test directory must be removable");
+    }
+
     #[test]
     fn stage_autosave_jobs_are_bounded_and_finish_drains_terminal_relax_state() {
         let root = std::env::temp_dir().join(format!(
@@ -1577,6 +1611,47 @@ mod stage_autosave_tests {
         assert_eq!(recorder.due_accepted_step_fields(2, false), ["m"]);
         assert!(recorder.due_accepted_step_fields(2, true).is_empty());
         assert_eq!(recorder.due_accepted_step_fields(3, true), ["m"]);
+        drop(recorder);
+        pipeline.finish().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn accepted_step_operator_fields_include_step0_and_forced_step1_once() {
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-artifact-pipeline-step0-operator-fields-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let mut pipeline = ArtifactPipeline::start_with_stage_autosave(
+            root.clone(),
+            context(),
+            1,
+            Some(StageAutosavePipelineConfig {
+                stage_id: "relax".into(),
+                policy: policy(
+                    "zarr",
+                    serde_json::json!([
+                        {"quantity": "H_ex", "every_steps": 50_000},
+                        {"quantity": "H_demag", "every_steps": 50_000},
+                        {"quantity": "H_eff", "every_steps": 50_000}
+                    ]),
+                ),
+            }),
+        )
+        .unwrap();
+        let mut recorder =
+            ArtifactRecorder::streaming(ExecutionProvenance::default(), pipeline.sender());
+        assert_eq!(
+            recorder.due_accepted_step_fields(0, false),
+            ["H_demag", "H_eff", "H_ex"]
+        );
+        assert!(recorder.due_accepted_step_fields(1, false).is_empty());
+        assert_eq!(
+            recorder.due_accepted_step_fields(1, true),
+            ["H_demag", "H_eff", "H_ex"]
+        );
+        assert!(recorder.due_accepted_step_fields(1, true).is_empty());
         drop(recorder);
         pipeline.finish().unwrap();
         fs::remove_dir_all(root).unwrap();

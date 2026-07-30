@@ -3,6 +3,7 @@ import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   collectFieldVectorIdentityIssues,
   ControlRoomApi,
+  ControlRoomApiError,
   MAX_TOPOLOGY_BYTES,
   parseFieldVectorResponseMetadata,
   transformFieldMetaForDisplay,
@@ -517,6 +518,12 @@ function makeLargeMixedTopologyBuffer(): ArrayBuffer {
   const facetNodes = [0, 1, 2, 0, 1, 4, 3];
   const cellMarkers = [10, 11, 12];
   const facetMarkers = [20, 21];
+  const cellGlobalOrdinals = [
+    BigInt(10),
+    BigInt("9007199254740993"),
+    BigInt("18446744073709551615"),
+  ];
+  const facetGlobalOrdinals = [BigInt(20), BigInt("9007199254740995")];
 
   let offset = 64;
   offset = align(offset + nodeCount * 3 * 8);
@@ -537,7 +544,13 @@ function makeLargeMixedTopologyBuffer(): ArrayBuffer {
   const cellMarkersOffset = offset;
   offset = align(offset + cellMarkers.length * 4);
   const facetMarkersOffset = offset;
-  const buffer = new ArrayBuffer(facetMarkersOffset + facetMarkers.length * 4);
+  offset = align(offset + facetMarkers.length * 4);
+  const cellGlobalOrdinalsOffset = offset;
+  offset = align(offset + cellGlobalOrdinals.length * 8);
+  const facetGlobalOrdinalsOffset = offset;
+  const buffer = new ArrayBuffer(
+    facetGlobalOrdinalsOffset + facetGlobalOrdinals.length * 8,
+  );
   const view = new DataView(buffer);
   for (const [index, code] of [..."FMMT"].entries()) {
     view.setUint8(index, code.charCodeAt(0));
@@ -552,6 +565,8 @@ function makeLargeMixedTopologyBuffer(): ArrayBuffer {
   view.setUint32(28, cellMarkers.length, true);
   view.setUint32(32, facetMarkers.length, true);
   view.setUint32(36, 64, true);
+  view.setUint32(40, cellGlobalOrdinals.length, true);
+  view.setUint32(44, facetGlobalOrdinals.length, true);
   new Uint32Array(buffer, cellTypesOffset, cellTypes.length).set(cellTypes);
   new Uint32Array(buffer, cellOffsetsOffset, cellOffsets.length).set(cellOffsets);
   new Uint32Array(buffer, cellNodesOffset, cellNodes.length).set(cellNodes);
@@ -561,6 +576,16 @@ function makeLargeMixedTopologyBuffer(): ArrayBuffer {
   new Uint32Array(buffer, facetNodesOffset, facetNodes.length).set(facetNodes);
   new Uint32Array(buffer, cellMarkersOffset, cellMarkers.length).set(cellMarkers);
   new Uint32Array(buffer, facetMarkersOffset, facetMarkers.length).set(facetMarkers);
+  new BigUint64Array(
+    buffer,
+    cellGlobalOrdinalsOffset,
+    cellGlobalOrdinals.length,
+  ).set(cellGlobalOrdinals);
+  new BigUint64Array(
+    buffer,
+    facetGlobalOrdinalsOffset,
+    facetGlobalOrdinals.length,
+  ).set(facetGlobalOrdinals);
   return buffer;
 }
 
@@ -2708,6 +2733,15 @@ describe("ControlRoomApi", () => {
     expect(Array.from(result.data.facetNodes ?? [])).toEqual([0, 1, 2, 0, 1, 4, 3]);
     expect(Array.from(result.data.cellMarkers ?? [])).toEqual([10, 11, 12]);
     expect(Array.from(result.data.facetMarkers ?? [])).toEqual([20, 21]);
+    expect(result.data.cellGlobalOrdinals).toEqual(new BigUint64Array([
+      BigInt(10),
+      BigInt("9007199254740993"),
+      BigInt("18446744073709551615"),
+    ]));
+    expect(result.data.facetGlobalOrdinals).toEqual(new BigUint64Array([
+      BigInt(20),
+      BigInt("9007199254740995"),
+    ]));
     expect(result.data.elementCount).toBe(3);
     expect(result.data.indices).toHaveLength(0);
     expect(result.data.elementMarkers).toBe(result.data.cellMarkers);
@@ -2715,7 +2749,7 @@ describe("ControlRoomApi", () => {
     expect(result.data.boundaryFaces).toHaveLength(0);
     expect(result.data.boundaryMarkers).toBe(result.data.facetMarkers);
     expect(observedRanges[0]).toBe("bytes=0-63");
-    expect(observedRanges).toHaveLength(13);
+    expect(observedRanges).toHaveLength(15);
   });
 
   it.each([
@@ -3293,6 +3327,56 @@ describe("ControlRoomApi", () => {
     expect(result.etag).toBe('"cross-section-quality-1"');
     expect([...result.data.perElementQuality]).toEqual([0.25]);
     expect(result.data.range).toEqual({ min: 0.25, max: 0.25 });
+  });
+
+  it("preserves the stable unsupported code from every mixed cross-section resource", async () => {
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            code: "mixed_topology_not_supported",
+            error:
+              "mixed_topology_not_supported: cross-section slicing is tet4-only",
+            message:
+              "mixed_topology_not_supported: cross-section slicing is tet4-only",
+          }),
+          {
+            headers: {
+              "content-type": "application/json",
+              ...contractHeaders,
+            },
+            status: 409,
+          },
+        ),
+    });
+
+    const requests = [
+      () =>
+        api.meshing.sharedDomain.crossSection({
+          plane: "xy",
+          positionPercent: 50,
+        }),
+      () =>
+        api.meshing.sharedDomain.crossSectionImage({
+          metric: "gamma",
+          plane: "xy",
+          positionPercent: 50,
+        }),
+      () =>
+        api.meshing.sharedDomain.crossSectionQuality({
+          metric: "gamma",
+          plane: "xy",
+          positionPercent: 50,
+        }),
+    ];
+
+    for (const request of requests) {
+      await expect(request()).rejects.toMatchObject({
+        code: "mixed_topology_not_supported",
+        status: 409,
+      } satisfies Partial<ControlRoomApiError>);
+    }
   });
 
   it("returns not-modified for fresh binary topology resources", async () => {

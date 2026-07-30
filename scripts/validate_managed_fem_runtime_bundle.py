@@ -118,6 +118,100 @@ def require_mapping(value: object, label: str) -> Mapping[str, object]:
     return value
 
 
+def validate_build_identity(
+    manifest: Mapping[str, object],
+    required_git_commit: str | None,
+    required_worktree_state: str | None,
+    required_source_snapshot_sha256: str | None,
+) -> tuple[str, str, str]:
+    identity = require_mapping(manifest.get("build_identity"), "build_identity")
+    git_commit = identity.get("git_commit")
+    worktree_state = identity.get("worktree_state")
+    source_snapshot_sha256 = identity.get("source_snapshot_sha256")
+    if not isinstance(git_commit, str) or re.fullmatch(r"[0-9a-f]{40}", git_commit) is None:
+        raise ValueError("managed FEM build identity git commit is invalid")
+    if worktree_state not in {"clean", "dirty"}:
+        raise ValueError("managed FEM build identity worktree state is invalid")
+    if required_git_commit is not None and git_commit != required_git_commit:
+        raise ValueError(
+            "managed FEM build identity git commit mismatch: "
+            f"expected {required_git_commit}, got {git_commit}"
+        )
+    if required_worktree_state is not None and worktree_state != required_worktree_state:
+        raise ValueError(
+            "managed FEM build identity worktree state mismatch: "
+            f"expected {required_worktree_state}, got {worktree_state}"
+        )
+    if (
+        not isinstance(source_snapshot_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", source_snapshot_sha256) is None
+    ):
+        raise ValueError("managed FEM build identity source snapshot is invalid")
+    if (
+        required_source_snapshot_sha256 is not None
+        and source_snapshot_sha256 != required_source_snapshot_sha256
+    ):
+        raise ValueError(
+            "managed FEM build identity source snapshot mismatch: "
+            f"expected {required_source_snapshot_sha256}, got {source_snapshot_sha256}"
+        )
+    return git_commit, worktree_state, source_snapshot_sha256
+
+
+STARTUP_STAMP = re.compile(
+    r"^\[fullmag\] build: [^|]+ \| commit: (?P<git_commit>[0-9a-f]{40}) "
+    r"\| (?P<worktree_state>clean|dirty) \| source snapshot: "
+    r"(?P<source_snapshot_sha256>[0-9a-f]{64})$"
+)
+
+
+def validate_startup_identity(
+    binary: Path,
+    arguments: Sequence[str],
+    label: str,
+    expected: tuple[str, str, str],
+    runtime_root: Path,
+) -> None:
+    environment = os.environ.copy()
+    existing = environment.get("LD_LIBRARY_PATH")
+    environment["LD_LIBRARY_PATH"] = str(runtime_root / "lib") + (
+        f":{existing}" if existing else ""
+    )
+    try:
+        result = subprocess.run(
+            (str(binary), *arguments),
+            check=False,
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ValueError(f"managed FEM {label} startup identity query failed: {error}") from error
+    match = None
+    for line in result.stderr.splitlines():
+        match = STARTUP_STAMP.fullmatch(line.strip())
+        if match is not None:
+            break
+    if match is None:
+        raise ValueError(f"managed FEM {label} startup build identity is missing")
+    if result.returncode != 0:
+        raise ValueError(
+            f"managed FEM {label} startup identity query exited with status "
+            f"{result.returncode}"
+        )
+    actual = (
+        match.group("git_commit"),
+        match.group("worktree_state"),
+        match.group("source_snapshot_sha256"),
+    )
+    if actual != expected:
+        raise ValueError(
+            f"managed FEM {label} startup build identity mismatch: "
+            f"expected {expected}, got {actual}"
+        )
+
+
 def query_mesh_abi(library: Path, runtime_root: Path) -> Mapping[str, object]:
     environment = os.environ.copy()
     existing = environment.get("LD_LIBRARY_PATH")
@@ -371,13 +465,30 @@ def validate_bundle(
     readelf: str,
     native_requirements: Sequence[tuple[str, str]],
     required_compute_capability: str | None,
+    required_git_commit: str | None,
+    required_worktree_state: str | None,
+    required_source_snapshot_sha256: str | None,
     allow_unaddressed_staging: bool,
 ) -> Mapping[str, object]:
     runtime_root = runtime_root.resolve()
     manifest_path = runtime_root / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("schema") != 2:
-        raise ValueError("unsupported managed FEM manifest schema; expected schema 2")
+    schema = manifest.get("schema")
+    if schema not in {2, 3}:
+        raise ValueError("unsupported managed FEM manifest schema; expected schema 2 or 3")
+    legacy_schema = schema == 2
+    if legacy_schema and any(
+        value is not None
+        for value in (
+            required_git_commit,
+            required_worktree_state,
+            required_source_snapshot_sha256,
+        )
+    ):
+        raise ValueError(
+            "managed FEM manifest schema 2 cannot satisfy exact source identity; "
+            "rebuild as schema 3"
+        )
     variant = manifest.get("variant")
     if not isinstance(variant, str) or not variant:
         raise ValueError("managed FEM manifest has no variant")
@@ -388,6 +499,20 @@ def validate_bundle(
                 "hash-addressed variant directory mismatch: "
                 f"expected {expected_directory}, got {runtime_root.name}"
             )
+
+    if legacy_schema:
+        git_commit, worktree_state, source_snapshot_sha256 = (
+            "unknown",
+            "unknown",
+            "unknown",
+        )
+    else:
+        git_commit, worktree_state, source_snapshot_sha256 = validate_build_identity(
+            manifest,
+            required_git_commit,
+            required_worktree_state,
+            required_source_snapshot_sha256,
+        )
 
     binaries = require_mapping(manifest.get("binaries"), "binaries")
     integrity = require_mapping(manifest.get("integrity"), "integrity")
@@ -406,6 +531,27 @@ def validate_bundle(
             )
         resolved_binaries[name] = path
 
+    if not legacy_schema:
+        expected_startup_identity = (
+            git_commit,
+            worktree_state,
+            source_snapshot_sha256,
+        )
+        validate_startup_identity(
+            resolved_binaries["worker"],
+            ("--help",),
+            "CLI",
+            expected_startup_identity,
+            runtime_root,
+        )
+        validate_startup_identity(
+            resolved_binaries["api"],
+            ("--print-openapi-v2",),
+            "API",
+            expected_startup_identity,
+            runtime_root,
+        )
+
     native_libraries = require_mapping(
         manifest.get("native_libraries"), "native_libraries"
     )
@@ -421,6 +567,13 @@ def validate_bundle(
             raise ValueError(
                 f"managed FEM native library {name} hash mismatch: "
                 f"expected {expected}, got {actual}"
+            )
+        if "soname" not in entry or (
+            entry["soname"] is not None
+            and (not isinstance(entry["soname"], str) or not entry["soname"])
+        ):
+            raise ValueError(
+                f"managed FEM native library {name} soname must be null or a nonempty string"
             )
         expected_soname = entry.get("soname")
         actual_soname = read_soname(path, readelf)
@@ -535,6 +688,12 @@ def validate_bundle(
         "loaded_hypre_sonames": loaded_hypre_sonames,
         "hypre_binding_provider": str(resolved_libraries["hypre"]),
         "hypre_binding_count": hypre_binding_count,
+        "git_commit": git_commit,
+        "worktree_state": worktree_state,
+        "source_snapshot_sha256": source_snapshot_sha256,
+        "source_identity_compatibility": (
+            "exact-schema-3" if not legacy_schema else "legacy-schema-2-unbound"
+        ),
     }
 
 
@@ -545,6 +704,9 @@ def main() -> None:
     parser.add_argument("--readelf", default="readelf")
     parser.add_argument("--require-native-cubin", action="append", default=[])
     parser.add_argument("--require-compute-capability")
+    parser.add_argument("--require-git-commit")
+    parser.add_argument("--require-worktree-state")
+    parser.add_argument("--require-source-snapshot-sha256")
     parser.add_argument("--compare-exact", type=Path)
     parser.add_argument("--allow-unaddressed-staging", action="store_true")
     args = parser.parse_args()
@@ -564,6 +726,9 @@ def main() -> None:
             readelf=args.readelf,
             native_requirements=parse_native_requirements(args.require_native_cubin),
             required_compute_capability=args.require_compute_capability,
+            required_git_commit=args.require_git_commit,
+            required_worktree_state=args.require_worktree_state,
+            required_source_snapshot_sha256=args.require_source_snapshot_sha256,
             allow_unaddressed_staging=args.allow_unaddressed_staging,
         )
         print(json.dumps(result, sort_keys=True))

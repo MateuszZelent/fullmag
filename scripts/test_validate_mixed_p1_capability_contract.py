@@ -80,6 +80,42 @@ class MixedP1CapabilityContractTest(unittest.TestCase):
                 capability_id,
             )
 
+    def test_repository_publication_source_map_has_complete_thin_film_ir_paths(self) -> None:
+        source_map = json.loads(
+            (
+                REPO_ROOT
+                / "docs/physics/0106-fem-mixed-prism-pyramid-shared-domain.source-map.json"
+            ).read_text(encoding="utf-8")
+        )
+        parameters = {
+            parameter["python"]: parameter
+            for parameter in source_map["public_api"]["parameters"]
+        }
+        prefix = "problem_meta.runtime_metadata.mesh_workflow.per_geometry[]"
+        self.assertEqual(
+            {
+                "GeometryMeshHandle.thin_film.maximum_element_size": f"{prefix}.maximum_element_size",
+                "GeometryMeshHandle.thin_film.layers": f"{prefix}.through_thickness_elements",
+                "GeometryMeshHandle.thin_film.topology": f"{prefix}.topology",
+                "GeometryMeshHandle.thin_film.exact_layers": f"{prefix}.exact_layer_count",
+                "GeometryMeshHandle.thin_film.transition": f"{prefix}.transition_policy",
+                "GeometryMeshHandle.thin_film.order": f"{prefix}.order",
+            },
+            {
+                parameter: details["problem_ir"]
+                for parameter, details in parameters.items()
+            },
+        )
+        self.assertEqual(
+            parameters["GeometryMeshHandle.thin_film.maximum_element_size"][
+                "compatibility_alias"
+            ],
+            {
+                "python": "GeometryMeshHandle.thin_film.hmax",
+                "problem_ir": f"{prefix}.hmax",
+            },
+        )
+
     def test_rejects_cpu_operator_demotion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

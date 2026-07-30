@@ -1515,7 +1515,7 @@ class MeshData:
                 float(eps_volume) * 6.0
                 if eps_volume is not None
                 else max(
-                    FEM_TOPOLOGY_VOLUME_EPS * 6.0,
+                    np.finfo(np.float64).tiny,
                     FEM_TOPOLOGY_RELATIVE_DETERMINANT_EPS
                     * characteristic_length**3,
                 )

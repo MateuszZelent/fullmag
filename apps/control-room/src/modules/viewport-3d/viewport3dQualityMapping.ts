@@ -39,13 +39,23 @@ const meshQualityVertexColorCache = new WeakMap<
   WeakMap<DecodedMeshQualityData, MeshQualityColorCacheEntry>
 >();
 
+/** FMMQ v1 quality arrays are defined only for the legacy tet4 realization. */
+export function topologySupportsTet4FmmqQuality(
+  topology: DecodedTopology | null | undefined,
+): topology is DecodedTopology {
+  return Boolean(
+    topology &&
+      (!topology.cellTypes || topology.cellTypes.every((cellType) => cellType === 1)),
+  );
+}
+
 export function buildMeshQualityVertexColors(
   topology: DecodedTopology | null | undefined,
   quality: DecodedMeshQualityData | null | undefined,
   metric: MeshQualityColorMetric,
   palette = "viridis",
 ): ScalarColorBuffer | null {
-  if (!topology || !quality) return null;
+  if (!topologySupportsTet4FmmqQuality(topology) || !quality) return null;
 
   const cacheKey = `${metric}:${palette}`;
   const cached = cachedMeshQualityVertexColors(topology, quality, cacheKey);
@@ -55,11 +65,6 @@ export function buildMeshQualityVertexColors(
     cacheMeshQualityVertexColors(topology, quality, cacheKey, null);
     return null;
   }
-  if (topology.cellTypes && new Set(topology.cellTypes).size > 1) {
-    cacheMeshQualityVertexColors(topology, quality, cacheKey, null);
-    return null;
-  }
-
   const values = quality[metric];
   if (!values || values.length !== topology.elementCount) {
     cacheMeshQualityVertexColors(topology, quality, cacheKey, null);

@@ -1,25 +1,50 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "${REPO_ROOT}/scripts/lib/managed_fem_image_identity.sh"
+SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="${FULLMAG_RUNTIME_PUBLICATION_REPO_ROOT:-${SOURCE_ROOT}}"
+source "${SOURCE_ROOT}/scripts/lib/managed_fem_image_identity.sh"
+source "${SOURCE_ROOT}/scripts/lib/managed_fem_runtime_storage.sh"
 RUNTIME_PARENT="${REPO_ROOT}/.fullmag/runtimes"
 RUNTIME_ROOT="${RUNTIME_PARENT}/fem-gpu-host"
-VARIANTS_ROOT="${RUNTIME_PARENT}/fem-gpu-variants"
-STAGING_ROOT="${RUNTIME_ROOT}.staging.$$"
-STAGING_RELATIVE=".fullmag/runtimes/$(basename "${STAGING_ROOT}")"
+VARIANTS_ROOT=""
+STAGING_ROOT=""
 RUNTIME_LOCK="${RUNTIME_PARENT}/.fem-gpu-host.export.lock"
 docker_build_ref=""
 docker_compatibility_ref="fullmag/fem-gpu:local"
 docker_build_ref_marker=""
 persistent_staging_archive=""
 persistent_validation_root=""
-mkdir -p "${RUNTIME_PARENT}" "${VARIANTS_ROOT}"
+bootstrapped_source_identity_file="${FULLMAG_BOOTSTRAPPED_SOURCE_IDENTITY_FILE:-}"
+bootstrapped_source_snapshot_root="${FULLMAG_BOOTSTRAPPED_SOURCE_SNAPSHOT_ROOT:-}"
+source_identity_file=""
+SOURCE_SNAPSHOT_ROOT=""
+source_identity_owned=0
+source_snapshot_owned=0
+mkdir -p "${RUNTIME_PARENT}"
 exec 9>"${RUNTIME_LOCK}"
 if ! flock -n 9; then
   echo "[export_fem_gpu_runtime] waiting for existing runtime export to finish"
   flock 9
 fi
+
+is_canonical_source_snapshot_path() {
+  local path="${1:-}"
+  local parent="${FULLMAG_CONTAINER_TARGET_DIR:-}"
+  [ -n "${path}" ] && [ -n "${parent}" ] &&
+    [ -d "${path}" ] && [ ! -L "${path}" ] &&
+    [ "$(dirname -- "${path}")" = "${parent}" ] &&
+    [[ "$(basename -- "${path}")" = source-snapshot.* ]]
+}
+
+is_canonical_source_identity_path() {
+  local path="${1:-}"
+  local parent="${FULLMAG_CONTAINER_TARGET_DIR:-}"
+  [ -n "${path}" ] && [ -n "${parent}" ] &&
+    [ -f "${path}" ] && [ ! -L "${path}" ] &&
+    [ "$(dirname -- "${path}")" = "${parent}" ] &&
+    [[ "$(basename -- "${path}")" = source-identity.*.json ]]
+}
 
 cleanup_failed_export() {
   local status="$?"
@@ -36,7 +61,18 @@ cleanup_failed_export() {
   if [ -n "${persistent_validation_root}" ]; then
     rm -rf -- "${persistent_validation_root}" || true
   fi
-  rm -rf -- "${STAGING_ROOT}" || true
+  if [ -n "${STAGING_ROOT}" ]; then
+    rm -rf -- "${STAGING_ROOT}" || true
+  fi
+  if [ "${source_identity_owned:-0}" = "1" ] &&
+     is_canonical_source_identity_path "${source_identity_file:-}"; then
+    rm -f -- "${source_identity_file}" || true
+  fi
+  if [ "${source_snapshot_owned:-0}" = "1" ] &&
+     is_canonical_source_snapshot_path "${SOURCE_SNAPSHOT_ROOT:-}"; then
+    chmod -R u+w "${SOURCE_SNAPSHOT_ROOT}" 2>/dev/null || true
+    rm -rf -- "${SOURCE_SNAPSHOT_ROOT}" || true
+  fi
   exit "${status}"
 }
 trap cleanup_failed_export EXIT
@@ -55,48 +91,14 @@ print_container_target_remount_guidance() {
 }
 
 validate_container_target_dir() {
-  if ! mkdir -p "${FULLMAG_CONTAINER_TARGET_DIR}"; then
-    echo "[export_fem_gpu_runtime] cannot create managed container target directory: ${FULLMAG_CONTAINER_TARGET_DIR}" >&2
+  validate_managed_fem_runtime_storage_target \
+    "${FULLMAG_CONTAINER_TARGET_DIR}" \
+    "${FULLMAG_NATIVE_BUILD_IMAGE}" \
+    "${FULLMAG_LOOP_SYSFS_ROOT}" \
     print_container_target_remount_guidance
-    return 2
-  fi
-  local filesystem_type
-  filesystem_type="$(findmnt -n -o FSTYPE --target "${FULLMAG_CONTAINER_TARGET_DIR}" 2>/dev/null || true)"
-  if [ "${filesystem_type}" != "ext4" ]; then
-    echo "[export_fem_gpu_runtime] FULLMAG_CONTAINER_TARGET_DIR must be an ext4 filesystem: ${FULLMAG_CONTAINER_TARGET_DIR} (observed ${filesystem_type:-unknown})" >&2
-    print_container_target_remount_guidance
-    return 2
-  fi
-  local source_device
-  source_device="$(findmnt -n -o SOURCE --target "${FULLMAG_CONTAINER_TARGET_DIR}" 2>/dev/null || true)"
-  if ! [[ "${source_device}" =~ ^/dev/loop[0-9]+$ ]]; then
-    echo "[export_fem_gpu_runtime] managed native mount view must use a loop device backed by ${FULLMAG_NATIVE_BUILD_IMAGE}: ${FULLMAG_CONTAINER_TARGET_DIR} (observed source ${source_device:-unknown})" >&2
-    print_container_target_remount_guidance
-    return 2
-  fi
-  local loop_device_name="${source_device#/dev/}"
-  local backing_file_path="${FULLMAG_LOOP_SYSFS_ROOT}/${loop_device_name}/loop/backing_file"
-  local observed_backing_image=""
-  if ! IFS= read -r observed_backing_image < "${backing_file_path}"; then
-    echo "[export_fem_gpu_runtime] cannot read loop backing image for ${source_device}: ${backing_file_path}" >&2
-    print_container_target_remount_guidance
-    return 2
-  fi
-  if [ "${observed_backing_image}" != "${FULLMAG_NATIVE_BUILD_IMAGE}" ]; then
-    echo "[export_fem_gpu_runtime] managed native mount view has the wrong physical backing image: expected ${FULLMAG_NATIVE_BUILD_IMAGE}, observed ${observed_backing_image:-unknown}" >&2
-    print_container_target_remount_guidance
-    return 2
-  fi
-  local write_probe="${FULLMAG_CONTAINER_TARGET_DIR}/.fullmag-write-probe.$$"
-  if ! (umask 077 && : > "${write_probe}") 2>/dev/null; then
-    echo "[export_fem_gpu_runtime] managed ext4 container target is not writable: ${FULLMAG_CONTAINER_TARGET_DIR}" >&2
-    print_container_target_remount_guidance
-    return 2
-  fi
-  rm -f -- "${write_probe}"
 }
 
-cd "${REPO_ROOT}"
+cd "${SOURCE_ROOT}"
 #rm -rf target/* target/.* 2>/dev/null || true
 
 readonly FULLMAG_NATIVE_BUILD_STORAGE_ROOT="/zfn2/mateuszz/git/fullmag"
@@ -110,6 +112,9 @@ readonly FULLMAG_WORKTREE_TARGET_SLUG="$(basename "${REPO_ROOT}" | sed 's/[^A-Za
 readonly FULLMAG_WORKTREE_TARGET_DIGEST="$(printf '%s' "${REPO_ROOT}" | sha256sum | cut -c1-64)"
 readonly FULLMAG_WORKTREE_TARGET_ID="${FULLMAG_WORKTREE_TARGET_SLUG}-${FULLMAG_WORKTREE_TARGET_DIGEST}"
 readonly FULLMAG_CONTAINER_TARGET_DIR="${FULLMAG_CONTAINER_TARGET_ROOT}/${FULLMAG_WORKTREE_TARGET_ID}"
+VARIANTS_ROOT="${FULLMAG_CONTAINER_TARGET_DIR}/runtime-variants"
+STAGING_ROOT="${FULLMAG_CONTAINER_TARGET_DIR}/runtime-export-staging.$$"
+readonly VARIANTS_ROOT STAGING_ROOT
 : "${FULLMAG_LOOP_SYSFS_ROOT:=/sys/class/block}"
 : "${FULLMAG_FEM_RUNTIME_CARGO_JOBS:=8}"
 : "${FULLMAG_CUDA_ARCHITECTURES:=80-real;89-real;90-real;90-virtual}"
@@ -118,9 +123,14 @@ readonly FULLMAG_CONTAINER_TARGET_DIR="${FULLMAG_CONTAINER_TARGET_ROOT}/${FULLMA
 : "${FULLMAG_FEM_RUNTIME_VARIANT:=hypre-${FULLMAG_HYPRE_MEMORY_VARIANT}}"
 : "${FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY:=8.9}"
 : "${FULLMAG_ENABLE_NVTX:=0}"
+: "${FULLMAG_FEM_RUNTIME_REUSE_BUILD:=0}"
 case "${FULLMAG_ENABLE_NVTX}" in
   0|1) ;;
   *) echo "[export_fem_gpu_runtime] FULLMAG_ENABLE_NVTX must be 0 or 1" >&2; exit 2 ;;
+esac
+case "${FULLMAG_FEM_RUNTIME_REUSE_BUILD}" in
+  0|1) ;;
+  *) echo "[export_fem_gpu_runtime] FULLMAG_FEM_RUNTIME_REUSE_BUILD must be 0 or 1" >&2; exit 2 ;;
 esac
 validate_container_target_dir
 if [ ! -d "${FULLMAG_BUILD_ROOT}" ] || [ ! -w "${FULLMAG_BUILD_ROOT}" ]; then
@@ -128,12 +138,88 @@ if [ ! -d "${FULLMAG_BUILD_ROOT}" ] || [ ! -w "${FULLMAG_BUILD_ROOT}" ]; then
   exit 2
 fi
 mkdir -p "${PERSISTENT_RUNTIME_PARENT}"
+mkdir -p "${VARIANTS_ROOT}" "${FULLMAG_CONTAINER_TARGET_DIR}/tmp" \
+  "${FULLMAG_CONTAINER_TARGET_DIR}/cargo-home"
+
+verify_source_snapshot_identity() {
+  python3 "${SOURCE_ROOT}/scripts/capture_source_snapshot_identity.py" \
+    --repo-root "${REPO_ROOT}" \
+    --compare "${source_identity_file}" \
+    --verify-materialized "${SOURCE_SNAPSHOT_ROOT}"
+}
+
+validate_bootstrapped_source_snapshot() {
+  if ! is_canonical_source_snapshot_path "${bootstrapped_source_snapshot_root}" ||
+     ! is_canonical_source_identity_path "${bootstrapped_source_identity_file}"; then
+    return 1
+  fi
+  local canonical_source_root canonical_snapshot_root
+  canonical_source_root="$(realpath -e -- "${SOURCE_ROOT}")"
+  canonical_snapshot_root="$(realpath -e -- "${bootstrapped_source_snapshot_root}")"
+  if [ "${canonical_source_root}" != "${canonical_snapshot_root}" ]; then
+    return 1
+  fi
+  SOURCE_SNAPSHOT_ROOT="${bootstrapped_source_snapshot_root}"
+  source_identity_file="${bootstrapped_source_identity_file}"
+  source_snapshot_owned=1
+  source_identity_owned=1
+  verify_source_snapshot_identity
+}
+
+bootstrap_new_source_snapshot() {
+  source_identity_file="$(mktemp "${FULLMAG_CONTAINER_TARGET_DIR}/source-identity.XXXXXXXXXX.json")"
+  source_identity_owned=1
+  SOURCE_SNAPSHOT_ROOT="$(mktemp -d "${FULLMAG_CONTAINER_TARGET_DIR}/source-snapshot.XXXXXXXXXX")"
+  source_snapshot_owned=1
+  python3 scripts/capture_source_snapshot_identity.py \
+    --repo-root "${REPO_ROOT}" --output "${source_identity_file}" \
+    --materialize "${SOURCE_SNAPSHOT_ROOT}" --materialize-existing-empty
+  export FULLMAG_RUNTIME_PUBLICATION_REPO_ROOT="${REPO_ROOT}"
+  export FULLMAG_BOOTSTRAPPED_SOURCE_IDENTITY_FILE="${source_identity_file}"
+  export FULLMAG_BOOTSTRAPPED_SOURCE_SNAPSHOT_ROOT="${SOURCE_SNAPSHOT_ROOT}"
+  flock -u 9
+  exec 9>&-
+  exec bash "${SOURCE_SNAPSHOT_ROOT}/scripts/export_fem_gpu_runtime.sh"
+}
+
+resolve_source_snapshot_bootstrap() {
+  if [ -z "${bootstrapped_source_snapshot_root}" ] &&
+     [ -z "${bootstrapped_source_identity_file}" ]; then
+    bootstrap_new_source_snapshot
+    return
+  fi
+  if [ -z "${bootstrapped_source_snapshot_root}" ] ||
+     [ -z "${bootstrapped_source_identity_file}" ]; then
+    echo "[export_fem_gpu_runtime] incomplete immutable source snapshot bootstrap" >&2
+    return 2
+  fi
+  local status
+  if validate_bootstrapped_source_snapshot; then
+    return 0
+  else
+    status="$?"
+  fi
+  echo "[export_fem_gpu_runtime] supplied immutable source snapshot bootstrap is invalid" >&2
+  return "${status}"
+}
+
 export FULLMAG_CUDA_ARCHITECTURES
 export FULLMAG_HYPRE_GPU_ARCHITECTURES
 export FULLMAG_HYPRE_MEMORY_VARIANT
 export FULLMAG_ENABLE_NVTX
 FULLMAG_HOST_UID="$(id -u)"
 FULLMAG_HOST_GID="$(id -g)"
+resolve_source_snapshot_bootstrap
+if [ ! -f "${source_identity_file}" ] || [ ! -d "${SOURCE_SNAPSHOT_ROOT}" ]; then
+  echo "[export_fem_gpu_runtime] immutable source snapshot bootstrap is incomplete" >&2
+  exit 2
+fi
+FULLMAG_SOURCE_GIT_COMMIT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["head_commit_full"])' "${source_identity_file}")"
+FULLMAG_SOURCE_WORKTREE_STATE="$(python3 -c 'import json,sys; print("dirty" if json.load(open(sys.argv[1]))["source_snapshot_dirty"] else "clean")' "${source_identity_file}")"
+FULLMAG_SOURCE_SNAPSHOT_SHA256="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_snapshot_sha256"])' "${source_identity_file}")"
+readonly FULLMAG_SOURCE_GIT_COMMIT FULLMAG_SOURCE_WORKTREE_STATE FULLMAG_SOURCE_SNAPSHOT_SHA256
+verify_source_snapshot_identity
+cd "${SOURCE_SNAPSHOT_ROOT}"
 
 docker_build_ref_marker="$(mktemp -d "${TMPDIR:-/tmp}/fullmag-fem-gpu-runtime-export.XXXXXXXXXX")"
 docker_build_ref="fullmag/fem-gpu:$(basename "${docker_build_ref_marker}")"
@@ -141,16 +227,24 @@ build_managed_fem_image "${docker_build_ref}" "${docker_compatibility_ref}"
 docker_image_id="${MANAGED_FEM_BUILT_IMAGE_ID}"
 
 FULLMAG_FEM_GPU_IMAGE="${docker_image_id}" docker compose --profile fem-gpu run --rm -T \
+  -v "${SOURCE_SNAPSHOT_ROOT}:/workspace:ro" \
   -v "${FULLMAG_CONTAINER_TARGET_DIR}:/workspace/target" \
   -e FULLMAG_FEM_RUNTIME_CARGO_JOBS="${FULLMAG_FEM_RUNTIME_CARGO_JOBS}" \
   -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES}" \
   -e FULLMAG_ENABLE_NVTX="${FULLMAG_ENABLE_NVTX}" \
   -e FULLMAG_HOST_UID="${FULLMAG_HOST_UID}" \
   -e FULLMAG_HOST_GID="${FULLMAG_HOST_GID}" \
-  -e FULLMAG_RUNTIME_EXPORT_STAGING="${STAGING_RELATIVE}" \
+  -e FULLMAG_SOURCE_GIT_COMMIT="${FULLMAG_SOURCE_GIT_COMMIT}" \
+  -e FULLMAG_SOURCE_WORKTREE_STATE="${FULLMAG_SOURCE_WORKTREE_STATE}" \
+  -e FULLMAG_SOURCE_SNAPSHOT_SHA256="${FULLMAG_SOURCE_SNAPSHOT_SHA256}" \
+  -e TMPDIR="/workspace/target/tmp" \
+  -e CARGO_HOME="/workspace/target/cargo-home" \
+  -e FULLMAG_FEM_RUNTIME_REUSE_BUILD="${FULLMAG_FEM_RUNTIME_REUSE_BUILD}" \
+  -e FULLMAG_RUNTIME_EXPORT_STAGING="/workspace/target/runtime-export-staging.$$" \
   fem-gpu bash -lc '
 set -euo pipefail
 runtime_root="${FULLMAG_RUNTIME_EXPORT_STAGING:?missing managed FEM runtime staging directory}"
+mkdir -p "${TMPDIR}" "${CARGO_HOME}"
 restore_staging_owner() {
   local status="$?"
   trap - EXIT
@@ -183,6 +277,22 @@ if [ "${FULLMAG_ENABLE_NVTX}" = "0" ] &&
   exit 2
 fi
 cargo +nightly clean -p fullmag-build-info
+if [ "${FULLMAG_FEM_RUNTIME_REUSE_BUILD}" = "0" ]; then
+  echo "[export_fem_gpu_runtime] clearing release artifacts before a clean rebuild"
+  cargo +nightly clean --workspace --release
+  mapfile -t stale_fem_native_artifacts < <(
+    find target/release/build \
+      -path "*fullmag-fem-sys*/out/native-build/backends/fem/libfullmag_fem.so.0" \
+      -print 2>/dev/null
+  )
+  if [ "${#stale_fem_native_artifacts[@]}" -ne 0 ]; then
+    echo "[export_fem_gpu_runtime] stale fullmag-fem-sys native artifacts remain after targeted clean" >&2
+    printf "  %s\n" "${stale_fem_native_artifacts[@]}" >&2
+    exit 2
+  fi
+else
+  echo "[export_fem_gpu_runtime] reusing the task-specific target through Cargo freshness checks"
+fi
 
 echo "[export_fem_gpu_runtime] building fullmag-cli, fullmag-api, and PyO3 core with cuda fem-gpu release features"
 cargo_jobs="${FULLMAG_FEM_RUNTIME_CARGO_JOBS:-1}"
@@ -194,7 +304,7 @@ echo "[export_fem_gpu_runtime] cargo build jobs: ${cargo_jobs}"
 if [ "${FULLMAG_ENABLE_NVTX}" = "1" ]; then
   export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }--cfg fullmag_enable_nvtx --check-cfg=cfg(fullmag_enable_nvtx)"
 fi
-FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES}" FULLMAG_USE_MFEM_STACK=ON cargo +nightly build -j "$cargo_jobs" -p fullmag-cli -p fullmag-api -p fullmag-py-core --features "fullmag-cli/cuda fullmag-cli/fem-gpu fullmag-cli/stage-autosave-hdf5 fullmag-api/cuda fullmag-api/fem-gpu fullmag-api/stage-autosave-hdf5" --release 2>&1 | tee /tmp/fullmag-build.log
+FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES}" FULLMAG_USE_MFEM_STACK=ON cargo +nightly build -j "$cargo_jobs" -p fullmag-cli -p fullmag-api -p fullmag-py-core --features "fullmag-cli/cuda fullmag-cli/fem-gpu fullmag-cli/stage-autosave-hdf5 fullmag-api/cuda fullmag-api/fem-gpu fullmag-api/stage-autosave-hdf5" --release 2>&1 | tee "${TMPDIR}/fullmag-build.log"
 echo "[export_fem_gpu_runtime] clearing previous runtime bundle contents"
 clear_runtime_bundle_contents
 echo "[export_fem_gpu_runtime] copying launcher and API binaries"
@@ -625,9 +735,7 @@ Path("${runtime_root}/runtime-diagnostics.json").write_text(
     json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
 )
 PY
-chown "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}" .fullmag .fullmag/runtimes
 chown -R "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}" ${runtime_root}
-chmod u+rwx,go+rx,go-w .fullmag .fullmag/runtimes
 chmod -R u+rwX,go+rX,go-w ${runtime_root}
 echo "[export_fem_gpu_runtime] container-side export complete"
 ' < /dev/null
@@ -639,7 +747,20 @@ cat > "${STAGING_ROOT}/bin/fullmag-fem-gpu" <<'EOF'
 set -euo pipefail
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 RUNTIME_ROOT="$(cd "${SELF_DIR}/.." && pwd)"
-REPO_ROOT="$(cd "${RUNTIME_ROOT}/../../.." && pwd)"
+launcher_path="${BASH_SOURCE[0]}"
+case "${launcher_path}" in
+  /*) ;;
+  *) launcher_path="${PWD}/${launcher_path}" ;;
+esac
+case "${launcher_path}" in
+  */.fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu)
+    REPO_ROOT="${launcher_path%/.fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu}"
+    ;;
+  */.fullmag/runtimes/fem-gpu-variants/*/bin/fullmag-fem-gpu)
+    REPO_ROOT="${launcher_path%%/.fullmag/runtimes/fem-gpu-variants/*}"
+    ;;
+  *) REPO_ROOT="$(cd "${RUNTIME_ROOT}/../../.." && pwd)" ;;
+esac
 export FULLMAG_REPO_ROOT="${REPO_ROOT}"
 export LD_LIBRARY_PATH="${RUNTIME_ROOT}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 export PYTHONPATH="${RUNTIME_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
@@ -794,18 +915,23 @@ PY
 
 docker run --rm --network none \
   --user "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}" \
-  -v "${REPO_ROOT}:/workspace" \
+  -v "${SOURCE_SNAPSHOT_ROOT}:/workspace:ro" \
+  -v "${FULLMAG_CONTAINER_TARGET_DIR}:/managed-runtime-target" \
+  -e TMPDIR="/managed-runtime-target/tmp" \
   -w /workspace \
   "${docker_image_id}" \
   python3 scripts/build_managed_fem_runtime_manifest.py \
-    --runtime-root "/workspace/${STAGING_RELATIVE}" \
+    --runtime-root "/managed-runtime-target/runtime-export-staging.$$" \
     --variant "${FULLMAG_FEM_RUNTIME_VARIANT}" \
     --requested-cuda-architectures "${FULLMAG_CUDA_ARCHITECTURES}" \
     --hypre-build-metadata "/opt/fullmag-deps/share/fullmag/hypre-build-metadata.json" \
-    --runtime-diagnostics-json "/workspace/${STAGING_RELATIVE}/runtime-diagnostics.json" \
+    --runtime-diagnostics-json "/managed-runtime-target/runtime-export-staging.$$/runtime-diagnostics.json" \
     --docker-image-id "${docker_image_id}" \
     --observed-docker-image-id "${observed_docker_image_id}" \
-    --created-at "${created_at}"
+    --created-at "${created_at}" \
+    --git-commit "${FULLMAG_SOURCE_GIT_COMMIT}" \
+    --worktree-state "${FULLMAG_SOURCE_WORKTREE_STATE}" \
+    --source-snapshot-sha256 "${FULLMAG_SOURCE_SNAPSHOT_SHA256}"
 
 RUNTIME_ROOT="${STAGING_ROOT}" python3 - <<'PY'
 import json
@@ -825,6 +951,9 @@ PY
 python3 scripts/validate_managed_fem_runtime_bundle.py \
   --runtime-root "${STAGING_ROOT}" \
   --allow-unaddressed-staging \
+  --require-git-commit "${FULLMAG_SOURCE_GIT_COMMIT}" \
+  --require-worktree-state "${FULLMAG_SOURCE_WORKTREE_STATE}" \
+  --require-source-snapshot-sha256 "${FULLMAG_SOURCE_SNAPSHOT_SHA256}" \
   --require-native-cubin fullmag_fem=sm_89 \
   --require-native-cubin hypre=sm_89 \
   --require-compute-capability "${FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY}"
@@ -858,7 +987,10 @@ validate_persistent_runtime_archive() {
   persistent_validation_root="$(mktemp -d "${validation_parent}/fullmag-fem-runtime-archive.XXXXXXXX")"
   if ! tar -C "${persistent_validation_root}" -xf "${archive}" || \
      ! python3 scripts/validate_managed_fem_runtime_bundle.py \
-       --runtime-root "${persistent_validation_root}" --allow-unaddressed-staging || \
+       --runtime-root "${persistent_validation_root}" --allow-unaddressed-staging \
+       --require-git-commit "${FULLMAG_SOURCE_GIT_COMMIT}" \
+       --require-worktree-state "${FULLMAG_SOURCE_WORKTREE_STATE}" \
+       --require-source-snapshot-sha256 "${FULLMAG_SOURCE_SNAPSHOT_SHA256}" || \
      ! python3 scripts/validate_managed_fem_runtime_bundle.py \
        --runtime-root "${persistent_validation_root}" \
        --compare-exact "${expected_root}"; then
@@ -876,15 +1008,23 @@ publish_runtime_bundle() {
   local variant_root="${VARIANTS_ROOT}/${FULLMAG_FEM_RUNTIME_VARIANT}-${manifest_sha256}"
   local alias_target="fem-gpu-variants/$(basename "${variant_root}")"
   local repo_next_alias="${RUNTIME_PARENT}/.fem-gpu-host.next.$$"
+  local variants_alias="${RUNTIME_PARENT}/fem-gpu-variants"
   local persistent_archive="${PERSISTENT_RUNTIME_PARENT}/$(basename "${variant_root}").tar"
   python3 scripts/validate_managed_fem_runtime_bundle.py \
     --runtime-root "${STAGING_ROOT}" \
     --allow-unaddressed-staging \
+    --require-git-commit "${FULLMAG_SOURCE_GIT_COMMIT}" \
+    --require-worktree-state "${FULLMAG_SOURCE_WORKTREE_STATE}" \
+    --require-source-snapshot-sha256 "${FULLMAG_SOURCE_SNAPSHOT_SHA256}" \
     --require-native-cubin fullmag_fem=sm_89 \
     --require-native-cubin hypre=sm_89 \
     --require-compute-capability "${FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY}"
   if [ -e "${variant_root}" ]; then
-    python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root "${variant_root}"
+    python3 scripts/validate_managed_fem_runtime_bundle.py \
+      --runtime-root "${variant_root}" \
+      --require-git-commit "${FULLMAG_SOURCE_GIT_COMMIT}" \
+      --require-worktree-state "${FULLMAG_SOURCE_WORKTREE_STATE}" \
+      --require-source-snapshot-sha256 "${FULLMAG_SOURCE_SNAPSHOT_SHA256}"
     python3 scripts/validate_managed_fem_runtime_bundle.py \
       --runtime-root "${variant_root}" --compare-exact "${STAGING_ROOT}"
   else
@@ -892,7 +1032,7 @@ publish_runtime_bundle() {
   fi
   if [ -e "${RUNTIME_ROOT}" ] && [ ! -L "${RUNTIME_ROOT}" ]; then
     echo "[export_fem_gpu_runtime] refusing to replace non-symlink active runtime: ${RUNTIME_ROOT}" >&2
-    echo "Select an already preserved schema-v2 variant first." >&2
+    echo "Select an already preserved schema-v3 variant first." >&2
     return 2
   fi
   persistent_staging_archive="${persistent_archive}.staging.$$"
@@ -910,14 +1050,36 @@ publish_runtime_bundle() {
     echo "[export_fem_gpu_runtime] durable latest archive copy differs from immutable archive" >&2
     return 2
   fi
+  verify_source_snapshot_identity
   mv -f "${persistent_staging_archive}" "${PERSISTENT_LATEST_ARCHIVE}"
   persistent_staging_archive=""
+  migrate_managed_fem_runtime_variants "${variants_alias}" "${VARIANTS_ROOT}" \
+    "${SOURCE_SNAPSHOT_ROOT}/scripts/validate_managed_fem_runtime_bundle.py"
+  verify_source_snapshot_identity
   ln -sfn "${alias_target}" "${repo_next_alias}"
   mv -Tf "${repo_next_alias}" "${RUNTIME_ROOT}"
   rm -rf -- "${STAGING_ROOT}"
 }
 
-publish_runtime_bundle
+finalize_verified_source_publication() {
+  verify_source_snapshot_identity
+  publish_runtime_bundle
+  if ! is_canonical_source_snapshot_path "${SOURCE_SNAPSHOT_ROOT}"; then
+    echo "[export_fem_gpu_runtime] refusing to clean non-canonical source snapshot" >&2
+    return 2
+  fi
+  chmod -R u+w "${SOURCE_SNAPSHOT_ROOT}" 2>/dev/null || true
+  rm -rf -- "${SOURCE_SNAPSHOT_ROOT}"
+  SOURCE_SNAPSHOT_ROOT=""
+  source_snapshot_owned=0
+  if is_canonical_source_identity_path "${source_identity_file}"; then
+    rm -f -- "${source_identity_file}"
+  fi
+  source_identity_file=""
+  source_identity_owned=0
+}
+
+finalize_verified_source_publication
 remove_managed_fem_build_ref "${docker_build_ref}"
 docker_build_ref=""
 rmdir -- "${docker_build_ref_marker}"

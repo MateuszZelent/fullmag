@@ -36,8 +36,11 @@ numeric element IDs. The target vocabulary includes
 `fem.cpu.exchange_demag.mixed_p1`, and
 `fem.gpu.exchange_demag.mixed_p1`.
 
-`layers=1` means exactly two magnetic node planes and one three-dimensional
-prism layer. It is not a shell, 2.5D, or thickness-averaged model.
+The bounded relaxation implementation accepts exact `layers` in `{1, 2, 3}`.
+For any accepted count `L`, requested and realized counts are both `L` and the
+magnetic mesh has exactly `L+1` node planes. In particular, `layers=1` means
+exactly two magnetic node planes and one three-dimensional prism layer. None of
+these meshes is a shell, 2.5D, or thickness-averaged model.
 
 Requested topology, exact layer count, device, precision, demag model, and
 workflow remain distinct from the realized mesh certificate and resolved
@@ -94,9 +97,14 @@ Remaining costs and risks:
    manifoldness, positive order-2-or-higher Jacobians, relative volume error,
    honest quality metric, and fallback list.
 6. FMMT v2 implements canonical type enums, offsets plus connectivity,
-   per-cell/per-facet markers, and range-readable versioned metadata. OpenAPI,
-   serializer, range/header logic, generated frontend types, decoder, adapters,
-   viewport, selection, and mesh inspectors consume that representation.
+   per-cell/per-facet markers, and range-readable versioned metadata. The
+   reserved 64-byte header stores optional cell/facet global-ordinal counts at
+   byte offsets 40/44. A count is zero for legacy v2 or exactly matches its
+   entity count; nonzero counts select aligned trailing `u64` cell/facet
+   ordinal sections after the marker sections. The serializer, range/header
+   logic, decoder, topology-index builder, viewport triangulation, and surface
+   selection consume that representation. Histogram and Inspector integration
+   are outside this bounded transport change.
 7. Preserve FMMT v1 and the tetrahedral reader only for version-1 tetrahedral
    sessions. Remove the temporary legacy reader after all supported writers emit
    v2, API and control-room consumers decode v2, persisted v1 compatibility has
@@ -126,9 +134,10 @@ requirements.
 
 ## Validation
 
-- Gmsh 4.15.2 Box-in-Box feasibility: prism-only film, pyramid/tet-only air,
-  two magnetic node planes, tri/quad film facets, conforming enclosure, and
-  manifold face ownership without the production splitter.
+- Gmsh 4.15.2 Box-in-Box feasibility and regression fixtures: prism-only film,
+  pyramid/tet-only air, exact `L+1` magnetic node planes for
+  `L in {1, 2, 3}`, tri/quad film facets, conforming enclosure, and manifold
+  face ownership without the production splitter.
 - Element basis, trace, quadrature, Jacobian, material-mask, and manufactured
   solution tests for every topology.
 - Exchange directional derivative and Poisson sign/convergence gates.

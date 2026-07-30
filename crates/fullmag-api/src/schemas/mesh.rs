@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
 
@@ -32,13 +32,46 @@ pub struct MeshSummaryResource {
 pub struct MeshCapabilitiesResource {
     pub revision: u64,
     /// Meshing policy/build feature matrix only. UI-wide gating remains owned by `status.capabilities`.
-    #[schema(additional_properties, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub mesh_capabilities: Option<Value>,
+    pub mesh_capabilities: Option<MeshCapabilityMatrixResource>,
     /// Meshing adaptivity capability/state only. UI-wide gating remains owned by `status.capabilities`.
     #[schema(additional_properties, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_adaptivity_state: Option<Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub struct MeshFeatureCapabilityResource {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_layer_counts: Vec<u32>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct MeshCapabilityMatrixResource {
+    #[serde(
+        rename = "mesh.topology.mixed_p1",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub mixed_p1: Option<MeshFeatureCapabilityResource>,
+    #[serde(rename = "mesh.swept.prism", skip_serializing_if = "Option::is_none")]
+    pub swept_prism: Option<MeshFeatureCapabilityResource>,
+    #[serde(
+        rename = "mesh.transition.pyramid_tet",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pyramid_tet: Option<MeshFeatureCapabilityResource>,
+    #[serde(
+        rename = "mesh.exact_layer_count",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub exact_layer_count: Option<MeshFeatureCapabilityResource>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
@@ -396,9 +429,8 @@ pub struct MeshSharedDomainBuildReportResource {
     #[schema(value_type = [Object])]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selector_resolution: Vec<Value>,
-    #[schema(value_type = [Object])]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub orphan_entities: Vec<Value>,
+    pub orphan_entities: Vec<MeshOrphanEntityResource>,
     #[schema(value_type = [Object])]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rejected_element_types: Vec<Value>,
@@ -424,6 +456,36 @@ pub struct MeshSharedDomainBuildReportResource {
     pub mixed_topology_provenance: Option<MeshMixedTopologyProvenanceResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gmsh_version: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub struct MeshOrphanEntityResource {
+    #[schema(minimum = 0, maximum = 3)]
+    #[serde(deserialize_with = "deserialize_orphan_entity_dimension")]
+    pub dimension: u8,
+    #[schema(minimum = 1)]
+    #[serde(deserialize_with = "deserialize_positive_orphan_entity_tag")]
+    pub tag: u32,
+}
+
+fn deserialize_orphan_entity_dimension<'de, D>(deserializer: D) -> Result<u8, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let dimension = u8::deserialize(deserializer)?;
+    (dimension <= 3)
+        .then_some(dimension)
+        .ok_or_else(|| D::Error::custom("orphan entity dimension must be in 0..=3"))
+}
+
+fn deserialize_positive_orphan_entity_tag<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let tag = u32::deserialize(deserializer)?;
+    (tag > 0)
+        .then_some(tag)
+        .ok_or_else(|| D::Error::custom("orphan entity tag must be positive"))
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]

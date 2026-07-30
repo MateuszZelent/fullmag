@@ -3,6 +3,7 @@ import type { DecodedTopology } from "@/kernel/api/codecs";
 type Viewport3DTopologyCells = Pick<
   DecodedTopology,
   | "cellNodes"
+  | "cellGlobalOrdinals"
   | "cellOffsets"
   | "cellTypes"
   | "indices"
@@ -39,6 +40,18 @@ const CELL_EDGES: Readonly<Record<number, readonly (readonly [number, number])[]
   ],
 };
 
+interface CanonicalFaceOwner {
+  cellNodes: readonly number[];
+  globalCellOrdinal: bigint | null;
+  localCellIndex: number;
+  type: number;
+}
+
+type CanonicalFaceIncidence = ReadonlyMap<
+  string,
+  readonly CanonicalFaceOwner[]
+>;
+
 export interface Viewport3DTopologySurfacePartInput {
   boundary_face_count: number;
   boundary_face_indices?: readonly number[];
@@ -62,6 +75,8 @@ export interface Viewport3DPreparedPartTopologyIndices {
   edgeIndices: Uint32Array | null;
   surfaceIndices: Uint32Array | null;
   surfaceTriangleFacetIndices: Uint32Array | null;
+  surfaceTriangleCellTypes: Uint32Array | null;
+  surfaceTriangleGlobalCellOrdinals: BigUint64Array | null;
   surfaceNodeIndices: Uint32Array | null;
   surfaceNodeSelection: { nodeIndices: number[] } | null;
   volumeEdgeIndices: Uint32Array | null;
@@ -94,6 +109,7 @@ export function buildViewport3DTopologyIndexBundle({
   const fallbackSurfaceEdgeIndices = buildTopologySurfaceEdgeIndices(topology);
   const fallbackSurfaceNodeIndices = uniqueSortedIndices(fallbackSurfaceIndices);
   const fallbackVolumeEdgeIndices = buildTopologyVolumeEdgeIndices(topology);
+  const canonicalFaceIncidence = buildCanonicalFaceIncidence(topology);
   const airboxVolumeEdgeFallback =
     airboxParts.length > 0
       ? buildUnclaimedVolumeEdgeIndices(topology, magneticParts) ??
@@ -115,6 +131,7 @@ export function buildViewport3DTopologyIndexBundle({
         part,
         supplementalSurfaceParts:
           magneticSurfacePartsByPartId?.get(part.id) ?? [],
+        canonicalFaceIncidence,
         topology,
       }),
     );
@@ -125,6 +142,7 @@ export function buildViewport3DTopologyIndexBundle({
       part.id,
       buildPreparedPartTopologyIndices({
         fallbackVolumeEdgeIndices: airboxVolumeEdgeFallback,
+        canonicalFaceIncidence,
         part,
         topology,
       }),
@@ -142,11 +160,13 @@ export function buildViewport3DTopologyIndexBundle({
 }
 
 function buildPreparedPartTopologyIndices({
+  canonicalFaceIncidence,
   fallbackVolumeEdgeIndices = null,
   part,
   supplementalSurfaceParts = [],
   topology,
 }: {
+  canonicalFaceIncidence: CanonicalFaceIncidence;
   fallbackVolumeEdgeIndices?: Uint32Array | null;
   part: Viewport3DTopologyIndexPartInput;
   supplementalSurfaceParts?: readonly Viewport3DTopologyIndexPartInput[];
@@ -156,6 +176,7 @@ function buildPreparedPartTopologyIndices({
     part,
     topology,
     supplementalSurfaceParts,
+    canonicalFaceIncidence,
   );
   const surfaceIndices = surfaceTriangles.indices;
   const surfaceNodeIndices = part.surface_node_indices != null
@@ -170,7 +191,9 @@ function buildPreparedPartTopologyIndices({
       supplementalSurfaceParts,
     ),
     surfaceIndices,
+    surfaceTriangleCellTypes: surfaceTriangles.cellTypes,
     surfaceTriangleFacetIndices: surfaceTriangles.facetIndices,
+    surfaceTriangleGlobalCellOrdinals: surfaceTriangles.globalCellOrdinals,
     surfaceNodeIndices,
     surfaceNodeSelection: surfaceNodeIndices
       ? { nodeIndices: Array.from(surfaceNodeIndices) }
@@ -202,12 +225,36 @@ function buildPartSurfaceTrianglesWithSupplemental(
   part: Viewport3DTopologySurfacePartInput,
   topology: Viewport3DTopologyFacets & Pick<DecodedTopology, "nodeCount">,
   supplemental: readonly Viewport3DTopologySurfacePartInput[],
-): { facetIndices: Uint32Array | null; indices: Uint32Array | null } {
+  canonicalFaceIncidence: CanonicalFaceIncidence | null = null,
+): {
+  cellTypes: Uint32Array | null;
+  facetIndices: Uint32Array | null;
+  globalCellOrdinals: BigUint64Array | null;
+  indices: Uint32Array | null;
+} {
+  const cellTypes: number[] = [];
   const facets: number[] = [];
+  const globalCellOrdinals: bigint[] = [];
   const indices: number[] = [];
-  const seen = new Set<string>();
+  const seenFaces = new Set<string>();
+  const primaryClaim = canonicalFaceIncidence
+    ? buildPartElementClaim(
+        part,
+        topology as Viewport3DTopologyInput,
+      )
+    : null;
   for (const sourcePart of [part, ...supplemental]) {
     for (const { facet, nodes } of semanticPartFaces(sourcePart, topology)) {
+      const faceKey = canonicalFaceKey(nodes);
+      if (seenFaces.has(faceKey)) continue;
+      seenFaces.add(faceKey);
+      const owner = canonicalFaceIncidence && primaryClaim
+        ? resolveCanonicalFaceOwnerForPart(
+            nodes,
+            canonicalFaceIncidence,
+            primaryClaim,
+          )
+        : null;
       const triangles: number[] = [];
       appendTriangulatedFace(triangles, nodes);
       for (let offset = 0; offset + 2 < triangles.length; offset += 3) {
@@ -217,18 +264,82 @@ function buildPartSurfaceTrianglesWithSupplemental(
         if (a >= topology.nodeCount || b >= topology.nodeCount || c >= topology.nodeCount) {
           continue;
         }
-        const key = `${nodes.length}:${triangleStringKey(a, b, c)}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
         indices.push(a, b, c);
         facets.push(facet);
+        if (canonicalFaceIncidence) {
+          const globalCellOrdinal = owner?.globalCellOrdinal ?? null;
+          globalCellOrdinals.push(globalCellOrdinal ?? BigInt(0));
+          cellTypes.push(globalCellOrdinal === null ? 0 : owner?.type ?? 0);
+        }
       }
     }
   }
   return {
+    cellTypes: canonicalFaceIncidence && indices.length
+      ? Uint32Array.from(cellTypes)
+      : null,
     facetIndices: facets.length ? Uint32Array.from(facets) : null,
+    globalCellOrdinals: canonicalFaceIncidence && indices.length
+      ? BigUint64Array.from(globalCellOrdinals)
+      : null,
     indices: indices.length ? Uint32Array.from(indices) : null,
   };
+}
+
+function buildCanonicalFaceIncidence(
+  topology: Viewport3DTopologyCells,
+): CanonicalFaceIncidence {
+  const incidence = new Map<string, CanonicalFaceOwner[]>();
+  const globalOrdinals = topology.cellGlobalOrdinals;
+  const hasGlobalOrdinals =
+    globalOrdinals?.length === topologyCellCount(topology);
+  forEachTopologyCell(topology, (localCellIndex, type, cellNodes) => {
+    for (const localFace of CELL_FACES[type] ?? []) {
+      const nodes = localFace.map((corner) => cellNodes[corner]);
+      if (
+        nodes.some(
+          (node) => node === undefined || node >= topology.nodeCount,
+        )
+      ) {
+        continue;
+      }
+      const key = canonicalFaceKey(nodes as number[]);
+      const owners = incidence.get(key);
+      const owner = {
+        cellNodes,
+        globalCellOrdinal: hasGlobalOrdinals
+          ? globalOrdinals?.[localCellIndex] ?? null
+          : null,
+        localCellIndex,
+        type,
+      };
+      if (owners) owners.push(owner);
+      else incidence.set(key, [owner]);
+    }
+  });
+  return incidence;
+}
+
+function resolveCanonicalFaceOwnerForPart(
+  nodes: readonly number[],
+  incidence: CanonicalFaceIncidence,
+  primaryClaim: PartElementClaim,
+): CanonicalFaceOwner | null {
+  const owners = incidence.get(canonicalFaceKey(nodes)) ?? [];
+  const primaryOwners = owners.filter((owner) =>
+    isElementClaimed(
+      owner.localCellIndex,
+      owner.cellNodes,
+      [primaryClaim],
+    ),
+  );
+  return primaryOwners.length === 1 ? primaryOwners[0] ?? null : null;
+}
+
+function canonicalFaceKey(nodes: readonly number[]): string {
+  return `${nodes.length}:${[...nodes]
+    .sort((left, right) => left - right)
+    .join(":")}`;
 }
 
 export function buildPartSurfaceEdgeIndicesWithSupplemental(
@@ -608,6 +719,37 @@ export function transferablesForTopologyIndexBundle(
   return [...new Set(transferables)];
 }
 
+export function topologyIndexBundleByteLength(
+  bundle: Viewport3DTopologyIndexBundle,
+): number {
+  let total =
+    (bundle.fallbackSurfaceEdgeIndices?.byteLength ?? 0) +
+    bundle.fallbackSurfaceIndices.byteLength +
+    bundle.fallbackSurfaceNodeIndices.byteLength +
+    bundle.fallbackVolumeEdgeIndices.byteLength;
+  for (const prepared of bundle.magneticPartsById.values()) {
+    total += preparedTopologyIndexByteLength(prepared);
+  }
+  for (const prepared of bundle.airboxPartsById.values()) {
+    total += preparedTopologyIndexByteLength(prepared);
+  }
+  return total;
+}
+
+function preparedTopologyIndexByteLength(
+  prepared: Viewport3DPreparedPartTopologyIndices,
+): number {
+  return (
+    (prepared.edgeIndices?.byteLength ?? 0) +
+    (prepared.surfaceIndices?.byteLength ?? 0) +
+    (prepared.surfaceTriangleCellTypes?.byteLength ?? 0) +
+    (prepared.surfaceTriangleFacetIndices?.byteLength ?? 0) +
+    (prepared.surfaceTriangleGlobalCellOrdinals?.byteLength ?? 0) +
+    (prepared.surfaceNodeIndices?.byteLength ?? 0) +
+    (prepared.volumeEdgeIndices?.byteLength ?? 0)
+  );
+}
+
 function addPreparedPartTransferables(
   transferables: Transferable[],
   prepared: Viewport3DPreparedPartTopologyIndices,
@@ -617,6 +759,14 @@ function addPreparedPartTransferables(
   addArrayBufferTransferable(
     transferables,
     prepared.surfaceTriangleFacetIndices?.buffer,
+  );
+  addArrayBufferTransferable(
+    transferables,
+    prepared.surfaceTriangleCellTypes?.buffer,
+  );
+  addArrayBufferTransferable(
+    transferables,
+    prepared.surfaceTriangleGlobalCellOrdinals?.buffer,
   );
   addArrayBufferTransferable(transferables, prepared.surfaceNodeIndices?.buffer);
   addArrayBufferTransferable(transferables, prepared.volumeEdgeIndices?.buffer);
@@ -901,26 +1051,4 @@ function appendSurfaceEdge(
 
 function isValidIndex(value: number | undefined): value is number {
   return value !== undefined && Number.isInteger(value) && value >= 0;
-}
-
-function triangleStringKey(first: number, second: number, third: number): string {
-  let a = first;
-  let b = second;
-  let c = third;
-  if (a > b) {
-    const next = a;
-    a = b;
-    b = next;
-  }
-  if (b > c) {
-    const next = b;
-    b = c;
-    c = next;
-  }
-  if (a > b) {
-    const next = a;
-    a = b;
-    b = next;
-  }
-  return `${a}:${b}:${c}`;
 }

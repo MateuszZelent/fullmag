@@ -1049,11 +1049,16 @@ Recipe ma:
 
 - zachować magic `FMMT`;
 - version = 2;
-- header zawiera node/element/facet/connectivity/marker counts;
+- 64-byte header zawiera node/element/facet/connectivity/marker counts oraz
+  opcjonalne `cellGlobalOrdinalCount` pod offsetem 40 i
+  `facetGlobalOrdinalCount` pod offsetem 44; każdy ordinal count jest równy
+  zero dla legacy v2 albo dokładnie odpowiada liczbie elementów/facetów;
 - sekcje są wyrównane do 8 bajtów;
 - payload przenosi:
   positions, element types, element offsets, element nodes,
-  facet types, facet roles, facet offsets, facet nodes oraz markery;
+  facet types, facet roles, facet offsets, facet nodes oraz markery, a po
+  markerach opcjonalne wyrównane do 8 bajtów sekcje
+  `cellGlobalOrdinals: u64[]` i `facetGlobalOrdinals: u64[]`;
 - type codes są kodami Fullmag, nie Gmsh;
 - decoder obsługuje v1 tylko w oknie migracyjnym i normalizuje do v2 model;
 - server po cutover emituje v2;
@@ -1067,6 +1072,7 @@ Recipe ma:
 - unknown type/role reject;
 - v1 compatibility fixture;
 - chunked fetch każdej sekcji;
+- dokładne globalne ordinals powyżej bezpiecznego zakresu JavaScript `number`;
 - scoped object/part topology zachowuje types i remapuje offsets.
 
 #### Zadanie 6.2 — OpenAPI resources i provenance

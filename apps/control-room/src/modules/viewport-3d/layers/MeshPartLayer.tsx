@@ -19,6 +19,7 @@ import {
   viewport3DVectorLayersEnabledFromBrowserConfig,
 } from "@/kernel/browserFullmagConfig";
 import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
+import type { MeshElementFamily } from "@/kernel/selection/selectionTypes";
 
 import { createViewport3DGpuUploadManager } from "../build-engine/gpu/viewport3dGpuUploadManager";
 import {
@@ -91,6 +92,9 @@ import {
 } from "./meshPartScalarTransition";
 
 const MESH_PART_GEOMETRY_UPLOAD_FRAME_BUDGET_MS = 3;
+const MESH_PART_SURFACE_USER_DATA = {
+  viewportMeshPartSurface: true,
+} as const;
 
 export function resolveMeshPartScalarColors({
   fieldModel,
@@ -200,6 +204,121 @@ export function resolveMeshPartBoundaryFaceIndexForPick({
   if (explicitFaceIndex !== undefined) return explicitFaceIndex;
   if (localFaceIndex >= part.boundary_face_count) return null;
   return part.boundary_face_start + localFaceIndex;
+}
+
+export function resolveMeshPartSurfacePickIdentity({
+  expandedSurfaceFaces,
+  faceIndex,
+  part,
+  surfaceHit,
+  surfaceTriangleCellTypes,
+  surfaceTriangleFacetIndices,
+  surfaceTriangleGlobalCellOrdinals,
+}: {
+  expandedSurfaceFaces: boolean;
+  faceIndex: number | null | undefined;
+  part: Pick<
+    Viewport3DMeshPart,
+    "boundary_face_count" | "boundary_face_indices" | "boundary_face_start"
+  >;
+  surfaceHit: boolean;
+  surfaceTriangleCellTypes?: Uint32Array | null;
+  surfaceTriangleFacetIndices?: Uint32Array | null;
+  surfaceTriangleGlobalCellOrdinals?: BigUint64Array | null;
+}): {
+  boundaryFaceIndex: number | null;
+  elementFamily: MeshElementFamily | null;
+  globalCellOrdinal: string | null;
+} {
+  if (
+    !surfaceHit ||
+    faceIndex === null ||
+    faceIndex === undefined ||
+    faceIndex < 0
+  ) {
+    return {
+      boundaryFaceIndex: null,
+      elementFamily: null,
+      globalCellOrdinal: null,
+    };
+  }
+  const localTriangleIndex = Math.floor(faceIndex);
+  const hasCellTypes = surfaceTriangleCellTypes != null;
+  const hasFacetIndices = surfaceTriangleFacetIndices != null;
+  const hasGlobalCellOrdinals = surfaceTriangleGlobalCellOrdinals != null;
+  const identityMapCount = Number(hasCellTypes) +
+    Number(hasFacetIndices) +
+    Number(hasGlobalCellOrdinals);
+  if (identityMapCount === 0) {
+    return {
+      boundaryFaceIndex: resolveMeshPartBoundaryFaceIndexForPick({
+        expandedSurfaceFaces,
+        faceIndex: localTriangleIndex,
+        part,
+      }),
+      elementFamily: null,
+      globalCellOrdinal: null,
+    };
+  }
+  if (
+    identityMapCount !== 3 ||
+    !surfaceTriangleCellTypes ||
+    !surfaceTriangleFacetIndices ||
+    !surfaceTriangleGlobalCellOrdinals ||
+    surfaceTriangleCellTypes.length !== surfaceTriangleFacetIndices.length ||
+    surfaceTriangleGlobalCellOrdinals.length !== surfaceTriangleFacetIndices.length ||
+    localTriangleIndex >= surfaceTriangleFacetIndices.length
+  ) {
+    return {
+      boundaryFaceIndex: null,
+      elementFamily: null,
+      globalCellOrdinal: null,
+    };
+  }
+  const boundaryFaceIndex = resolveMeshPartBoundaryFaceIndexForPick({
+    expandedSurfaceFaces,
+    faceIndex: localTriangleIndex,
+    part,
+    surfaceTriangleFacetIndices,
+  });
+  const globalCellOrdinal =
+    surfaceTriangleGlobalCellOrdinals?.[localTriangleIndex];
+  const elementFamily = meshElementFamilyFromCellType(
+    surfaceTriangleCellTypes?.[localTriangleIndex],
+  );
+  if (
+    boundaryFaceIndex === null ||
+    globalCellOrdinal === undefined ||
+    !elementFamily
+  ) {
+    return {
+      boundaryFaceIndex: null,
+      elementFamily: null,
+      globalCellOrdinal: null,
+    };
+  }
+  return {
+    boundaryFaceIndex,
+    elementFamily,
+    globalCellOrdinal: globalCellOrdinal.toString(10),
+  };
+}
+
+function meshElementFamilyFromCellType(
+  cellType: number | undefined,
+): MeshElementFamily | null {
+  switch (cellType) {
+    case 1:
+      return "tet4";
+    case 2:
+      return "prism6";
+    case 3:
+      return "pyramid5";
+    case 4:
+      return "hex8";
+    default:
+      return null;
+  }
 }
 
 export function resolveRetainedMeshPartScalarColors({
@@ -762,15 +881,22 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     if (eventIntersectsRegionOverlay(event)) return;
     event.stopPropagation();
+    const identity = resolveMeshPartSurfacePickIdentity({
+      expandedSurfaceFaces: expandSurfaceFaces,
+      faceIndex: event.faceIndex,
+      part,
+      surfaceHit: event.object.userData.viewportMeshPartSurface === true,
+      surfaceTriangleCellTypes: partModel.surfaceTriangleCellTypes,
+      surfaceTriangleFacetIndices: partModel.surfaceTriangleFacetIndices,
+      surfaceTriangleGlobalCellOrdinals:
+        partModel.surfaceTriangleGlobalCellOrdinals,
+    });
     onSelectPart(
       selectionForMeshPart(
         part,
-        resolveMeshPartBoundaryFaceIndexForPick({
-          expandedSurfaceFaces: expandSurfaceFaces,
-          faceIndex: event.faceIndex,
-          part,
-          surfaceTriangleFacetIndices: partModel.surfaceTriangleFacetIndices,
-        }),
+        identity.boundaryFaceIndex,
+        identity.globalCellOrdinal,
+        identity.elementFamily,
       ),
     );
   };
@@ -786,6 +912,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
           renderOrder={surfacePolicy.transparent
             ? RENDER_POLICIES.contextSurface.renderOrder
             : RENDER_POLICIES.solidSurface.renderOrder}
+          userData={MESH_PART_SURFACE_USER_DATA}
         >
           {scalarShaderMaterial ? (
             <primitive attach="material" object={scalarShaderMaterial} />

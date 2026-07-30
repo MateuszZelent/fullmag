@@ -21,6 +21,7 @@
 #include "cpu/mfem/runtime/interrupt.hpp"
 #include "cpu/mfem/runtime/mfem_host_access.hpp"
 #include "cpu/mfem/runtime/mfem_device.hpp"
+#include "cpu/mfem/runtime/runtime_build_info.hpp"
 #include "cpu/mfem/runtime/snapshot.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "cpu/mfem/runtime/state_io.hpp"
@@ -3365,6 +3366,36 @@ int fullmag_fem_backend_get_device_info(
     }
     handle->last_error.clear();
     *out_info = fullmag::fem::device_info_snapshot(handle->context);
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_get_runtime_build_info(fullmag_fem_runtime_build_info *out_info)
+{
+    if (out_info == nullptr) {
+        fullmag_fem_set_global_error("fullmag_fem_get_runtime_build_info received null out_info");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (!fullmag::fem::runtime_build_info(*out_info)) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem runtime build identity is unavailable without the MFEM stack");
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    }
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_get_runtime_build_info_v2(fullmag_fem_runtime_build_info_v2 *out_info)
+{
+    if (out_info == nullptr) {
+        fullmag_fem_set_global_error("fullmag_fem_get_runtime_build_info_v2 received null out_info");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (!fullmag::fem::runtime_build_info_v2(*out_info)) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem runtime build identity v2 is unavailable without the MFEM stack");
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    }
+    fullmag_fem_clear_global_error();
     return FULLMAG_FEM_OK;
 }
 

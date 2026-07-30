@@ -49,7 +49,10 @@ import type { Viewport3DColors } from "../viewport3dTypes";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
-import { recordMeshPartSurfaceAdoption } from "./MeshPartLayer";
+import {
+  recordMeshPartSurfaceAdoption,
+  resolveMeshPartSurfacePickIdentity,
+} from "./MeshPartLayer";
 import type { Viewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 import {
   percentToUnit,
@@ -84,6 +87,12 @@ export interface AirboxSurfaceColorState {
 }
 
 const AIRBOX_MESH_PART_GEOMETRY_UPLOAD_FRAME_BUDGET_MS = 3;
+
+export function resolveAirboxMeshPartSurfacePickIdentity(
+  input: Parameters<typeof resolveMeshPartSurfacePickIdentity>[0],
+) {
+  return resolveMeshPartSurfacePickIdentity(input);
+}
 
 export function BoundsBox({
   bounds,
@@ -277,7 +286,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
       topologyModel.positions.byteLength + (edgeIndices?.byteLength ?? 0),
     invalidate,
     itemCount: edgeIndices?.length ?? 0,
-    key: `airbox-wireframe:${part.id}:scope=${renderSettings.geometryScope}:topology=${topologyRevision ?? "none"}:positions=${topologyModel.positions.byteLength}:indices=${edgeIndices?.byteLength ?? 0}`,
+    key: `airbox-wireframe:${part.id}:scope=${renderSettings.geometryScope}:edge-source=${renderSettings.geometryScope === "full" ? "volumeEdges" : "surfaceEdges"}:render-semantic=${resolveAirboxWireframeSemantic(renderSettings)}:topology=${topologyRevision ?? "none"}:positions=${topologyModel.positions.byteLength}:indices=${edgeIndices?.byteLength ?? 0}`,
     lane: "topology-index",
     targetRevision: topologyRevision === null ? null : String(topologyRevision),
     tracker,
@@ -396,7 +405,24 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
       return;
     }
     event.stopPropagation();
-    onSelectPart(selectionForMeshPart(part));
+    const identity = resolveAirboxMeshPartSurfacePickIdentity({
+      expandedSurfaceFaces: false,
+      faceIndex: event.faceIndex,
+      part,
+      surfaceHit: event.object.userData.viewportAirboxMeshPartSurface === true,
+      surfaceTriangleCellTypes: partModel.surfaceTriangleCellTypes,
+      surfaceTriangleFacetIndices: partModel.surfaceTriangleFacetIndices,
+      surfaceTriangleGlobalCellOrdinals:
+        partModel.surfaceTriangleGlobalCellOrdinals,
+    });
+    onSelectPart(
+      selectionForMeshPart(
+        part,
+        identity.boundaryFaceIndex,
+        identity.globalCellOrdinal,
+        identity.elementFamily,
+      ),
+    );
   };
   if (!geometry) {
     return (
@@ -498,6 +524,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
         <mesh
           geometry={geometry}
           renderOrder={RENDER_POLICIES.airSurface.renderOrder}
+          userData={{ viewportAirboxMeshPartSurface: true }}
         >
           <meshBasicMaterial
             color={materialColor}

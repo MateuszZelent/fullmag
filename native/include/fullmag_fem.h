@@ -646,6 +646,24 @@ typedef struct {
     uint64_t gpu_memory_total_bytes;
 } fullmag_fem_device_info;
 
+#define FULLMAG_FEM_RUNTIME_BUILD_INFO_V1_ABI_VERSION 1u
+#define FULLMAG_FEM_RUNTIME_BUILD_INFO_MFEM_VERSION_CAPACITY 32u
+#define FULLMAG_FEM_RUNTIME_BUILD_INFO_HYPRE_VERSION_CAPACITY 32u
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    char mfem_version[FULLMAG_FEM_RUNTIME_BUILD_INFO_MFEM_VERSION_CAPACITY];
+} fullmag_fem_runtime_build_info;
+
+#define FULLMAG_FEM_RUNTIME_BUILD_INFO_V2_ABI_VERSION 2u
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    char mfem_version[FULLMAG_FEM_RUNTIME_BUILD_INFO_MFEM_VERSION_CAPACITY];
+    char hypre_version[FULLMAG_FEM_RUNTIME_BUILD_INFO_HYPRE_VERSION_CAPACITY];
+} fullmag_fem_runtime_build_info_v2;
+
 typedef struct {
     int available;
     int built_with_mfem_stack;
@@ -1474,6 +1492,13 @@ int fullmag_fem_backend_stage_completion(
 int fullmag_fem_backend_get_device_info(
     fullmag_fem_backend *handle,
     fullmag_fem_device_info *out_info
+);
+
+int fullmag_fem_get_runtime_build_info(
+    fullmag_fem_runtime_build_info *out_info
+);
+int fullmag_fem_get_runtime_build_info_v2(
+    fullmag_fem_runtime_build_info_v2 *out_info
 );
 
 int fullmag_fem_backend_get_transfer_audit(

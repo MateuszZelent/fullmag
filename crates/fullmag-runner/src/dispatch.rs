@@ -11,8 +11,8 @@
 //! - `gpu`: force native FEM GPU, fail if unavailable
 
 use fullmag_ir::{
-    BackendPlanIR, FdmMultilayerPlanIR, FdmPlanIR, FemEigenPlanIR, FemMeshPartSelector, FemPlanIR,
-    OutputIR, ProblemIR, RelaxationAlgorithmIR,
+    BackendPlanIR, ExecutionMode, FdmMultilayerPlanIR, FdmPlanIR, FemEigenPlanIR,
+    FemMeshPartSelector, FemPlanIR, OutputIR, ProblemIR, RelaxationAlgorithmIR,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -2021,8 +2021,28 @@ pub(crate) fn execute_fem<'a>(
     live: Option<LiveStepConsumer<'a>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    execute_fem_in_mode(
+        engine,
+        plan,
+        until_seconds,
+        outputs,
+        live,
+        artifact_writer,
+        ExecutionMode::Strict,
+    )
+}
+
+pub(crate) fn execute_fem_in_mode<'a>(
+    engine: FemEngine,
+    plan: &FemPlanIR,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    live: Option<LiveStepConsumer<'a>>,
+    artifact_writer: Option<ArtifactPipelineSender>,
+    execution_mode: ExecutionMode,
+) -> Result<ExecutedRun, RunError> {
     let stage_context = FemStageExecutionContext::from_fem_plan(plan);
-    execute_fem_with_context(
+    execute_fem_with_context_in_mode(
         engine,
         plan,
         &stage_context,
@@ -2030,6 +2050,7 @@ pub(crate) fn execute_fem<'a>(
         outputs,
         live,
         artifact_writer,
+        execution_mode,
     )
 }
 
@@ -2041,6 +2062,28 @@ pub(crate) fn execute_fem_with_context<'a>(
     outputs: &[OutputIR],
     live: Option<LiveStepConsumer<'a>>,
     artifact_writer: Option<ArtifactPipelineSender>,
+) -> Result<ExecutedRun, RunError> {
+    execute_fem_with_context_in_mode(
+        engine,
+        plan,
+        stage_context,
+        until_seconds,
+        outputs,
+        live,
+        artifact_writer,
+        ExecutionMode::Strict,
+    )
+}
+
+pub(crate) fn execute_fem_with_context_in_mode<'a>(
+    engine: FemEngine,
+    plan: &FemPlanIR,
+    stage_context: &FemStageExecutionContext,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    live: Option<LiveStepConsumer<'a>>,
+    artifact_writer: Option<ArtifactPipelineSender>,
+    execution_mode: ExecutionMode,
 ) -> Result<ExecutedRun, RunError> {
     let normalized_plan = normalized_fem_plan_for_runtime(plan)?;
     let pbc_decision = fem_static_periodic_decision(&normalized_plan);
@@ -2105,6 +2148,7 @@ pub(crate) fn execute_fem_with_context<'a>(
                 outputs,
                 live,
                 artifact_writer,
+                execution_mode,
             )
         }
         FemEngine::NativeGpu => {
@@ -2117,6 +2161,7 @@ pub(crate) fn execute_fem_with_context<'a>(
                 outputs,
                 live,
                 artifact_writer,
+                execution_mode,
             )
         }
     }?;
@@ -5244,6 +5289,7 @@ fn execute_native_fem(
     outputs: &[OutputIR],
     mut live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
+    execution_mode: ExecutionMode,
 ) -> Result<ExecutedRun, RunError> {
     let fem_mesh_generation_id = stage_context.generation_id();
     if until_seconds <= 0.0 {
@@ -5276,8 +5322,8 @@ fn execute_native_fem(
     let gpu_state_info = backend.gpu_state_info()?;
     let gpu_rk_plan_info = backend.gpu_rk_plan_info()?;
     let execution_engine = native_fem_execution_engine(plan);
-    let execution_mode = native_fem_execution_mode(plan);
-    validate_all_in_gpu_fem_runtime_contract(execution_mode, &gpu_rk_plan_info)?;
+    let native_execution_mode = native_fem_execution_mode(plan);
+    validate_all_in_gpu_fem_runtime_contract(native_execution_mode, &gpu_rk_plan_info)?;
     let demag_policy = crate::native_fem::resolved_native_fem_demag_solver_policy(plan);
     runtime_info_once(&format!(
         "native FEM backend active: engine={} device='{}' cc={} driver={} runtime={} mfem_device={} assembly_mode=legacy_sparse llg_mode={} demag_solver={} preconditioner={} demag_mode={} hypre_gpu_policy={} demag_residency={}",
@@ -5399,11 +5445,19 @@ fn execute_native_fem(
         Some(&gpu_state_info),
         Some(&gpu_rk_plan_info),
     );
+    if execution_mode == ExecutionMode::Strict && execution_engine == "fem_native_gpu" {
+        let build_info = native_fem::strict_gpu_runtime_build_info()?;
+        provenance.mfem_version = Some(build_info.mfem_version);
+        provenance.hypre_version = Some(build_info.hypre_version);
+    }
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)
     } else {
         ArtifactRecorder::in_memory(provenance.clone())
     };
+    if native_relaxation_step.is_some() && current_stats.step == 0 {
+        artifacts.record_scalar(&current_stats)?;
+    }
     if needs_initial_snapshot && current_stats.step == 0 {
         record_native_fem_initial_field_snapshots(
             &mut backend,
@@ -5545,6 +5599,7 @@ fn execute_native_fem(
     _outputs: &[OutputIR],
     _live: Option<LiveStepConsumer<'_>>,
     _artifact_writer: Option<ArtifactPipelineSender>,
+    _execution_mode: ExecutionMode,
 ) -> Result<ExecutedRun, RunError> {
     Err(RunError {
         message:
@@ -6264,6 +6319,17 @@ mod tests {
         assert!(
             execute_body.contains("current_stats.step == 0"),
             "initial native FEM field snapshots must be tied to the computed step-0 stats"
+        );
+        let scalar_pos = execute_body
+            .find("artifacts.record_scalar(&current_stats)?;")
+            .expect("native FEM direct minimization must record the existing step-0 stats");
+        let snapshot_pos = execute_body
+            .rfind(helper)
+            .expect("native FEM direct minimization must record step-0 fields");
+        assert!(
+            execute_body[..scalar_pos].contains("native_relaxation_step.is_some()")
+                && scalar_pos < snapshot_pos,
+            "step-0 scalar evidence must be direct-minimizer-only and precede field snapshots"
         );
         let helper_body = &source[helper_pos..execute_pos];
         assert!(

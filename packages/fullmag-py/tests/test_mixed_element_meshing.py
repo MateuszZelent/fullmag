@@ -1125,9 +1125,10 @@ def _mixed_shared_domain_case(
     return tuple(body_size), airbox, mesh
 
 
-def test_shared_domain_box_prism_mesh_has_exact_requested_layer() -> None:
+@pytest.mark.parametrize("layers", [1, 2, 3])
+def test_shared_domain_box_prism_mesh_has_exact_requested_layer(layers: int) -> None:
     pytest.importorskip("gmsh")
-    body_size, _airbox, mesh = _mixed_shared_domain_case(layers=1)
+    body_size, _airbox, mesh = _mixed_shared_domain_case(layers=layers)
 
     magnetic_nodes = np.unique(
         np.concatenate(
@@ -1144,18 +1145,35 @@ def test_shared_domain_box_prism_mesh_has_exact_requested_layer() -> None:
         if not planes or abs(coordinate - planes[-1]) > tolerance:
             planes.append(coordinate)
 
-    assert len(planes) == 2
+    assert len(planes) == layers + 1
     assert mesh.mixed_layer_topology_certificate is not None
-    assert mesh.mixed_layer_topology_certificate.realized_layer_count == 1
+    certificate = mesh.mixed_layer_topology_certificate
+    assert certificate.requested_layer_count == layers
+    assert certificate.realized_layer_count == layers
     assert mesh.mixed_layer_topology_certificate.magnetic_plane_coordinates_m == pytest.approx(
         planes
     )
+    assert set(mesh.cell_types[mesh.element_markers == 1].tolist()) == {"prism6"}
+    assert set(mesh.cell_types[mesh.element_markers == 0].tolist()) == {
+        "pyramid5",
+        "tet4",
+    }
+    assert certificate.topology_fingerprint == mesh.topology_fingerprint_v3()
+    assert certificate.fallbacks_triggered == ()
 
 
-def test_shared_domain_box_prism_rejects_unqualified_multiple_layers() -> None:
-    pytest.importorskip("gmsh")
-    with pytest.raises(ValueError, match="qualified for exactly one layer"):
-        _mixed_shared_domain_case(layers=2)
+@pytest.mark.parametrize("layers", [0, 4])
+def test_shared_domain_box_prism_rejects_layer_count_outside_bounded_set(
+    monkeypatch: pytest.MonkeyPatch,
+    layers: int,
+) -> None:
+    swept_module = importlib.import_module("fullmag.meshing._gmsh_swept")
+    gmsh_import = Mock(side_effect=AssertionError("Gmsh started before validation"))
+    monkeypatch.setattr(swept_module, "_import_gmsh", gmsh_import)
+
+    with pytest.raises(ValueError, match="exactly 1, 2, or 3 layers"):
+        _mixed_shared_domain_case(layers=layers)
+    gmsh_import.assert_not_called()
 
 
 @pytest.mark.parametrize("axis", [0, 1, 2])
@@ -1374,7 +1392,10 @@ def test_shared_domain_topology_fingerprint_is_deterministic() -> None:
     assert first_certificate.topology_fingerprint == second_certificate.topology_fingerprint
 
 
-def test_shared_domain_box_asset_pipeline_routes_to_strict_mixed_geo_path() -> None:
+@pytest.mark.parametrize("layers", [1, 2, 3])
+def test_shared_domain_box_asset_pipeline_routes_to_strict_mixed_geo_path(
+    layers: int,
+) -> None:
     pytest.importorskip("gmsh")
     from fullmag.meshing.asset_pipeline import (
         _realize_fem_domain_mesh_asset_from_components_impl,
@@ -1396,7 +1417,7 @@ def test_shared_domain_box_asset_pipeline_routes_to_strict_mixed_geo_path() -> N
             mesh_workflow={
                 "mesh_options": {
                     "mesh_strategy": "swept_prism",
-                    "through_thickness_elements": 1,
+                    "through_thickness_elements": layers,
                     "through_thickness_distribution": "fixed",
                 }
             },
@@ -1407,7 +1428,13 @@ def test_shared_domain_box_asset_pipeline_routes_to_strict_mixed_geo_path() -> N
     assert report.fallbacks_triggered == []
     assert region_markers == [{"geometry_name": "magnet", "marker": 1}]
     assert mesh.mixed_layer_topology_certificate is not None
-    assert mesh.mixed_layer_topology_certificate.fallbacks_triggered == ()
+    certificate = mesh.mixed_layer_topology_certificate
+    assert certificate.requested_layer_count == layers
+    assert certificate.realized_layer_count == layers
+    assert len(certificate.magnetic_plane_coordinates_m) == layers + 1
+    assert certificate.topology_fingerprint == mesh.topology_fingerprint_v3()
+    assert certificate.fallbacks_triggered == ()
+    assert report.degraded is False
     assert set(mesh.cell_types.tolist()) == {"prism6", "pyramid5", "tet4"}
 
 
@@ -1837,7 +1864,7 @@ def test_asset_mixed_route_rejects_unqualified_requests_before_generator(
     elif case == "order":
         hints = fm.FEM(order=2, hmax=0.8e-6)
     elif case == "layers":
-        mesh_options["through_thickness_elements"] = 2
+        mesh_options["through_thickness_elements"] = 4
     elif case == "distribution":
         mesh_options["through_thickness_distribution"] = "linear"
     elif case == "sweep_face":
@@ -2410,7 +2437,7 @@ def test_mixed_certificate_rejects_semantically_resigned_part_reassignment() -> 
     )
     resigned = replace(
         certificate,
-        topology_fingerprint=unsigned.topology_fingerprint_v2(),
+        topology_fingerprint=unsigned.topology_fingerprint_v3(),
     )
     with pytest.raises(ValueError, match="mixed layer topology certificate.*stale"):
         replace(unsigned, mixed_layer_topology_certificate=resigned)
@@ -2663,7 +2690,7 @@ def test_resigned_mesh_with_pyramid_base_off_quad_interface_is_rejected() -> Non
     )
     resigned = replace(
         certificate,
-        topology_fingerprint=unsigned.topology_fingerprint_v2(),
+        topology_fingerprint=unsigned.topology_fingerprint_v3(),
     )
     with pytest.raises(ValueError, match="pyramid bases.*quad.*marker 10"):
         replace(unsigned, mixed_layer_topology_certificate=resigned)

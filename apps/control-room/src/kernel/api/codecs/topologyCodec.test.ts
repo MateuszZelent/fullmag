@@ -56,7 +56,13 @@ function makeTopologyBuffer(): ArrayBuffer {
   return buffer;
 }
 
-function makeMixedTopologyBuffer(): ArrayBuffer {
+function makeMixedTopologyBuffer({
+  cellGlobalOrdinals = [],
+  facetGlobalOrdinals = [],
+}: {
+  cellGlobalOrdinals?: readonly bigint[];
+  facetGlobalOrdinals?: readonly bigint[];
+} = {}): ArrayBuffer {
   const positions = [
     0, 0, 0,
     1, 0, 0,
@@ -102,7 +108,11 @@ function makeMixedTopologyBuffer(): ArrayBuffer {
   const cellMarkersOffset = offset;
   offset = alignToEight(offset + cellMarkers.length * 4);
   const facetMarkersOffset = offset;
-  const byteLength = facetMarkersOffset + facetMarkers.length * 4;
+  offset = alignToEight(offset + facetMarkers.length * 4);
+  const cellGlobalOrdinalsOffset = offset;
+  offset = alignToEight(offset + cellGlobalOrdinals.length * 8);
+  const facetGlobalOrdinalsOffset = offset;
+  const byteLength = facetGlobalOrdinalsOffset + facetGlobalOrdinals.length * 8;
 
   const buffer = new ArrayBuffer(byteLength);
   const view = new DataView(buffer);
@@ -119,6 +129,8 @@ function makeMixedTopologyBuffer(): ArrayBuffer {
   view.setUint32(28, cellMarkers.length, true);
   view.setUint32(32, facetMarkers.length, true);
   view.setUint32(36, FMMT_V2_HEADER_LEN, true);
+  view.setUint32(40, cellGlobalOrdinals.length, true);
+  view.setUint32(44, facetGlobalOrdinals.length, true);
 
   new Float64Array(buffer, positionsOffset, positions.length).set(positions);
   new Uint32Array(buffer, cellTypesOffset, cellTypes.length).set(cellTypes);
@@ -130,6 +142,16 @@ function makeMixedTopologyBuffer(): ArrayBuffer {
   new Uint32Array(buffer, facetNodesOffset, facetNodes.length).set(facetNodes);
   new Uint32Array(buffer, cellMarkersOffset, cellMarkers.length).set(cellMarkers);
   new Uint32Array(buffer, facetMarkersOffset, facetMarkers.length).set(facetMarkers);
+  new BigUint64Array(
+    buffer,
+    cellGlobalOrdinalsOffset,
+    cellGlobalOrdinals.length,
+  ).set(cellGlobalOrdinals);
+  new BigUint64Array(
+    buffer,
+    facetGlobalOrdinalsOffset,
+    facetGlobalOrdinals.length,
+  ).set(facetGlobalOrdinals);
   return buffer;
 }
 
@@ -174,6 +196,84 @@ describe("decodeTopology", () => {
     expect(decoded.boundaryFaceCount).toBe(2);
     expect(decoded.boundaryFaces).toHaveLength(0);
     expect(decoded.boundaryMarkers).toBe(decoded.facetMarkers);
+    expect(decoded.cellGlobalOrdinals).toEqual(new BigUint64Array());
+    expect(decoded.facetGlobalOrdinals).toEqual(new BigUint64Array());
+  });
+
+  it("decodes exact optional u64 global ordinals without Number precision loss", () => {
+    const decoded = decodeTopology(makeMixedTopologyBuffer({
+      cellGlobalOrdinals: [
+        BigInt(10),
+        BigInt(11),
+        BigInt("9007199254740993"),
+        BigInt("18446744073709551615"),
+      ],
+      facetGlobalOrdinals: [BigInt(20), BigInt("9007199254740995")],
+    }));
+
+    expect(decoded.cellGlobalOrdinals).toEqual(new BigUint64Array([
+      BigInt(10),
+      BigInt(11),
+      BigInt("9007199254740993"),
+      BigInt("18446744073709551615"),
+    ]));
+    expect(decoded.facetGlobalOrdinals).toEqual(new BigUint64Array([
+      BigInt(20),
+      BigInt("9007199254740995"),
+    ]));
+    expect(topologyByteLayout(decodeTopologyHeader(
+      makeMixedTopologyBuffer({
+        cellGlobalOrdinals: [BigInt(10), BigInt(11), BigInt(12), BigInt(13)],
+        facetGlobalOrdinals: [BigInt(20), BigInt(21)],
+      }),
+    )).cellGlobalOrdinals).not.toBeNull();
+  });
+
+  it.each([
+    ["neither", [], []],
+    ["cell only", [BigInt(10), BigInt(11), BigInt(12), BigInt(13)], []],
+    ["facet only", [], [BigInt(20), BigInt(21)]],
+    [
+      "both",
+      [BigInt(10), BigInt(11), BigInt(12), BigInt(13)],
+      [BigInt(20), BigInt(21)],
+    ],
+  ])("lays out %s optional global ordinal sections", (
+    _variant,
+    cellGlobalOrdinals,
+    facetGlobalOrdinals,
+  ) => {
+    const buffer = makeMixedTopologyBuffer({
+      cellGlobalOrdinals,
+      facetGlobalOrdinals,
+    });
+    const layout = topologyByteLayout(decodeTopologyHeader(buffer));
+
+    expect(layout.cellGlobalOrdinals === null).toBe(cellGlobalOrdinals.length === 0);
+    expect(layout.facetGlobalOrdinals === null).toBe(facetGlobalOrdinals.length === 0);
+    if (layout.cellGlobalOrdinals) {
+      expect(layout.cellGlobalOrdinals.start % BigUint64Array.BYTES_PER_ELEMENT).toBe(0);
+    }
+    if (layout.facetGlobalOrdinals) {
+      expect(layout.facetGlobalOrdinals.start % BigUint64Array.BYTES_PER_ELEMENT).toBe(0);
+    }
+    expect(layout.expectedByteLength).toBe(buffer.byteLength);
+    expect(decodeTopology(buffer).cellGlobalOrdinals).toEqual(
+      new BigUint64Array(cellGlobalOrdinals),
+    );
+    expect(decodeTopology(buffer).facetGlobalOrdinals).toEqual(
+      new BigUint64Array(facetGlobalOrdinals),
+    );
+  });
+
+  it("rejects optional ordinal counts that are neither zero nor entity counts", () => {
+    const buffer = makeMixedTopologyBuffer();
+    new DataView(buffer).setUint32(40, 1, true);
+    expect(() => decodeTopologyHeader(buffer)).toThrow(/global ordinal counts/i);
+
+    new DataView(buffer).setUint32(40, 0, true);
+    new DataView(buffer).setUint32(44, 1, true);
+    expect(() => decodeTopologyHeader(buffer)).toThrow(/global ordinal counts/i);
   });
 
   it("decodes FMMT header and byte layout for chunked topology reads", () => {

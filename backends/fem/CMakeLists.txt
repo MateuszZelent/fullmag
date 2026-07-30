@@ -149,6 +149,7 @@ set(FEM_SOURCES
     cpu/mfem/runtime/interrupt.cpp
     cpu/mfem/runtime/mfem_context.cpp
     cpu/mfem/runtime/mfem_device.cpp
+    cpu/mfem/runtime/runtime_build_info.cpp
     cpu/mfem/runtime/mfem_mesh_builder.cpp
     cpu/mfem/runtime/snapshot.cpp
     cpu/mfem/runtime/stage_completion.cpp

@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { isValidElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -23,6 +22,7 @@ import {
   buildBoundsVolumeWireframePositions,
   resolveAirboxRuntimeVisualizationSettings,
   resolveAirboxSurfaceColorState,
+  resolveAirboxMeshPartSurfacePickIdentity,
   resolveAirboxTopologyVisualizationSettings,
   resolveAirboxWireframeEdgeIndices,
   resolveAirboxWireframePrimitive,
@@ -68,7 +68,7 @@ const materialProfile = resolveViewport3DMaterialProfile(
 );
 
 const boundsLayersSource = readFileSync(
-  join(process.cwd(), "src/modules/viewport-3d/layers/BoundsLayers.tsx"),
+  new URL("./BoundsLayers.tsx", import.meta.url),
   "utf8",
 );
 
@@ -108,6 +108,52 @@ it("routes airbox mesh-part topology geometry adoption through the upload manage
   expect(airboxMeshPartLayerSource).not.toContain("const geometry = useMemo");
   expect(airboxMeshPartLayerSource).not.toContain("const edgeGeometry = useMemo");
   expect(airboxMeshPartLayerSource).not.toContain("const pointsGeometry = useMemo");
+});
+
+it("records full-airbox volume-edge hidden-edge semantics in topology telemetry", () => {
+  expect(boundsLayersSource).toContain('"volumeEdges"');
+  expect(boundsLayersSource).toContain("render-semantic=${resolveAirboxWireframeSemantic(renderSettings)}");
+});
+
+it("maps an airbox surface triangle to its canonical cell identity", () => {
+  expect(resolveAirboxMeshPartSurfacePickIdentity({
+    expandedSurfaceFaces: false,
+    faceIndex: 1,
+    part: {
+      boundary_face_count: 1,
+      boundary_face_indices: [17],
+      boundary_face_start: 17,
+    },
+    surfaceHit: true,
+    surfaceTriangleCellTypes: new Uint32Array([1, 3]),
+    surfaceTriangleFacetIndices: new Uint32Array([17, 17]),
+    surfaceTriangleGlobalCellOrdinals: new BigUint64Array([
+      BigInt(11),
+      BigInt("9007199254740993"),
+    ]),
+  })).toEqual({
+    boundaryFaceIndex: 17,
+    elementFamily: "pyramid5",
+    globalCellOrdinal: "9007199254740993",
+  });
+});
+
+it("fails closed when an airbox surface identity map is incomplete", () => {
+  expect(resolveAirboxMeshPartSurfacePickIdentity({
+    expandedSurfaceFaces: false,
+    faceIndex: 0,
+    part: {
+      boundary_face_count: 1,
+      boundary_face_start: 17,
+    },
+    surfaceHit: true,
+    surfaceTriangleCellTypes: new Uint32Array([1]),
+    surfaceTriangleFacetIndices: new Uint32Array([17]),
+  })).toEqual({
+    boundaryFaceIndex: null,
+    elementFamily: null,
+    globalCellOrdinal: null,
+  });
 });
 
 it("routes airbox vector layer input through target-pass selection", () => {

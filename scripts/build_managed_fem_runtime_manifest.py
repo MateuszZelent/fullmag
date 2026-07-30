@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a schema-v2 manifest from the libraries the managed FEM worker loads."""
+"""Build a schema-v3 manifest from the libraries the managed FEM worker loads."""
 
 from __future__ import annotations
 
@@ -164,10 +164,16 @@ def build_manifest(args: argparse.Namespace) -> Mapping[str, object]:
             "runtime diagnostics require device name, compute capability, and CUDA driver version"
         )
     created_at = args.created_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    if re.fullmatch(r"[0-9a-f]{40}", args.git_commit) is None:
+        raise ValueError("managed FEM build identity git commit must be 40 lowercase hex digits")
+    if args.worktree_state not in {"clean", "dirty"}:
+        raise ValueError("managed FEM build identity worktree state must be clean or dirty")
+    if re.fullmatch(r"[0-9a-f]{64}", args.source_snapshot_sha256) is None:
+        raise ValueError("managed FEM source snapshot must be 64 lowercase hex digits")
     built_image_id = args.docker_image_id or previous.get("docker_image_id", "")
     observed_image_id = args.observed_docker_image_id or None
     manifest: dict[str, object] = {
-        "schema": 2,
+        "schema": 3,
         "runtime": "fem-gpu-host",
         "variant": args.variant,
         "docker_image": "fullmag/fem-gpu:local",
@@ -180,6 +186,11 @@ def build_manifest(args: argparse.Namespace) -> Mapping[str, object]:
         },
         "created_at": created_at,
         "source_manifest_sha256": previous_manifest_sha256,
+        "build_identity": {
+            "git_commit": args.git_commit,
+            "worktree_state": args.worktree_state,
+            "source_snapshot_sha256": args.source_snapshot_sha256,
+        },
         "binaries": {name: str(binaries[name]) for name in resolved_binaries},
         "integrity": {
             f"{name}_sha256": sha256(path) for name, path in resolved_binaries.items()
@@ -226,6 +237,9 @@ def main() -> None:
     parser.add_argument("--docker-image-id")
     parser.add_argument("--observed-docker-image-id")
     parser.add_argument("--created-at")
+    parser.add_argument("--git-commit", required=True)
+    parser.add_argument("--worktree-state", required=True)
+    parser.add_argument("--source-snapshot-sha256", required=True)
     parser.add_argument("--cuobjdump", default="cuobjdump")
     parser.add_argument("--ldd", default="ldd")
     parser.add_argument("--readelf", default="readelf")
@@ -238,7 +252,7 @@ def main() -> None:
                 {
                     "runtime": manifest["runtime"],
                     "variant": manifest["variant"],
-                    "manifest": "schema-v2-written",
+                    "manifest": "schema-v3-written",
                 },
                 sort_keys=True,
             )

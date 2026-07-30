@@ -13,6 +13,7 @@ interface TopologyIndexWorkerRequest {
   >;
   topology: {
     boundaryFaces: Uint32Array;
+    cellGlobalOrdinals?: BigUint64Array;
     cellNodes?: Uint32Array;
     cellOffsets?: Uint32Array;
     cellTypes?: Uint32Array;
