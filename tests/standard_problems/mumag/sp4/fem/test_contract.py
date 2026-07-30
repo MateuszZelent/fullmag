@@ -1,5 +1,6 @@
 from pathlib import Path
 import contextlib
+from dataclasses import replace
 import io
 import json
 
@@ -9,6 +10,7 @@ from tests.standard_problems.mumag.sp4.common.contract import (
     CANONICAL_RELAXATION_DEVICE,
     CONTRACT,
     DEFAULT_RELAXATION_ALGORITHM,
+    MIXED_P1_QUALIFICATION,
     PRODUCTION_RELAXATION_ALGORITHMS,
     RELAXATION_DT_MAX_S,
     validate_device,
@@ -89,6 +91,92 @@ def test_qualification_defaults_to_monotone_overdamped_llg_relaxation():
         "nonlinear_cg",
     )
     assert RELAXATION_DT_MAX_S == 1e-14
+
+
+def test_mixed_p1_qualification_contract_freezes_energy_and_temporal_gates():
+    contract = MIXED_P1_QUALIFICATION
+
+    assert (contract.mesh_energy.atol_j, contract.mesh_energy.rtol) == (2e-19, 2e-2)
+    assert (contract.airbox_energy.atol_j, contract.airbox_energy.rtol) == (1e-19, 1e-2)
+    assert (contract.operator_energy.atol_j, contract.operator_energy.rtol) == (1e-30, 1e-6)
+    assert contract.fixed_finest_dt_pair_s == (2e-14, 1e-14)
+    assert contract.adaptive_finest_max_err_pair == (1e-6, 1e-7)
+    assert contract.component_rms_max == 0.01
+    assert contract.component_p99_max == 0.03
+    assert contract.component_endpoint_max == 0.01
+    assert contract.crossing_delta_max_s == 5e-12
+    assert contract.energy_trajectory_relative_rms_max == 0.01
+    assert (
+        contract.temporal_energy_endpoint.atol_j,
+        contract.temporal_energy_endpoint.rtol,
+    ) == (1e-19, 1e-2)
+
+
+def test_mixed_p1_qualification_rules_are_executable_and_fail_closed():
+    contract = MIXED_P1_QUALIFICATION
+
+    assert contract.operator_energy.accepts(1e-18, 1e-18 + 1e-24)
+    assert not contract.operator_energy.accepts(1e-18, 1e-18 + 3e-24)
+    assert not contract.operator_energy.accepts(float("nan"), 0.0)
+    assert contract.temporal_accepts(
+        component_rms=(0.01, 0.0, 0.0),
+        component_p99=(0.03, 0.0, 0.0),
+        component_endpoint=(0.01, 0.0, 0.0),
+        crossing_delta_s=5e-12,
+        energy_relative_rms=(0.01, 0.0, 0.0),
+        energy_endpoint_pairs_j=((1e-18, 1e-18),) * 3,
+    )
+    assert not contract.temporal_accepts(
+        component_rms=(0.0100001, 0.0, 0.0),
+        component_p99=(0.0, 0.0, 0.0),
+        component_endpoint=(0.0, 0.0, 0.0),
+        crossing_delta_s=0.0,
+        energy_relative_rms=(0.0, 0.0, 0.0),
+        energy_endpoint_pairs_j=((0.0, 0.0),) * 3,
+    )
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "component_rms",
+        "component_p99",
+        "component_endpoint",
+        "energy_relative_rms",
+        "energy_endpoint_pairs_j",
+    ),
+)
+@pytest.mark.parametrize("length", (0, 2, 4))
+def test_mixed_p1_temporal_gate_rejects_non_triplet_metrics(field, length):
+    kwargs = {
+        "component_rms": (0.0, 0.0, 0.0),
+        "component_p99": (0.0, 0.0, 0.0),
+        "component_endpoint": (0.0, 0.0, 0.0),
+        "crossing_delta_s": 0.0,
+        "energy_relative_rms": (0.0, 0.0, 0.0),
+        "energy_endpoint_pairs_j": ((0.0, 0.0),) * 3,
+    }
+    kwargs[field] = ((0.0, 0.0),) * length if field == "energy_endpoint_pairs_j" else (0.0,) * length
+
+    assert not MIXED_P1_QUALIFICATION.temporal_accepts(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    (
+        {"fixed_finest_dt_pair_s": (1e-14,)},
+        {"fixed_finest_dt_pair_s": [2e-14, 1e-14]},
+        {"fixed_finest_dt_pair_s": (1e-14, 2e-14)},
+        {"adaptive_finest_max_err_pair": [1e-6, 1e-7]},
+        {"adaptive_finest_max_err_pair": (1e-7, 1e-6)},
+        {"component_rms_max": -1.0},
+        {"component_p99_max": float("nan")},
+        {"crossing_delta_max_s": float("inf")},
+    ),
+)
+def test_mixed_p1_qualification_contract_rejects_invalid_frozen_values(changes):
+    with pytest.raises((TypeError, ValueError)):
+        replace(MIXED_P1_QUALIFICATION, **changes)
 
 
 def _managed_problem_ir(

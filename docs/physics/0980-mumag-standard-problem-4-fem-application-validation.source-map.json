@@ -1,0 +1,1076 @@
+{
+  "document": {
+    "path": "docs/physics/0980-mumag-standard-problem-4-fem-application-validation.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "unsupported",
+      "reason": "The current tree has no Fullmag FDM SP4 scenario lane; OOMMF data is reference input only."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "The mixed-P1 FEM topology and its qualification matrix do not apply to Cartesian FDM execution."
+    }
+  ],
+  "equations": [
+    {
+      "id": "sp4-gilbert-llg",
+      "symbols": ["m", "H_eff", "gamma0", "alpha", "p", "t"],
+      "sources": ["cpu-llg-rhs", "gpu-llg-rhs"]
+    },
+    {
+      "id": "sp4-effective-field",
+      "symbols": ["H_eff", "H_ex", "H_demag", "H_ext", "Aex", "mu0", "Ms", "m", "Bext"],
+      "sources": ["exchange-operator", "demag-rhs", "sp4-contract"]
+    },
+    {
+      "id": "sp4-applied-fields",
+      "symbols": ["Bext"],
+      "sources": ["sp4-contract"]
+    },
+    {
+      "id": "sp4-fem-symmetric-energy-difference",
+      "symbols": ["DeltaE", "Ea", "Eb"],
+      "sources": ["energy-tolerance", "scalar-parity"]
+    },
+    {
+      "id": "sp4-fem-energy-acceptance",
+      "symbols": ["DeltaE", "Ea", "Eb", "aE", "rE"],
+      "sources": ["energy-tolerance", "scalar-parity"]
+    }
+  ],
+  "symbols": [
+    {"id": "m", "latex": "\\mathbf m", "meaning": "reduced magnetization", "si_unit": "1"},
+    {"id": "M", "latex": "\\mathbf M", "meaning": "magnetization", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "Ms", "latex": "M_s", "meaning": "saturation magnetization", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "Aex", "latex": "A_{\\mathrm{ex}}", "meaning": "exchange stiffness", "si_unit": "\\mathrm{J\\,m^{-1}}"},
+    {"id": "alpha", "latex": "\\alpha", "meaning": "Gilbert damping", "si_unit": "1"},
+    {"id": "gamma0", "latex": "\\gamma_0", "meaning": "gyromagnetic coefficient used by Fullmag", "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}"},
+    {"id": "p", "latex": "p", "meaning": "precession selector: dynamics $1$, overdamped relaxation $0$", "si_unit": "1"},
+    {"id": "H_eff", "latex": "\\mathbf H_{\\mathrm{eff}}", "meaning": "effective magnetic field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "H_ex", "latex": "\\mathbf H_{\\mathrm{ex}}", "meaning": "exchange field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "H_demag", "latex": "\\mathbf H_{\\mathrm{demag}}", "meaning": "demagnetizing field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "H_ext", "latex": "\\mathbf H_{\\mathrm{ext}}", "meaning": "applied magnetic field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "Bext", "latex": "\\mathbf B_{\\mathrm{ext}}", "meaning": "applied magnetic flux density", "si_unit": "\\mathrm{T}"},
+    {"id": "mu0", "latex": "\\mu_0", "meaning": "vacuum permeability", "si_unit": "\\mathrm{N\\,A^{-2}}"},
+    {"id": "t", "latex": "t", "meaning": "physical time", "si_unit": "\\mathrm{s}"},
+    {"id": "dt", "latex": "\\Delta t", "meaning": "accepted or fixed time step", "si_unit": "\\mathrm{s}"},
+    {"id": "mmean", "latex": "m_x,m_y,m_z", "meaning": "volume-weighted mean reduced-magnetization components", "si_unit": "1"},
+    {"id": "Eex", "latex": "E_{\\mathrm{ex}}", "meaning": "exchange energy", "si_unit": "\\mathrm{J}"},
+    {"id": "Edemag", "latex": "E_{\\mathrm{demag}}", "meaning": "demagnetization energy", "si_unit": "\\mathrm{J}"},
+    {"id": "Eext", "latex": "E_{\\mathrm{ext}}", "meaning": "Zeeman energy", "si_unit": "\\mathrm{J}"},
+    {"id": "Etotal", "latex": "E_{\\mathrm{total}}", "meaning": "total energy", "si_unit": "\\mathrm{J}"},
+    {"id": "tauMax", "latex": "\\tau_{\\max}", "meaning": "maximum torque proxy published as `max_torque_T`", "si_unit": "\\mathrm{T}"},
+    {"id": "DeltaE", "latex": "\\Delta_E", "meaning": "absolute energy difference", "si_unit": "\\mathrm{J}"},
+    {"id": "aE", "latex": "a_E", "meaning": "absolute energy-comparison allowance", "si_unit": "\\mathrm{J}"},
+    {"id": "rE", "latex": "r_E", "meaning": "relative energy-comparison allowance", "si_unit": "1"},
+    {"id": "Ea", "latex": "E_a,E_b", "meaning": "the same energy observable from two compared runs", "si_unit": "\\mathrm{J}"},
+    {"id": "Eb", "latex": "E_a,E_b", "meaning": "the same energy observable from two compared runs", "si_unit": "\\mathrm{J}"}
+  ],
+  "sources": [
+    {"id": "sp4-contract", "path": "tests/standard_problems/mumag/sp4/common/contract.py", "symbol": "class SP4Contract", "responsibility": "Define canonical SI application constants, cases, mesh levels, and airboxes."},
+    {"id": "energy-tolerance", "path": "tests/standard_problems/mumag/sp4/common/contract.py", "symbol": "class EnergyComparisonTolerance", "responsibility": "Implement the frozen fail-closed absolute-plus-relative energy rule."},
+    {"id": "mixed-qualification-contract", "path": "tests/standard_problems/mumag/sp4/common/contract.py", "symbol": "class MixedP1QualificationContract", "responsibility": "Own frozen mixed-P1 spatial, airbox, operator, and temporal acceptance constants and rules."},
+    {"id": "study-authoring", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyBuilder", "responsibility": "Expose public study authoring and requested runtime intent."},
+    {"id": "thin-film-authoring", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "thin_film", "responsibility": "Validate and lower exact-layer prismatic thin-film controls."},
+    {"id": "relax-authoring", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "add_relax", "responsibility": "Validate relaxation algorithm, stopping policy, and stage-local controls."},
+    {"id": "stage-autosave", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class StageAutosave", "responsibility": "Represent stage-owned table and field outputs."},
+    {"id": "mixed-lowering-test", "path": "tests/standard_problems/mumag/sp4/fem/test_scenarios.py", "symbol": "test_projected_gradient_scenario_requests_one_exact_uniform_prism_layer", "responsibility": "Execute public lowering and assert the exact mixed mesh entry and autosave IR."},
+    {"id": "dynamics-lowering-test", "path": "tests/standard_problems/mumag/sp4/fem/test_scenarios.py", "symbol": "test_dynamics_scenario_uses_common_mumax_like_relaxation_and_named_run_solver", "responsibility": "Assert field, RK policy, stage order, outputs, and strict runtime intent."},
+    {"id": "mixed-planner", "path": "crates/fullmag-plan/src/mesh.rs", "symbol": "validate_mixed_p1_execution_scope", "responsibility": "Reject every tuple outside the bounded strict certificate-bound mixed-P1 scope."},
+    {"id": "mixed-capabilities", "path": "crates/fullmag-runner/src/capabilities.rs", "symbol": "mixed_p1_feature_capabilities", "responsibility": "Publish implemented scope without claiming managed production qualification."},
+    {"id": "cpu-llg-rhs", "path": "backends/fem/cpu/mfem/integrators/llg_rhs.cpp", "symbol": "llg_rhs_aos", "responsibility": "Evaluate the CPU Gilbert RHS with the explicit precession selector."},
+    {"id": "gpu-llg-rhs", "path": "backends/fem/gpu/cuda/integrators/llg/llg_rhs_kernels.cu", "symbol": "fullmag_cuda_llg_rhs_fused", "responsibility": "Dispatch the device-resident fused GPU Gilbert RHS."},
+    {"id": "exchange-operator", "path": "backends/fem/cpu/mfem/interactions/exchange_operator.cpp", "symbol": "initialize_exchange_operator_mfem", "responsibility": "Assemble the topology-aware exchange operator."},
+    {"id": "demag-rhs", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp", "symbol": "assemble_demag_poisson_rhs", "responsibility": "Assemble the magnetic-cell Poisson demagnetization source."},
+    {"id": "matrix-specs", "path": "tests/standard_problems/mumag/sp4/fem/matrix_contract.py", "symbol": "matrix_specs", "responsibility": "Enumerate deterministic staged mixed-relaxation run identities."},
+    {"id": "scalar-parity", "path": "scripts/run_fem_sp4_mixed_matrix.py", "symbol": "_parity_scalar", "responsibility": "Apply a fail-closed absolute-plus-relative scalar comparison."},
+    {"id": "device-pairs", "path": "scripts/run_fem_sp4_mixed_matrix.py", "symbol": "_compare_stage3_pairs", "responsibility": "Compare certificate-bound identical-topology CPU/GPU relaxation pairs."},
+    {"id": "matrix-executor", "path": "scripts/run_fem_sp4_mixed_matrix.py", "symbol": "execute_matrix", "responsibility": "Execute source-bound staged evidence under durable storage."},
+    {"id": "source-identity", "path": "scripts/capture_source_snapshot_identity.py", "symbol": "capture", "responsibility": "Capture content-addressed committed, dirty, and untracked source identity."},
+    {"id": "runtime-verifier", "path": "scripts/verify_fem_mixed_prism_airbox_runtime.py", "symbol": "validate_runtime_artifacts", "responsibility": "Verify mixed topology, fields, energies, device residency, transfers, and provenance."},
+    {"id": "trajectory-metrics", "path": "tests/standard_problems/mumag/sp4/common/metrics.py", "symbol": "trajectory_pair_metrics", "responsibility": "Compute common-grid trajectory RMS, endpoint, and crossing differences."},
+    {"id": "zero-crossing", "path": "tests/standard_problems/mumag/sp4/common/metrics.py", "symbol": "find_first_zero_crossing", "responsibility": "Interpolate the first positive-to-nonpositive mean-mx crossing without extrapolation."},
+    {"id": "vector-map-metrics", "path": "tests/standard_problems/mumag/sp4/common/metrics.py", "symbol": "vector_field_metrics", "responsibility": "Compare SP4 vector maps by component error and directional correlation."},
+    {"id": "relaxation-verifier", "path": "tests/standard_problems/mumag/sp4/fem/verify.py", "symbol": "relaxation_matrix_metrics", "responsibility": "Require ready CPU/GPU relaxation artifacts and three-family basin agreement."},
+    {"id": "results-ledger", "path": "tests/standard_problems/mumag/sp4/fem/collect_results.py", "symbol": "collect_attempt", "responsibility": "Append run provenance and observables to the SP4 results ledger."}
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "StudyBuilder.problem_name",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "non-empty string when supplied",
+        "meaning": "canonical problem identity",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "`problem_meta.name`"
+      },
+      {
+        "python": "StudyBuilder.engine.backend",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "lower-cased authoring string; no immediate enum check; this contract is later rejected unless it resolves to `fem`",
+        "meaning": "requested backend",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.backend`"
+      },
+      {
+        "python": "StudyBuilder.device.spec",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "lower-cased; `cpu`, `gpu`, `cuda`, and `cuda:<integer>` receive structured handling, other strings survive authoring for late validation; a malformed CUDA index raises `ValueError`; qualifying execution resolves explicitly to `cpu` or `gpu`",
+        "meaning": "requested device intent",
+        "backend_support": "FEM CPU/GPU; `auto` is authoring-only for this strict gate",
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.device`"
+      },
+      {
+        "python": "StudyBuilder.device.precision",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "non-`None` strings are lower-cased without immediate enum validation; the mixed-P1 planner later requires `double`",
+        "meaning": "requested arithmetic precision",
+        "backend_support": "FEM CPU/GPU double only",
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.execution_precision`"
+      },
+      {
+        "python": "StudyBuilder.mode.execution_mode",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "one of `strict`, `extended`, or `hybrid`; this contract requires `strict`",
+        "meaning": "fallback policy",
+        "backend_support": "FEM CPU/GPU strict only",
+        "problem_ir": "`problem_meta.runtime_metadata.runtime_selection.execution_mode`"
+      },
+      {
+        "python": "StudyBuilder.interactive.enabled",
+        "type": "bool",
+        "default": "True",
+        "si_unit": "1",
+        "validation": "converted with `bool`; this script supplies `True`",
+        "meaning": "keep the launcher session open",
+        "backend_support": "FEM CPU/GPU authoring",
+        "problem_ir": "`problem_meta.runtime_metadata.interactive_session_requested`"
+      },
+      {
+        "python": "StudyUniverseHandle.__call__.mode",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "effective default `auto`; allowed values are `auto` and `manual`; `manual` requires `size`",
+        "meaning": "declared-domain mode",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.study_universe.mode`"
+      },
+      {
+        "python": "StudyUniverseHandle.__call__.size",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "exactly three finite positive components; required in manual mode",
+        "meaning": "universe dimensions",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.study_universe.size`"
+      },
+      {
+        "python": "StudyUniverseHandle.__call__.center",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "exactly three finite components; omitted value retains `(0,0,0)`",
+        "meaning": "universe center",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.study_universe.center`"
+      },
+      {
+        "python": "StudyUniverseHandle.__call__.padding",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "exactly three finite nonnegative components; omitted value retains `(0,0,0)`",
+        "meaning": "automatic-domain padding",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.study_universe.padding`"
+      },
+      {
+        "python": "StudyUniverseHandle.mesh.minimum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "finite positive and not greater than the maximum when both are supplied",
+        "meaning": "airbox lower size target",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.study_universe.airbox_hmin`"
+      },
+      {
+        "python": "StudyUniverseHandle.mesh.maximum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "finite positive and not smaller than the minimum when both are supplied",
+        "meaning": "airbox upper size target",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.study_universe.airbox_hmax`"
+      },
+      {
+        "python": "StudyUniverseHandle.mesh.maximum_element_growth_rate",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "finite, positive, and at most `2.5`",
+        "meaning": "airbox size-growth bound",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.study_universe.airbox_growth_rate`"
+      },
+      {
+        "python": "StudyUniverseHandle.mesh.hmin",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "compatibility alias used only when `minimum_element_size` is omitted; same positive/order validation",
+        "meaning": "airbox lower size alias",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.study_universe.airbox_hmin`"
+      },
+      {
+        "python": "StudyUniverseHandle.mesh.hmax",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "compatibility alias used only when `maximum_element_size` is omitted; same positive/order validation",
+        "meaning": "airbox upper size alias",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.study_universe.airbox_hmax`"
+      },
+      {
+        "python": "StudyUniverseHandle.mesh.growth_rate",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "compatibility alias used only when `maximum_element_growth_rate` is omitted; finite, positive, at most `2.5`",
+        "meaning": "airbox growth alias",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.study_universe.airbox_growth_rate`"
+      },
+      {
+        "python": "StudyUniverseHandle.mesh.grading",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "one of `auto`, `geometric`, or `linear` after lower-casing",
+        "meaning": "airbox grading policy",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.study_universe.airbox_grading`"
+      },
+      {
+        "python": "Box.size_or_x",
+        "type": "tuple[float,float,float] | float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "either a three-vector or the first positive dimension paired with `y` and `z`; ignored when keyword `size` is supplied",
+        "meaning": "positional box dimensions",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "`geometry.entries[].size`"
+      },
+      {
+        "python": "Box.y",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "finite positive and accepted only with scalar `size_or_x` and `z`",
+        "meaning": "second positional dimension",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "`geometry.entries[].size[1]`"
+      },
+      {
+        "python": "Box.z",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "finite positive and accepted only with scalar `size_or_x` and `y`",
+        "meaning": "third positional dimension",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "`geometry.entries[].size[2]`"
+      },
+      {
+        "python": "Box.size",
+        "type": "tuple[float,float,float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "keyword form requires exactly three finite positive dimensions; one complete size form is required",
+        "meaning": "magnetic-film dimensions",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "`geometry.entries[].size`"
+      },
+      {
+        "python": "Box.name",
+        "type": "str",
+        "default": "\"box\"",
+        "si_unit": "1",
+        "validation": "non-empty string; example supplies `\"film\"`, then geometry registration canonicalizes it to `film_geom`",
+        "meaning": "shape identity",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "`geometry.entries[].name`"
+      },
+      {
+        "python": "StudyBuilder.geometry.shape",
+        "type": "object",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "must lower as a supported geometry; example supplies `Box`",
+        "meaning": "registered magnetic shape",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "`geometry.entries[]`"
+      },
+      {
+        "python": "StudyBuilder.geometry.name",
+        "type": "str",
+        "default": "\"body\"",
+        "si_unit": "1",
+        "validation": "non-empty at materialization; example supplies `\"film\"`",
+        "meaning": "magnet, region, and material identity stem",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "`magnets[].name` and `regions[].name`"
+      },
+      {
+        "python": "MagnetHandle.Ms",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{A\\,m^{-1}}",
+        "validation": "required and finite positive when lowered",
+        "meaning": "saturation magnetization",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`materials[].saturation_magnetisation`"
+      },
+      {
+        "python": "MagnetHandle.Aex",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{J\\,m^{-1}}",
+        "validation": "required and finite positive when lowered",
+        "meaning": "exchange stiffness",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`materials[].exchange_stiffness`"
+      },
+      {
+        "python": "MagnetHandle.alpha",
+        "type": "float",
+        "default": "0.01",
+        "si_unit": "1",
+        "validation": "finite nonnegative when lowered; example supplies `0.02`",
+        "meaning": "Gilbert damping",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`materials[].damping`"
+      },
+      {
+        "python": "MagnetHandle.m",
+        "type": "InitialMagnetization",
+        "default": "unset",
+        "si_unit": "1",
+        "validation": "must be a supported initializer at lowering",
+        "meaning": "initial reduced magnetization",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`magnets[].initial_magnetization`"
+      },
+      {
+        "python": "UniformMagnetization.value",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "exactly three finite components; normalization is performed by the solver path, not this constructor",
+        "meaning": "uniform initial direction",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`magnets[].initial_magnetization.value`"
+      },
+      {
+        "python": "GeometryMeshHandle.thin_film.hmax",
+        "type": "float | \"auto\" | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "compatibility alias used only when `maximum_element_size` is omitted",
+        "meaning": "upper in-plane size alias",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.mesh_workflow.per_geometry[].maximum_element_size`"
+      },
+      {
+        "python": "GeometryMeshHandle.thin_film.hmin",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "compatibility alias used only when `minimum_element_size` is omitted",
+        "meaning": "lower in-plane size alias",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.mesh_workflow.per_geometry[].minimum_element_size`"
+      },
+      {
+        "python": "GeometryMeshHandle.thin_film.minimum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "finite positive length or `None`; baseline supplies `3e-9`",
+        "meaning": "lower authored in-plane target",
+        "backend_support": "FEM CPU/GPU mixed-P1",
+        "problem_ir": "`problem_meta.runtime_metadata.mesh_workflow.per_geometry[].minimum_element_size`"
+      },
+      {
+        "python": "GeometryMeshHandle.thin_film.maximum_element_size",
+        "type": "float | \"auto\" | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "finite positive length, `\"auto\"`, or `None`; baseline supplies `3e-9`",
+        "meaning": "upper authored in-plane target",
+        "backend_support": "FEM CPU/GPU mixed-P1",
+        "problem_ir": "`problem_meta.runtime_metadata.mesh_workflow.per_geometry[].maximum_element_size`"
+      },
+      {
+        "python": "GeometryMeshHandle.thin_film.layers",
+        "type": "int",
+        "default": "1",
+        "si_unit": "1",
+        "validation": "strict mixed-P1 accepts exactly `1`, `2`, or `3`",
+        "meaning": "prism cells through film thickness",
+        "backend_support": "FEM CPU/GPU mixed-P1",
+        "problem_ir": "`problem_meta.runtime_metadata.mesh_workflow.per_geometry[].through_thickness_elements`"
+      },
+      {
+        "python": "GeometryMeshHandle.thin_film.topology",
+        "type": "\"tetrahedral\" | \"prismatic\" | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "mixed-P1 requires `\"prismatic\"`",
+        "meaning": "requested volume-cell family",
+        "backend_support": "FEM CPU/GPU mixed-P1",
+        "problem_ir": "`problem_meta.runtime_metadata.mesh_workflow.per_geometry[].topology`"
+      },
+      {
+        "python": "GeometryMeshHandle.thin_film.exact_layers",
+        "type": "bool | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "strict prismatic execution resolves `None` to `True` and rejects `False`",
+        "meaning": "require requested and realized layer equality",
+        "backend_support": "FEM CPU/GPU mixed-P1",
+        "problem_ir": "`problem_meta.runtime_metadata.mesh_workflow.per_geometry[].exact_layer_count`"
+      },
+      {
+        "python": "GeometryMeshHandle.thin_film.transition",
+        "type": "\"pyramid_to_tetrahedra\" | \"reject\" | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "shared mixed domain requires `\"pyramid_to_tetrahedra\"`",
+        "meaning": "conforming air transition",
+        "backend_support": "FEM CPU/GPU mixed-P1",
+        "problem_ir": "`problem_meta.runtime_metadata.mesh_workflow.per_geometry[].transition_policy`"
+      },
+      {
+        "python": "GeometryMeshHandle.thin_film.order",
+        "type": "int | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "mixed-P1 accepts only `None` or `1`",
+        "meaning": "finite-element order",
+        "backend_support": "FEM CPU/GPU mixed-P1",
+        "problem_ir": "`problem_meta.runtime_metadata.mesh_workflow.per_geometry[].order`"
+      },
+      {
+        "python": "GeometryMeshHandle.thin_film.curvature_factor",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "finite positive when supplied",
+        "meaning": "curvature-based sizing factor",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.mesh_workflow.per_geometry[].curvature_factor`"
+      },
+      {
+        "python": "GeometryMeshHandle.thin_film.narrow_region_resolution",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "finite positive when supplied",
+        "meaning": "narrow-region target",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.mesh_workflow.per_geometry[].narrow_region_resolution`"
+      },
+      {
+        "python": "GeometryMeshHandle.thin_film.interface_maximum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "finite positive; overridden by `surface_maximum_element_size`",
+        "meaning": "interface size target",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.mesh_workflow.per_geometry[].interface_hmax`"
+      },
+      {
+        "python": "GeometryMeshHandle.thin_film.surface_maximum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "finite positive; canonical alias with precedence over interface spelling",
+        "meaning": "surface size target",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.mesh_workflow.per_geometry[].interface_hmax`"
+      },
+      {
+        "python": "GeometryMeshHandle.thin_film.interface_thickness",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "finite positive; overridden by `surface_thickness`",
+        "meaning": "interface refinement thickness",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.mesh_workflow.per_geometry[].interface_thickness`"
+      },
+      {
+        "python": "GeometryMeshHandle.thin_film.surface_thickness",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "finite positive; canonical alias with precedence over interface spelling",
+        "meaning": "surface refinement thickness",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.mesh_workflow.per_geometry[].interface_thickness`"
+      },
+      {
+        "python": "GeometryMeshHandle.thin_film.transition_distance",
+        "type": "float | \"airbox_boundary\" | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "nonnegative finite length or accepted airbox-boundary alias; overridden by surface spelling",
+        "meaning": "interface transition distance",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.mesh_workflow.per_geometry[].transition_distance`"
+      },
+      {
+        "python": "GeometryMeshHandle.thin_film.surface_transition_distance",
+        "type": "float | \"airbox_boundary\" | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "nonnegative finite length or accepted airbox-boundary alias; has precedence",
+        "meaning": "surface transition distance",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.mesh_workflow.per_geometry[].transition_distance`"
+      },
+      {
+        "python": "GeometryMeshHandle.thin_film.edge_maximum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "finite positive; requires an edge thickness after resolution",
+        "meaning": "edge size target",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.mesh_workflow.per_geometry[].edge_hmax`"
+      },
+      {
+        "python": "GeometryMeshHandle.thin_film.edge_thickness",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "finite positive, paired with edge size, and for boxes smaller than half the smaller in-plane dimension",
+        "meaning": "edge refinement thickness",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.mesh_workflow.per_geometry[].edge_thickness`"
+      },
+      {
+        "python": "GeometryMeshHandle.thin_film.edge_transition_distance",
+        "type": "float | \"airbox_boundary\" | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "nonnegative finite length or accepted alias; requires active edge refinement",
+        "meaning": "edge transition distance",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.mesh_workflow.per_geometry[].edge_transition_distance`"
+      },
+      {
+        "python": "GeometryMeshHandle.thin_film.corner_maximum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "finite positive, paired with corner extent, and no larger than active edge size",
+        "meaning": "corner size target",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.mesh_workflow.per_geometry[].corner_hmax`"
+      },
+      {
+        "python": "GeometryMeshHandle.thin_film.corner_extent",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "finite positive, paired with corner size, and for boxes smaller than half the smaller in-plane dimension",
+        "meaning": "corner refinement extent",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.mesh_workflow.per_geometry[].corner_extent`"
+      },
+      {
+        "python": "GeometryMeshHandle.thin_film.corner_transition_distance",
+        "type": "float | \"airbox_boundary\" | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "nonnegative finite length or accepted alias; requires active corner refinement",
+        "meaning": "corner transition distance",
+        "backend_support": "FEM CPU/GPU meshing",
+        "problem_ir": "`problem_meta.runtime_metadata.mesh_workflow.per_geometry[].corner_transition_distance`"
+      },
+      {
+        "python": "StudyBuilder.demag.enabled",
+        "type": "bool",
+        "default": "True",
+        "si_unit": "1",
+        "validation": "converted with `bool`",
+        "meaning": "enable demagnetization",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "presence of `energy_terms[kind=demag]`"
+      },
+      {
+        "python": "StudyBuilder.demag.model",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "supported canonical model; mutually exclusive with `realization`",
+        "meaning": "demag model family",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "normalized into `energy_terms[].realization`"
+      },
+      {
+        "python": "StudyBuilder.demag.variant",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "requires a compatible `model`; airbox accepts its declared variants",
+        "meaning": "model variant",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "normalized into `energy_terms[].realization`"
+      },
+      {
+        "python": "StudyBuilder.demag.realization",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "legacy realization must be an allowed demag identifier and cannot be mixed with `model`; example supplies `poisson_robin`",
+        "meaning": "open-boundary demag realization",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`energy_terms[].realization`"
+      },
+      {
+        "python": "StudyBuilder.fem_demag_solver.solver",
+        "type": "\"CG\" | \"GMRES\"",
+        "default": "\"CG\"",
+        "si_unit": "1",
+        "validation": "exactly `CG` or `GMRES`",
+        "meaning": "Poisson linear solver",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy.solver`"
+      },
+      {
+        "python": "StudyBuilder.fem_demag_solver.preconditioner",
+        "type": "\"AMG\" | \"JACOBI\" | \"NONE\"",
+        "default": "\"AMG\"",
+        "si_unit": "1",
+        "validation": "exactly one supported identifier",
+        "meaning": "Poisson preconditioner",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy.preconditioner`"
+      },
+      {
+        "python": "StudyBuilder.fem_demag_solver.rtol",
+        "type": "float",
+        "default": "1e-8",
+        "si_unit": "1",
+        "validation": "finite positive; example supplies `1e-12`",
+        "meaning": "relative linear residual target",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy.rtol`"
+      },
+      {
+        "python": "StudyBuilder.fem_demag_solver.atol",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "solver-residual unit",
+        "validation": "finite positive when supplied",
+        "meaning": "absolute linear residual target",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy.atol`"
+      },
+      {
+        "python": "StudyBuilder.fem_demag_solver.max_iterations",
+        "type": "int",
+        "default": "500",
+        "si_unit": "1",
+        "validation": "integer at least `1`",
+        "meaning": "linear iteration ceiling",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy.max_iterations`"
+      },
+      {
+        "python": "StudyBuilder.fem_demag_solver.print_level",
+        "type": "int",
+        "default": "0",
+        "si_unit": "1",
+        "validation": "nonnegative integer",
+        "meaning": "native solver verbosity",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy.print_level`"
+      },
+      {
+        "python": "StudyBuilder.build_domain_mesh()",
+        "type": "call",
+        "default": "n/a",
+        "si_unit": "1",
+        "validation": "accepts no arguments; marks explicit shared-domain construction requested",
+        "meaning": "materialize domain mesh",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`problem_meta.runtime_metadata.mesh_workflow.build_requested` and `.build_target`"
+      },
+      {
+        "python": "StudyStagesBuilder.add_relax.stage_id",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "non-empty and unique when supplied",
+        "meaning": "stage identity",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`problem_meta.runtime_metadata.active_stage_id` and `study_pipeline.nodes[].id`"
+      },
+      {
+        "python": "StudyStagesBuilder.add_relax.algorithm",
+        "type": "str",
+        "default": "\"llg_overdamped\"",
+        "si_unit": "1",
+        "validation": "bounded values are `llg_overdamped`, `projected_gradient_bb`, and `nonlinear_cg`; other algorithms are rejected by this scope",
+        "meaning": "relaxation family",
+        "backend_support": "FEM CPU/GPU bounded scope",
+        "problem_ir": "`study.algorithm`"
+      },
+      {
+        "python": "StudyStagesBuilder.add_relax.max_steps",
+        "type": "int",
+        "default": "50000",
+        "si_unit": "1",
+        "validation": "positive integer; production scenario explicitly supplies `50000`",
+        "meaning": "accepted-step ceiling",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`study.stop.max_steps`"
+      },
+      {
+        "python": "StudyStagesBuilder.add_relax.tol",
+        "type": "float",
+        "default": "1e-4",
+        "si_unit": "\\mathrm{A\\,m^{-1}}",
+        "validation": "finite positive torque threshold; scenario supplies `7.957747154594767`",
+        "meaning": "relaxation stop threshold",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`study.stop.torque_tolerance_apm`"
+      },
+      {
+        "python": "StudyStagesBuilder.add_relax.energy_tolerance",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm J",
+        "validation": "finite positive when supplied; must agree with explicit `stop`",
+        "meaning": "energy stop threshold",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`study.stop.energy_tolerance_j`"
+      },
+      {
+        "python": "StudyStagesBuilder.add_relax.max_relaxation_time_s",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm s",
+        "validation": "finite positive; LLG-overdamped only; aliases must agree",
+        "meaning": "relaxation pseudotime ceiling",
+        "backend_support": "FEM CPU/GPU LLG relaxation",
+        "problem_ir": "`study.stop.max_relaxation_time_s`"
+      },
+      {
+        "python": "StudyStagesBuilder.add_relax.max_pseudotime_s",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm s",
+        "validation": "compatibility alias for `max_relaxation_time_s`; conflicting aliases raise",
+        "meaning": "relaxation pseudotime alias",
+        "backend_support": "FEM CPU/GPU LLG relaxation",
+        "problem_ir": "`study.stop.max_relaxation_time_s`"
+      },
+      {
+        "python": "StudyStagesBuilder.add_relax.max_physical_time_s",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm s",
+        "validation": "compatibility alias despite historical name; conflicting aliases raise",
+        "meaning": "relaxation-time alias",
+        "backend_support": "FEM CPU/GPU LLG relaxation",
+        "problem_ir": "`study.stop.max_relaxation_time_s`"
+      },
+      {
+        "python": "StudyStagesBuilder.add_relax.relax_alpha",
+        "type": "float | None",
+        "default": "`1.0` for LLG, otherwise `None`",
+        "si_unit": "1",
+        "validation": "numeric override accepted only by `llg_overdamped`; direct minimizers reject it",
+        "meaning": "stage-local damping",
+        "backend_support": "FEM CPU/GPU LLG relaxation",
+        "problem_ir": "`materials[].damping` in the relaxation-stage IR"
+      },
+      {
+        "python": "StudyStagesBuilder.add_relax.solver",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "LLG-overdamped only; resolves a supported explicit RK integrator; direct minimizers reject it",
+        "meaning": "relaxation integrator",
+        "backend_support": "FEM CPU/GPU LLG relaxation",
+        "problem_ir": "`study.dynamics.integrator`"
+      },
+      {
+        "python": "StudyStagesBuilder.add_relax.dt",
+        "type": "float | \"auto\" | None",
+        "default": "None",
+        "si_unit": "\\mathrm s",
+        "validation": "deprecated fixed/auto control; positive fixed value or `auto`; mutually exclusive with canonical adaptive controls",
+        "meaning": "relaxation timestep policy",
+        "backend_support": "FEM CPU/GPU LLG relaxation",
+        "problem_ir": "`study.dynamics.fixed_timestep` or adaptive policy"
+      },
+      {
+        "python": "StudyStagesBuilder.add_relax.max_error",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "state-error norm",
+        "validation": "deprecated positive alias for `max_err`; cannot be combined with `max_err` or `dt_initial`",
+        "meaning": "adaptive error threshold alias",
+        "backend_support": "FEM CPU/GPU adaptive LLG",
+        "problem_ir": "`study.dynamics.adaptive_timestep.atol`"
+      },
+      {
+        "python": "StudyStagesBuilder.add_relax.dt_min",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm s",
+        "validation": "positive; adaptive stepping only; executable adaptive stages require it explicitly",
+        "meaning": "minimum adaptive step",
+        "backend_support": "FEM CPU/GPU adaptive LLG",
+        "problem_ir": "`study.dynamics.adaptive_timestep.dt_min`"
+      },
+      {
+        "python": "StudyStagesBuilder.add_relax.dt_max",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm s",
+        "validation": "positive; adaptive stepping only; executable adaptive stages require it explicitly",
+        "meaning": "maximum adaptive step",
+        "backend_support": "FEM CPU/GPU adaptive LLG",
+        "problem_ir": "`study.dynamics.adaptive_timestep.dt_max`"
+      },
+      {
+        "python": "StudyStagesBuilder.add_relax.dt_initial",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm s",
+        "validation": "positive and requires `max_err`; cannot mix with deprecated `dt`/`max_error`",
+        "meaning": "initial adaptive step",
+        "backend_support": "FEM CPU/GPU adaptive LLG",
+        "problem_ir": "`study.dynamics.adaptive_timestep.dt_initial`"
+      },
+      {
+        "python": "StudyStagesBuilder.add_relax.max_err",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "state-error norm",
+        "validation": "positive; requires adaptive RK23/RK45 and explicit `dt_min`/`dt_max`",
+        "meaning": "adaptive maximum error",
+        "backend_support": "FEM CPU/GPU adaptive LLG",
+        "problem_ir": "`study.dynamics.adaptive_timestep.atol` with `tolerance_mode=max_error`"
+      },
+      {
+        "python": "StudyStagesBuilder.add_relax.adaptive_timestep",
+        "type": "AdaptiveTimestep | None",
+        "default": "None",
+        "si_unit": "mixed",
+        "validation": "exact object type; adaptive RK23/RK45 only; mutually exclusive with scalar timestep controls and must carry explicit limits for executable stages",
+        "meaning": "canonical adaptive policy",
+        "backend_support": "FEM CPU/GPU adaptive LLG",
+        "problem_ir": "`study.dynamics.adaptive_timestep`"
+      },
+      {
+        "python": "StudyStagesBuilder.add_relax.field_refresh",
+        "type": "FieldRefreshPolicy | None",
+        "default": "None",
+        "si_unit": "mixed",
+        "validation": "LLG-overdamped only; must satisfy `FieldRefreshPolicy` validation",
+        "meaning": "interaction refresh policy",
+        "backend_support": "FEM CPU/GPU LLG relaxation",
+        "problem_ir": "`study.dynamics.field_refresh`"
+      },
+      {
+        "python": "StudyStagesBuilder.add_relax.stop",
+        "type": "RelaxStop | None",
+        "default": "None",
+        "si_unit": "mixed",
+        "validation": "exact stop object; scalar aliases must agree and at least one criterion remains",
+        "meaning": "canonical stopping policy",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`study.stop`"
+      },
+      {
+        "python": "RelaxStageBuilder.autosave.policy",
+        "type": "StageAutosave",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "exact `StageAutosave`; one policy per relaxation stage; every cadence must be accepted-step based",
+        "meaning": "bind outputs to relaxation stage",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`study.sampling.stage_autosave`"
+      },
+      {
+        "python": "StageAutosave.target",
+        "type": "str",
+        "default": "\"main\"",
+        "si_unit": "1",
+        "validation": "non-empty safe artifact identifier",
+        "meaning": "output target",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`study.sampling.stage_autosave.target`"
+      },
+      {
+        "python": "StageAutosave.layout",
+        "type": "str",
+        "default": "\"continuous\"",
+        "si_unit": "1",
+        "validation": "`continuous` or `separate`",
+        "meaning": "logical sample layout",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`study.sampling.stage_autosave.layout`"
+      },
+      {
+        "python": "StageAutosave.format",
+        "type": "str",
+        "default": "\"zarr\"",
+        "si_unit": "1",
+        "validation": "`zarr`, `hdf5`, or `txt`; `txt` rejects fields",
+        "meaning": "artifact format",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`study.sampling.stage_autosave.format`"
+      },
+      {
+        "python": "StageAutosave.table",
+        "type": "TableAutosave | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "must be `TableAutosave`; at least a table or one field is required",
+        "meaning": "scalar-output policy",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`study.sampling.stage_autosave.table`"
+      },
+      {
+        "python": "StageAutosave.fields",
+        "type": "Sequence[FieldAutosave]",
+        "default": "()",
+        "si_unit": "1",
+        "validation": "only `FieldAutosave`, without duplicate quantities",
+        "meaning": "field-output policies",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`study.sampling.stage_autosave.fields`"
+      },
+      {
+        "python": "TableAutosave.t_sampl",
+        "type": "float | \"auto\" | None",
+        "default": "None",
+        "si_unit": "\\mathrm s",
+        "validation": "exactly one of `t_sampl` and `every_steps` is required; positive finite seconds or `auto`",
+        "meaning": "physical-time table cadence",
+        "backend_support": "FEM CPU/GPU run stages",
+        "problem_ir": "`study.sampling.stage_autosave.table.sample_period_s` or `.sample_period_policy`"
+      },
+      {
+        "python": "TableAutosave.every_steps",
+        "type": "int | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "exactly one of `every_steps` and `t_sampl` is required; positive non-boolean integer",
+        "meaning": "accepted-step table cadence",
+        "backend_support": "FEM CPU/GPU relaxation stages",
+        "problem_ir": "`study.sampling.stage_autosave.table.every_steps`"
+      },
+      {
+        "python": "TableAutosave.quantities",
+        "type": "Sequence[str] | None",
+        "default": "None",
+        "si_unit": "mixed",
+        "validation": "supported non-empty canonical quantity IDs; `None` uses the default set",
+        "meaning": "scalar columns",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`study.sampling.stage_autosave.table.quantities`"
+      },
+      {
+        "python": "TableAutosave.extra_quantities",
+        "type": "Sequence[str]",
+        "default": "()",
+        "si_unit": "mixed",
+        "validation": "every identifier must be supported; duplicates are removed stably",
+        "meaning": "appended scalar columns",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "merged into `study.sampling.stage_autosave.table.quantities`"
+      },
+      {
+        "python": "TableAutosave.table_id",
+        "type": "str",
+        "default": "\"default\"",
+        "si_unit": "1",
+        "validation": "non-empty string",
+        "meaning": "table identity",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`study.sampling.stage_autosave.table.table_id`"
+      },
+      {
+        "python": "FieldAutosave.quantity",
+        "type": "str",
+        "default": "required",
+        "si_unit": "quantity-defined",
+        "validation": "non-empty supported field identifier",
+        "meaning": "field to save",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`study.sampling.stage_autosave.fields[].quantity`"
+      },
+      {
+        "python": "FieldAutosave.every",
+        "type": "float | \"auto\" | None",
+        "default": "None",
+        "si_unit": "\\mathrm s",
+        "validation": "exactly one of `every` and `every_steps` is required; positive finite seconds or `auto`",
+        "meaning": "physical-time field cadence",
+        "backend_support": "FEM CPU/GPU run stages",
+        "problem_ir": "`study.sampling.stage_autosave.fields[].every_seconds` or `.sample_period_policy`"
+      },
+      {
+        "python": "FieldAutosave.every_steps",
+        "type": "int | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "exactly one of `every_steps` and `every` is required; positive non-boolean integer",
+        "meaning": "accepted-step field cadence",
+        "backend_support": "FEM CPU/GPU relaxation stages",
+        "problem_ir": "`study.sampling.stage_autosave.fields[].every_steps`"
+      }
+    ]
+  }
+}

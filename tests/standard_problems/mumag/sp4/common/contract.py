@@ -35,6 +35,118 @@ class AirboxVariant:
 
 
 @dataclass(frozen=True)
+class EnergyComparisonTolerance:
+    atol_j: float
+    rtol: float
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.atol_j) or self.atol_j < 0.0:
+            raise ValueError("energy absolute tolerance must be finite and nonnegative")
+        if not math.isfinite(self.rtol) or self.rtol < 0.0:
+            raise ValueError("energy relative tolerance must be finite and nonnegative")
+
+    def accepts(self, left_j: float, right_j: float) -> bool:
+        if not math.isfinite(left_j) or not math.isfinite(right_j):
+            return False
+        delta = abs(left_j - right_j)
+        allowed = self.atol_j + self.rtol * max(abs(left_j), abs(right_j))
+        return delta <= allowed
+
+
+@dataclass(frozen=True)
+class MixedP1QualificationContract:
+    mesh_energy: EnergyComparisonTolerance
+    airbox_energy: EnergyComparisonTolerance
+    operator_energy: EnergyComparisonTolerance
+    fixed_finest_dt_pair_s: tuple[float, float]
+    adaptive_finest_max_err_pair: tuple[float, float]
+    component_rms_max: float
+    component_p99_max: float
+    component_endpoint_max: float
+    crossing_delta_max_s: float
+    energy_trajectory_relative_rms_max: float
+    temporal_energy_endpoint: EnergyComparisonTolerance
+
+    def __post_init__(self) -> None:
+        for name, tolerance in (
+            ("mesh_energy", self.mesh_energy),
+            ("airbox_energy", self.airbox_energy),
+            ("operator_energy", self.operator_energy),
+            ("temporal_energy_endpoint", self.temporal_energy_endpoint),
+        ):
+            if not isinstance(tolerance, EnergyComparisonTolerance):
+                raise TypeError(f"{name} must be EnergyComparisonTolerance")
+        for name, pair in (
+            ("fixed_finest_dt_pair_s", self.fixed_finest_dt_pair_s),
+            ("adaptive_finest_max_err_pair", self.adaptive_finest_max_err_pair),
+        ):
+            if not isinstance(pair, tuple):
+                raise TypeError(f"{name} must be an immutable tuple")
+            if (
+                len(pair) != 2
+                or not all(math.isfinite(value) and value > 0.0 for value in pair)
+                or pair[0] <= pair[1]
+            ):
+                raise ValueError(
+                    f"{name} must contain exactly two finite positive values "
+                    "ordered coarser to finer"
+                )
+        for name, value in (
+            ("component_rms_max", self.component_rms_max),
+            ("component_p99_max", self.component_p99_max),
+            ("component_endpoint_max", self.component_endpoint_max),
+            ("crossing_delta_max_s", self.crossing_delta_max_s),
+            (
+                "energy_trajectory_relative_rms_max",
+                self.energy_trajectory_relative_rms_max,
+            ),
+        ):
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be finite and nonnegative")
+
+    def temporal_accepts(
+        self,
+        *,
+        component_rms: tuple[float, float, float],
+        component_p99: tuple[float, float, float],
+        component_endpoint: tuple[float, float, float],
+        crossing_delta_s: float,
+        energy_relative_rms: tuple[float, float, float],
+        energy_endpoint_pairs_j: tuple[
+            tuple[float, float], tuple[float, float], tuple[float, float]
+        ],
+    ) -> bool:
+        triplets = (
+            component_rms,
+            component_p99,
+            component_endpoint,
+            energy_relative_rms,
+            energy_endpoint_pairs_j,
+        )
+        if any(len(values) != 3 for values in triplets):
+            return False
+        if any(len(pair) != 2 for pair in energy_endpoint_pairs_j):
+            return False
+        bounded_metrics = (
+            (component_rms, self.component_rms_max),
+            (component_p99, self.component_p99_max),
+            (component_endpoint, self.component_endpoint_max),
+            (energy_relative_rms, self.energy_trajectory_relative_rms_max),
+        )
+        if any(
+            not all(math.isfinite(value) and 0.0 <= value <= limit for value in values)
+            for values, limit in bounded_metrics
+        ):
+            return False
+        if not math.isfinite(crossing_delta_s) or abs(crossing_delta_s) > self.crossing_delta_max_s:
+            return False
+        return all(
+            self.temporal_energy_endpoint.accepts(left_j, right_j)
+            for left_j, right_j in energy_endpoint_pairs_j
+        )
+
+
+@dataclass(frozen=True)
 class SP4Contract:
     dimensions_m: tuple[float, float, float]
     ms_a_per_m: float
@@ -81,6 +193,21 @@ CONTRACT = SP4Contract(
         AirboxVariant("baseline", (700e-9, 250e-9, 250e-9), 20e-9),
         AirboxVariant("expanded", (1000e-9, 500e-9, 500e-9), 20e-9),
     ),
+)
+
+
+MIXED_P1_QUALIFICATION = MixedP1QualificationContract(
+    mesh_energy=EnergyComparisonTolerance(atol_j=2e-19, rtol=2e-2),
+    airbox_energy=EnergyComparisonTolerance(atol_j=1e-19, rtol=1e-2),
+    operator_energy=EnergyComparisonTolerance(atol_j=1e-30, rtol=1e-6),
+    fixed_finest_dt_pair_s=(2e-14, 1e-14),
+    adaptive_finest_max_err_pair=(1e-6, 1e-7),
+    component_rms_max=0.01,
+    component_p99_max=0.03,
+    component_endpoint_max=0.01,
+    crossing_delta_max_s=5e-12,
+    energy_trajectory_relative_rms_max=0.01,
+    temporal_energy_endpoint=EnergyComparisonTolerance(atol_j=1e-19, rtol=1e-2),
 )
 
 
