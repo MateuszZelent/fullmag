@@ -2302,6 +2302,7 @@ class _WorldState:
 
     # Shared geometry/mesh asset cache for flat scripts.
     _geometry_asset_cache: dict[str, dict[str, object] | None] = field(default_factory=dict)
+    _active_mesh_artifact: object | None = None
     _default_mesh_spec: _MeshSpecState = field(default_factory=_MeshSpecState)
     _script_source_root: Path | None = None
     _declared_stages: list[CapturedStage] = field(default_factory=list)
@@ -4468,6 +4469,152 @@ class StudyObjectsHandle:
         self.mesh = StudyObjectsMeshHandle(owner)
 
 
+@dataclass(frozen=True, slots=True)
+class MeshPersistenceResult:
+    action: str
+    path: Path
+    topology_fingerprint: str
+    authoring_fingerprint: str
+    mismatch_reasons: tuple[str, ...] = ()
+
+
+class StudyMeshHandle:
+    """Persistence and interchange facade for the study's realized FEM mesh."""
+
+    def __init__(self, owner: "StudyBuilder") -> None:
+        self._owner = owner
+
+    def _current_artifact(self):
+        from fullmag.meshing.persistence import MeshArtifact, mesh_data_from_ir
+
+        active = _state._active_mesh_artifact
+        if isinstance(active, MeshArtifact):
+            return active
+        assets = _build_explicit_mesh_assets()
+        domain = (assets or {}).get("fem_domain_mesh_asset")
+        if not isinstance(domain, Mapping) or not isinstance(domain.get("mesh"), Mapping):
+            raise ValueError("study.mesh requires a realized shared-domain FEM mesh")
+        mesh_ir = domain["mesh"]
+        mesh = mesh_data_from_ir(mesh_ir)
+        boundary_map = _boundary_semantic_map(mesh)
+        return MeshArtifact(
+            mesh=mesh,
+            mesh_name=str(mesh_ir.get("mesh_name", "study_domain")),
+            authoring_document=_current_mesh_authoring_document(),
+            authoring_fingerprint="",
+            topology_fingerprint=mesh.topology_fingerprint_v3(),
+            region_markers=[dict(entry) for entry in domain.get("region_markers", [])],
+            object_region_markers=[
+                dict(entry) for entry in domain.get("object_region_markers", [])
+            ],
+            boundary_map=boundary_map,
+            build_report=(
+                dict(domain["build_report"])
+                if isinstance(domain.get("build_report"), Mapping)
+                else None
+            ),
+            provenance={"origin": "generated"},
+        )
+
+    def save(self, path: str | Path) -> Path:
+        from fullmag.meshing.persistence import save_mesh_artifact
+
+        artifact = self._current_artifact()
+        saved = save_mesh_artifact(
+            path,
+            mesh=artifact.mesh,
+            mesh_name=artifact.mesh_name,
+            authoring_document=_current_mesh_authoring_document(),
+            region_markers=artifact.region_markers,
+            object_region_markers=artifact.object_region_markers,
+            boundary_map=artifact.boundary_map,
+            build_report=artifact.build_report,
+            provenance=artifact.provenance,
+        )
+        return saved
+
+    def load(self, path: str | Path) -> MeshPersistenceResult:
+        from fullmag.meshing.persistence import load_mesh_artifact
+
+        artifact = load_mesh_artifact(
+            path,
+            expected_authoring_document=_current_mesh_authoring_document(),
+        )
+        _bind_mesh_artifact(artifact, Path(path))
+        return MeshPersistenceResult(
+            action="loaded",
+            path=Path(path),
+            topology_fingerprint=artifact.topology_fingerprint,
+            authoring_fingerprint=artifact.authoring_fingerprint,
+        )
+
+    def save_or_load(self, path: str | Path) -> MeshPersistenceResult:
+        from fullmag.meshing.persistence import (
+            MeshConfigurationMismatch,
+            load_mesh_artifact,
+        )
+
+        target = Path(path)
+        differences: tuple[str, ...] = ()
+        if target.exists():
+            try:
+                artifact = load_mesh_artifact(
+                    target,
+                    expected_authoring_document=_current_mesh_authoring_document(),
+                )
+            except MeshConfigurationMismatch as exc:
+                differences = exc.differences
+            else:
+                _bind_mesh_artifact(artifact, target)
+                return MeshPersistenceResult(
+                    action="loaded",
+                    path=target,
+                    topology_fingerprint=artifact.topology_fingerprint,
+                    authoring_fingerprint=artifact.authoring_fingerprint,
+                )
+        self.save(target)
+        artifact = load_mesh_artifact(target)
+        _bind_mesh_artifact(artifact, target)
+        return MeshPersistenceResult(
+            action="saved",
+            path=target,
+            topology_fingerprint=artifact.topology_fingerprint,
+            authoring_fingerprint=artifact.authoring_fingerprint,
+            mismatch_reasons=differences,
+        )
+
+    def export(self, path: str | Path, *, format: str = "auto") -> Path:
+        from fullmag.meshing.persistence import export_gmsh_mesh
+
+        if format not in {"auto", "gmsh"}:
+            raise ValueError("study.mesh.export() supports format='auto' or 'gmsh'")
+        return export_gmsh_mesh(self._current_artifact(), path)
+
+    def import_(
+        self,
+        path: str | Path,
+        *,
+        region_map: Mapping[str, int] | None = None,
+        boundary_map: Mapping[str, int] | None = None,
+        coordinate_unit: str | None = None,
+    ) -> MeshPersistenceResult:
+        from fullmag.meshing.persistence import import_gmsh_mesh
+
+        artifact = import_gmsh_mesh(
+            path,
+            region_map=region_map,
+            boundary_map=boundary_map,
+            coordinate_unit=coordinate_unit,
+        )
+        _bind_mesh_artifact(artifact, Path(path))
+        return MeshPersistenceResult(
+            action="imported",
+            path=Path(path),
+            topology_fingerprint=artifact.topology_fingerprint,
+            authoring_fingerprint=artifact.authoring_fingerprint,
+        )
+
+
 class StudyCouplingsHandle:
     def __init__(self, owner: "StudyBuilder") -> None:
         self._owner = owner
@@ -4567,6 +4714,7 @@ class StudyBuilder:
         self.universe = StudyUniverseHandle(self)
         self.airbox = StudyAirboxHandle(self)
         self.objects = StudyObjectsHandle(self)
+        self.mesh = StudyMeshHandle(self)
         self.couplings = StudyCouplingsHandle(self)
         self.regions = StudyRegionRegistry()
         if problem_name is not None:
@@ -6509,7 +6657,94 @@ def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
     return mesh_workflow
 
 
-def _build_explicit_mesh_assets() -> None:
+def _current_mesh_authoring_document() -> dict[str, object]:
+    from fullmag.meshing.persistence import MeshArtifact
+
+    if isinstance(_state._active_mesh_artifact, MeshArtifact):
+        return dict(_state._active_mesh_artifact.authoring_document)
+    geometries = _collect_flat_geometries()
+    geometry_payloads: list[dict[str, object]] = []
+    for geometry in geometries:
+        payload = dict(geometry.to_ir())
+        source = payload.get("source")
+        if isinstance(source, str):
+            source_path = Path(source).expanduser()
+            if not source_path.is_absolute():
+                source_path = _mesh_source_root() / source_path
+            if source_path.is_file():
+                import hashlib
+
+                payload["source_sha256"] = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        geometry_payloads.append(payload)
+    fem_hint = _resolve_flat_fem_hint()
+    workflow = _collect_mesh_workflow_metadata()
+    if isinstance(workflow, dict):
+        workflow = {
+            key: value
+            for key, value in workflow.items()
+            if key not in {"domain_mesh_source", "domain_region_markers", "domain_object_region_markers"}
+        }
+    return {
+        "geometries": geometry_payloads,
+        "fem": fem_hint.to_ir() if fem_hint is not None else None,
+        "study_universe": (
+            _state._study_universe.to_ir() if _state._study_universe is not None else None
+        ),
+        "mesh_workflow": workflow,
+        "object_regions": [
+            region.to_ir()
+            for handle in _state._magnets
+            for region in handle._object_regions
+        ],
+    }
+
+
+def _boundary_semantic_map(mesh: object) -> dict[str, int]:
+    markers = getattr(mesh, "boundary_markers")
+    roles = getattr(mesh, "facet_roles")
+    result: dict[str, int] = {}
+    for marker in sorted(set(int(value) for value in markers.tolist())):
+        marker_roles = sorted(
+            set(str(value) for value in roles[markers == marker].tolist())
+        )
+        role = marker_roles[0] if len(marker_roles) == 1 else "boundary"
+        result[f"{role}_{marker}"] = marker
+    return result
+
+
+def _bind_mesh_artifact(artifact: object, source: Path) -> None:
+    _state._active_mesh_artifact = artifact
+    _state._domain_mesh_source = str(source)
+    _state._domain_region_markers = [dict(entry) for entry in artifact.region_markers]
+    _state._domain_object_region_markers = [
+        dict(entry) for entry in artifact.object_region_markers
+    ]
+    _state._extra_runtime_metadata["mesh_persistence"] = {
+        "source": str(source),
+        "origin": (artifact.provenance or {}).get("origin", "native_load"),
+        "topology_fingerprint": artifact.topology_fingerprint,
+        "authoring_fingerprint": artifact.authoring_fingerprint,
+    }
+
+
+def _build_explicit_mesh_assets() -> dict[str, Any] | None:
+    from fullmag.meshing.persistence import MeshArtifact
+
+    active = _state._active_mesh_artifact
+    if isinstance(active, MeshArtifact):
+        domain_asset: dict[str, object] = {
+            "mesh_source": str(_state._domain_mesh_source) if _state._domain_mesh_source else None,
+            "mesh": active.mesh.to_ir(active.mesh_name),
+            "region_markers": [dict(entry) for entry in active.region_markers],
+            "object_region_markers": [dict(entry) for entry in active.object_region_markers],
+        }
+        if active.build_report is not None:
+            domain_asset["build_report"] = dict(active.build_report)
+        return {
+            "fdm_grid_assets": [],
+            "fem_mesh_assets": [],
+            "fem_domain_mesh_asset": domain_asset,
+        }
     geometries = _collect_flat_geometries()
     if not geometries:
         raise ValueError("No geometries defined — call fm.geometry(...) before build_mesh()")
@@ -6537,6 +6772,7 @@ def _build_explicit_mesh_assets() -> None:
         asset_cache=_state._geometry_asset_cache,
     )
     _cache_mesh_quality_reports(assets)
+    return assets
 
 
 def _mesh_quality_report_from_ir(payload: Mapping[str, object]) -> object | None:

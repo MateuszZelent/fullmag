@@ -183,16 +183,6 @@ if [ "${FULLMAG_ENABLE_NVTX}" = "0" ] &&
   exit 2
 fi
 cargo +nightly clean -p fullmag-build-info
-mapfile -t stale_fem_native_artifacts < <(
-  find target/release/build \
-    -path "*fullmag-fem-sys*/out/native-build/backends/fem/libfullmag_fem.so.0" \
-    -print 2>/dev/null
-)
-if [ "${#stale_fem_native_artifacts[@]}" -ne 0 ]; then
-  echo "[export_fem_gpu_runtime] stale fullmag-fem-sys native artifacts remain after targeted clean" >&2
-  printf "  %s\n" "${stale_fem_native_artifacts[@]}" >&2
-  exit 2
-fi
 
 echo "[export_fem_gpu_runtime] building fullmag-cli, fullmag-api, and PyO3 core with cuda fem-gpu release features"
 cargo_jobs="${FULLMAG_FEM_RUNTIME_CARGO_JOBS:-1}"

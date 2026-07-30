@@ -434,6 +434,8 @@ def test_export_script_preserves_release_cache_while_refreshing_build_identity()
     assert copy_index != -1
     assert clean_index < build_index < copy_index
     assert "cargo +nightly clean --workspace --release" not in script
+    assert "stale_fem_native_artifacts" not in script
+    assert "stale fullmag-fem-sys native artifacts remain after targeted clean" not in script
 
 
 def test_export_script_defaults_to_bounded_parallel_cargo_builds() -> None:
