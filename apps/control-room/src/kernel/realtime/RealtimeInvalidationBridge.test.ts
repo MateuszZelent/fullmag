@@ -45,6 +45,7 @@ import {
   MODEL_REGIONS_PATH,
   MODEL_SCENE_PATH,
   SIMULATION_COMMANDS_PATH,
+  SIMULATION_OBJECT_METRICS_PATH,
   SIMULATION_PREPARATION_PATH,
   SIMULATION_RUN_CURRENT_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
@@ -700,8 +701,14 @@ describe("RealtimeInvalidationBridge", () => {
     const bridge = new RealtimeInvalidationBridge(resources);
     const tableRowsPath = DATA_TABLE_ROWS_PATH.replace("{table_id}", "default");
     const tableWindowKey = `${tableRowsPath}?columns=time%2Ce_total&cursor=10&limit=100`;
+    const objectMetricsKey = SIMULATION_OBJECT_METRICS_PATH.replace(
+      "{object_id}",
+      "film",
+    );
 
     resources.subscribe(tableWindowKey, () => {});
+    resources.subscribe(objectMetricsKey, () => {});
+    resources.invalidate(objectMetricsKey, 99);
 
     const handled = bridge.handleEvent({
       payload: {
@@ -721,6 +728,9 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision("session:status")).toBeNull();
     expect(resources.getRevision(tableRowsPath)).toBe(10);
     expect(resources.getRevision(tableWindowKey)).toBe(10);
+    expect(resources.getRevision(objectMetricsKey)).toBe(
+      dependentRevision(tableRowsPath, 10),
+    );
     expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).toBeNull();
     expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBeNull();
     expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBeNull();
