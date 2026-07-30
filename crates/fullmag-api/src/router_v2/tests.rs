@@ -1895,6 +1895,10 @@ async fn contract_version_header_is_exposed_to_browser_clients() {
         exposed_headers.contains("etag"),
         "browser clients must be able to read etag, got {exposed_headers}"
     );
+    assert!(
+        exposed_headers.contains("content-range"),
+        "browser clients must be able to read content-range, got {exposed_headers}"
+    );
     for header_name in [
         "x-fullmag-field-revision",
         "x-fullmag-domain-generation-id",
