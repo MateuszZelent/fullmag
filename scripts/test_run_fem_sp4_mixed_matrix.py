@@ -525,6 +525,19 @@ class MixedSP4MatrixExecutorTests(unittest.TestCase):
 
         self.assertEqual(summary["status"], "completed_nonqualifying")
 
+    def test_one_step_runtime_smoke_accepts_genuine_torque_convergence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            durable_root = Path(directory)
+            summary = executor.execute_matrix(
+                durable_root / "matrix",
+                durable_root=durable_root,
+                max_steps=1,
+                evidence_mode=executor.ONE_STEP_RUNTIME_SMOKE,
+                launch=self._successful_launch,
+            )
+
+        self.assertEqual(summary["status"], "completed_nonqualifying")
+
     def test_one_step_runtime_smoke_rejects_incomplete_budget_evidence(self) -> None:
         [spec, *_] = executor.collect_execution_cases(self._plans())
 
@@ -560,6 +573,22 @@ class MixedSP4MatrixExecutorTests(unittest.TestCase):
         def mutate_budget_metric_threshold(qualification: dict[str, object]) -> None:
             qualification["stop_threshold"] = 2.0
 
+        def mutate_budget_metric_value_below(qualification: dict[str, object]) -> None:
+            qualification["stop_metric_value"] = 1.0 - 5.0e-13
+
+        def mutate_budget_metric_value_above(qualification: dict[str, object]) -> None:
+            qualification["stop_metric_value"] = 1.0 + 5.0e-13
+
+        def mutate_budget_metric_threshold_below(
+            qualification: dict[str, object],
+        ) -> None:
+            qualification["stop_threshold"] = 1.0 - 5.0e-13
+
+        def mutate_budget_metric_threshold_above(
+            qualification: dict[str, object],
+        ) -> None:
+            qualification["stop_threshold"] = 1.0 + 5.0e-13
+
         mutations = {
             "wrong_stop_reason": mutate_wrong_stop_reason,
             "zero_steps": mutate_zero_steps,
@@ -571,6 +600,10 @@ class MixedSP4MatrixExecutorTests(unittest.TestCase):
             "budget_metric_unit": mutate_budget_metric_unit,
             "budget_metric_value": mutate_budget_metric_value,
             "budget_metric_threshold": mutate_budget_metric_threshold,
+            "budget_metric_value_below": mutate_budget_metric_value_below,
+            "budget_metric_value_above": mutate_budget_metric_value_above,
+            "budget_metric_threshold_below": mutate_budget_metric_threshold_below,
+            "budget_metric_threshold_above": mutate_budget_metric_threshold_above,
         }
         for label, mutate in mutations.items():
             with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:

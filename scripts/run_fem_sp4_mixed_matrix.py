@@ -1322,16 +1322,22 @@ def _validate_case_artifacts(
                     raise ExecutionError(
                         "non-converged one-step runtime smoke must prove max_steps completion"
                     )
-            _equal_float(
+            stop_metric_value = _finite(
                 qualification.get("stop_metric_value"),
-                executed_steps,
                 "one-step runtime smoke stop metric value",
             )
-            _equal_float(
+            if stop_metric_value != executed_steps:
+                raise ExecutionError(
+                    "one-step runtime smoke stop metric value must equal executed_steps"
+                )
+            stop_threshold = _finite(
                 qualification.get("stop_threshold"),
-                max_steps,
                 "one-step runtime smoke stop threshold",
             )
+            if stop_threshold != max_steps:
+                raise ExecutionError(
+                    "one-step runtime smoke stop threshold must equal max_steps"
+                )
         elif converged is not True:
             raise ExecutionError("one-step runtime smoke convergence state must be explicit")
     elif converged is not True:
