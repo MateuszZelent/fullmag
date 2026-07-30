@@ -81,7 +81,7 @@ def test_export_and_restore_use_the_validated_storage_migration() -> None:
         encoding="utf-8"
     )
 
-    assert 'source "${REPO_ROOT}/scripts/lib/managed_fem_runtime_storage.sh"' in exporter
+    assert 'source "${SOURCE_ROOT}/scripts/lib/managed_fem_runtime_storage.sh"' in exporter
     assert 'migrate_managed_fem_runtime_variants "${variants_alias}"' in exporter
     assert 'source "${REPO_ROOT}/scripts/lib/managed_fem_runtime_storage.sh"' in restorer
     assert 'migrate_managed_fem_runtime_variants "${variants_alias}"' in restorer

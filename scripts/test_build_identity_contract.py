@@ -1,7 +1,49 @@
+import os
+import subprocess
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_build_script_prefers_exact_injected_managed_source_identity(
+    tmp_path: Path,
+) -> None:
+    crate_dir = tmp_path / "workspace" / "crates" / "fullmag-build-info"
+    crate_dir.mkdir(parents=True)
+    build_rs = crate_dir / "build.rs"
+    build_rs.write_bytes((ROOT / "crates/fullmag-build-info/build.rs").read_bytes())
+    builder = tmp_path / "fullmag-build-info-builder"
+    compile_result = subprocess.run(
+        ["rustc", str(build_rs), "-o", str(builder)],
+        env={**os.environ, "CARGO_MANIFEST_DIR": str(crate_dir)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert compile_result.returncode == 0, compile_result.stderr
+
+    result = subprocess.run(
+        [str(builder)],
+        env={
+            **os.environ,
+            "FULLMAG_SOURCE_GIT_COMMIT": "0123abcd" * 5,
+            "FULLMAG_SOURCE_WORKTREE_STATE": "dirty",
+            "FULLMAG_SOURCE_SNAPSHOT_SHA256": "45" * 32,
+            "SOURCE_DATE_EPOCH": "0",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "cargo:rerun-if-env-changed=FULLMAG_SOURCE_GIT_COMMIT" in result.stdout
+    assert "cargo:rerun-if-env-changed=FULLMAG_SOURCE_WORKTREE_STATE" in result.stdout
+    assert "cargo:rerun-if-env-changed=FULLMAG_SOURCE_SNAPSHOT_SHA256" in result.stdout
+    assert f"cargo:rustc-env=FULLMAG_BUILD_GIT_COMMIT={'0123abcd' * 5}" in result.stdout
+    assert "cargo:rustc-env=FULLMAG_BUILD_WORKTREE_STATE=dirty" in result.stdout
+    assert f"cargo:rustc-env=FULLMAG_BUILD_SOURCE_SNAPSHOT_SHA256={'45' * 32}" in result.stdout
 
 
 def test_cli_and_api_print_shared_build_identity_before_argument_handling() -> None:

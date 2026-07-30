@@ -72,8 +72,15 @@ def write_fake_schema_v2_bundle(
         "worker": bin_dir / "fullmag-fem-gpu-bin",
         "api": bin_dir / "fullmag-api",
     }
-    for path in binaries.values():
-        path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    stamp = (
+        "[fullmag] build: 1970-01-01T00:00:00Z | commit: "
+        + "0123abcd" * 5
+        + " | dirty | source snapshot: "
+        + "45" * 32
+    )
+    for name, path in binaries.items():
+        startup = f"printf '%s\\n' {stamp!r} >&2\n" if name in {"worker", "api"} else ""
+        path.write_text(f"#!/bin/sh\n{startup}exit 0\n", encoding="utf-8")
         path.chmod(0o755)
 
     library_specs = {
@@ -156,9 +163,14 @@ int fullmag_fem_get_mesh_abi_layout(mesh_layout *out) {
             "HYPRE_USING_THRUST_ASYNC": False,
         }
     manifest = {
-        "schema": 2,
+        "schema": 3,
         "runtime": "fem-gpu-host",
         "variant": "test-sm89",
+        "build_identity": {
+            "git_commit": "0123abcd" * 5,
+            "worktree_state": "dirty",
+            "source_snapshot_sha256": "45" * 32,
+        },
         "binaries": {
             name: str(path.relative_to(runtime)) for name, path in binaries.items()
         },
@@ -440,10 +452,10 @@ def test_export_script_restores_runtime_bundle_to_host_owner() -> None:
 
     assert 'FULLMAG_HOST_UID="$(id -u)"' in script
     assert 'FULLMAG_HOST_GID="$(id -g)"' in script
-    assert 'chown "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}" .fullmag .fullmag/runtimes' in script
     assert 'chown -R "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}"' in script
-    assert 'chmod u+rwx,go+rx,go-w .fullmag .fullmag/runtimes' in script
     assert 'chmod -R u+rwX,go+rX,go-w ${runtime_root}' in script
+    assert 'chown "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}" .fullmag' not in script
+    assert 'chmod u+rwx,go+rx,go-w .fullmag' not in script
     assert 'stat -c "%u:%g" .fullmag/runtimes/fem-gpu-host' not in script
 
 
@@ -667,6 +679,363 @@ def test_managed_runtime_validator_rejects_missing_or_mismatched_api(tmp_path: P
     invalid = validate_fake_bundle(runtime, ldd, readelf)
     assert invalid.returncode != 0
     assert "api hash mismatch" in invalid.stderr
+
+
+def test_managed_runtime_validator_requires_exact_build_identity(
+    tmp_path: Path,
+) -> None:
+    runtime, ldd, readelf = write_fake_schema_v2_bundle(tmp_path)
+
+    valid = validate_fake_bundle(
+        runtime,
+        ldd,
+        readelf,
+        "--require-git-commit",
+        "0123abcd" * 5,
+        "--require-worktree-state",
+        "dirty",
+        "--require-source-snapshot-sha256",
+        "45" * 32,
+    )
+    assert valid.returncode == 0, valid.stderr
+
+    manifest_path = runtime / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["build_identity"]["git_commit"] = "unknown"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    unknown = validate_fake_bundle(runtime, ldd, readelf)
+    assert unknown.returncode == 2
+    assert "build identity git commit is invalid" in unknown.stderr
+
+    manifest["build_identity"]["git_commit"] = "89abcdef" * 5
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    mismatched = validate_fake_bundle(
+        runtime,
+        ldd,
+        readelf,
+        "--require-git-commit",
+        "0123abcd" * 5,
+        "--require-worktree-state",
+        "dirty",
+    )
+    assert mismatched.returncode == 2
+    assert "build identity git commit mismatch" in mismatched.stderr
+
+    manifest["build_identity"]["git_commit"] = "0123abcd" * 5
+    manifest["build_identity"]["worktree_state"] = "clean"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    wrong_state = validate_fake_bundle(
+        runtime,
+        ldd,
+        readelf,
+        "--require-git-commit",
+        "0123abcd" * 5,
+        "--require-worktree-state",
+        "dirty",
+    )
+    assert wrong_state.returncode == 2
+    assert "build identity worktree state mismatch" in wrong_state.stderr
+
+
+def test_managed_runtime_validator_binds_manifest_to_cli_and_api_startup_stamps(
+    tmp_path: Path,
+) -> None:
+    runtime, ldd, readelf = write_fake_schema_v2_bundle(tmp_path)
+    api = runtime / "bin/fullmag-api"
+    api.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' '[fullmag] build: 1970-01-01T00:00:00Z | commit: "
+        + "0123abcd" * 5
+        + " | dirty | source snapshot: "
+        + "67" * 32
+        + "' >&2\nexit 0\n",
+        encoding="utf-8",
+    )
+    manifest_path = runtime / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["integrity"]["api_sha256"] = hashlib.sha256(api.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    invalid = validate_fake_bundle(runtime, ldd, readelf)
+
+    assert invalid.returncode == 2
+    assert "API startup build identity mismatch" in invalid.stderr
+
+
+def test_export_passes_and_requires_exact_host_source_identity() -> None:
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    resolve_index = exporter.index("python3 scripts/capture_source_snapshot_identity.py")
+    compose_index = exporter.index('FULLMAG_FEM_GPU_IMAGE="${docker_image_id}" docker compose')
+    manifest_index = exporter.index('python3 scripts/build_managed_fem_runtime_manifest.py')
+    publish_index = exporter.index("publish_runtime_bundle() {")
+
+    assert resolve_index < compose_index < manifest_index < publish_index
+    assert '--materialize "${SOURCE_SNAPSHOT_ROOT}"' in exporter
+    assert 'FULLMAG_RUNTIME_PUBLICATION_REPO_ROOT="${REPO_ROOT}"' in exporter
+    assert 'exec bash "${SOURCE_SNAPSHOT_ROOT}/scripts/export_fem_gpu_runtime.sh"' in exporter
+    assert 'cd "${SOURCE_SNAPSHOT_ROOT}"' in exporter
+    assert '-v "${SOURCE_SNAPSHOT_ROOT}:/workspace:ro"' in exporter
+    assert '-v "${REPO_ROOT}:/workspace"' not in exporter
+    assert '-e FULLMAG_SOURCE_GIT_COMMIT="${FULLMAG_SOURCE_GIT_COMMIT}"' in exporter
+    assert '-e FULLMAG_SOURCE_WORKTREE_STATE="${FULLMAG_SOURCE_WORKTREE_STATE}"' in exporter
+    assert '-e FULLMAG_SOURCE_SNAPSHOT_SHA256="${FULLMAG_SOURCE_SNAPSHOT_SHA256}"' in exporter
+    assert '--git-commit "${FULLMAG_SOURCE_GIT_COMMIT}"' in exporter
+    assert '--worktree-state "${FULLMAG_SOURCE_WORKTREE_STATE}"' in exporter
+    assert '--require-git-commit "${FULLMAG_SOURCE_GIT_COMMIT}"' in exporter
+    assert '--require-worktree-state "${FULLMAG_SOURCE_WORKTREE_STATE}"' in exporter
+    assert '--source-snapshot-sha256 "${FULLMAG_SOURCE_SNAPSHOT_SHA256}"' in exporter
+    assert '--require-source-snapshot-sha256 "${FULLMAG_SOURCE_SNAPSHOT_SHA256}"' in exporter
+    assert '--verify-materialized "${SOURCE_SNAPSHOT_ROOT}"' in exporter
+    assert "capture_source_snapshot_identity.py" in exporter
+    source_capture = (
+        REPO_ROOT / "scripts/capture_source_snapshot_identity.py"
+    ).read_text(encoding="utf-8")
+    assert "source identity changed during managed FEM runtime build" in source_capture
+    assert 'grep -aFq "commit: ${FULLMAG_SOURCE_GIT_COMMIT}' not in exporter
+
+
+def test_export_does_not_trust_public_bootstrap_environment_or_cleanup_foreign_paths() -> None:
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'source_snapshot_owned=0' in exporter
+    assert 'source_identity_owned=0' in exporter
+    assert 'validate_bootstrapped_source_snapshot() {' in exporter
+    assert 'SOURCE_ROOT' in exporter
+    assert 'FULLMAG_CONTAINER_TARGET_DIR' in exporter
+    assert 'source-snapshot.*' in exporter
+    assert '[ ! -L "${path}" ]' in exporter
+    assert 'SOURCE_SNAPSHOT_ROOT="$(mktemp -d "${FULLMAG_CONTAINER_TARGET_DIR}/source-snapshot.XXXXXXXXXX")"' in exporter
+    assert '--materialize-existing-empty' in exporter
+
+    function_start = exporter.index("cleanup_failed_export() {")
+    function_end = exporter.index("\n}\n", function_start) + len("\n}")
+    cleanup_function = exporter[function_start:function_end]
+    result = subprocess.run(
+        [
+            "bash",
+            "-euo",
+            "pipefail",
+            "-c",
+            (
+                'docker_build_ref=""\n'
+                'docker_build_ref_marker=""\n'
+                'persistent_staging_archive=""\n'
+                'persistent_validation_root=""\n'
+                'STAGING_ROOT=""\n'
+                'source_identity_file="/foreign/identity.json"\n'
+                'SOURCE_SNAPSHOT_ROOT="/foreign/snapshot"\n'
+                'source_identity_owned=0\n'
+                'source_snapshot_owned=0\n'
+                'rm() { printf "unexpected rm: %s\\n" "$*" >&2; return 99; }\n'
+                'chmod() { printf "unexpected chmod: %s\\n" "$*" >&2; return 99; }\n'
+                f"{cleanup_function}\n"
+                'trap cleanup_failed_export EXIT\n'
+                'exit 17\n'
+            ),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 17
+    assert "unexpected" not in result.stderr
+
+
+def test_export_keeps_identity_through_final_verify_and_publication(
+    tmp_path: Path,
+) -> None:
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+    verification_start = exporter.index("verify_source_snapshot_identity() {")
+    verification_end = exporter.index("\n}\n", verification_start) + len("\n}")
+    verification_function = exporter[verification_start:verification_end]
+    function_start = exporter.index("finalize_verified_source_publication() {")
+    function_end = exporter.index("\n}\n", function_start) + len("\n}")
+    lifecycle_function = exporter[function_start:function_end]
+    snapshot = tmp_path / "source-snapshot.test"
+    identity = tmp_path / "source-identity.test.json"
+    snapshot.mkdir()
+    identity.write_text("{}\n", encoding="utf-8")
+    lifecycle_log = tmp_path / "lifecycle.log"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-euo",
+            "pipefail",
+            "-c",
+            (
+                f'FULLMAG_CONTAINER_TARGET_DIR={str(tmp_path)!r}\n'
+                f'SOURCE_SNAPSHOT_ROOT={str(snapshot)!r}\n'
+                f'source_identity_file={str(identity)!r}\n'
+                f'LIFECYCLE_LOG={str(lifecycle_log)!r}\n'
+                'SOURCE_ROOT=/captured/source\n'
+                'REPO_ROOT=/original/repo\n'
+                'source_snapshot_owned=1\n'
+                'source_identity_owned=1\n'
+                'is_canonical_source_snapshot_path() {\n'
+                '  [ "$1" = "$SOURCE_SNAPSHOT_ROOT" ] && [ -d "$1" ] && [ ! -L "$1" ]\n'
+                '}\n'
+                'is_canonical_source_identity_path() {\n'
+                '  [ "$1" = "$source_identity_file" ] && [ -f "$1" ] && [ ! -L "$1" ]\n'
+                '}\n'
+                'python3() {\n'
+                '  test "$4" = "--compare"\n'
+                '  test "$5" = "$source_identity_file"\n'
+                '  test -f "$5"\n'
+                '  printf "verify:%s\\n" "$5" >> "$LIFECYCLE_LOG"\n'
+                '}\n'
+                'publish_runtime_bundle() {\n'
+                '  test -f "$source_identity_file"\n'
+                '  printf "publish:%s\\n" "$source_identity_file" >> "$LIFECYCLE_LOG"\n'
+                '}\n'
+                f"{verification_function}\n{lifecycle_function}\n"
+                'finalize_verified_source_publication\n'
+                'test ! -e "$SOURCE_SNAPSHOT_ROOT"\n'
+                'test ! -e "$source_identity_file"\n'
+                'test "$source_snapshot_owned" = 0\n'
+                'test "$source_identity_owned" = 0\n'
+            ),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert lifecycle_log.read_text(encoding="utf-8").splitlines() == [
+        f"verify:{identity}",
+        f"publish:{identity}",
+    ]
+
+    container_complete = exporter.index("container-side export complete")
+    lifecycle_definition = exporter.index("finalize_verified_source_publication() {")
+    intervening = exporter[container_complete:lifecycle_definition]
+    assert 'rm -f -- "${source_identity_file}"' not in intervening
+    assert 'source_identity_file=""' not in intervening
+
+
+def test_failed_nested_bootstrap_verify_cleans_owned_snapshot_without_relaunch(
+    tmp_path: Path,
+) -> None:
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    def bash_function(name: str) -> str:
+        start = exporter.index(f"{name}() {{")
+        end = exporter.index("\n}\n", start) + len("\n}")
+        return exporter[start:end]
+
+    snapshot = tmp_path / "source-snapshot.nested"
+    identity = tmp_path / "source-identity.nested.json"
+    snapshot.mkdir()
+    identity.write_text("{}\n", encoding="utf-8")
+    lifecycle_log = tmp_path / "nested.log"
+    functions = "\n".join(
+        bash_function(name)
+        for name in (
+            "is_canonical_source_snapshot_path",
+            "is_canonical_source_identity_path",
+            "cleanup_failed_export",
+            "verify_source_snapshot_identity",
+            "validate_bootstrapped_source_snapshot",
+            "resolve_source_snapshot_bootstrap",
+        )
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            "-euo",
+            "pipefail",
+            "-c",
+            (
+                f'FULLMAG_CONTAINER_TARGET_DIR={str(tmp_path)!r}\n'
+                f'bootstrapped_source_snapshot_root={str(snapshot)!r}\n'
+                f'bootstrapped_source_identity_file={str(identity)!r}\n'
+                f'SOURCE_ROOT={str(snapshot)!r}\n'
+                'REPO_ROOT=/original/repo\n'
+                'SOURCE_SNAPSHOT_ROOT=""\n'
+                'source_identity_file=""\n'
+                'source_snapshot_owned=0\n'
+                'source_identity_owned=0\n'
+                'docker_build_ref=""\n'
+                'docker_build_ref_marker=""\n'
+                'persistent_staging_archive=""\n'
+                'persistent_validation_root=""\n'
+                'STAGING_ROOT=""\n'
+                f'LIFECYCLE_LOG={str(lifecycle_log)!r}\n'
+                'python3() { printf "verify-failed\\n" >> "$LIFECYCLE_LOG"; return 23; }\n'
+                'bootstrap_new_source_snapshot() { printf "relaunch\\n" >> "$LIFECYCLE_LOG"; return 0; }\n'
+                f"{functions}\n"
+                'trap cleanup_failed_export EXIT\n'
+                'resolve_source_snapshot_bootstrap\n'
+            ),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 23, result.stderr + result.stdout
+    assert lifecycle_log.read_text(encoding="utf-8").splitlines() == [
+        "verify-failed"
+    ]
+    assert not snapshot.exists()
+    assert not identity.exists()
+
+
+def test_source_bootstrap_launches_once_only_when_both_handoff_vars_are_absent() -> None:
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+    start = exporter.index("resolve_source_snapshot_bootstrap() {")
+    end = exporter.index("\n}\n", start) + len("\n}")
+    resolver = exporter[start:end]
+    result = subprocess.run(
+        [
+            "bash",
+            "-euo",
+            "pipefail",
+            "-c",
+            (
+                f"{resolver}\n"
+                'launches=0\n'
+                'bootstrap_new_source_snapshot() { launches=$((launches + 1)); }\n'
+                'validate_bootstrapped_source_snapshot() { return 99; }\n'
+                'bootstrapped_source_snapshot_root=""\n'
+                'bootstrapped_source_identity_file=""\n'
+                'resolve_source_snapshot_bootstrap\n'
+                'test "$launches" = 1\n'
+                'bootstrapped_source_snapshot_root=/supplied/snapshot\n'
+                'bootstrapped_source_identity_file=""\n'
+                'if resolve_source_snapshot_bootstrap; then exit 91; else status=$?; fi\n'
+                'test "$status" = 2\n'
+                'test "$launches" = 1\n'
+            ),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_export_revalidates_source_immediately_before_alias_switch() -> None:
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+    function_start = exporter.index("publish_runtime_bundle() {")
+    function_end = exporter.index("\n}\n", function_start) + len("\n}")
+    publication = exporter[function_start:function_end]
+
+    verify_index = publication.rindex("verify_source_snapshot_identity")
+    migrate_index = publication.index("migrate_managed_fem_runtime_variants")
+    link_index = publication.index('ln -sfn "${alias_target}"')
+    switch_index = publication.index('mv -Tf "${repo_next_alias}"')
+
+    assert migrate_index < verify_index < link_index < switch_index
+    assert "source_identity_file" not in publication[verify_index:link_index]
 
 
 def test_managed_runtime_validator_rejects_mismatched_mesh_abi(tmp_path: Path) -> None:
@@ -1171,6 +1540,9 @@ def test_export_archive_validation_scratch_is_unique_and_ignores_tmpdir(
             "PATH": f"{fake_bin}:{environment['PATH']}",
             "SCRATCH_PATHS": str(scratch_paths),
             "TMPDIR": str(unrelated_tmpdir),
+            "FULLMAG_SOURCE_GIT_COMMIT": "0123abcd" * 5,
+            "FULLMAG_SOURCE_WORKTREE_STATE": "dirty",
+            "FULLMAG_SOURCE_SNAPSHOT_SHA256": "45" * 32,
         }
     )
     result = subprocess.run(
@@ -1228,7 +1600,42 @@ def test_ensure_managed_runtime_rebuilds_an_invalid_bundle() -> None:
     )[0]
 
     assert "Managed FEM runtime bundle is invalid; restoring the persistent build first." in ensure_recipe
-    assert "bash scripts/restore_persistent_fem_runtime.sh || just rebuild-fem-runtime" in ensure_recipe
+    assert "bash scripts/restore_persistent_fem_runtime.sh" in ensure_recipe
+    assert "validate_current >/dev/null 2>&1 || just rebuild-fem-runtime" in ensure_recipe
+    assert "capture_source_snapshot_identity.py" in ensure_recipe
+    assert '--compare "$identity_file"' in ensure_recipe
+    assert "--require-source-snapshot-sha256" in ensure_recipe
+    assert "-newer" not in ensure_recipe
+
+
+def test_managed_runtime_validator_migrates_schema_2_without_treating_it_as_current(
+    tmp_path: Path,
+) -> None:
+    runtime, ldd, readelf = write_fake_schema_v2_bundle(tmp_path)
+    manifest_path = runtime / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["schema"] = 2
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    compatible = validate_fake_bundle(runtime, ldd, readelf)
+    exact = validate_fake_bundle(
+        runtime,
+        ldd,
+        readelf,
+        "--require-git-commit",
+        "0123abcd" * 5,
+        "--require-worktree-state",
+        "dirty",
+        "--require-source-snapshot-sha256",
+        "45" * 32,
+    )
+
+    assert compatible.returncode == 0, compatible.stderr
+    assert json.loads(compatible.stdout)["source_identity_compatibility"] == (
+        "legacy-schema-2-unbound"
+    )
+    assert exact.returncode == 2
+    assert "schema 2 cannot satisfy exact source identity" in exact.stderr
 
 
 def test_make_install_cli_uses_external_cargo_target_variable() -> None:
@@ -1302,6 +1709,12 @@ def test_manifest_builder_records_actual_loaded_native_libraries(tmp_path: Path)
             "8.9",
             "--driver-version",
             "591.86",
+            "--git-commit",
+            "0123abcd" * 5,
+            "--worktree-state",
+            "dirty",
+            "--source-snapshot-sha256",
+            "45" * 32,
             "--cuobjdump",
             str(cuobjdump),
             "--ldd",
@@ -1318,7 +1731,7 @@ def test_manifest_builder_records_actual_loaded_native_libraries(tmp_path: Path)
 
     assert result.returncode == 0, result.stderr
     manifest = json.loads((runtime / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["schema"] == 2
+    assert manifest["schema"] == 3
     assert manifest["native_libraries"]["fullmag_fem"]["cubins"] == ["sm_89"]
     assert manifest["native_libraries"]["hypre"]["path"] == "lib/libHYPRE-3.1.0.so"
     assert manifest["loader_trace"]["fullmag_fem"]["libHYPRE-3.1.0.so"] == (
@@ -1327,6 +1740,11 @@ def test_manifest_builder_records_actual_loaded_native_libraries(tmp_path: Path)
     assert manifest["build"]["cuda_toolkit"] == "12.4"
     assert manifest["build"]["hypre_memory_variant"] == "baseline"
     assert manifest["runtime_diagnostics"]["compute_capability"] == "8.9"
+    assert manifest["build_identity"] == {
+        "git_commit": "0123abcd" * 5,
+        "worktree_state": "dirty",
+        "source_snapshot_sha256": "45" * 32,
+    }
     assert manifest["native_abi"] == {
         "mesh_desc_abi_version": 2,
         "mesh_desc_struct_size": 232,

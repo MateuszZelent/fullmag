@@ -3,22 +3,31 @@ pub struct BuildIdentity {
     pub built_at_utc: &'static str,
     pub git_commit: &'static str,
     pub worktree_state: &'static str,
+    pub source_snapshot_sha256: &'static str,
 }
+
+const BUILD_STAMP: &str = concat!(
+    "[fullmag] build: ",
+    env!("FULLMAG_BUILD_TIMESTAMP_UTC"),
+    " | commit: ",
+    env!("FULLMAG_BUILD_GIT_COMMIT"),
+    " | ",
+    env!("FULLMAG_BUILD_WORKTREE_STATE"),
+    " | source snapshot: ",
+    env!("FULLMAG_BUILD_SOURCE_SNAPSHOT_SHA256"),
+);
 
 pub fn identity() -> BuildIdentity {
     BuildIdentity {
         built_at_utc: env!("FULLMAG_BUILD_TIMESTAMP_UTC"),
         git_commit: env!("FULLMAG_BUILD_GIT_COMMIT"),
         worktree_state: env!("FULLMAG_BUILD_WORKTREE_STATE"),
+        source_snapshot_sha256: env!("FULLMAG_BUILD_SOURCE_SNAPSHOT_SHA256"),
     }
 }
 
 pub fn stamp() -> String {
-    let value = identity();
-    format!(
-        "[fullmag] build: {} | commit: {} | {}",
-        value.built_at_utc, value.git_commit, value.worktree_state
-    )
+    BUILD_STAMP.to_string()
 }
 
 pub fn print_startup_stamp() {
@@ -35,8 +44,11 @@ mod tests {
         assert_eq!(
             stamp(),
             format!(
-                "[fullmag] build: {} | commit: {} | {}",
-                identity.built_at_utc, identity.git_commit, identity.worktree_state
+                "[fullmag] build: {} | commit: {} | {} | source snapshot: {}",
+                identity.built_at_utc,
+                identity.git_commit,
+                identity.worktree_state,
+                identity.source_snapshot_sha256
             )
         );
         assert!(matches!(

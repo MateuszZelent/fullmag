@@ -4,26 +4,66 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 fn main() {
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
+    println!("cargo:rerun-if-env-changed=FULLMAG_SOURCE_GIT_COMMIT");
+    println!("cargo:rerun-if-env-changed=FULLMAG_SOURCE_WORKTREE_STATE");
+    println!("cargo:rerun-if-env-changed=FULLMAG_SOURCE_SNAPSHOT_SHA256");
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
         .expect("fullmag-build-info must live below the workspace crates directory");
-    emit_git_rerun_paths(repo_root);
 
     let timestamp = build_timestamp_utc();
-    let commit = git_output(repo_root, &["rev-parse", "--short=8", "HEAD"])
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "unknown".to_string());
-    let worktree_state = git_output(
-        repo_root,
-        &["status", "--porcelain", "--untracked-files=normal"],
-    )
-    .map(|value| if value.is_empty() { "clean" } else { "dirty" })
-    .unwrap_or("unknown");
+    let (commit, worktree_state, source_snapshot_sha256) = injected_source_identity()
+        .unwrap_or_else(|| {
+            emit_git_rerun_paths(repo_root);
+            let commit = git_output(repo_root, &["rev-parse", "--verify", "HEAD"])
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "unknown".to_string());
+            let worktree_state = git_output(
+                repo_root,
+                &["status", "--porcelain", "--untracked-files=normal"],
+            )
+            .map(|value| if value.is_empty() { "clean" } else { "dirty" })
+            .unwrap_or("unknown");
+            (commit, worktree_state.to_string(), "unknown".to_string())
+        });
 
     println!("cargo:rustc-env=FULLMAG_BUILD_TIMESTAMP_UTC={timestamp}");
     println!("cargo:rustc-env=FULLMAG_BUILD_GIT_COMMIT={commit}");
     println!("cargo:rustc-env=FULLMAG_BUILD_WORKTREE_STATE={worktree_state}");
+    println!("cargo:rustc-env=FULLMAG_BUILD_SOURCE_SNAPSHOT_SHA256={source_snapshot_sha256}");
+}
+
+fn injected_source_identity() -> Option<(String, String, String)> {
+    let commit = std::env::var("FULLMAG_SOURCE_GIT_COMMIT").ok();
+    let worktree_state = std::env::var("FULLMAG_SOURCE_WORKTREE_STATE").ok();
+    let source_snapshot_sha256 = std::env::var("FULLMAG_SOURCE_SNAPSHOT_SHA256").ok();
+    match (commit, worktree_state, source_snapshot_sha256) {
+        (None, None, None) => None,
+        (Some(commit), Some(worktree_state), Some(source_snapshot_sha256)) => {
+            if commit.len() != 40
+                || !commit
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                panic!("FULLMAG_SOURCE_GIT_COMMIT must be exactly 40 lowercase hex digits");
+            }
+            if !matches!(worktree_state.as_str(), "clean" | "dirty") {
+                panic!("FULLMAG_SOURCE_WORKTREE_STATE must be clean or dirty");
+            }
+            if source_snapshot_sha256.len() != 64
+                || !source_snapshot_sha256.bytes().all(|byte| {
+                    byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+                })
+            {
+                panic!("FULLMAG_SOURCE_SNAPSHOT_SHA256 must be exactly 64 lowercase hex digits");
+            }
+            Some((commit, worktree_state, source_snapshot_sha256))
+        }
+        _ => panic!(
+            "FULLMAG_SOURCE_GIT_COMMIT, FULLMAG_SOURCE_WORKTREE_STATE, and FULLMAG_SOURCE_SNAPSHOT_SHA256 must be set together"
+        ),
+    }
 }
 
 fn build_timestamp_utc() -> String {
