@@ -35,5 +35,6 @@ html_theme = "sphinx_clarity_theme"
 html_title = "FullMag public documentation"
 html_static_path = ["_static"]
 html_extra_path = ["CNAME"]
+html_css_files = ["fullmag-docs.css"]
 
 nitpicky = True

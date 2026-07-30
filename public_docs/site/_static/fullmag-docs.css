@@ -1,0 +1,70 @@
+article,
+article > main {
+  min-width: 0;
+}
+
+article > main .table-wrapper {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+article > main .table-wrapper table {
+  width: max-content;
+  min-width: 100%;
+  max-width: none;
+}
+
+article > main table {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+article > main .table-wrapper th,
+article > main .table-wrapper td,
+article > main table th,
+article > main table td {
+  min-width: 8rem;
+  max-width: 24rem;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  vertical-align: top;
+}
+
+article > main .table-wrapper code,
+article > main .table-wrapper .math,
+article > main table code,
+article > main table .math {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+article > main .math,
+article > main pre {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+#main-header {
+  overflow-x: clip;
+}
+
+@media (max-width: 48rem) {
+  article > main .table-wrapper,
+  article > main table {
+    scrollbar-width: thin;
+    background: linear-gradient(
+      to right,
+      transparent 95%,
+      color-mix(in srgb, currentColor 10%, transparent)
+    );
+  }
+}
