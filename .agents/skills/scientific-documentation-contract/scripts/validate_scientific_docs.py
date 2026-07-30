@@ -118,7 +118,8 @@ def validate_page(repo_root: Path, manifest: object, rendered_html: Path | None 
     if RAW_INLINE_RE.search(page):
         errors.append("page contains raw inline LaTeX delimiters; use MyST $...$ MathJax syntax")
     for section in REQUIRED_SECTIONS:
-        if f"({section})=" not in page:
+        scoped_anchor = re.search(rf"\((?:[a-z0-9]+-)*{re.escape(section)}\)=", page)
+        if scoped_anchor is None:
             errors.append(f"page missing required section: {section}")
 
     lanes = _objects(manifest.get("backend_matrix"), "backend_matrix", errors)

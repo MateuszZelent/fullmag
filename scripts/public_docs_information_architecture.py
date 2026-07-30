@@ -58,6 +58,12 @@ DEMAGNETIZATION_SUBPAGES = (
     "periodic-demag",
     "validation",
 )
+DEMAGNETIZATION_REFERENCE_PAGES = frozenset(
+    {
+        "physics/interactions/demagnetization/index.md",
+        *(f"physics/interactions/demagnetization/{page}.md" for page in DEMAGNETIZATION_SUBPAGES),
+    }
+)
 DMI_SUBPAGES = (
     "interfacial",
     "bulk",
@@ -218,6 +224,7 @@ PYTHON_API_REFERENCE_PAGES = {
     "python-api/dynamics/llg.md",
     "python-api/studies/time-evolution.md",
     "python-api/outputs/fields-and-scalars.md",
+    "python-api/interactions/demagnetization.md",
 }
 
 
@@ -249,14 +256,14 @@ def _interaction_subtree(
     directory = f"physics/interactions/{slug}"
     children = tuple(f"{directory}/{subpage}.md" for subpage in subpages)
     return (
-        _scaffold(
+        (_reference if f"{directory}/index.md" in DEMAGNETIZATION_REFERENCE_PAGES else _scaffold)(
             f"{directory}/index.md",
             title,
             f"the canonical {title} interaction reference",
             children,
         ),
         *(
-            _scaffold(
+            (_reference if f"{directory}/{subpage}.md" in DEMAGNETIZATION_REFERENCE_PAGES else _scaffold)(
                 f"{directory}/{subpage}.md",
                 _title(subpage),
                 f"the {title} reference for {_title(subpage)}",
@@ -329,7 +336,7 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
         ),
     ),
     *(
-        _scaffold(
+        (_reference if f"python-api/interactions/{slug}.md" in PYTHON_API_REFERENCE_PAGES else _scaffold)(
             f"python-api/interactions/{slug}.md",
             _INTERACTION_TITLES[slug],
             f"the Python API reference for {_INTERACTION_TITLES[slug]}",
