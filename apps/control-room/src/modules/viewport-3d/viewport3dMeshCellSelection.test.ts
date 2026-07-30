@@ -11,8 +11,12 @@ function part(id: string, role: "air" | "magnetic") {
     boundary_face_count: 1,
     boundary_face_indices: [7],
     boundary_face_start: 7,
+    element_count: 1,
+    element_start: 0,
     id,
     label: id,
+    node_count: 4,
+    node_start: 0,
     role,
   };
 }

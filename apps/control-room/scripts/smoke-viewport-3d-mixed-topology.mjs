@@ -75,6 +75,7 @@ async function main() {
       "/v2/sessions/current/visualization/state",
       buildMixedTopologyVisualizationPatch(switchedX, "component_y"),
     );
+    await assertBrowserConsumedComponentY(page);
     await assertNoTopologyRebuildAfterFieldSwitch(page, baseline, topologyRequests);
     if (errors.length > 0) throw new Error(`Browser console errors:\n${errors.join("\n")}`);
     console.log(`Viewport 3D mixed-topology smoke passed at ${workspaceUrl}.`);
@@ -278,6 +279,17 @@ async function assertNoTopologyRebuildAfterFieldSwitch(page, baseline, topologyR
   }
 }
 
+async function assertBrowserConsumedComponentY(page) {
+  await poll("browser component-Y visualization state", async () => {
+    const text = await page
+      .locator(".fm-viewport-3d__colorbar")
+      .evaluateAll((nodes) =>
+        nodes.map((node) => node.textContent ?? "").join("\n"),
+      );
+    return text.includes("Component Y") ? true : null;
+  });
+}
+
 async function assertAirboxFullWireframeBuildEvidence(page, airboxPartId) {
   const found = (await readViewport3DBuildDiagnostics(page)).some((record) => {
     const key = record.buildKey ?? record.detail?.buildKey ?? "";
@@ -298,6 +310,7 @@ async function waitForMeshCellAuditHook(page) {
   await page.waitForFunction(
     () => typeof window.__FULLMAG_LIST_VIEWPORT_3D_MESH_CELLS__ === "function" &&
       typeof window.__FULLMAG_SELECT_VIEWPORT_3D_MESH_CELL__ === "function",
+    undefined,
     { timeout: timeoutMs },
   );
 }

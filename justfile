@@ -4073,7 +4073,7 @@ _run-viewport-3d-browser-smoke fixture smoke_script report_name smoke_log_name s
       FULLMAG_RELAX_DEVICE="$mode" \
       FULLMAG_CPU_THREADS="$cpu_threads_env" \
       FULLMAG_API_PORT="{{api_port}}" \
-      "{{max_steps_env}}=$max_steps" \
+      {{max_steps_env}}="$max_steps" \
       "{{gpu_runtime_bin}}" --dev --web-port "{{web_port}}" -i "{{fixture}}" \
         > "$app_log" 2>&1 & \
       sim_pid=$!; \
@@ -4095,7 +4095,7 @@ _run-viewport-3d-browser-smoke fixture smoke_script report_name smoke_log_name s
       fi; \
       CONTROL_ROOM_API_BASE_URL="$api_url" \
       CONTROL_ROOM_URL="$web_url" \
-      "{{smoke_timeout_env}}=$smoke_timeout" \
+      {{smoke_timeout_env}}="$smoke_timeout" \
       $PNPM_CMD --dir apps/control-room "{{smoke_script}}" | tee "$smoke_log"; \
       printf "\n{{smoke_label}} logs:\n"; \
       printf "  fullmag: %s\n" "$app_log"; \
