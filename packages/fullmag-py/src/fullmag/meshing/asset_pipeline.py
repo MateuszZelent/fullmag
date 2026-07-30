@@ -41,7 +41,7 @@ from .gmsh_bridge import (
     generate_mesh_from_file,
     generate_shared_domain_mesh_from_components,
 )
-from ._gmsh_types import FEM_TOPOLOGY_VOLUME_EPS, _tetra_signed_volumes
+from ._gmsh_types import FEM_TOPOLOGY_VOLUME_EPS
 from .surface_assets import _geometry_to_trimesh, _import_trimesh, build_surface_preview_payload
 from .voxelization import VoxelMaskData, voxelize_geometry
 
@@ -844,11 +844,22 @@ def _drop_degenerate_tetrahedra(
 ) -> MeshData:
     if mesh.n_elements == 0:
         return mesh
-    if np.any(mesh.cell_types != "tet4"):
-        raise ValueError(
-            "tetrahedral degenerate-cell cleanup is unavailable for mixed topology"
-        )
-    volumes = _tetra_signed_volumes(mesh)
+    tetra_ordinals = np.flatnonzero(mesh.cell_types == "tet4")
+    if tetra_ordinals.size == 0:
+        mesh.validate_strict(require_positive_orientation=True)
+        return mesh
+    tetra_nodes = np.asarray(
+        [mesh.cell_node_ids(int(index)) for index in tetra_ordinals],
+        dtype=np.int32,
+    )
+    p0 = mesh.nodes[tetra_nodes[:, 0]]
+    p1 = mesh.nodes[tetra_nodes[:, 1]]
+    p2 = mesh.nodes[tetra_nodes[:, 2]]
+    p3 = mesh.nodes[tetra_nodes[:, 3]]
+    volumes = (
+        np.linalg.det(np.stack([p1 - p0, p2 - p0, p3 - p0], axis=2))
+        / 6.0
+    )
     bbox = np.ptp(mesh.nodes, axis=0) if mesh.nodes.size else np.zeros(3, dtype=np.float64)
     scale = float(np.max(bbox))
     eps = max(
@@ -856,10 +867,18 @@ def _drop_degenerate_tetrahedra(
         FEM_TOPOLOGY_VOLUME_EPS,
         (scale if scale > 0.0 else 1.0) ** 3 * 1e-18,
     )
-    keep = np.abs(volumes) > eps
-    removed = int(np.count_nonzero(~keep))
+    keep_tetrahedra = np.abs(volumes) > eps
+    removed = int(np.count_nonzero(~keep_tetrahedra))
     if removed == 0:
+        if tetra_ordinals.size != mesh.n_elements:
+            mesh.validate_strict(require_positive_orientation=True)
         return mesh
+    if tetra_ordinals.size != mesh.n_elements:
+        raise ValueError(
+            "tetrahedral degenerate-cell cleanup is unavailable for mixed topology; "
+            f"found {removed} degenerate tet4 cells"
+        )
+    keep = keep_tetrahedra
     if removed == mesh.n_elements:
         raise ValueError(f"{context} produced only degenerate tetrahedra")
     marker = "shared_domain_degenerate_tetra_cleanup"

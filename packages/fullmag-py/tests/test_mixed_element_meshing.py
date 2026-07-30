@@ -2428,7 +2428,7 @@ def test_mixed_certificate_rejects_semantically_resigned_part_reassignment() -> 
     )
     resigned = replace(
         certificate,
-        topology_fingerprint=unsigned.topology_fingerprint_v2(),
+        topology_fingerprint=unsigned.topology_fingerprint_v3(),
     )
     with pytest.raises(ValueError, match="mixed layer topology certificate.*stale"):
         replace(unsigned, mixed_layer_topology_certificate=resigned)
@@ -2681,7 +2681,7 @@ def test_resigned_mesh_with_pyramid_base_off_quad_interface_is_rejected() -> Non
     )
     resigned = replace(
         certificate,
-        topology_fingerprint=unsigned.topology_fingerprint_v2(),
+        topology_fingerprint=unsigned.topology_fingerprint_v3(),
     )
     with pytest.raises(ValueError, match="pyramid bases.*quad.*marker 10"):
         replace(unsigned, mixed_layer_topology_certificate=resigned)
