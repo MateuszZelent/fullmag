@@ -1409,9 +1409,7 @@ extern "C" {
     pub fn fullmag_fem_get_regional_field_drive_abi_layout(
         out_layout: *mut fullmag_fem_regional_field_drive_abi_layout,
     ) -> i32;
-    pub fn fullmag_fem_get_mesh_abi_layout(
-        out_layout: *mut fullmag_fem_mesh_abi_layout,
-    ) -> i32;
+    pub fn fullmag_fem_get_mesh_abi_layout(out_layout: *mut fullmag_fem_mesh_abi_layout) -> i32;
     pub fn fullmag_fem_get_availability_info(out_info: *mut fullmag_fem_availability_info) -> i32;
     pub fn fullmag_fem_get_frequency_domain_availability_info(
         request: *const fullmag_fem_frequency_domain_availability_request,
@@ -1709,33 +1707,108 @@ mod tests {
         assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, abi_version), 0);
         assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, struct_size), 4);
         assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, nodes_xyz), 8);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, nodes_xyz_len), 16);
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, nodes_xyz_len),
+            16
+        );
         assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_types), 24);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_types_len), 32);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_offsets), 40);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_offsets_len), 48);
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, cell_types_len),
+            32
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, cell_offsets),
+            40
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, cell_offsets_len),
+            48
+        );
         assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_nodes), 56);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_nodes_len), 64);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_global_ordinals), 72);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_global_ordinals_len), 80);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_markers), 88);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, cell_markers_len), 96);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_types), 104);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_types_len), 112);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_roles), 120);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_roles_len), 128);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_offsets), 136);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_offsets_len), 144);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_nodes), 152);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_nodes_len), 160);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_global_ordinals), 168);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_global_ordinals_len), 176);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_markers), 184);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, facet_markers_len), 192);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, periodic_node_pairs), 200);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, periodic_node_pairs_len), 208);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, periodic_boundary_pair_markers), 216);
-        assert_eq!(std::mem::offset_of!(fullmag_fem_mesh_desc, periodic_boundary_pair_markers_len), 224);
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, cell_nodes_len),
+            64
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, cell_global_ordinals),
+            72
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, cell_global_ordinals_len),
+            80
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, cell_markers),
+            88
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, cell_markers_len),
+            96
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, facet_types),
+            104
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, facet_types_len),
+            112
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, facet_roles),
+            120
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, facet_roles_len),
+            128
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, facet_offsets),
+            136
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, facet_offsets_len),
+            144
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, facet_nodes),
+            152
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, facet_nodes_len),
+            160
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, facet_global_ordinals),
+            168
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, facet_global_ordinals_len),
+            176
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, facet_markers),
+            184
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, facet_markers_len),
+            192
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, periodic_node_pairs),
+            200
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, periodic_node_pairs_len),
+            208
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, periodic_boundary_pair_markers),
+            216
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_mesh_desc, periodic_boundary_pair_markers_len),
+            224
+        );
     }
 
     #[test]

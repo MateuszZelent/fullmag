@@ -27,8 +27,59 @@ pub(crate) fn average_magnetization_components(values: &[[f64; 3]]) -> [f64; 3] 
     [sum[0] * inv, sum[1] * inv, sum[2] * inv]
 }
 
+pub(crate) fn weighted_average_magnetization_components(
+    values: &[[f64; 3]],
+    weights: &[f64],
+) -> [f64; 3] {
+    let mut sum = [0.0; 3];
+    let mut weight_sum = 0.0;
+
+    for (value, weight) in values.iter().zip(weights.iter().copied()) {
+        if !weight.is_finite()
+            || weight <= 0.0
+            || value.iter().any(|component| !component.is_finite())
+        {
+            continue;
+        }
+        sum[0] += weight * value[0];
+        sum[1] += weight * value[1];
+        sum[2] += weight * value[2];
+        weight_sum += weight;
+    }
+
+    if weight_sum <= 0.0 {
+        return [0.0, 0.0, 0.0];
+    }
+
+    let inverse_weight = 1.0 / weight_sum;
+    [
+        sum[0] * inverse_weight,
+        sum[1] * inverse_weight,
+        sum[2] * inverse_weight,
+    ]
+}
+
 pub(crate) fn apply_average_m_to_step_stats(stats: &mut StepStats, magnetization: &[[f64; 3]]) {
     let [mx, my, mz] = average_magnetization_components(magnetization);
+    stats.mx = mx;
+    stats.my = my;
+    stats.mz = mz;
+}
+
+pub(crate) fn apply_weighted_average_m_to_step_stats(
+    stats: &mut StepStats,
+    magnetization: &[[f64; 3]],
+    weights: &[f64],
+) {
+    let [mx, my, mz] = if weights
+        .iter()
+        .take(magnetization.len())
+        .any(|weight| weight.is_finite() && *weight > 0.0)
+    {
+        weighted_average_magnetization_components(magnetization, weights)
+    } else {
+        average_magnetization_components(magnetization)
+    };
     stats.mx = mx;
     stats.my = my;
     stats.mz = mz;
@@ -160,4 +211,46 @@ pub(crate) fn scalar_outputs_request_average_m(schedules: &[OutputSchedule]) -> 
     schedules
         .iter()
         .any(|schedule| matches!(schedule.name.as_str(), "mx" | "my" | "mz"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        apply_weighted_average_m_to_step_stats, weighted_average_magnetization_components,
+    };
+    use crate::types::StepStats;
+
+    #[test]
+    fn weighted_average_magnetization_uses_fem_volume_weights() {
+        let values = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let weights = [1.0, 2.0, 7.0];
+
+        let actual = weighted_average_magnetization_components(&values, &weights);
+        for (actual, expected) in actual.into_iter().zip([0.1, 0.2, 0.7]) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn weighted_average_magnetization_keeps_zero_magnetization_with_positive_weight() {
+        let values = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]];
+        let weights = [3.0, 1.0];
+
+        assert_eq!(
+            weighted_average_magnetization_components(&values, &weights),
+            [0.25, 0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn weighted_step_stats_fall_back_to_uniform_average_without_mesh_volumes() {
+        let mut stats = StepStats::default();
+        apply_weighted_average_m_to_step_stats(
+            &mut stats,
+            &[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            &[],
+        );
+
+        assert_eq!([stats.mx, stats.my, stats.mz], [0.5, 0.5, 0.0]);
+    }
 }

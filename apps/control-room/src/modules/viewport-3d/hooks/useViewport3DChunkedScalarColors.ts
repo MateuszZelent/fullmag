@@ -568,6 +568,8 @@ export function useViewport3DChunkedScalarColors({
         !viewport3DTargetFieldBufferCanServeSurface(
           explicitPartFieldBuffer,
           mode,
+          partFieldVector.quantityId,
+          targetRenderPlans?.get(partId)?.shader.projectionMode ?? "raw_nodal",
         )
       ) {
         continue;

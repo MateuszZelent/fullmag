@@ -18,6 +18,7 @@ import numpy as np
 from fullmag._core import validate_mesh_ir
 
 from ._gmsh_extraction import _read_mesh_file
+from ._gmsh_extraction import _derive_facet_roles
 from ._gmsh_infra import _import_meshio
 from ._gmsh_types import (
     MeshData,
@@ -29,6 +30,8 @@ from ._gmsh_types import (
 
 ARTIFACT_SCHEMA = "fullmag.mesh-artifact.v1"
 AUTHORING_SCHEMA = "fullmag.mesh-authoring-fingerprint.v1"
+INTERCHANGE_SCHEMA = "fullmag.mesh-interchange.v1"
+COMSOL_INTERCHANGE_SCHEMA = "fullmag.mesh-comsol-interchange.v1"
 _COORDINATE_SCALES = {"m": 1.0, "mm": 1.0e-3, "um": 1.0e-6, "nm": 1.0e-9}
 
 
@@ -279,6 +282,32 @@ def _normalize_markers(markers: Sequence[Mapping[str, object]]) -> list[dict[str
     return result
 
 
+def _validate_semantic_marker_coverage(
+    mesh: MeshData,
+    *,
+    region_markers: Sequence[Mapping[str, object]],
+    object_region_markers: Sequence[Mapping[str, object]],
+    boundary_map: Mapping[str, int],
+) -> None:
+    declared_volume = {
+        int(entry["marker"])
+        for entry in (*region_markers, *object_region_markers)
+    }
+    present_volume = set(int(value) for value in mesh.element_markers.tolist()) - {0}
+    if present_volume != declared_volume:
+        raise MeshSemanticMappingError(
+            f"volume markers {sorted(present_volume)} do not match declared semantic "
+            f"markers {sorted(declared_volume)}"
+        )
+    declared_boundary = set(int(value) for value in boundary_map.values())
+    present_boundary = set(int(value) for value in mesh.boundary_markers.tolist())
+    if present_boundary != declared_boundary:
+        raise MeshSemanticMappingError(
+            f"boundary markers {sorted(present_boundary)} do not match boundary_map "
+            f"{sorted(declared_boundary)}"
+        )
+
+
 def save_mesh_artifact(
     path: str | Path,
     *,
@@ -301,6 +330,13 @@ def save_mesh_artifact(
         raise ValueError("mesh failed Rust MeshIR validation")
     regions = _normalize_markers(region_markers)
     object_regions = _normalize_markers(object_region_markers)
+    boundaries = {str(name): int(marker) for name, marker in (boundary_map or {}).items()}
+    _validate_semantic_marker_coverage(
+        mesh,
+        region_markers=regions,
+        object_region_markers=object_regions,
+        boundary_map=boundaries,
+    )
     topology = _serialize_mesh(mesh)
     report_bytes = _canonical_json(dict(build_report)) if build_report is not None else None
     members = {"topology.npz": topology}
@@ -320,7 +356,7 @@ def save_mesh_artifact(
         "authoring_fingerprint": mesh_authoring_fingerprint(authoring),
         "region_markers": regions,
         "object_region_markers": object_regions,
-        "boundary_map": dict(sorted((boundary_map or {}).items())),
+        "boundary_map": dict(sorted(boundaries.items())),
         "provenance": dict(provenance or {"origin": "generated"}),
         "build_report_present": report_bytes is not None,
         "members": {
@@ -391,6 +427,17 @@ def load_mesh_artifact(
         differences = _mapping_differences(authoring, dict(expected_authoring_document))
         if differences:
             raise MeshConfigurationMismatch(differences)
+    regions = _normalize_markers(manifest.get("region_markers", []))
+    object_regions = _normalize_markers(manifest.get("object_region_markers", []))
+    boundaries = {
+        str(name): int(marker) for name, marker in manifest.get("boundary_map", {}).items()
+    }
+    _validate_semantic_marker_coverage(
+        mesh,
+        region_markers=regions,
+        object_region_markers=object_regions,
+        boundary_map=boundaries,
+    )
     build_report = None
     if manifest.get("build_report_present"):
         if "build-report.json" not in members:
@@ -402,11 +449,9 @@ def load_mesh_artifact(
         authoring_document=authoring,
         authoring_fingerprint=fingerprint,
         topology_fingerprint=topology_fingerprint,
-        region_markers=_normalize_markers(manifest.get("region_markers", [])),
-        object_region_markers=_normalize_markers(manifest.get("object_region_markers", [])),
-        boundary_map={
-            str(name): int(marker) for name, marker in manifest.get("boundary_map", {}).items()
-        },
+        region_markers=regions,
+        object_region_markers=object_regions,
+        boundary_map=boundaries,
         build_report=build_report,
         provenance=dict(manifest.get("provenance", {})),
     )
@@ -456,7 +501,7 @@ def export_gmsh_mesh(artifact: MeshArtifact, path: str | Path) -> Path:
         temporary.unlink(missing_ok=True)
     sidecar = Path(f"{target}.fullmag.json")
     sidecar_payload = {
-        "schema": "fullmag.mesh-interchange.v1",
+        "schema": INTERCHANGE_SCHEMA,
         "coordinate_unit": "m",
         "msh_sha256": sha256(payload).hexdigest(),
         "source_topology_fingerprint": artifact.topology_fingerprint,
@@ -604,7 +649,14 @@ def import_gmsh_mesh(
     sidecar_path = Path(f"{source}.fullmag.json")
     sidecar: dict[str, object] = {}
     if sidecar_path.exists():
-        sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        try:
+            sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise MeshArtifactCorruptionError(f"invalid Gmsh sidecar: {exc}") from exc
+        if sidecar.get("schema") != INTERCHANGE_SCHEMA:
+            raise MeshArtifactVersionError(
+                f"unsupported mesh interchange schema {sidecar.get('schema')!r}"
+            )
         if sidecar.get("msh_sha256") != sha256(source.read_bytes()).hexdigest():
             raise MeshArtifactCorruptionError("Gmsh sidecar digest does not match .msh")
     resolved_unit = coordinate_unit or sidecar.get("coordinate_unit")
@@ -672,19 +724,26 @@ def import_gmsh_mesh(
     mesh.validate_strict(require_positive_orientation=True)
     if validate_mesh_ir(mesh.to_ir("study_domain")) is False:
         raise ValueError("imported Gmsh mesh failed Rust MeshIR validation")
+    source_sha256 = sha256(source.read_bytes()).hexdigest()
+    external_authoring = {
+        "external_mesh_sha256": source_sha256,
+        "coordinate_unit": resolved_unit,
+    }
     return MeshArtifact(
         mesh=mesh,
         mesh_name="study_domain",
-        authoring_document={"external_mesh": str(source), "coordinate_unit": resolved_unit},
-        authoring_fingerprint=mesh_authoring_fingerprint(
-            {"external_mesh": str(source), "coordinate_unit": resolved_unit}
-        ),
+        authoring_document=external_authoring,
+        authoring_fingerprint=mesh_authoring_fingerprint(external_authoring),
         topology_fingerprint=mesh.topology_fingerprint_v3(),
         region_markers=_normalize_markers(regions),
         object_region_markers=_normalize_markers(sidecar.get("object_region_markers", [])),
         boundary_map={str(name): int(marker) for name, marker in dict(boundaries_raw).items()},
         build_report=None,
-        provenance={"origin": "gmsh_import", "source": str(source)},
+        provenance={
+            "origin": "gmsh_import",
+            "source": str(source),
+            "source_sha256": source_sha256,
+        },
     )
 
 
@@ -718,4 +777,401 @@ def _remap_mesh_markers(
         cell_global_ordinals=np.arange(mesh.n_elements, dtype=np.int64),
         facet_global_ordinals=np.arange(mesh.n_boundary_faces, dtype=np.int64),
         cell_mesh_parts=cell_mesh_parts,
+    )
+
+
+_COMSOL_TYPE_NAMES = {
+    "tri3": "tri",
+    "quad4": "quad",
+    "tet4": "tet",
+    "pyramid5": "pyr",
+    "prism6": "prism",
+    "hex8": "hex",
+}
+_COMSOL_TO_FULLMAG_TYPES = {value: key for key, value in _COMSOL_TYPE_NAMES.items()}
+_COMSOL_ARITIES = {
+    "tri": 3,
+    "quad": 4,
+    "tet": 4,
+    "pyr": 5,
+    "prism": 6,
+    "hex": 8,
+}
+_COMSOL_IGNORED_LOWER_DIMENSIONAL_ARITIES = {"vtx": 1, "edg": 2}
+
+
+def export_comsol_mesh(artifact: MeshArtifact, path: str | Path) -> Path:
+    """Export a linear 3D mesh as COMSOL Multiphysics text format v4."""
+    target = Path(path)
+    if target.suffix.lower() != ".mphtxt":
+        raise ValueError("COMSOL interchange export requires a .mphtxt destination")
+    mesh = artifact.mesh
+    unsupported = sorted(
+        (set(mesh.cell_types.tolist()) | set(mesh.facet_types.tolist()))
+        - set(_COMSOL_TYPE_NAMES)
+    )
+    if unsupported:
+        raise MeshSemanticMappingError(
+            f"COMSOL export does not support element families {unsupported}"
+        )
+    volume_markers = sorted(set(int(value) for value in mesh.element_markers.tolist()))
+    surface_markers = sorted(set(int(value) for value in mesh.boundary_markers.tolist()))
+    volume_export_map = _positive_export_tags(volume_markers)
+    surface_export_map = {marker: index for index, marker in enumerate(surface_markers)}
+    blocks: list[tuple[str, np.ndarray, np.ndarray]] = []
+    for types, offsets, nodes, markers, marker_map in (
+        (
+            mesh.cell_types,
+            mesh.cell_offsets,
+            mesh.cell_nodes,
+            mesh.element_markers,
+            volume_export_map,
+        ),
+        (
+            mesh.facet_types,
+            mesh.facet_offsets,
+            mesh.facet_nodes,
+            mesh.boundary_markers,
+            surface_export_map,
+        ),
+    ):
+        for kind in dict.fromkeys(types.tolist()):
+            indices = np.flatnonzero(types == kind)
+            connectivity = np.asarray(
+                [nodes[offsets[index] : offsets[index + 1]] for index in indices],
+                dtype=np.int64,
+            )
+            entities = np.asarray(
+                [marker_map[int(markers[index])] for index in indices], dtype=np.int64
+            )
+            blocks.append((_COMSOL_TYPE_NAMES[str(kind)], connectivity, entities))
+    lines = [
+        "# Created by Fullmag for COMSOL Multiphysics mesh import.",
+        "0 1 # Major & minor version",
+        "1 # number of tags",
+        "5 mesh1",
+        "1 # number of types",
+        "3 obj",
+        "0 0 1",
+        "4 Mesh # class",
+        "4 # Mesh serialization version (COMSOL v4/v44)",
+        "3 # space dimension",
+        f"{mesh.n_nodes} # number of mesh vertices",
+        "0 # lowest mesh vertex index",
+        "# Mesh vertex coordinates (metres)",
+    ]
+    lines.extend(" ".join(f"{float(value):.17g}" for value in point) for point in mesh.nodes)
+    lines.append(f"{len(blocks)} # number of element types")
+    for block_index, (kind, connectivity, entities) in enumerate(blocks):
+        lines.extend(
+            [
+                f"# Type #{block_index}",
+                f"{len(kind)} {kind} # type name",
+                f"{_COMSOL_ARITIES[kind]} # number of vertices per element",
+                f"{len(connectivity)} # number of elements",
+                "# Elements",
+            ]
+        )
+        lines.extend(" ".join(str(int(node)) for node in row) for row in connectivity)
+        lines.extend(
+            [
+                f"{len(entities)} # number of geometric entity indices",
+                "# Geometric entity indices",
+            ]
+        )
+        lines.extend(str(int(marker)) for marker in entities)
+    payload = ("\n".join(lines) + "\n").encode("utf-8")
+    _atomic_write_bytes(target, payload)
+    sidecar = Path(f"{target}.fullmag.json")
+    _atomic_write_bytes(
+        sidecar,
+        _canonical_json(
+            {
+                "schema": COMSOL_INTERCHANGE_SCHEMA,
+                "coordinate_unit": "m",
+                "mphtxt_sha256": sha256(payload).hexdigest(),
+                "source_topology_fingerprint": artifact.topology_fingerprint,
+                "region_markers": artifact.region_markers,
+                "object_region_markers": artifact.object_region_markers,
+                "boundary_map": artifact.boundary_map,
+                "cell_global_ordinals": artifact.mesh.cell_global_ordinals.tolist(),
+                "facet_global_ordinals": artifact.mesh.facet_global_ordinals.tolist(),
+                "cell_mesh_parts": artifact.mesh.cell_mesh_parts.tolist(),
+                "periodic_boundary_pairs": artifact.mesh.periodic_boundary_pairs,
+                "periodic_node_pairs": artifact.mesh.periodic_node_pairs,
+                "volume_marker_fullmag_to_comsol": {
+                    str(marker): exported
+                    for marker, exported in volume_export_map.items()
+                },
+                "surface_marker_fullmag_to_comsol": {
+                    str(marker): exported
+                    for marker, exported in surface_export_map.items()
+                },
+                "comsol_mesh_serialization_version": 4,
+            }
+        ),
+    )
+    return target
+
+
+def _comsol_tokens(path: Path) -> list[str]:
+    tokens: list[str] = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            tokens.extend(line.split("#", 1)[0].split())
+    except (OSError, UnicodeError) as exc:
+        raise MeshArtifactCorruptionError(f"invalid COMSOL text mesh: {exc}") from exc
+    return tokens
+
+
+def import_comsol_mesh(
+    path: str | Path,
+    *,
+    region_map: Mapping[str, int] | None = None,
+    boundary_map: Mapping[str, int] | None = None,
+    region_entity_map: Mapping[int, int] | None = None,
+    boundary_entity_map: Mapping[int, int] | None = None,
+    coordinate_unit: str | None = None,
+) -> MeshArtifact:
+    """Import COMSOL Multiphysics text mesh serialization version 4."""
+    source = Path(path)
+    if source.suffix.lower() != ".mphtxt":
+        raise ValueError("COMSOL interchange import requires a .mphtxt source")
+    sidecar_path = Path(f"{source}.fullmag.json")
+    sidecar: dict[str, object] = {}
+    if sidecar_path.exists():
+        try:
+            sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise MeshArtifactCorruptionError(f"invalid COMSOL sidecar: {exc}") from exc
+        if sidecar.get("schema") != COMSOL_INTERCHANGE_SCHEMA:
+            raise MeshArtifactVersionError(
+                f"unsupported COMSOL interchange schema {sidecar.get('schema')!r}"
+            )
+        if sidecar.get("mphtxt_sha256") != sha256(source.read_bytes()).hexdigest():
+            raise MeshArtifactCorruptionError("COMSOL sidecar digest does not match .mphtxt")
+    resolved_unit = coordinate_unit or sidecar.get("coordinate_unit")
+    if resolved_unit not in _COORDINATE_SCALES:
+        raise ValueError("coordinate_unit must be explicitly provided as m, mm, um, or nm")
+    tokens = _comsol_tokens(source)
+    cursor = 0
+
+    def take() -> str:
+        nonlocal cursor
+        if cursor >= len(tokens):
+            raise MeshArtifactCorruptionError("truncated COMSOL text mesh")
+        value = tokens[cursor]
+        cursor += 1
+        return value
+
+    def take_int() -> int:
+        try:
+            return int(take())
+        except ValueError as exc:
+            raise MeshArtifactCorruptionError("invalid integer in COMSOL text mesh") from exc
+
+    def take_string() -> str:
+        length = take_int()
+        value = take()
+        if len(value) != length:
+            raise MeshArtifactCorruptionError("invalid length-prefixed COMSOL string")
+        return value
+
+    if (take_int(), take_int()) != (0, 1):
+        raise MeshArtifactVersionError("unsupported COMSOL text file version")
+    for _ in range(take_int()):
+        take_string()
+    for _ in range(take_int()):
+        take_string()
+    if (take_int(), take_int(), take_int()) != (0, 0, 1) or take_string() != "Mesh":
+        raise MeshArtifactCorruptionError("COMSOL text file does not contain a Mesh object")
+    mesh_version = take_int()
+    if mesh_version != 4:
+        raise MeshArtifactVersionError(
+            f"unsupported COMSOL Mesh serialization version {mesh_version}; export as v44"
+        )
+    if take_int() != 3:
+        raise MeshArtifactVersionError("only three-dimensional COMSOL meshes are supported")
+    node_count = take_int()
+    lowest_index = take_int()
+    if lowest_index != 0:
+        raise MeshArtifactVersionError("COMSOL mesh vertex indices must start at zero")
+    coordinates = np.asarray(
+        [[float(take()), float(take()), float(take())] for _ in range(node_count)],
+        dtype=np.float64,
+    ) * _COORDINATE_SCALES[str(resolved_unit)]
+    cell_types: list[str] = []
+    cell_nodes: list[int] = []
+    cell_offsets = [0]
+    element_markers: list[int] = []
+    facet_types: list[str] = []
+    facet_nodes: list[int] = []
+    facet_offsets = [0]
+    boundary_markers: list[int] = []
+    for _ in range(take_int()):
+        comsol_kind = take_string()
+        expected_arity = _COMSOL_ARITIES.get(
+            comsol_kind,
+            _COMSOL_IGNORED_LOWER_DIMENSIONAL_ARITIES.get(comsol_kind),
+        )
+        if expected_arity is None:
+            raise MeshSemanticMappingError(
+                f"unsupported COMSOL element type {comsol_kind!r}"
+            )
+        arity = take_int()
+        if arity != expected_arity:
+            raise MeshSemanticMappingError(
+                f"unsupported higher-order COMSOL {comsol_kind} element with {arity} nodes"
+            )
+        count = take_int()
+        rows = [[take_int() for _ in range(arity)] for _ in range(count)]
+        marker_count = take_int()
+        if marker_count != count:
+            raise MeshArtifactCorruptionError(
+                f"COMSOL {comsol_kind} entity count does not match element count"
+            )
+        markers = [take_int() for _ in range(count)]
+        if comsol_kind in _COMSOL_IGNORED_LOWER_DIMENSIONAL_ARITIES:
+            continue
+        kind = _COMSOL_TO_FULLMAG_TYPES[comsol_kind]
+        if kind in {"tri3", "quad4"}:
+            for row, marker in zip(rows, markers, strict=True):
+                facet_types.append(kind)
+                facet_nodes.extend(row)
+                facet_offsets.append(len(facet_nodes))
+                boundary_markers.append(marker)
+        else:
+            for row, marker in zip(rows, markers, strict=True):
+                cell_types.append(kind)
+                cell_nodes.extend(row)
+                cell_offsets.append(len(cell_nodes))
+                element_markers.append(marker)
+    if cursor != len(tokens):
+        raise MeshArtifactVersionError(
+            "COMSOL text mesh contains additional objects; export mesh only as v44"
+        )
+    volume_translation = {
+        int(exported): int(fullmag)
+        for fullmag, exported in dict(
+            sidecar.get("volume_marker_fullmag_to_comsol", {})
+        ).items()
+    }
+    surface_translation = {
+        int(exported): int(fullmag)
+        for fullmag, exported in dict(
+            sidecar.get("surface_marker_fullmag_to_comsol", {})
+        ).items()
+    }
+    if not sidecar:
+        if (
+            region_map is None
+            or boundary_map is None
+            or region_entity_map is None
+            or boundary_entity_map is None
+        ):
+            raise MeshSemanticMappingError(
+                "region_map, boundary_map, region_entity_map, and "
+                "boundary_entity_map are required without a matching Fullmag sidecar"
+            )
+        volume_translation = {
+            int(external): int(fullmag)
+            for external, fullmag in region_entity_map.items()
+        }
+        surface_translation = {
+            int(external): int(fullmag)
+            for external, fullmag in boundary_entity_map.items()
+        }
+    element_markers_array = np.asarray(
+        [volume_translation.get(marker, marker) for marker in element_markers],
+        dtype=np.int32,
+    )
+    boundary_markers_array = np.asarray(
+        [surface_translation.get(marker, marker) for marker in boundary_markers],
+        dtype=np.int32,
+    )
+    cell_types_array = np.asarray(cell_types)
+    cell_offsets_array = np.asarray(cell_offsets, dtype=np.int64)
+    cell_nodes_array = np.asarray(cell_nodes, dtype=np.int32)
+    facet_offsets_array = np.asarray(facet_offsets, dtype=np.int64)
+    facet_nodes_array = np.asarray(facet_nodes, dtype=np.int32)
+    facet_roles = _derive_facet_roles(
+        cell_types_array,
+        cell_offsets_array,
+        cell_nodes_array,
+        element_markers_array,
+        facet_offsets_array,
+        facet_nodes_array,
+        boundary_markers_array,
+    )
+    mesh = MeshData(
+        nodes=coordinates,
+        cell_types=cell_types_array,
+        cell_offsets=cell_offsets_array,
+        cell_nodes=cell_nodes_array,
+        element_markers=element_markers_array,
+        facet_types=np.asarray(facet_types),
+        facet_roles=facet_roles,
+        facet_offsets=facet_offsets_array,
+        facet_nodes=facet_nodes_array,
+        boundary_markers=boundary_markers_array,
+        cell_global_ordinals=np.arange(len(cell_types), dtype=np.int64),
+        facet_global_ordinals=np.arange(len(facet_types), dtype=np.int64),
+        cell_mesh_parts=np.asarray(
+            ["far_air" if marker == 0 else "magnetic" for marker in element_markers_array]
+        ),
+    )
+    mesh.validate_strict(require_positive_orientation=True)
+    if validate_mesh_ir(mesh.to_ir("study_domain")) is False:
+        raise ValueError("imported COMSOL mesh failed Rust MeshIR validation")
+    regions_raw = region_map or {
+        str(entry["geometry_name"]): int(entry["marker"])
+        for entry in sidecar.get("region_markers", [])
+    }
+    boundaries_raw = boundary_map or sidecar.get("boundary_map", {})
+    if not regions_raw or not boundaries_raw:
+        raise MeshSemanticMappingError("COMSOL mesh semantic maps are incomplete")
+    present_volume_markers = set(int(value) for value in mesh.element_markers.tolist())
+    declared_volume_markers = set(int(value) for value in regions_raw.values())
+    if present_volume_markers - {0} != declared_volume_markers:
+        raise MeshSemanticMappingError(
+            f"volume markers {sorted(present_volume_markers)} do not match "
+            f"region_map {sorted(declared_volume_markers)}"
+        )
+    present_boundary_markers = set(int(value) for value in mesh.boundary_markers.tolist())
+    declared_boundary_markers = set(int(value) for value in dict(boundaries_raw).values())
+    if present_boundary_markers != declared_boundary_markers:
+        raise MeshSemanticMappingError(
+            f"boundary markers {sorted(present_boundary_markers)} do not match "
+            f"boundary_map {sorted(declared_boundary_markers)}"
+        )
+    source_sha256 = sha256(source.read_bytes()).hexdigest()
+    external_authoring = {
+        "external_mesh_sha256": source_sha256,
+        "coordinate_unit": resolved_unit,
+    }
+    return MeshArtifact(
+        mesh=mesh,
+        mesh_name="study_domain",
+        authoring_document=external_authoring,
+        authoring_fingerprint=mesh_authoring_fingerprint(external_authoring),
+        topology_fingerprint=mesh.topology_fingerprint_v3(),
+        region_markers=_normalize_markers(
+            [
+                {"geometry_name": str(name), "marker": int(marker)}
+                for name, marker in regions_raw.items()
+            ]
+        ),
+        object_region_markers=_normalize_markers(
+            sidecar.get("object_region_markers", [])
+        ),
+        boundary_map={
+            str(name): int(marker) for name, marker in dict(boundaries_raw).items()
+        },
+        build_report=None,
+        provenance={
+            "origin": "comsol_import",
+            "source": str(source),
+            "source_sha256": source_sha256,
+            "comsol_mesh_serialization_version": mesh_version,
+        },
     )

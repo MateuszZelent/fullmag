@@ -1,6 +1,6 @@
 # Mesh Persistence and Interchange Design
 
-**Status:** proposed for implementation planning  
+**Status:** implemented; COMSOL qualification corrected against official 6.4 formats
 **Date:** 2026-07-30  
 **Scope:** FEM solver meshes, including shared magnetic-domain and airbox meshes
 
@@ -18,7 +18,9 @@ study.mesh.save("mesh.fullmag-mesh")
 study.mesh.load("mesh.fullmag-mesh")
 study.mesh.save_or_load("mesh.fullmag-mesh")
 
-study.mesh.export("mesh.msh")
+study.mesh.export("mesh.mphtxt")       # direct COMSOL interchange
+study.mesh.export("mesh.msh")          # general Gmsh interchange
+study.mesh.import_("mesh.mphtxt")
 study.mesh.import_("mesh.msh", region_map={...}, boundary_map={...})
 ```
 
@@ -96,7 +98,9 @@ own per-object sizing; `body.mesh(...)`, `study.universe.mesh(...)`, and
 
 ### 3.4 `study.mesh.export(path, format="auto")`
 
-- Exports the realized mesh to Gmsh 4.1 `.msh` for COMSOL and other mesh tools.
+- Exports `.mphtxt` as COMSOL Multiphysics native text Mesh serialization v4.
+- Exports `.msh` as Gmsh 4.1 for general mesh-tool interchange; `.msh` is not
+  claimed as a directly supported COMSOL import format.
 - Writes linear supported volume cells (`tet4`, `prism6`, `pyramid5`, `hex8`)
   and boundary facets (`tri3`, `quad4`) without changing node coordinates or
   connectivity.
@@ -111,7 +115,7 @@ own per-object sizing; `body.mesh(...)`, `study.universe.mesh(...)`, and
 
 ### 3.5 `study.mesh.import_(path, ...)`
 
-- Imports a Gmsh 4.1 `.msh` returned from COMSOL or another tool.
+- Imports COMSOL `.mphtxt` Mesh serialization v4 or Gmsh 4.1 `.msh`.
 - Requires explicit `region_map` and `boundary_map` when stable semantic names
   cannot be recovered unambiguously from Physical Groups or a matching sidecar.
 - Treats connectivity, node ordering, element ordering, marker IDs, and boundary
@@ -166,22 +170,20 @@ The manifest uses `fullmag.mesh-artifact.v1` and contains:
 - artifact schema and minimum reader version;
 - SI coordinate unit fixed to `m`;
 - creation timestamp as provenance, excluded from deterministic identity;
-- Fullmag API, IR, serializer, mesh-cache, Gmsh, and meshio versions;
-- mesh name, mesh identity, generation identity, and domain mesh mode;
+- artifact, authoring, and topology-fingerprint schema versions;
+- mesh name and topology identity;
 - SHA-256 digest and byte length of every member;
 - topology fingerprint and its version;
 - authoring fingerprint and the normalized input document used to compute it;
 - `region_markers` mapping geometry/object names to volume markers;
 - `object_region_markers` for authored subregions;
 - boundary semantic map for outer, interface, periodic, and selected surfaces;
-- mesh-part semantics for magnetic, transition-air, far-air, and named object
-  partitions;
-- periodic policy and certificate status;
-- build-report presence and validation status;
+- mesh-part semantics and periodic certificates inside `topology.npz`;
+- build-report presence;
 - provenance identifying generated, native-loaded, or external-imported origin.
 
-Unknown required fields, digest failures, duplicate semantic names, marker
-collisions, or unsupported major schema versions fail closed.
+Digest failures, incomplete or colliding semantic maps, unsupported major schema
+versions, and invalid strict `MeshData`/Rust `MeshIR` topology fail closed.
 
 ## 5. Authoring fingerprint
 
@@ -242,11 +244,13 @@ imported from interchange, and record both fingerprints.
 
 ## 7. COMSOL interoperability boundary
 
-Gmsh `.msh` is the supported interchange baseline because it is inspectable,
-open, and already readable through meshio. COMSOL import/export support must be
-qualified by tested element families and Physical Group preservation; the
-design does not claim round-trip preservation of proprietary COMSOL selections,
-curved higher-order elements, solver features, or mesh-operation history.
+COMSOL `.mphtxt` Mesh serialization v4 is the direct interoperability baseline.
+COMSOL 6.4 officially lists `.mphtxt` and `.mphbin`, but not Gmsh `.msh`, as
+native mesh import formats. Gmsh remains a separate open interchange option.
+For a mesh returned by current COMSOL, export MPHTXT with `fileversion=v44`;
+Mesh serialization v64 is rejected until a dedicated parser and fixture exist.
+The design does not claim preservation of proprietary mesh-operation history,
+curved higher-order elements, or solver features.
 
 The first production slice supports linear 3D volume cells and linear boundary
 facets already represented by `MeshData`. Higher-order elements fail with an
@@ -264,7 +268,9 @@ Round-trip acceptance requires:
 - the imported topology passes Rust `MeshIR` validation and focused managed FEM
   runtime smoke verification.
 
-COMSOL may renumber nodes, cells, and markers. Equality after COMSOL round-trip
+COMSOL may renumber nodes, cells, and geometric entities. Without a matching
+sidecar the import requires semantic maps plus explicit external-entity maps.
+Equality after COMSOL round-trip
 is therefore semantic and geometric within declared tolerances, not identity of
 the original topology fingerprint.
 
@@ -308,9 +314,10 @@ missing case inside `save_or_load()`.
   identity.
 - Missing units, missing Physical Groups, marker collisions, and higher-order
   elements fail with actionable diagnostics.
-- A checked-in small COMSOL-returned fixture, created manually once and stored
-  with provenance, proves the documented interchange subset without requiring
-  COMSOL in CI.
+- A checked-in provenance-pinned Mesh serialization v4 fixture created by
+  COMSOL covers complete `vtx`, `edg`, `tri`, and `tet` output. It qualifies the
+  importer against actual COMSOL output, but does not by itself prove execution
+  of a Fullmag-to-COMSOL-to-Fullmag round-trip in the proprietary application.
 
 ### 9.3 End-to-end proof
 
@@ -323,8 +330,12 @@ shared-domain example must demonstrate:
    region partition, boundary semantics, and solver result within the existing
    deterministic tolerance;
 4. changing one mesh size causes `save_or_load()` to rebuild;
-5. native-loaded and Gmsh-imported meshes each pass the managed FEM runtime
-   smoke appropriate to their supported topology.
+5. native-loaded, Gmsh-imported, and Fullmag-produced MPHTXT-imported meshes each
+   pass the managed FEM runtime smoke appropriate to their supported topology.
+
+Step 5 and the COMSOL-created fixture qualify Fullmag's serializer/parser and
+runtime binding. They do not claim that the proprietary COMSOL application was
+executed during Fullmag CI.
 
 ## 10. Documentation and compatibility
 
@@ -358,5 +369,5 @@ Use one lossless native artifact plus one explicit interchange format. A single
 `.msh` file cannot safely serve both roles because standard Gmsh containers do
 not carry every Fullmag certificate, provenance field, authoring input, and
 semantic round-trip invariant. The native container is authoritative for
-`save/load/save_or_load`; `.msh` plus its sidecar is authoritative only for the
-documented COMSOL interchange subset.
+`save/load/save_or_load`; `.mphtxt` and `.msh` plus their sidecars are
+authoritative only for their documented interchange subsets.

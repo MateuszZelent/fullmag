@@ -592,17 +592,19 @@ def build_geometry_assets_for_request(
 
         if explicit_domain_mesh_source is not None:
             source_suffix = Path(explicit_domain_mesh_source).suffix.lower()
-            if source_suffix in {".fullmag-mesh", ".msh"}:
+            if source_suffix in {".fullmag-mesh", ".msh", ".mphtxt"}:
                 from fullmag.meshing.persistence import (
+                    import_comsol_mesh,
                     import_gmsh_mesh,
                     load_mesh_artifact,
                 )
 
-                artifact = (
-                    load_mesh_artifact(explicit_domain_mesh_source)
-                    if source_suffix == ".fullmag-mesh"
-                    else import_gmsh_mesh(explicit_domain_mesh_source)
-                )
+                if source_suffix == ".fullmag-mesh":
+                    artifact = load_mesh_artifact(explicit_domain_mesh_source)
+                elif source_suffix == ".mphtxt":
+                    artifact = import_comsol_mesh(explicit_domain_mesh_source)
+                else:
+                    artifact = import_gmsh_mesh(explicit_domain_mesh_source)
                 if artifact.region_markers != explicit_domain_region_markers:
                     raise ValueError(
                         "explicit shared-domain mesh region markers do not match the persisted artifact"

@@ -909,7 +909,6 @@ impl CurrentLiveLatestFields {
     pub fn insert(&mut self, quantity: String, value: serde_json::Value) {
         self.0.insert(quantity, value);
     }
-
 }
 
 #[derive(Debug, Clone, Default)]

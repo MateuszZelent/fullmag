@@ -3775,7 +3775,11 @@ mod stt_tests {
         let expected_field_component = -8.0 * kc3 * component / (9.0 * MU0 * ms);
         let field = problem.anisotropy_field(&magnetization);
         for actual in field[0] {
-            check_close(actual, expected_field_component, expected_field_component.abs() * 1e-12);
+            check_close(
+                actual,
+                expected_field_component,
+                expected_field_component.abs() * 1e-12,
+            );
         }
     }
 
@@ -3815,8 +3819,8 @@ mod stt_tests {
 
         const HBAR: f64 = 1.054571817e-34;
         const E_CHARGE: f64 = 1.60217662e-19;
-        let field_amplitude = cfg.current_density * HBAR
-            / (2.0 * E_CHARGE * MU0 * 800.0e3 * cfg.thickness);
+        let field_amplitude =
+            cfg.current_density * HBAR / (2.0 * E_CHARGE * MU0 * 800.0e3 * cfg.thickness);
         let alpha = problem.material.damping;
         let gamma_bar = problem.dynamics.gyromagnetic_ratio / (1.0 + alpha * alpha);
         let raw = [0.0, -cfg.xi_fl, cfg.xi_dl];
@@ -3828,7 +3832,11 @@ mod stt_tests {
         ];
 
         for component in 0..3 {
-            check_close(actual[component], expected[component], expected[component].abs() * 1e-12);
+            check_close(
+                actual[component],
+                expected[component],
+                expected[component].abs() * 1e-12,
+            );
         }
     }
 

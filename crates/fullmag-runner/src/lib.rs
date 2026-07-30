@@ -1325,8 +1325,8 @@ fn require_supported_fem_topology(
     facet_families.dedup();
     let tetrahedral = !cell_families.is_empty()
         && cell_families
-        .iter()
-        .all(|family| *family == fullmag_ir::FemCellTypeIR::Tet4)
+            .iter()
+            .all(|family| *family == fullmag_ir::FemCellTypeIR::Tet4)
         && facet_families
             .iter()
             .all(|family| *family == fullmag_ir::FemFacetTypeIR::Tri3);
@@ -1388,9 +1388,7 @@ fn require_supported_fem_topology(
     let fingerprint = mesh
         .mixed_topology_fingerprint_for_version(&certificate.topology_fingerprint_version)
         .map_err(|error| RunError {
-            message: format!(
-                "fem_mixed_p1_runtime_certificate_rejected: {error}; fallback=none"
-            ),
+            message: format!("fem_mixed_p1_runtime_certificate_rejected: {error}; fallback=none"),
         })?;
     if certificate.topology_fingerprint != fingerprint {
         return Err(RunError {
@@ -1582,10 +1580,10 @@ fn require_tetrahedral_fem_plan_mesh(
 ) -> Result<(), RunError> {
     let tetrahedral = !mesh.cells.types.is_empty()
         && mesh
-        .cells
-        .types
-        .iter()
-        .all(|family| *family == fullmag_ir::FemCellTypeIR::Tet4)
+            .cells
+            .types
+            .iter()
+            .all(|family| *family == fullmag_ir::FemCellTypeIR::Tet4)
         && mesh
             .facets
             .types

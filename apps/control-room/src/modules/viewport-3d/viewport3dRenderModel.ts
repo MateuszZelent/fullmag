@@ -906,6 +906,7 @@ export function buildViewport3DFieldRenderModel(
                 explicitPartFieldBuffer,
                 colorMode,
                 partQuantityId,
+                targetRenderPlan?.shader.projectionMode ?? "raw_nodal",
               )
             ? null
             : targetRenderPlan?.shader.projectionMode === "surface_faces"
@@ -1028,6 +1029,7 @@ export function buildViewport3DFieldRenderModel(
           colorMode: partSurfaceScalarColorMode ?? null,
           explicitPartFieldBuffer,
           quantityId: partQuantityId,
+          projectionMode: targetRenderPlan?.shader.projectionMode ?? "raw_nodal",
           scalarColors: activePartScalarColors,
         }),
         passId: `${partId}:surface`,
@@ -1118,6 +1120,7 @@ export function buildViewport3DFieldRenderModel(
         degradation: resolveViewport3DTargetSurfaceDegradation({
           colorMode: fullScalarColorMode,
           explicitPartFieldBuffer: null,
+          projectionMode: "raw_nodal",
           scalarColors: fullScalarColors,
         }),
         passId: `${FULL_VIEWPORT_3D_TARGET_ID}:surface`,
@@ -1213,11 +1216,13 @@ function targetFieldBufferSource(
 function resolveViewport3DTargetSurfaceDegradation({
   colorMode,
   explicitPartFieldBuffer,
+  projectionMode,
   quantityId,
   scalarColors,
 }: {
   colorMode: string | null;
   explicitPartFieldBuffer: Viewport3DTargetFieldBuffer | null;
+  projectionMode: SurfaceFieldProjectionMode;
   quantityId?: string | null;
   scalarColors: ScalarColorBuffer | null;
 }): Viewport3DTargetPassDegradation | null {
@@ -1237,6 +1242,7 @@ function resolveViewport3DTargetSurfaceDegradation({
       explicitPartFieldBuffer,
       colorMode,
       quantityId,
+      projectionMode,
     )
   ) {
     return explicitPartFieldBuffer.sampled

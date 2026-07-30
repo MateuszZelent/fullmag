@@ -4632,11 +4632,19 @@ class StudyMeshHandle:
         )
 
     def export(self, path: str | Path, *, format: str = "auto") -> Path:
-        from fullmag.meshing.persistence import export_gmsh_mesh
+        from fullmag.meshing.persistence import export_comsol_mesh, export_gmsh_mesh
 
-        if format not in {"auto", "gmsh"}:
-            raise ValueError("study.mesh.export() supports format='auto' or 'gmsh'")
-        return export_gmsh_mesh(self._current_artifact(), path)
+        target = Path(path)
+        resolved_format = (
+            "comsol" if target.suffix.lower() == ".mphtxt" else "gmsh"
+        ) if format == "auto" else format
+        if resolved_format == "comsol":
+            return export_comsol_mesh(self._current_artifact(), target)
+        if resolved_format == "gmsh":
+            return export_gmsh_mesh(self._current_artifact(), target)
+        raise ValueError(
+            "study.mesh.export() supports format='auto', 'comsol', or 'gmsh'"
+        )
 
     def import_(
         self,
@@ -4644,39 +4652,44 @@ class StudyMeshHandle:
         *,
         region_map: Mapping[str, int] | None = None,
         boundary_map: Mapping[str, int] | None = None,
+        region_entity_map: Mapping[int, int] | None = None,
+        boundary_entity_map: Mapping[int, int] | None = None,
         coordinate_unit: str | None = None,
     ) -> MeshPersistenceResult:
         from fullmag.meshing.persistence import (
+            import_comsol_mesh,
             import_gmsh_mesh,
-            load_mesh_artifact,
-            save_mesh_artifact,
+            mesh_authoring_fingerprint,
         )
-
-        artifact = import_gmsh_mesh(
-            path,
-            region_map=region_map,
-            boundary_map=boundary_map,
-            coordinate_unit=coordinate_unit,
-        )
-        import hashlib
 
         source = Path(path)
-        cache_dir = Path.cwd() / ".fullmag" / "local" / "cache" / "imported_meshes"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        cache_key = hashlib.sha256(source.read_bytes()).hexdigest()
-        native_path = cache_dir / f"{cache_key}.fullmag-mesh"
-        save_mesh_artifact(
-            native_path,
-            mesh=artifact.mesh,
-            mesh_name=artifact.mesh_name,
-            authoring_document=_current_mesh_authoring_document(),
-            region_markers=artifact.region_markers,
-            object_region_markers=artifact.object_region_markers,
-            boundary_map=artifact.boundary_map,
-            provenance=artifact.provenance,
+        importer = (
+            import_comsol_mesh
+            if source.suffix.lower() == ".mphtxt"
+            else import_gmsh_mesh
         )
-        bound_artifact = load_mesh_artifact(native_path)
-        _bind_mesh_artifact(bound_artifact, native_path)
+        import_kwargs: dict[str, object] = {
+            "region_map": region_map,
+            "boundary_map": boundary_map,
+            "coordinate_unit": coordinate_unit,
+        }
+        if importer is import_comsol_mesh:
+            import_kwargs.update(
+                region_entity_map=region_entity_map,
+                boundary_entity_map=boundary_entity_map,
+            )
+        elif region_entity_map is not None or boundary_entity_map is not None:
+            raise ValueError(
+                "region_entity_map and boundary_entity_map are COMSOL .mphtxt options"
+            )
+        artifact = importer(source, **import_kwargs)
+        authoring_document = _current_mesh_authoring_document()
+        bound_artifact = replace(
+            artifact,
+            authoring_document=authoring_document,
+            authoring_fingerprint=mesh_authoring_fingerprint(authoring_document),
+        )
+        _bind_mesh_artifact(bound_artifact, source)
         return MeshPersistenceResult(
             action="imported",
             path=source,
@@ -6863,7 +6876,17 @@ def _build_explicit_mesh_assets() -> dict[str, Any] | None:
         requested_backend=BackendTarget.FEM,
         geometries=resolved_geometries,
         discretization=DiscretizationHints(**discretization_kwargs),
+        study_universe=(
+            _state._study_universe.to_ir()
+            if _state._study_universe is not None
+            else None
+        ),
         mesh_workflow=_collect_mesh_workflow_metadata(),
+        object_regions=[
+            region.to_ir()
+            for handle in _state._magnets
+            for region in handle._object_regions
+        ],
         asset_cache=_state._geometry_asset_cache,
     )
     _cache_mesh_quality_reports(assets)

@@ -325,7 +325,7 @@ describe("viewport3dFieldMapping", () => {
     expect(Array.from(result?.scalarValues ?? [])).toEqual([6, 6, 6]);
   });
 
-  it("rejects surface-face projection when a face node is missing from the field map", () => {
+  it("degrades surface-face projection when a face node is missing from the field map", () => {
     const result = buildSurfaceFaceScalarColors(
       {
         ...vectorField([
@@ -340,10 +340,16 @@ describe("viewport3dFieldMapping", () => {
       "x",
     );
 
-    expect(result).toBeNull();
+    expect(result?.degradedFaceCount).toBe(1);
+    expect(result?.missingNodeCount).toBe(1);
+    expect(Array.from(result?.colors ?? [])).toEqual([
+      0.5, 0.5, 0.5,
+      0.5, 0.5, 0.5,
+      0.5, 0.5, 0.5,
+    ]);
   });
 
-  it("rejects sampled node-index payloads for surface-face projection", () => {
+  it("maps sampled node-index payloads for surface-face projection", () => {
     const result = buildSurfaceFaceScalarColors(
       {
         ...vectorField([
@@ -359,7 +365,39 @@ describe("viewport3dFieldMapping", () => {
       "x",
     );
 
-    expect(result).toBeNull();
+    expect(Array.from(result?.scalarValues ?? [])).toEqual([3, 3, 3]);
+  });
+
+  it("maps sampled node-index payloads for thickness-average-z projection", () => {
+    const result = buildThicknessAverageZScalarColors(
+      {
+        ...vectorField([
+          0, 0, 1,
+          0, 0, 1,
+          0, 0, 1,
+          0, 0, -1,
+          0, 0, -1,
+          0, 0, -1,
+        ]),
+        indexing: "sampled_node_indices",
+        nodeIndices: Uint32Array.from([0, 1, 2, 3, 4, 5]),
+      },
+      Float32Array.from([
+        0, 0, 1,
+        1, 0, 1,
+        0, 1, 1,
+        0, 0, -1,
+        1, 0, -1,
+        0, 1, -1,
+      ]),
+      Uint32Array.from([0, 1, 2]),
+      6,
+      "orientation",
+    );
+
+    expect(result?.projectionMode).toBe("thickness_average_z");
+    expect(result?.degradedFaceCount).toBe(0);
+    expect(result?.projectedSamplesPerBinMin).toBe(2);
   });
 
   it("does not build large surface-face projection synchronously", () => {

@@ -188,6 +188,22 @@ describe("viewport3DTargetFieldBuffer", () => {
     expect(viewport3DTargetFieldBufferCanServeSurface(buffer, "x")).toBe(false);
     expect(viewport3DTargetFieldBufferCanServeSurface(buffer, "orientation"))
       .toBe(false);
+    expect(
+      viewport3DTargetFieldBufferCanServeSurface(
+        buffer,
+        "orientation",
+        undefined,
+        "surface_faces",
+      ),
+    ).toBe(true);
+    expect(
+      viewport3DTargetFieldBufferCanServeSurface(
+        buffer,
+        "orientation",
+        undefined,
+        "thickness_average_z",
+      ),
+    ).toBe(true);
   });
 
   it("treats sampled payload metadata as sampled even without max_samples in the query", () => {
@@ -209,6 +225,14 @@ describe("viewport3DTargetFieldBuffer", () => {
     expect(buffer.complete).toBe(false);
     expect(buffer.sampled).toBe(true);
     expect(viewport3DTargetFieldBufferCanServeSurface(buffer, "x")).toBe(false);
+    expect(
+      viewport3DTargetFieldBufferCanServeSurface(
+        buffer,
+        "x",
+        undefined,
+        "surface_faces",
+      ),
+    ).toBe(true);
     expect(viewport3DTargetFieldBufferCanServeVectors(buffer)).toBe(true);
   });
 

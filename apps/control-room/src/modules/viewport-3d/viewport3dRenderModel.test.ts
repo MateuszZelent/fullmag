@@ -1840,6 +1840,66 @@ describe("viewport3dRenderModel", () => {
     });
   });
 
+  it.each(["surface_faces", "thickness_average_z"] as const)(
+    "renders %s surface coloring from a mapped sampled prism payload",
+    (surfaceProjectionMode) => {
+      const topologyModel = buildViewport3DTopologyRenderModel(
+        topologyFixture(),
+        [
+          {
+            boundary_face_count: 1,
+            boundary_face_start: 0,
+            element_count: 1,
+            element_start: 0,
+            id: "part-a",
+            label: "Prism",
+          },
+        ],
+        [],
+        undefined,
+        { meshTopologyHash: "hash-1" },
+      );
+      const fieldVector: DecodedFieldVector = {
+        ...fieldVectorFixture(),
+        indexing: "sampled_node_indices",
+        meshTopologyHash: "hash-1",
+        nodeIndices: new Uint32Array([0, 1, 2, 3]),
+      };
+      const sampledBuffer = buildViewport3DTargetFieldBuffer({
+        fieldVector,
+        query: {
+          component: "full",
+          max_samples: 4,
+          scope_id: "part-a",
+          scope_kind: "part",
+        },
+        targetIds: ["part-a"],
+      });
+
+      const model = buildViewport3DFieldRenderModel(
+        topologyModel,
+        null,
+        0.5,
+        {
+          partTargetFieldBuffers: new Map([["part-a", sampledBuffer]]),
+          scalarColorsVisible: true,
+          targetRenderPlans: new Map([
+            [
+              "part-a",
+              targetRenderPlanFixture({ surfaceProjectionMode }),
+            ],
+          ]),
+        },
+      );
+
+      const surface = model?.targetPasses.get("part-a")?.surface;
+      expect(surface?.projectionMode).toBe(surfaceProjectionMode);
+      expect(surface?.scalarColors?.projectionMode).toBe(surfaceProjectionMode);
+      expect(surface?.scalarColors?.geometryRole).toBe("face_expanded_surface");
+      expect(surface?.degradation).toBeNull();
+    },
+  );
+
   it("uses target render plans as authoritative part pass semantics", () => {
     const topologyModel = buildViewport3DTopologyRenderModel(
       topologyFixture(),

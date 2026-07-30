@@ -11570,10 +11570,8 @@ fn fem_planner_preserves_legacy_v2_when_rebinding_packed_certificate() {
         fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
         fullmag_ir::RequestedFemDemagIR::PoissonRobin,
     );
-    ir.geometry_assets
-        .as_mut()
-        .unwrap()
-        .fem_domain_mesh_asset = Some(valid_mixed_certificate_asset_for_version("v2"));
+    ir.geometry_assets.as_mut().unwrap().fem_domain_mesh_asset =
+        Some(valid_mixed_certificate_asset_for_version("v2"));
 
     let planned = plan(&ir).expect("legacy v2 mixed certificate must remain plannable");
     let BackendPlanIR::Fem(fem) = planned.backend_plan else {
@@ -11585,7 +11583,10 @@ fn fem_planner_preserves_legacy_v2_when_rebinding_packed_certificate() {
         .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
         .expect("packed plan must retain a certificate");
     assert_eq!(certificate.topology_fingerprint_version, "v2");
-    assert_eq!(certificate.topology_fingerprint, fem.mesh.topology_fingerprint_v6());
+    assert_eq!(
+        certificate.topology_fingerprint,
+        fem.mesh.topology_fingerprint_v6()
+    );
 }
 
 #[test]
