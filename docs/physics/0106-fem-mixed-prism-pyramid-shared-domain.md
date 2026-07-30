@@ -742,13 +742,18 @@ pure-air nodes are outside the magnetic operator comparison.
 The step-0 `scalars.csv` row supplies `E_ex`, `E_demag`, `E_total`,
 `max_torque_Apm`, and `max_torque_T`. The maximum torque is the native scalar
 reduction; the gate does not claim that a host-derived full torque vector is a
-GPU-resident operator artifact. Frozen component tolerances are
-`rtol=5e-8`, `atol=1e-6 A/m` for `H_ex` and `rtol=5e-6`,
-`atol=1e-6 A/m` for `H_demag` and `H_eff`. Energy uses `rtol=1e-6` and
+GPU-resident operator artifact. The existing native CPU/GPU parity contract
+sets the frozen component tolerances to `rtol=5e-8` and `atol=1e-6 A/m` for
+each of `H_ex`, `H_demag`, and `H_eff`. Energy uses `rtol=1e-6` and
 `atol=1e-30 J`; both torque units use `rtol=1e-6`, with
 `atol=1e-9 A/m` and `atol=1e-15 T`, respectively. Every component uses
 `abs(cpu-gpu) <= atol + rtol * max(abs(cpu), abs(gpu))`. These are existing
 Fullmag CPU/GPU contracts and must not be tuned from this workload.
+Comparison reparses and rehashes the raw scalar row and both field chunks, then
+requires exact agreement with their persisted run-summary bindings. The
+versioned `comparison.v3.csv` publishes maximum and RMS field deltas, all three
+energy comparisons, both maximum-torque comparisons, and their units and
+statuses alongside the initial-state and per-lane Armijo evidence.
 
 The checked-in Gmsh 4.15.2 fixture is reproducible feasibility evidence only.
 It is not runtime, MFEM, CPU/GPU, physics, API, or viewport proof.

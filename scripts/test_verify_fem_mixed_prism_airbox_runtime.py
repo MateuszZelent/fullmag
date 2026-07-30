@@ -615,7 +615,7 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                 cpu_artifacts=cpu[2],
                 gpu_artifacts=gpu[2],
             )
-            csv_path = root / "comparison.v1.csv"
+            csv_path = root / "comparison.v3.csv"
             verifier.write_comparison_csv(csv_path, comparison)
 
             self.assertEqual(cpu_summary["execution_engine"], "fem_cpu_native")
@@ -653,9 +653,34 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                 0.0,
             )
             self.assertEqual(comparison["qualification_status"], "implemented")
-            csv_text = csv_path.read_text(encoding="utf-8")
-            self.assertIn("initial_m_max_component_abs_delta", csv_text)
-            self.assertIn("cpu_accepted_armijo_rhs", csv_text)
+            with csv_path.open(newline="", encoding="utf-8") as stream:
+                comparison_rows = {
+                    row["quantity"]: row for row in csv.DictReader(stream)
+                }
+            expected_units = {
+                "initial_m_max_component_abs_delta": "1",
+                "initial_m_rms_component_abs_delta": "1",
+                "step0_H_ex_max_component_abs_delta": "A/m",
+                "step0_H_ex_rms_component_abs_delta": "A/m",
+                "step0_H_demag_max_component_abs_delta": "A/m",
+                "step0_H_demag_rms_component_abs_delta": "A/m",
+                "step0_H_eff_max_component_abs_delta": "A/m",
+                "step0_H_eff_rms_component_abs_delta": "A/m",
+                "step0_E_ex": "J",
+                "step0_E_demag": "J",
+                "step0_E_total": "J",
+                "step0_max_torque_Apm": "A/m",
+                "step0_max_torque_T": "T",
+                "cpu_accepted_energy_delta_upper": "J",
+                "cpu_accepted_armijo_rhs": "J",
+                "gpu_accepted_energy_delta_upper": "J",
+                "gpu_accepted_armijo_rhs": "J",
+            }
+            self.assertEqual(set(comparison_rows), set(expected_units))
+            for quantity, unit in expected_units.items():
+                with self.subTest(quantity=quantity):
+                    self.assertEqual(comparison_rows[quantity]["unit"], unit)
+                    self.assertEqual(comparison_rows[quantity]["status"], "pass")
             self.assertEqual(verifier.SCALAR_CSV_SERIALIZATION_RTOL, 1.0e-15)
             self.assertNotEqual(
                 cpu_summary["final_scalar_values"]["E_ex"],  # type: ignore[index]
@@ -742,6 +767,67 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                         cpu_artifacts=cpu[2],
                         gpu_artifacts=gpu[2],
                     )
+
+    def test_compare_rejects_step0_summary_scalars_not_bound_to_raw_csv(self) -> None:
+        mutations = ("energy", "torque")
+        for mutation in mutations:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                cpu = self._write_valid_bundle(root, "cpu")
+                gpu = self._write_valid_bundle(root, "gpu")
+                cpu_summary = validate_runtime_artifacts(
+                    cpu[0], cpu[1], cpu[2], device="cpu", runtime_log=cpu[3], runtime_manifest=cpu[4]
+                )
+                gpu_summary = validate_runtime_artifacts(
+                    gpu[0], gpu[1], gpu[2], device="gpu", runtime_log=gpu[3], runtime_manifest=gpu[4]
+                )
+                for summary in (cpu_summary, gpu_summary):
+                    step0 = summary["step0_operator_artifacts"]
+                    if mutation == "energy":
+                        step0["energy_terms_j"]["E_ex"] = 123.0
+                    else:
+                        step0["max_torque_apm"] = 456.0
+
+                with self.subTest(mutation=mutation), self.assertRaises(ContractError):
+                    verifier.compare_runtime_summaries(
+                        cpu_summary,
+                        gpu_summary,
+                        cpu_artifacts=cpu[2],
+                        gpu_artifacts=gpu[2],
+                    )
+
+    def test_compare_rejects_final_field_chunk_tampered_after_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cpu = self._write_valid_bundle(root, "cpu")
+            gpu = self._write_valid_bundle(root, "gpu")
+            cpu_summary = validate_runtime_artifacts(
+                cpu[0], cpu[1], cpu[2], device="cpu", runtime_log=cpu[3], runtime_manifest=cpu[4]
+            )
+            gpu_summary = validate_runtime_artifacts(
+                gpu[0], gpu[1], gpu[2], device="gpu", runtime_log=gpu[3], runtime_manifest=gpu[4]
+            )
+            (gpu[2] / "fields/H_demag.zarr/1.0.0").write_bytes(
+                struct.pack("<9d", *([123.0] * 9))
+            )
+
+            with self.assertRaises(ContractError):
+                verifier.compare_runtime_summaries(
+                    cpu_summary,
+                    gpu_summary,
+                    cpu_artifacts=cpu[2],
+                    gpu_artifacts=gpu[2],
+                )
+
+    def test_step0_field_tolerances_match_native_cpu_gpu_parity_contract(self) -> None:
+        self.assertEqual(
+            verifier.STEP0_FIELD_TOLERANCES,
+            {
+                "H_ex": {"rtol": 5.0e-8, "atol_apm": 1.0e-6},
+                "H_demag": {"rtol": 5.0e-8, "atol_apm": 1.0e-6},
+                "H_eff": {"rtol": 5.0e-8, "atol_apm": 1.0e-6},
+            },
+        )
 
     def test_validate_accepts_canonically_omitted_empty_ignored_terms(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

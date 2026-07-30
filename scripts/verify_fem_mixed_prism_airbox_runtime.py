@@ -35,8 +35,8 @@ TORQUE_ATOL_APM = 1.0e-9
 TORQUE_ATOL_T = 1.0e-15
 STEP0_FIELD_TOLERANCES = {
     "H_ex": {"rtol": 5.0e-8, "atol_apm": 1.0e-6},
-    "H_demag": {"rtol": 5.0e-6, "atol_apm": 1.0e-6},
-    "H_eff": {"rtol": 5.0e-6, "atol_apm": 1.0e-6},
+    "H_demag": {"rtol": 5.0e-8, "atol_apm": 1.0e-6},
+    "H_eff": {"rtol": 5.0e-8, "atol_apm": 1.0e-6},
 }
 STEP0_FIELD_OBSERVABLES = tuple(STEP0_FIELD_TOLERANCES)
 GPU_PGBB_CONTROL_READBACK_BASE = 3
@@ -1420,6 +1420,7 @@ def _load_bound_step0_field(
         ".zarray": "array_sha256",
         "samples.csv": "samples_sha256",
         str(descriptor.get("step0_chunk_key")): "step0_chunk_sha256",
+        str(descriptor.get("final_chunk_key")): "final_chunk_sha256",
     }
     for filename, hash_field in bound_files.items():
         expected_hash = _canonical_sha256(
@@ -1432,14 +1433,61 @@ def _load_bound_step0_field(
     )
     if descriptor.get("component_count") != 3 or descriptor.get("dtype") != "<f8":
         raise ContractError(f"step-0 {observable} descriptor shape is invalid")
-    payload = (store / str(descriptor["step0_chunk_key"])).read_bytes()
     expected_len = 3 * node_count * DOUBLE_BYTES
-    if len(payload) != expected_len:
-        raise ContractError(f"step-0 {observable} payload length changed")
-    values = list(struct.unpack(f"<{3 * node_count}d", payload))
-    if not all(math.isfinite(value) for value in values):
-        raise ContractError(f"step-0 {observable} payload is non-finite")
-    return values, node_count
+    step0_values: list[float] | None = None
+    for sample_name, key_field in (
+        ("step-0", "step0_chunk_key"),
+        ("final", "final_chunk_key"),
+    ):
+        payload = (store / str(descriptor[key_field])).read_bytes()
+        if len(payload) != expected_len:
+            raise ContractError(f"{sample_name} {observable} payload length changed")
+        values = list(struct.unpack(f"<{3 * node_count}d", payload))
+        if not all(math.isfinite(value) for value in values):
+            raise ContractError(f"{sample_name} {observable} payload is non-finite")
+        if sample_name == "step-0":
+            step0_values = values
+    if step0_values is None:
+        raise ContractError(f"step-0 {observable} payload is absent")
+    return step0_values, node_count
+
+
+def _load_bound_step0_scalars(
+    artifacts: Path, summary: dict[str, object], step0: dict[str, Any]
+) -> dict[str, object]:
+    scalar_path = artifacts / "scalars.csv"
+    if _sha256_file(scalar_path) != summary.get("scalars_sha256"):
+        raise ContractError("scalar artifact changed after validation")
+    evidence = _validate_scalar_artifact(scalar_path)
+    raw_values = _object(
+        evidence.get("initial_scalar_values"), "raw step-0 scalar values"
+    )
+    summary_energy = _object(step0.get("energy_terms_j"), "summary step-0 energy")
+    for name in ("E_ex", "E_demag", "E_total"):
+        raw = _finite(raw_values.get(name), f"raw step-0 {name}")
+        persisted = _finite(summary_energy.get(name), f"summary step-0 {name}")
+        if persisted != raw:
+            raise ContractError(
+                f"summary step-0 {name} is not bound to raw scalars.csv"
+            )
+    scalar_bindings = (
+        ("max_torque_apm", "max_torque_Apm"),
+        ("max_torque_t", "max_torque_T"),
+    )
+    for summary_name, raw_name in scalar_bindings:
+        raw = _finite(raw_values.get(raw_name), f"raw step-0 {raw_name}")
+        persisted = _finite(step0.get(summary_name), f"summary step-0 {summary_name}")
+        if persisted != raw:
+            raise ContractError(
+                f"summary step-0 {summary_name} is not bound to raw scalars.csv"
+            )
+    return {
+        "energy_terms_j": {
+            name: raw_values[name] for name in ("E_ex", "E_demag", "E_total")
+        },
+        "max_torque_apm": raw_values["max_torque_Apm"],
+        "max_torque_t": raw_values["max_torque_T"],
+    }
 
 
 def _load_bound_magnetic_nodes(
@@ -1588,6 +1636,12 @@ def compare_runtime_summaries(
     gpu_nodes, gpu_node_count = _load_bound_magnetic_nodes(
         gpu_artifacts, gpu, gpu_step0
     )
+    cpu_step0_scalars = _load_bound_step0_scalars(
+        cpu_artifacts, cpu, cpu_step0
+    )
+    gpu_step0_scalars = _load_bound_step0_scalars(
+        gpu_artifacts, gpu, gpu_step0
+    )
     if cpu_node_count != gpu_node_count or cpu_nodes != gpu_nodes:
         raise ContractError("CPU/GPU magnetic-node operator domains differ")
     field_parity: dict[str, object] = {}
@@ -1631,8 +1685,12 @@ def compare_runtime_summaries(
             "atol_apm": tolerance["atol_apm"],
             "status": "pass",
         }
-    cpu_energy = _object(cpu_step0.get("energy_terms_j"), "CPU step-0 energy")
-    gpu_energy = _object(gpu_step0.get("energy_terms_j"), "GPU step-0 energy")
+    cpu_energy = _object(
+        cpu_step0_scalars.get("energy_terms_j"), "CPU raw step-0 energy"
+    )
+    gpu_energy = _object(
+        gpu_step0_scalars.get("energy_terms_j"), "GPU raw step-0 energy"
+    )
     energy_parity = {
         name: _compare_scalar(
             name,
@@ -1645,15 +1703,15 @@ def compare_runtime_summaries(
     }
     torque_apm_parity = _compare_scalar(
         "max_torque_Apm",
-        cpu_step0.get("max_torque_apm"),
-        gpu_step0.get("max_torque_apm"),
+        cpu_step0_scalars.get("max_torque_apm"),
+        gpu_step0_scalars.get("max_torque_apm"),
         rtol=TORQUE_RTOL,
         atol=TORQUE_ATOL_APM,
     )
     torque_t_parity = _compare_scalar(
         "max_torque_T",
-        cpu_step0.get("max_torque_t"),
-        gpu_step0.get("max_torque_t"),
+        cpu_step0_scalars.get("max_torque_t"),
+        gpu_step0_scalars.get("max_torque_t"),
         rtol=TORQUE_RTOL,
         atol=TORQUE_ATOL_T,
     )
@@ -1778,6 +1836,65 @@ def write_comparison_csv(path: Path, comparison: dict[str, object]) -> None:
             "status": state["status"],
         },
     ]
+    operator = _object(
+        comparison.get("same_state_operator_parity"),
+        "same-state operator parity",
+    )
+    fields = _object(operator.get("fields"), "same-state operator fields")
+    for observable in STEP0_FIELD_OBSERVABLES:
+        field = _object(fields.get(observable), f"same-state {observable}")
+        rows.extend(
+            (
+                {
+                    "quantity": f"step0_{observable}_max_component_abs_delta",
+                    "unit": "A/m",
+                    "cpu": "",
+                    "gpu": "",
+                    "absolute_delta": field["max_component_abs_delta"],
+                    "allowed_delta": field["max_allowed_delta"],
+                    "status": field["status"],
+                },
+                {
+                    "quantity": f"step0_{observable}_rms_component_abs_delta",
+                    "unit": "A/m",
+                    "cpu": "",
+                    "gpu": "",
+                    "absolute_delta": field["rms_component_abs_delta"],
+                    "allowed_delta": field["max_allowed_delta"],
+                    "status": field["status"],
+                },
+            )
+        )
+    energies = _object(operator.get("energy_terms_j"), "same-state energy parity")
+    for name in ("E_ex", "E_demag", "E_total"):
+        value = _object(energies.get(name), f"same-state {name}")
+        rows.append(
+            {
+                "quantity": f"step0_{name}",
+                "unit": "J",
+                "cpu": value["cpu"],
+                "gpu": value["gpu"],
+                "absolute_delta": value["absolute_delta"],
+                "allowed_delta": value["allowed_delta"],
+                "status": value["status"],
+            }
+        )
+    for key, quantity, unit in (
+        ("max_torque_apm", "step0_max_torque_Apm", "A/m"),
+        ("max_torque_t", "step0_max_torque_T", "T"),
+    ):
+        value = _object(operator.get(key), f"same-state {key}")
+        rows.append(
+            {
+                "quantity": quantity,
+                "unit": unit,
+                "cpu": value["cpu"],
+                "gpu": value["gpu"],
+                "absolute_delta": value["absolute_delta"],
+                "allowed_delta": value["allowed_delta"],
+                "status": value["status"],
+            }
+        )
     for device in ("cpu", "gpu"):
         lane = _object(comparison.get(device), f"{device} comparison lane")
         proof = _object(lane.get("accepted_energy_proof"), f"{device} energy proof")
