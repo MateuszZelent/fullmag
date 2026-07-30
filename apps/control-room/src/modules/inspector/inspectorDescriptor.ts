@@ -165,6 +165,21 @@ export function resolveInspectorDescriptor(
   const metadata: InspectorMetadataItem[] = [
     { label: "Kind", value: selection.kind },
   ];
+  const meshCellRef = selection.ref && "elementFamily" in selection.ref
+    ? selection.ref
+    : null;
+  if (meshCellRef?.elementFamily) {
+    metadata.push({
+      label: "Element family",
+      value: meshCellRef.elementFamily,
+    });
+  }
+  if (meshCellRef?.globalCellOrdinal) {
+    metadata.push({
+      label: "Global cell ordinal",
+      value: meshCellRef.globalCellOrdinal,
+    });
+  }
   if (selection.objectId) {
     metadata.push({ label: "Object", value: selection.objectId });
   }

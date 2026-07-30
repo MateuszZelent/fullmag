@@ -9,11 +9,11 @@ const timeoutMs = Number(
   process.env.CONTROL_ROOM_MIXED_TARGET_SMOKE_TIMEOUT_MS ?? 180_000,
 );
 const targetAId =
-  process.env.CONTROL_ROOM_MIXED_TARGET_A_ID ?? "permalloy_layer";
+  process.env.CONTROL_ROOM_MIXED_TARGET_A_ID ?? "film";
 const targetBId =
-  process.env.CONTROL_ROOM_MIXED_TARGET_B_ID ?? "cofeb_top_ring";
+  process.env.CONTROL_ROOM_MIXED_TARGET_B_ID ?? targetAId;
 let targetCId =
-  process.env.CONTROL_ROOM_MIXED_TARGET_C_ID ?? "cofeb_bottom_ring";
+  process.env.CONTROL_ROOM_MIXED_TARGET_C_ID ?? null;
 const airboxQuantityId =
   process.env.CONTROL_ROOM_MIXED_TARGET_AIRBOX_QUANTITY_ID ?? "H_eff";
 const vectorBudget = Number(
@@ -23,6 +23,7 @@ const TARGET_B_INITIAL_SURFACE_SOURCE = "component_x";
 const VIEWPORT_3D_CANVAS_SELECTOR = ".fm-viewport-3d canvas";
 const FIELD_VECTOR_PATH_RE =
   /^\/v2\/sessions\/current\/data\/fields\/([^/]+)\/samples\/vector$/;
+const SHARED_TOPOLOGY_PATH = "/v2/sessions/current/meshing/meshes/shared-domain/topology";
 const TERMINAL_COMMAND_STATUSES = new Set([
   "cancelled",
   "completed",
@@ -35,6 +36,7 @@ async function main() {
   await assertActiveSession();
   const { manifest, scene } = await waitForMixedTargetSceneReady();
   assertMagneticTargetsAvailable(scene, [targetAId, targetBId]);
+  assertMixedTopologyManifest(manifest);
   targetCId = magneticTargetExists(scene, targetCId) ? targetCId : null;
   const airboxPartId = resolveAirboxPartId(manifest);
   const targetPartIds = {
@@ -80,6 +82,7 @@ async function main() {
   const page = await browser.newPage({ viewport: { height: 900, width: 1440 } });
   const fieldRequests = [];
   const fieldResponses = [];
+  const topologyRequests = [];
   const buildDiagnostics = [];
   const errors = [];
 
@@ -115,6 +118,9 @@ async function main() {
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("request", (request) => {
     if (request.method() !== "GET") return;
+    if (new URL(request.url()).pathname === SHARED_TOPOLOGY_PATH) {
+      topologyRequests.push(request.url());
+    }
     const parsed = parseFieldVectorUrl(request.url());
     if (!parsed) return;
     fieldRequests.push({ ...parsed, timestamp: Date.now(), url: request.url() });
@@ -143,10 +149,21 @@ async function main() {
     await assertNoAirOrInterfaceColorbar(page);
     await waitForRequiredViewport3DBuildLanes(page);
     await waitForViewport3DBuildQuiescence(page);
+    await assertMixedMeshFamiliesSelectable(page);
+    const topologyBaseline = await snapshotTopologyBuildEvidence(
+      page,
+      topologyRequests,
+    );
+    await assertAirboxFullWireframeBuildEvidence(page, airboxPartId);
     await resetLongTaskMeasurements(page);
     await assertColorbarRemainsMountedAcrossModeSwitch(page, "component_y");
     await assertColorbarRangeUpdateDoesNotRemount(page);
     await assertNoBlockingFieldSwitchTask(page);
+    await assertNoTopologyRebuildAfterFieldSwitch(
+      page,
+      topologyBaseline,
+      topologyRequests,
+    );
     await collectViewport3DBuildDiagnostics(page, buildDiagnostics);
     assertRequiredViewport3DBuildLanes(buildDiagnostics);
     assertSemanticTargetBuildEvidence(buildDiagnostics, {
@@ -199,13 +216,13 @@ function buildMixedTargetVisualizationPatch(state, targetBSource) {
     "quantity": { "active_quantity_id": "m" },
     "style": {
       "scalar_color_palette": "viridis",
-      "surface_color_source": "orientation",
+      "surface_color_source": targetAId === targetBId ? targetBSource : "orientation",
       "vector_budget": vectorBudget,
       "vector_color_mode": "orientation",
-      "viewport_colorbar_visible": false,
+      "viewport_colorbar_visible": targetAId === targetBId,
     },
   });
-  overrides.push({
+  if (targetAId !== targetBId) overrides.push({
     "scope": "object",
     "scope_id": targetBId,
     "visible": true,
@@ -214,7 +231,7 @@ function buildMixedTargetVisualizationPatch(state, targetBSource) {
       "surface": { "visible": true },
       "vectors": { "visible": false },
       "visible": true,
-      "wireframe": { "visible": false },
+      "wireframe": { "visible": true },
     },
     "quantity": { "active_quantity_id": "m" },
     "style": {
@@ -250,10 +267,10 @@ function buildMixedTargetVisualizationPatch(state, targetBSource) {
     "visible": true,
     "display": {
       "geometry_scope": "full",
-      "surface": { "visible": false },
+      "surface": { "visible": true },
       "vectors": { "domain": "airbox_only", "visible": true },
       "visible": true,
-      "wireframe": { "visible": false },
+      "wireframe": { "visible": true },
     },
     "quantity": { "active_quantity_id": airboxQuantityId },
     "style": {
@@ -268,14 +285,14 @@ function buildMixedTargetVisualizationPatch(state, targetBSource) {
     active_quantity_id: "m",
     layers: {
       airbox: {
-        surface: { visible: false },
+        surface: { visible: true },
         vectors: {
           density: vectorBudget,
           domain: "airbox_only",
           visible: true,
         },
         visible: true,
-        wireframe: { visible: false },
+        wireframe: { visible: true },
       },
       surface: { visible: true },
       vectors: {
@@ -298,7 +315,12 @@ function assertMixedTargetVisualizationState(state, targetBSource) {
   const targetB = targets.get(targetBId)?.settings;
   const targetC = targetCId ? targets.get(targetCId)?.settings : null;
   const airbox = state.targets?.airbox?.settings;
-  if (targetA?.surface_color_source !== "orientation" || !targetA.vectors_visible) {
+  if (
+    targetA?.surface_color_source !==
+      (targetAId === targetBId ? targetBSource : "orientation") ||
+    !targetA.vectors_visible ||
+    (targetAId === targetBId && !targetA.viewport_colorbar_visible)
+  ) {
     throw new Error(
       `Target A was not patched to orientation+vectors: ${targetAId}; ` +
         `resolved=${JSON.stringify(targetA ?? null)} ` +
@@ -306,9 +328,11 @@ function assertMixedTargetVisualizationState(state, targetBSource) {
     );
   }
   if (
-    targetB?.surface_color_source !== targetBSource ||
-    targetB.vectors_visible ||
-    !targetB.viewport_colorbar_visible
+    targetAId !== targetBId && (
+      targetB?.surface_color_source !== targetBSource ||
+      targetB?.vectors_visible ||
+      !targetB?.viewport_colorbar_visible
+    )
   ) {
     throw new Error(`Target B was not patched to component colorbar mode: ${targetBId}`);
   }
@@ -318,8 +342,25 @@ function assertMixedTargetVisualizationState(state, targetBSource) {
   ) {
     throw new Error(`Target C was not patched to solid+vectors: ${targetCId}`);
   }
-  if (!airbox?.vectors_visible || airbox.viewport_colorbar_visible) {
-    throw new Error("Airbox was not patched to vector-only without viewport colorbar.");
+  if (!airbox?.vectors_visible || !airbox.wireframe_visible || airbox.viewport_colorbar_visible) {
+    throw new Error("Airbox was not patched to full wireframe+vectors without viewport colorbar.");
+  }
+}
+
+function assertMixedTopologyManifest(manifest) {
+  const counts = manifest.element_counts_by_type ?? {};
+  const missing = ["prism6", "pyramid5", "tet4"].filter(
+    (family) => Number(counts[family] ?? 0) <= 0,
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      `Mixed topology manifest is missing positive family counts: ${missing.join(", ")}; ` +
+        `received=${JSON.stringify(counts)}`,
+    );
+  }
+  const fallbacks = manifest.fallbacks_triggered ?? [];
+  if (fallbacks.length > 0) {
+    throw new Error(`Mixed topology manifest reported fallbacks: ${JSON.stringify(fallbacks)}`);
   }
 }
 
@@ -511,25 +552,129 @@ async function assertColorbarRangeUpdateDoesNotRemount(page) {
 
 async function assertCanvasNonBlank(page) {
   const result = await page.locator(VIEWPORT_3D_CANVAS_SELECTOR).evaluate((canvas) => {
-    const context = canvas.getContext("2d");
-    if (context) return { nonBlank: true };
     const gl =
       canvas.getContext("webgl2") ??
       canvas.getContext("webgl") ??
       canvas.getContext("experimental-webgl");
+    const rect = canvas.getBoundingClientRect();
     return {
       drawingBufferHeight: gl?.drawingBufferHeight ?? 0,
       drawingBufferWidth: gl?.drawingBufferWidth ?? 0,
-      nonBlank: Boolean(gl && !gl.isContextLost()),
+      isContextLost: gl ? gl.isContextLost() : null,
+      visible: rect.width > 0 && rect.height > 0,
     };
   });
-  if (!result.nonBlank || result.drawingBufferWidth <= 0 || result.drawingBufferHeight <= 0) {
+  if (
+    !result.visible ||
+    result.isContextLost !== false ||
+    result.drawingBufferWidth <= 0 ||
+    result.drawingBufferHeight <= 0
+  ) {
     throw new Error(`3D viewport canvas is blank or unavailable: ${JSON.stringify(result)}`);
   }
 }
 
+async function assertMixedMeshFamiliesSelectable(page) {
+  for (const family of ["prism6", "pyramid5", "tet4"]) {
+    await clickCanvasUntilMeshFamilySelected(page, family);
+  }
+}
+
+async function clickCanvasUntilMeshFamilySelected(page, expectedFamily) {
+  const canvas = page.locator(VIEWPORT_3D_CANVAS_SELECTOR);
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error("Viewport canvas has no clickable bounds.");
+  const step = Math.max(16, Math.min(box.width, box.height) * 0.1);
+  const offsets = [
+    [0, 0], [-1, 0], [1, 0], [0, -1], [0, 1],
+    [-1, -1], [1, -1], [-1, 1], [1, 1], [-2, 0], [2, 0],
+  ];
+  for (const [x, y] of offsets) {
+    await page.mouse.click(box.x + box.width / 2 + x * step, box.y + box.height / 2 + y * step);
+    const identity = await readSelectedMeshCellIdentity(page);
+    if (identity?.elementFamily !== expectedFamily) {
+      await page.waitForTimeout(80);
+      continue;
+    }
+    if (!/^\d+$/.test(identity.globalCellOrdinal)) {
+      throw new Error(`Selected ${expectedFamily} cell has a non-decimal global ordinal: ${identity.globalCellOrdinal}`);
+    }
+    return;
+  }
+  throw new Error(`Canvas clicks did not select a ${expectedFamily} cell with a global ordinal.`);
+}
+
+async function readSelectedMeshCellIdentity(page) {
+  const metadata = await page
+    .locator(".fm-inspector__metadata-item")
+    .evaluateAll((nodes) => Object.fromEntries(nodes.map((node) => [
+      node.querySelector("dt")?.textContent?.trim() ?? "",
+      node.querySelector("dd")?.textContent?.trim() ?? "",
+    ])));
+  const elementFamily = metadata["Element family"];
+  const globalCellOrdinal = metadata["Global cell ordinal"];
+  return typeof elementFamily === "string" && typeof globalCellOrdinal === "string"
+    ? { elementFamily, globalCellOrdinal }
+    : null;
+}
+
+async function snapshotTopologyBuildEvidence(page, topologyRequests) {
+  const records = await readViewport3DBuildDiagnostics(page);
+  return {
+    topologyBuildCount: records.filter(
+      (record) => (record.buildLane ?? record.detail?.buildLane) === "topology-index",
+    ).length,
+    topologyRequestCount: topologyRequests.length,
+  };
+}
+
+async function assertNoTopologyRebuildAfterFieldSwitch(
+  page,
+  baseline,
+  topologyRequests,
+) {
+  await waitForViewport3DBuildQuiescence(page);
+  const after = await snapshotTopologyBuildEvidence(page, topologyRequests);
+  if (
+    after.topologyBuildCount !== baseline.topologyBuildCount ||
+    after.topologyRequestCount !== baseline.topologyRequestCount
+  ) {
+    throw new Error(
+      `Quantity/component switch rebuilt topology: before=${JSON.stringify(baseline)} ` +
+        `after=${JSON.stringify(after)}`,
+    );
+  }
+}
+
+async function assertAirboxFullWireframeBuildEvidence(page, airboxPartId) {
+  const records = await readViewport3DBuildDiagnostics(page);
+  const matching = records.some((record) => {
+    const lane = record.buildLane ?? record.detail?.buildLane;
+    const state = record.buildState ?? record.detail?.state;
+    const key = record.buildKey ?? record.detail?.buildKey ?? "";
+    return (
+      lane === "topology-index" &&
+      state === "ready" &&
+      key.includes(`airbox-wireframe:${airboxPartId}:scope=full`) &&
+      key.includes("edge-source=volumeEdges") &&
+      key.includes("render-semantic=hiddenEdges")
+    );
+  });
+  if (!matching) {
+    throw new Error("Missing full-airbox volumeEdges/hiddenEdges topology telemetry.");
+  }
+}
+
 async function collectViewport3DBuildDiagnostics(page, buildDiagnostics) {
-  const records = await page.evaluate(() => {
+  const records = await readViewport3DBuildDiagnostics(page);
+  buildDiagnostics.push(...records);
+  if (buildDiagnostics.length === 0) {
+    throw new Error("Viewport 3D build diagnostics were not recorded.");
+  }
+}
+
+async function readViewport3DBuildDiagnostics(page) {
+  return page.evaluate(() => {
     const artifact = window.__FULLMAG_DIAGNOSTIC_RECORDER_EXPORT__?.();
     if (artifact?.streams?.viewport3dBuild) {
       return artifact.streams.viewport3dBuild;
@@ -548,10 +693,6 @@ async function collectViewport3DBuildDiagnostics(page, buildDiagnostics) {
       String(record?.name ?? "").startsWith("fullmag.viewport3d.build-engine"),
     );
   });
-  buildDiagnostics.push(...records);
-  if (buildDiagnostics.length === 0) {
-    throw new Error("Viewport 3D build diagnostics were not recorded.");
-  }
 }
 
 function assertRequiredViewport3DBuildLanes(records) {

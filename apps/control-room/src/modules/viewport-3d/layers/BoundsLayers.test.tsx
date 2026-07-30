@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { isValidElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -68,7 +67,7 @@ const materialProfile = resolveViewport3DMaterialProfile(
 );
 
 const boundsLayersSource = readFileSync(
-  join(process.cwd(), "src/modules/viewport-3d/layers/BoundsLayers.tsx"),
+  new URL("./BoundsLayers.tsx", import.meta.url),
   "utf8",
 );
 
@@ -108,6 +107,11 @@ it("routes airbox mesh-part topology geometry adoption through the upload manage
   expect(airboxMeshPartLayerSource).not.toContain("const geometry = useMemo");
   expect(airboxMeshPartLayerSource).not.toContain("const edgeGeometry = useMemo");
   expect(airboxMeshPartLayerSource).not.toContain("const pointsGeometry = useMemo");
+});
+
+it("records full-airbox volume-edge hidden-edge semantics in topology telemetry", () => {
+  expect(boundsLayersSource).toContain('"volumeEdges"');
+  expect(boundsLayersSource).toContain("render-semantic=${resolveAirboxWireframeSemantic(renderSettings)}");
 });
 
 it("routes airbox vector layer input through target-pass selection", () => {
