@@ -1,6 +1,8 @@
 use fullmag_fem_sys as ffi;
 use fullmag_ir::{StageCompletionIR, StageMetricKind, StageStopReason};
 
+use crate::types::RunError;
+
 use std::ffi::CStr;
 
 #[derive(Debug, Clone)]
@@ -11,6 +13,91 @@ pub(crate) struct DeviceInfo {
     pub runtime_version: i32,
     pub memory_free_bytes: u64,
     pub memory_total_bytes: u64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeBuildInfo {
+    pub mfem_version: String,
+}
+
+pub(crate) fn runtime_build_info() -> Result<RuntimeBuildInfo, RunError> {
+    let mut info = ffi::fullmag_fem_runtime_build_info {
+        abi_version: 0,
+        struct_size: 0,
+        mfem_version: [0; ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_MFEM_VERSION_CAPACITY],
+    };
+    let rc = unsafe { ffi::fullmag_fem_get_runtime_build_info(&mut info) };
+    if rc != ffi::FULLMAG_FEM_OK {
+        return Err(RunError {
+            message: "native FEM runtime build identity is unavailable".to_string(),
+        });
+    }
+    RuntimeBuildInfo::from_ffi(info)
+}
+
+impl RuntimeBuildInfo {
+    fn from_ffi(info: ffi::fullmag_fem_runtime_build_info) -> Result<Self, RunError> {
+        if info.abi_version != ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_V1_ABI_VERSION
+            || info.struct_size != std::mem::size_of::<ffi::fullmag_fem_runtime_build_info>() as u32
+        {
+            return Err(RunError {
+                message: "native FEM runtime build identity ABI is incompatible".to_string(),
+            });
+        }
+        let mfem_version = unsafe { CStr::from_ptr(info.mfem_version.as_ptr()) }
+            .to_string_lossy()
+            .to_string();
+        if mfem_version.is_empty() {
+            return Err(RunError {
+                message: "native FEM runtime build identity did not publish MFEM version"
+                    .to_string(),
+            });
+        }
+        Ok(Self { mfem_version })
+    }
+}
+
+#[cfg(test)]
+mod runtime_build_info_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_versioned_mfem_identity_from_loaded_native_abi() {
+        let mut info = ffi::fullmag_fem_runtime_build_info {
+            abi_version: ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_V1_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_runtime_build_info>() as u32,
+            mfem_version: [0; ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_MFEM_VERSION_CAPACITY],
+        };
+        info.mfem_version[..4].copy_from_slice(&[b'4' as _, b'.' as _, b'9' as _, 0]);
+
+        assert_eq!(
+            RuntimeBuildInfo::from_ffi(info).unwrap().mfem_version,
+            "4.9"
+        );
+    }
+
+    #[test]
+    fn rejects_missing_mfem_identity_from_loaded_native_abi() {
+        let info = ffi::fullmag_fem_runtime_build_info {
+            abi_version: ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_V1_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_runtime_build_info>() as u32,
+            mfem_version: [0; ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_MFEM_VERSION_CAPACITY],
+        };
+
+        assert!(RuntimeBuildInfo::from_ffi(info).is_err());
+    }
+
+    #[test]
+    fn rejects_incompatible_runtime_build_identity_abi() {
+        let mut info = ffi::fullmag_fem_runtime_build_info {
+            abi_version: 0,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_runtime_build_info>() as u32,
+            mfem_version: [0; ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_MFEM_VERSION_CAPACITY],
+        };
+        info.mfem_version[..4].copy_from_slice(&[b'4' as _, b'.' as _, b'9' as _, 0]);
+
+        assert!(RuntimeBuildInfo::from_ffi(info).is_err());
+    }
 }
 
 impl DeviceInfo {

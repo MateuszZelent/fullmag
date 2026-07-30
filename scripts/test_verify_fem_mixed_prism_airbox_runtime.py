@@ -1400,6 +1400,7 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
     def test_validate_rejects_each_gpu_identity_residency_and_telemetry_violation(self) -> None:
         cases = {
             "device_name": "Different GPU",
+            "mfem_version": "4.8",
             "mfem_device": "cpu",
             "fem_execution_mode": "hybrid_legacy_sparse",
             "fem_data_residency": "host_source_of_truth",
@@ -1437,6 +1438,27 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                         runtime_log=runtime_log,
                         runtime_manifest=manifest,
                     )
+
+    def test_validate_rejects_missing_gpu_mfem_version(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, bounded, artifacts, runtime_log, manifest, metadata = (
+                self._write_valid_bundle(root, "gpu")
+            )
+            del metadata["execution_provenance"]["mfem_version"]  # type: ignore[index]
+            (artifacts / "metadata.json").write_text(
+                json.dumps(metadata), encoding="utf-8"
+            )
+
+            with self.assertRaises(ContractError):
+                validate_runtime_artifacts(
+                    source,
+                    bounded,
+                    artifacts,
+                    device="gpu",
+                    runtime_log=runtime_log,
+                    runtime_manifest=manifest,
+                )
 
     def test_validate_rejects_legacy_ceed_cuda_device_labels(self) -> None:
         for section in ("execution_provenance", "demag_runtime"):

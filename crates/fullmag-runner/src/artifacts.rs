@@ -22,6 +22,45 @@ use std::path::Path;
 
 const MU0_H_PER_M: f64 = 1.256_637_062_12e-6;
 
+fn execution_provenance_json(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    execution_provenance: &crate::types::ExecutionProvenance,
+) -> std::io::Result<serde_json::Value> {
+    let mut value =
+        serde_json::to_value(execution_provenance).expect("ExecutionProvenance must serialize");
+    if plan.common.execution_mode == fullmag_ir::ExecutionMode::Strict
+        && execution_provenance.execution_engine == "fem_native_gpu"
+    {
+        insert_mfem_version(&mut value, strict_gpu_runtime_mfem_version()?);
+    }
+    Ok(value)
+}
+
+fn insert_mfem_version(provenance: &mut serde_json::Value, mfem_version: String) {
+    provenance
+        .as_object_mut()
+        .expect("ExecutionProvenance must serialize to an object")
+        .insert(
+            "mfem_version".to_string(),
+            serde_json::Value::String(mfem_version),
+        );
+}
+
+#[cfg(feature = "fem-gpu")]
+fn strict_gpu_runtime_mfem_version() -> std::io::Result<String> {
+    crate::native_fem::runtime_build_info()
+        .map(|info| info.mfem_version)
+        .map_err(|error| Error::new(ErrorKind::Other, error.message))
+}
+
+#[cfg(not(feature = "fem-gpu"))]
+fn strict_gpu_runtime_mfem_version() -> std::io::Result<String> {
+    Err(Error::new(
+        ErrorKind::Other,
+        "strict native FEM GPU artifacts require the loaded native FEM runtime build identity",
+    ))
+}
+
 fn runtime_threading_summary(problem: &fullmag_ir::ProblemIR) -> serde_json::Value {
     let resolved_cpu_threads = u32::try_from(crate::configured_cpu_threads(problem)).ok();
     serde_json::json!({
@@ -1024,8 +1063,7 @@ pub(crate) fn write_artifacts(
     let mesh_metadata = mesh_runtime_metadata(plan);
     let region_realization_revisions = region_realization_revisions_metadata(problem);
     let material_field_assets = write_material_field_artifacts(output_dir, plan)?;
-    let mut execution_provenance_json =
-        serde_json::to_value(&execution_provenance).expect("ExecutionProvenance must serialize");
+    let mut execution_provenance_json = execution_provenance_json(plan, &execution_provenance)?;
     if let Some(thermal) =
         thermal_execution_provenance(plan, &executed.result.steps, &execution_provenance)
     {
@@ -3213,6 +3251,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn strict_gpu_artifact_provenance_inserts_loaded_mfem_version() {
+        let mut provenance = serde_json::json!({"execution_engine": "fem_native_gpu"});
+
+        insert_mfem_version(&mut provenance, "4.9".to_string());
+
+        assert_eq!(provenance["mfem_version"], "4.9");
+    }
+
+    #[test]
     fn artifact_node_selection_resolves_quad_interface_by_global_ordinal() {
         let mut plan = test_fem_execution_plan();
         let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
@@ -5038,6 +5085,7 @@ mod tests {
                 },
             });
         }
+        plan.common.execution_mode = ExecutionMode::Extended;
         let provenance = ExecutionProvenance {
             execution_engine: "fem_native_gpu".to_string(),
             precision: "double".to_string(),
@@ -5181,6 +5229,7 @@ mod tests {
                 },
             });
         }
+        gpu_plan.common.execution_mode = ExecutionMode::Extended;
         let executed = ExecutedRun {
             result: RunResult {
                 status: RunStatus::Completed,
