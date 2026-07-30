@@ -1068,7 +1068,7 @@ finalize_verified_source_publication() {
     echo "[export_fem_gpu_runtime] refusing to clean non-canonical source snapshot" >&2
     return 2
   fi
-  chmod -R u+w "${SOURCE_SNAPSHOT_ROOT}"
+  chmod -R u+w "${SOURCE_SNAPSHOT_ROOT}" 2>/dev/null || true
   rm -rf -- "${SOURCE_SNAPSHOT_ROOT}"
   SOURCE_SNAPSHOT_ROOT=""
   source_snapshot_owned=0

@@ -877,6 +877,7 @@ def test_export_keeps_identity_through_final_verify_and_publication(
     function_start = exporter.index("finalize_verified_source_publication() {")
     function_end = exporter.index("\n}\n", function_start) + len("\n}")
     lifecycle_function = exporter[function_start:function_end]
+    assert 'chmod -R u+w "${SOURCE_SNAPSHOT_ROOT}" 2>/dev/null || true' in lifecycle_function
     snapshot = tmp_path / "source-snapshot.test"
     identity = tmp_path / "source-identity.test.json"
     snapshot.mkdir()
