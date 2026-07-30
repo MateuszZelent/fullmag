@@ -29,6 +29,7 @@ pub(crate) enum PythonMeshPreparationUpdate {
     Failed {
         stage_id: PreparationStageId,
         summary: String,
+        detail: Option<String>,
     },
 }
 
@@ -100,6 +101,11 @@ pub(crate) fn python_mesh_preparation_update(
             Some(PythonMeshPreparationUpdate::Failed {
                 stage_id,
                 summary: "Shared-domain mesh build failed".to_string(),
+                detail: payload
+                    .get("error")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(sanitize_preparation_progress_label)
+                    .map(|error| format!("{}: {error}", stage_id.as_str())),
             })
         }
         _ => None,
@@ -1779,6 +1785,25 @@ mod tests {
             Some(PythonMeshPreparationUpdate::Failed {
                 stage_id: PreparationStageId::Meshing,
                 summary: "Shared-domain mesh build failed".to_string(),
+                detail: None,
+            })
+        );
+    }
+
+    #[test]
+    fn structured_mesh_failure_projects_phase_qualified_sanitized_detail() {
+        assert_eq!(
+            python_mesh_preparation_update(
+                "mesh_build_failed",
+                &serde_json::json!({
+                    "phase": "postprocessing",
+                    "error": "unsupported cell type hex8",
+                }),
+            ),
+            Some(PythonMeshPreparationUpdate::Failed {
+                stage_id: PreparationStageId::MeshPostprocessing,
+                summary: "Shared-domain mesh build failed".to_string(),
+                detail: Some("mesh_postprocessing: unsupported cell type hex8".to_string()),
             })
         );
     }

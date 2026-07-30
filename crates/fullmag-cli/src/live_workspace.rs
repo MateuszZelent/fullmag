@@ -4245,7 +4245,11 @@ fn apply_mesh_preparation_update(
                 &detail,
             );
         }
-        PythonMeshPreparationUpdate::Failed { stage_id, summary } => {
+        PythonMeshPreparationUpdate::Failed {
+            stage_id,
+            summary,
+            detail,
+        } => {
             let owning_stage_id = match preparation.active_stage_id {
                 Some(
                     active_stage_id @ (PreparationStageId::DomainPreparation
@@ -4268,12 +4272,13 @@ fn apply_mesh_preparation_update(
                 "mesh_build_failed",
                 &summary,
             )?;
+            preparation.set_failure_detail(detail.clone());
             preparation_log_once(
                 preparation,
                 timestamp_unix_ms,
                 PreparationLogLevel::Error,
                 owning_stage_id,
-                &summary,
+                detail.as_deref().unwrap_or(&summary),
             );
         }
     }

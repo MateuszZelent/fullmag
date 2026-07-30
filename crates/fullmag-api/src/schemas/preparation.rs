@@ -100,6 +100,8 @@ pub struct PreparationFailureResource {
     pub error_code: String,
     #[schema(max_length = 1024)]
     pub summary: String,
+    #[schema(max_length = 1024)]
+    pub detail: Option<String>,
     pub stage_id: PreparationStageId,
     #[schema(max_length = 256)]
     pub diagnostics_correlation_id: Option<String>,

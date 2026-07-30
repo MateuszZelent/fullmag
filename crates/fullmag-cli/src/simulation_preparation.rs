@@ -214,6 +214,7 @@ pub struct PreparationLogEntry {
 pub struct PreparationFailure {
     pub error_code: String,
     pub summary: String,
+    pub detail: Option<String>,
     pub stage_id: PreparationStageId,
     pub diagnostics_correlation_id: Option<String>,
 }
@@ -556,6 +557,7 @@ impl SimulationPreparationState {
                 self.failure = Some(PreparationFailure {
                     error_code,
                     summary,
+                    detail: None,
                     stage_id,
                     diagnostics_correlation_id: None,
                 });
@@ -645,6 +647,7 @@ impl SimulationPreparationState {
         self.failure = Some(PreparationFailure {
             error_code: error_code.into(),
             summary: stage.detail.clone(),
+            detail: None,
             stage_id,
             diagnostics_correlation_id: None,
         });
@@ -654,6 +657,14 @@ impl SimulationPreparationState {
         self.completed_at_unix_ms = Some(timestamp_unix_ms);
         self.bump_revision_if_semantic_change(before);
         Ok(())
+    }
+
+    pub fn set_failure_detail(&mut self, detail: Option<String>) {
+        let before = self.semantic_snapshot();
+        if let Some(failure) = self.failure.as_mut() {
+            failure.detail = detail;
+        }
+        self.bump_revision_if_semantic_change(before);
     }
 
     pub fn mark_ready(
