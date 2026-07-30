@@ -7,14 +7,14 @@ description: Use when creating, changing, reviewing, restructuring, or publishin
 
 ## Core rule
 
-Make publication documentation mirror implementation ownership and prove every scientific and API claim from current code. Use the hierarchy **domain → solver → backend → interaction**. A page is incomplete when equations, symbols, SI units, backend distinctions, Python API, `ProblemIR`, source anchors, evidence, bibliography, or source-code index are missing.
+Make publication documentation physics-first and prove every scientific and API claim from current code. Use **one canonical scientific owner per physical interaction**. Common physics, equations, symbols, SI units, Python API, and `ProblemIR` semantics belong there once; solver and device realizations do not own duplicate interaction pages. A page is incomplete when equations, symbols, SI units, realization distinctions, Python API, `ProblemIR`, source anchors, evidence, bibliography, or source-code index are missing.
 
 For physics or numerics work, **REQUIRED SUB-SKILL:** use `physics-publication`. Read [references/page-contract.md](references/page-contract.md) completely before writing or reviewing a terminal page.
 
 ## Required workflow
 
 1. Inspect the current public Python constructors, validators, lowering, `ProblemIR`, planner capabilities, solver sources, and tests. Never reconstruct behavior from memory.
-2. Place the page in the implementation hierarchy and cover FEM CPU, FEM GPU, FDM CPU, and FDM GPU explicitly. Split chapters whenever implementation or support differs.
+2. Place the page under the canonical interaction and cover FDM CPU, FDM GPU, FEM CPU, and FEM GPU in an explicit support and qualification matrix. Add separate realization sections or subchapters only for material implementation differences. Give scientifically large topics focused subtrees instead of duplicating them by solver or device.
 3. Write every production equation in complete LaTeX. Define every symbol, including SI unit, in a MathJax-rendered table. Do not replace implemented terms with pedagogical approximations.
 4. Add a complete Python authoring chapter: every public parameter, a copyable executable `python` example organized with `# %%` cells, validation/failure behavior, and backend support.
 5. Add the canonical `ProblemIR` representation, exhaustive Python-to-IR mapping, normalization, requested intent, planner-resolved execution, and unsupported-combination semantics.
@@ -55,7 +55,10 @@ python3 .agents/skills/scientific-documentation-contract/scripts/validate_scient
 - Use `$...$` for inline math under MyST `dollarmath`; reject raw `\(...\)` delimiters.
 - Use labelled `{math}` blocks for governing, weak-form, discrete, field, energy, torque, and update equations.
 - Give every symbol an exact LaTeX token, scientific meaning, and SI unit rendered as LaTeX (`$1$` for dimensionless quantities).
-- Keep CPU and GPU, and FEM and FDM, in separate chapters whenever algorithms, discretization, precision, memory ownership, libraries, boundaries, convergence, support, failure semantics, or validation differ.
+- Keep shared physics in the canonical interaction page; never copy common equations into backend-specific pages.
+- Use one row for each of FDM CPU, FDM GPU, FEM CPU, and FEM GPU in the support and qualification matrix, including unsupported, planned, and unqualified states without overclaiming them.
+- Create separate realization sections or subchapters when algorithms, discretization, precision, memory ownership, libraries, boundaries, convergence, support, failure semantics, or validation materially differ. Do not split merely because solver or device names differ.
+- Give scientifically large topics such as demagnetization and DMI dedicated subtrees organized by independently useful physical or numerical boundaries.
 - Document actual approximations completely: equation, derivation or citation, validity domain, error regime, and implementation.
 - Provide complete parameter tables. Every row includes type, default, SI unit, validation domain, meaning, backend support, and `ProblemIR` destination.
 - Preserve requested intent separately from resolved execution and provenance.
@@ -71,7 +74,8 @@ Stop and report the exact blocker when a public parameter cannot be mapped, an e
 
 | Mistake | Required correction |
 |---|---|
-| One “implementation” section for all lanes | Create explicit FEM/FDM and CPU/GPU realization chapters. |
+| Four backend-owned copies of one interaction | Keep one canonical interaction owner and express all lanes in its realization matrix. |
+| One “implementation” section hides material lane differences | Add explicit realization sections only for the differing FEM/FDM or CPU/GPU behavior. |
 | `demag.cu lines 500–600` | Cite repository path plus stable function/class/anchor; generate lines from the revision. |
 | Plain-text units such as `J/m` | Render the unit as LaTeX, for example `$\mathrm{J\,m^{-1}}$`. |
 | Minimal Python snippet | Provide complete `# %%` cells and every used constructor parameter. |

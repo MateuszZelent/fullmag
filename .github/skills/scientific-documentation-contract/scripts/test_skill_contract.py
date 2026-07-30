@@ -12,7 +12,11 @@ class SkillIntegrationTests(unittest.TestCase):
     def test_skill_declares_required_publication_gates(self) -> None:
         text = SKILL.read_text(encoding="utf-8")
         for requirement in (
-            "domain → solver → backend → interaction",
+            "one canonical scientific owner per physical interaction",
+            "FDM CPU, FDM GPU, FEM CPU, and FEM GPU",
+            "support and qualification matrix",
+            "material implementation differences",
+            "scientifically large topics",
             "path + symbol",
             "# %%",
             "ProblemIR",
@@ -22,6 +26,7 @@ class SkillIntegrationTests(unittest.TestCase):
             "MathJax",
         ):
             self.assertIn(requirement, text)
+        self.assertNotIn("domain → solver → backend → interaction", text)
 
     def test_agents_makes_skill_mandatory(self) -> None:
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
