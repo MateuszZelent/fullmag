@@ -819,6 +819,32 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                     gpu_artifacts=gpu[2],
                 )
 
+    def test_compare_rejects_summary_alias_of_final_chunk_to_step0_chunk(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cpu = self._write_valid_bundle(root, "cpu")
+            gpu = self._write_valid_bundle(root, "gpu")
+            cpu_summary = validate_runtime_artifacts(
+                cpu[0], cpu[1], cpu[2], device="cpu", runtime_log=cpu[3], runtime_manifest=cpu[4]
+            )
+            gpu_summary = validate_runtime_artifacts(
+                gpu[0], gpu[1], gpu[2], device="gpu", runtime_log=gpu[3], runtime_manifest=gpu[4]
+            )
+            descriptor = gpu_summary["step0_operator_artifacts"]["fields"]["H_demag"]
+            descriptor["final_chunk_key"] = descriptor["step0_chunk_key"]
+            descriptor["final_chunk_sha256"] = descriptor["step0_chunk_sha256"]
+            (gpu[2] / "fields/H_demag.zarr/1.0.0").write_bytes(
+                struct.pack("<9d", *([321.0] * 9))
+            )
+
+            with self.assertRaises(ContractError):
+                verifier.compare_runtime_summaries(
+                    cpu_summary,
+                    gpu_summary,
+                    cpu_artifacts=cpu[2],
+                    gpu_artifacts=gpu[2],
+                )
+
     def test_step0_field_tolerances_match_native_cpu_gpu_parity_contract(self) -> None:
         self.assertEqual(
             verifier.STEP0_FIELD_TOLERANCES,

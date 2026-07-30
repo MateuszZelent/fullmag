@@ -1406,6 +1406,7 @@ def _load_bound_step0_field(
     summary: dict[str, object],
     step0: dict[str, Any],
     observable: str,
+    expected_node_count: int,
 ) -> tuple[list[float], int]:
     descriptor = _object(
         _object(step0.get("fields"), "step-0 fields").get(observable),
@@ -1414,42 +1415,27 @@ def _load_bound_step0_field(
     relative = descriptor.get("relative_path")
     if relative != f"fields/{observable}.zarr":
         raise ContractError(f"step-0 {observable} relative path is invalid")
-    store = artifacts / relative
-    bound_files = {
-        ".zattrs": "attrs_sha256",
-        ".zarray": "array_sha256",
-        "samples.csv": "samples_sha256",
-        str(descriptor.get("step0_chunk_key")): "step0_chunk_sha256",
-        str(descriptor.get("final_chunk_key")): "final_chunk_sha256",
-    }
-    for filename, hash_field in bound_files.items():
-        expected_hash = _canonical_sha256(
-            descriptor.get(hash_field), f"step-0 {observable} {hash_field}"
-        )
-        if _sha256_file(store / filename) != expected_hash:
-            raise ContractError(f"step-0 {observable} artifact hash changed for {filename}")
-    node_count = _nonnegative_int(
-        descriptor.get("node_count"), f"step-0 {observable} node_count"
+    source_hash = _canonical_sha256(
+        summary.get("bounded_source_sha256"), "bounded source SHA-256"
     )
-    if descriptor.get("component_count") != 3 or descriptor.get("dtype") != "<f8":
-        raise ContractError(f"step-0 {observable} descriptor shape is invalid")
-    expected_len = 3 * node_count * DOUBLE_BYTES
-    step0_values: list[float] | None = None
-    for sample_name, key_field in (
-        ("step-0", "step0_chunk_key"),
-        ("final", "final_chunk_key"),
-    ):
-        payload = (store / str(descriptor[key_field])).read_bytes()
-        if len(payload) != expected_len:
-            raise ContractError(f"{sample_name} {observable} payload length changed")
-        values = list(struct.unpack(f"<{3 * node_count}d", payload))
-        if not all(math.isfinite(value) for value in values):
-            raise ContractError(f"{sample_name} {observable} payload is non-finite")
-        if sample_name == "step-0":
-            step0_values = values
-    if step0_values is None:
-        raise ContractError(f"step-0 {observable} payload is absent")
-    return step0_values, node_count
+    engine = summary.get("execution_engine")
+    if not isinstance(engine, str) or not engine:
+        raise ContractError("execution engine is required for field artifact rebinding")
+    raw_descriptor = _validate_step0_field_artifact(
+        artifacts,
+        observable,
+        expected_source_hash=source_hash,
+        expected_engine=engine,
+        expected_node_count=expected_node_count,
+    )
+    if descriptor != raw_descriptor:
+        raise ContractError(
+            f"step-0 {observable} summary descriptor is not bound to raw samples"
+        )
+    store = artifacts / relative
+    payload = (store / str(raw_descriptor["step0_chunk_key"])).read_bytes()
+    values = list(struct.unpack(f"<{3 * expected_node_count}d", payload))
+    return values, expected_node_count
 
 
 def _load_bound_step0_scalars(
@@ -1647,10 +1633,10 @@ def compare_runtime_summaries(
     field_parity: dict[str, object] = {}
     for observable in STEP0_FIELD_OBSERVABLES:
         cpu_field, cpu_field_nodes = _load_bound_step0_field(
-            cpu_artifacts, cpu, cpu_step0, observable
+            cpu_artifacts, cpu, cpu_step0, observable, cpu_node_count
         )
         gpu_field, gpu_field_nodes = _load_bound_step0_field(
-            gpu_artifacts, gpu, gpu_step0, observable
+            gpu_artifacts, gpu, gpu_step0, observable, gpu_node_count
         )
         if cpu_field_nodes != cpu_node_count or gpu_field_nodes != gpu_node_count:
             raise ContractError(f"{observable} node count does not match metadata")
