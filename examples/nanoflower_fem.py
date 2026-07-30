@@ -58,7 +58,7 @@ study.tableautosave(1e-13)
 # ── Run ─────────────────────────────────────────────────────
 if not USE_SAVED_RELAXED_STATE:
     relax_result = study.relax(
-        tol=1e-6,                       # torque tolerance (max_dm_dt)
+        tolA=1e-6,                       # torque tolerance (max_dm_dt)
         max_steps=100_000,              # limit kroków
         algorithm="projected_gradient_bb",     # algorytm relaksacji
     )

@@ -4,6 +4,7 @@ import contextlib
 import copy
 import io
 import json
+import math
 import os
 import importlib.util
 import subprocess
@@ -4670,7 +4671,7 @@ class ProblemApiTests(unittest.TestCase):
         body.m = fm.texture.uniform(1, 0, 0)
         body.mesh(maximum_element_size=4e-9, order=1).build()
         fm.save("m", every=1e-12)
-        fm.relax(max_steps=25, tol=1e-5, algorithm="llg_overdamped")
+        fm.relax(max_steps=25, tolA=1e-5, algorithm="llg_overdamped")
         fm.run(4e-12)
         """
 
@@ -4855,7 +4856,7 @@ class ProblemApiTests(unittest.TestCase):
         body.m = fm.texture.uniform(1, 0, 0)
         study.save("m", every=1e-12)
         study.stages.add_stage(fm.relax_stage(
-            max_steps=25, tol=1e-5, algorithm="llg_overdamped", dt=1e-15
+            max_steps=25, tolA=1e-5, algorithm="llg_overdamped", dt=1e-15
         ))
         study.stages.add_run(4e-12)
         """
@@ -4876,7 +4877,7 @@ class ProblemApiTests(unittest.TestCase):
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
         self.assertIn("study.stages.add_relax(", rewritten)
         self.assertIn("algorithm=\"llg_overdamped\"", rewritten)
-        self.assertIn("tol=1e-05", rewritten)
+        self.assertIn("tolA=1e-05", rewritten)
         self.assertIn("max_steps=25", rewritten)
         self.assertIn('study.stages.add_run(stage_id="run-1", until=4e-12)', rewritten)
 
@@ -5046,7 +5047,10 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(len(loaded.stages), 1)
         study_ir = loaded.stages[0].problem.study.to_ir()
         self.assertEqual(study_ir["algorithm"], "nonlinear_cg")
-        self.assertEqual(study_ir["stop"]["torque_tolerance_apm"], 1e-4)
+        self.assertAlmostEqual(
+            study_ir["stop"]["torque_tolerance_apm"],
+            1e-6 / (4.0e-7 * math.pi),
+        )
         self.assertNotIn("dynamics", study_ir)
 
         stage_payload = export_builder_draft(loaded)["stages"][0]
@@ -6181,7 +6185,7 @@ class ProblemApiTests(unittest.TestCase):
         body.alpha = 0.1
         body.m = fm.texture.uniform(1, 0, 0)
         fm.save("m", every=1e-12)
-        fm.relax(max_steps=25, tol=1e-5, algorithm="llg_overdamped")
+        fm.relax(max_steps=25, tolA=1e-5, algorithm="llg_overdamped")
         fm.run(4e-12)
         """
 
@@ -6209,7 +6213,7 @@ class ProblemApiTests(unittest.TestCase):
             },
         )["rendered_source"]
 
-        self.assertIn('fm.relax(algorithm="nonlinear_cg", tol=2e-06, max_steps=250, energy_tolerance=3e-12)', rewritten)
+        self.assertIn('fm.relax(algorithm="nonlinear_cg", tolA=2e-06, max_steps=250, energy_tolerance=3e-12)', rewritten)
         self.assertIn("fm.run(9e-12)", rewritten)
 
     def test_script_rewrite_applies_eigen_k_path_override(self) -> None:
@@ -6799,7 +6803,7 @@ class ProblemApiTests(unittest.TestCase):
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
         self.assertIn("fm.solver(fix_dt=2e-13, demag_interval_s=8e-13)", rewritten)
         self.assertIn(
-            'fm.relax(algorithm="llg_overdamped", stop=fm.RelaxStop(torque_tolerance_apm=1e-05, max_steps=50000, max_relaxation_time_s=4e-12))',
+            'fm.relax(algorithm="llg_overdamped", tolT=1.25663706144e-11, stop=fm.RelaxStop(torque_tolerance_apm=1e-05, max_steps=50000, max_relaxation_time_s=4e-12))',
             rewritten,
         )
 
@@ -6842,7 +6846,7 @@ class ProblemApiTests(unittest.TestCase):
         body.m = fm.texture.uniform(1, 0, 0)
         fm.solver(dt=2e-13)
         fm.save("m", every=1e-12)
-        fm.relax(tol=1e-4, max_steps=250)
+        fm.relax(tolA=1e-4, max_steps=250)
         """
 
         with TemporaryDirectory() as tmp_dir:
@@ -6856,6 +6860,23 @@ class ProblemApiTests(unittest.TestCase):
         dynamics = loaded.problem.study.to_ir()["dynamics"]
         self.assertEqual(dynamics["integrator"], "rk23")
         self.assertIsNone(dynamics["fixed_timestep"])
+
+    def test_relax_stage_normalizes_default_tesla_and_explicit_ampere_tolerances(self) -> None:
+        expected_apm = 1e-6 / (4.0e-7 * math.pi)
+
+        default = fm.relax_stage(max_steps=20, dt=1e-15)
+        tesla = fm.relax_stage(tolT=1e-6, max_steps=20, dt=1e-15)
+        ampere = fm.relax_stage(tolA=expected_apm, max_steps=20, dt=1e-15)
+
+        self.assertAlmostEqual(default.stop.torque_tolerance_apm, expected_apm)
+        self.assertAlmostEqual(tesla.stop.torque_tolerance_apm, expected_apm)
+        self.assertAlmostEqual(ampere.stop.torque_tolerance_apm, expected_apm)
+
+    def test_relax_stage_rejects_legacy_and_ambiguous_tolerance_keywords(self) -> None:
+        with self.assertRaisesRegex(ValueError, "tolT or tolA"):
+            fm.relax_stage(tol=1e-4, max_steps=20, dt=1e-15)
+        with self.assertRaisesRegex(ValueError, "only one"):
+            fm.relax_stage(tolT=1e-6, tolA=1.0, max_steps=20, dt=1e-15)
 
     def test_flat_relax_accepts_solver_and_dt_overrides(self) -> None:
         script = """

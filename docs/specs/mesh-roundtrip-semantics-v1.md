@@ -1,7 +1,7 @@
 # Mesh Round-Trip Semantics v1
 
 Status: canonical  
-Updated: 2026-04-23
+Updated: 2026-07-30
 
 ## 1. Vocabulary
 
@@ -45,7 +45,8 @@ Render controls can affect what is displayed in viewport only; they are not allo
 
 ## 4. Resource-First API Projection
 
-`GET /v1/live/current/mesh/semantics` is the canonical consolidated projection for mesh semantics:
+The v1 live endpoint no longer exists. Mesh semantics are projected through the
+session-scoped v2 meshing resources under `/v2/sessions/current/meshing/...`:
 
 - `universe_config`,
 - `shared_domain_config`,
@@ -54,7 +55,7 @@ Render controls can affect what is displayed in viewport only; they are not allo
 - `mesh_build_diagnostics`,
 - `render_only_controls_do_not_change_solver_domain`.
 
-This endpoint is a thin semantic projection; heavy geometry remains served by binary topology lanes.
+These resources remain thin and revisioned; heavy geometry stays on binary topology lanes.
 
 ## 5. Round-Trip Contract
 
@@ -64,3 +65,20 @@ Round-trip is valid only if:
 2. solver mesh remains inspectable as derived execution artifact,
 3. UI mesh workspace shows config-level and solver-level data as distinct concepts,
 4. render-only controls do not alter solver-domain provenance or mesh identity.
+
+## 6. Persistence and interchange
+
+Native reuse and external interchange are separate contracts:
+
+- `.fullmag-mesh` is the lossless native artifact used by
+  `study.mesh.save()`, `study.mesh.load()`, and `study.mesh.save_or_load()`;
+- Gmsh 4.1 `.msh` plus `<mesh>.msh.fullmag.json` is the explicit interchange
+  representation used by `study.mesh.export()` and `study.mesh.import_()`.
+
+Native loading requires equality of the canonical mesh-authoring fingerprint
+and validates the topology fingerprint, member digests, semantic marker maps,
+mesh parts, periodic data, and available certificates. External import creates
+a new solver-mesh identity because node, element, and Physical Group numbering
+may change in COMSOL or another tool. In both cases the accepted topology enters
+the existing `fem_domain_mesh_asset`; neither representation replaces universe
+or per-object authoring intent.

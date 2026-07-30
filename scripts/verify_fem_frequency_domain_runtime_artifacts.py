@@ -2261,7 +2261,7 @@ def compare_numeric_value(
             fail(
                 f"mismatch at {name}: {target_label}={target_value:.17g}, "
                 f"{reference_label}={reference_value:.17g}, diff={difference:.17g}, "
-                f"tol={tolerance:.17g}"
+                f"tolA={tolerance:.17g}"
             )
         return
     if isinstance(target, list) and isinstance(reference, list):

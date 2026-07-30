@@ -24,7 +24,7 @@ class ResponsivePublicDocumentationTableTests(unittest.TestCase):
 
     def test_tables_own_horizontal_overflow_without_hiding_the_page(self) -> None:
         css = CSS.read_text(encoding="utf-8")
-        self.assertRegex(css, r"\.table-wrapper[^\{]*\{[^}]*overflow-x:\s*auto")
+        self.assertRegex(css, r"\.table-wrapper[^\{]*\{[^}]*overflow:\s*auto")
         self.assertRegex(css, r"th\s*,\s*[^\{]*td[^\{]*\{[^}]*white-space:\s*normal")
         self.assertIn("overflow-wrap: anywhere", css)
         self.assertNotRegex(css, r"(?:html|body)[^\{]*\{[^}]*overflow-x:\s*hidden")
@@ -68,7 +68,7 @@ class ResponsivePublicDocumentationTableTests(unittest.TestCase):
                 and re.search(r"width:\s*100%", declarations)
                 and re.search(r"min-width:\s*0", declarations)
                 and re.search(r"max-width:\s*100%", declarations)
-                and re.search(r"overflow-x:\s*auto", declarations)
+                and re.search(r"overflow:\s*auto", declarations)
                 for declarations in wrapper_rules
             )
         )
@@ -77,6 +77,30 @@ class ResponsivePublicDocumentationTableTests(unittest.TestCase):
                 re.search(r"width:\s*max-content", declarations)
                 or re.search(r"max-width:\s*none", declarations)
                 for declarations in table_rules
+            )
+        )
+
+    def test_theme_grid_content_cannot_grow_from_wide_tables(self) -> None:
+        css = CSS.read_text(encoding="utf-8")
+        content_rules = self._rules_for_selector(css, ".drawer-content")
+        descendant_rules = self._rules_for_selector(css, ".drawer-content > *")
+        wrapper_rules = self._rules_for_selector(css, "article main .table-wrapper")
+
+        for rules in (content_rules, descendant_rules):
+            self.assertTrue(
+                any(
+                    re.search(r"box-sizing:\s*border-box", declarations)
+                    and re.search(r"min-width:\s*0", declarations)
+                    and re.search(r"max-width:\s*100%", declarations)
+                    for declarations in rules
+                )
+            )
+
+        self.assertTrue(
+            any(
+                re.search(r"box-sizing:\s*border-box", declarations)
+                and re.search(r"overflow:\s*auto", declarations)
+                for declarations in wrapper_rules
             )
         )
 

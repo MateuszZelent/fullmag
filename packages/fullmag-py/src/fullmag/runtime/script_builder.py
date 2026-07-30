@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import re
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -3893,6 +3894,11 @@ def _render_stages(
                 or max_relaxation_time_s is not None
             )
             if needs_stop_object:
+                if torque_tolerance is not None:
+                    call_parts.append(
+                        "tolT="
+                        f"{_py_number(torque_tolerance * 4.0e-7 * math.pi)}"
+                    )
                 stop_parts: list[str] = []
                 stop_parts.append(
                     "torque_tolerance_apm=None"
@@ -3913,7 +3919,10 @@ def _render_stages(
                     )
                 call_parts.append(f"stop=fm.RelaxStop({', '.join(stop_parts)})")
             else:
-                call_parts.append(f"tol={_py_number(torque_tolerance)}")  # type: ignore[arg-type]
+                call_parts.append(
+                    "tolT="
+                    f"{_py_number(torque_tolerance * 4.0e-7 * math.pi)}"
+                )  # type: ignore[operator]
                 call_parts.append(f"max_steps={max_steps}")
                 if energy_tolerance is not None:
                     call_parts.append(

@@ -75,5 +75,5 @@ study.stages.add_relax(
     dt_min=1e-17,
     dt_max=1e-14,
     max_steps=1,
-    tol=1e-3,
+    tolA=1e-3,
 )

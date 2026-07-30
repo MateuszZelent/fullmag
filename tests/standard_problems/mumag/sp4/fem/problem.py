@@ -91,14 +91,14 @@ def build_study(request: SP4RunRequest):
                 max_err=1e-7,
                 relax_alpha=1.0,
                 max_steps=maximum_steps,
-                tol=torque_tolerance_apm,
+                tolA=torque_tolerance_apm,
             )
         elif algorithm in PRODUCTION_RELAXATION_ALGORITHMS:
             study.stages.add_relax(
                 stage_id="relax",
                 algorithm=algorithm,
                 max_steps=maximum_steps,
-                tol=torque_tolerance_apm,
+                tolA=torque_tolerance_apm,
             )
         else:
             raise ValueError(f"unsupported SP4 relaxation algorithm: {algorithm}")

@@ -84,5 +84,5 @@ study.save("mode", indices=(0, 1, 2, 3))
 study.stages.add_minimize(
     method="bb",
     max_steps=2000,
-    tol=1e-4,
+    tolA=1e-4,
 )

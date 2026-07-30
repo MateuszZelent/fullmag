@@ -141,6 +141,6 @@ study.stages.add_relax(
     max_error=ADAPTIVE_MAX_ERROR,
     dt_min=ADAPTIVE_DT_MIN,
     dt_max=ADAPTIVE_DT_MAX,
-    tol=RELAX_TORQUE_TOLERANCE_APM,
+    tolA=RELAX_TORQUE_TOLERANCE_APM,
     max_steps=5000,
 )

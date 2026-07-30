@@ -101,5 +101,5 @@ study.runtime_metadata("spin_wave_response", {
     "window_space": "hann",
     "window_time": "hann",
 })
-study.stages.add_minimize(stage_id="relax", method="bb", max_steps=RELAX_STEPS, tol=5e2)
+study.stages.add_minimize(stage_id="relax", method="bb", max_steps=RELAX_STEPS, tolA=5e2)
 study.stages.add_run(stage_id="propagate", until=UNTIL)

@@ -88,7 +88,7 @@ study.stages.add_relax(
     max_err=1e-7,
     relax_alpha=1.0,
     max_steps=50_000,
-    tol=7.957747154594767,
+    tolA=7.957747154594767,
 )
 
 # Apply the official reversal field only after relaxation.

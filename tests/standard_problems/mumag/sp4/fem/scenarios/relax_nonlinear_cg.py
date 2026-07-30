@@ -65,6 +65,6 @@ study.stages.add_relax(
     stage_id="relax",
     algorithm="nonlinear_cg",
     max_steps=50_000,
-    tol=7.957747154594767,
+    tolA=7.957747154594767,
 )
 

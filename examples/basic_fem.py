@@ -123,7 +123,7 @@ study.tableautosave(10e-12)
 # ── Stage authoring (uncomment to declare pipeline) ──────
 # if not USE_SAVED_RELAXED_STATE:
 #     study.stages.add_relax(
-#         tol=4e3,
+#         tolA=4e3,
 #         max_steps=1000,
 #         algorithm="llg_overdamped",
 #     )

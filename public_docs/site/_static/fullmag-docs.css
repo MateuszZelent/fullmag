@@ -2,6 +2,14 @@ article,
 article > main,
 article main,
 article main > section {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.drawer-content,
+.drawer-content > * {
+  box-sizing: border-box;
   min-width: 0;
   max-width: 100%;
 }
@@ -11,7 +19,8 @@ article main .table-wrapper {
   width: 100%;
   min-width: 0;
   max-width: 100%;
-  overflow-x: auto;
+  box-sizing: border-box;
+  overflow: auto;
   overscroll-behavior-inline: contain;
   -webkit-overflow-scrolling: touch;
 }

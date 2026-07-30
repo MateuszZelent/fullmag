@@ -10,7 +10,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
-from typing import Any, Mapping, Sequence
+from typing import Mapping, Sequence
 import zipfile
 
 import numpy as np
@@ -122,6 +122,20 @@ def _canonical_json(value: object) -> bytes:
         ensure_ascii=False,
         allow_nan=False,
     ).encode("utf-8")
+
+
+def _atomic_write_bytes(target: Path, payload: bytes) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        temporary.write_bytes(payload)
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def mesh_authoring_fingerprint(document: Mapping[str, object]) -> str:
@@ -435,7 +449,7 @@ def export_gmsh_mesh(artifact: MeshArtifact, path: str | Path) -> Path:
     os.close(descriptor)
     temporary = Path(temporary_name)
     try:
-        _write_gmsh41_ascii(artifact, temporary)
+        volume_export_map, surface_export_map = _write_gmsh41_ascii(artifact, temporary)
         payload = temporary.read_bytes()
         os.replace(temporary, target)
     finally:
@@ -454,8 +468,14 @@ def export_gmsh_mesh(artifact: MeshArtifact, path: str | Path) -> Path:
         "cell_mesh_parts": artifact.mesh.cell_mesh_parts.tolist(),
         "periodic_boundary_pairs": artifact.mesh.periodic_boundary_pairs,
         "periodic_node_pairs": artifact.mesh.periodic_node_pairs,
+        "volume_marker_fullmag_to_gmsh": {
+            str(marker): exported for marker, exported in volume_export_map.items()
+        },
+        "surface_marker_fullmag_to_gmsh": {
+            str(marker): exported for marker, exported in surface_export_map.items()
+        },
     }
-    sidecar.write_bytes(_canonical_json(sidecar_payload))
+    _atomic_write_bytes(sidecar, _canonical_json(sidecar_payload))
     return target
 
 
@@ -469,7 +489,25 @@ _GMSH_ELEMENT_IDS = {
 }
 
 
-def _write_gmsh41_ascii(artifact: MeshArtifact, target: Path) -> None:
+def _positive_export_tags(markers: Sequence[int]) -> dict[int, int]:
+    used = {marker for marker in markers if marker > 0}
+    next_tag = max(used, default=0) + 1
+    result: dict[int, int] = {}
+    for marker in markers:
+        if marker > 0:
+            result[marker] = marker
+        else:
+            while next_tag in used:
+                next_tag += 1
+            result[marker] = next_tag
+            used.add(next_tag)
+            next_tag += 1
+    return result
+
+
+def _write_gmsh41_ascii(
+    artifact: MeshArtifact, target: Path
+) -> tuple[dict[int, int], dict[int, int]]:
     mesh = artifact.mesh
     region_names = {
         int(entry["marker"]): str(entry["geometry_name"])
@@ -478,10 +516,9 @@ def _write_gmsh41_ascii(artifact: MeshArtifact, target: Path) -> None:
     boundary_names = {int(marker): name for name, marker in artifact.boundary_map.items()}
     volume_markers = sorted(set(int(value) for value in mesh.element_markers.tolist()))
     surface_markers = sorted(set(int(value) for value in mesh.boundary_markers.tolist()))
-    if any(marker <= 0 for marker in (*volume_markers, *surface_markers)):
-        raise MeshSemanticMappingError(
-            "Gmsh export currently requires positive volume and boundary markers"
-        )
+    volume_export_map = _positive_export_tags(volume_markers)
+    surface_export_map = _positive_export_tags(surface_markers)
+    region_names.setdefault(0, "airbox")
     missing_regions = sorted(set(volume_markers) - set(region_names))
     missing_boundaries = sorted(set(surface_markers) - set(boundary_names))
     if missing_regions or missing_boundaries:
@@ -492,8 +529,14 @@ def _write_gmsh41_ascii(artifact: MeshArtifact, target: Path) -> None:
     lower = mesh.nodes.min(axis=0)
     upper = mesh.nodes.max(axis=0)
     physical_names = [
-        *(f'3 {marker} "{region_names[marker]}"' for marker in volume_markers),
-        *(f'2 {marker} "{boundary_names[marker]}"' for marker in surface_markers),
+        *(
+            f'3 {volume_export_map[marker]} "{region_names[marker]}"'
+            for marker in volume_markers
+        ),
+        *(
+            f'2 {surface_export_map[marker]} "{boundary_names[marker]}"'
+            for marker in surface_markers
+        ),
     ]
     element_blocks: list[tuple[int, int, int, list[tuple[int, np.ndarray]]]] = []
     next_tag = 1
@@ -518,11 +561,13 @@ def _write_gmsh41_ascii(artifact: MeshArtifact, target: Path) -> None:
         handle.write(f"$Entities\n0 0 {len(surface_markers)} {len(volume_markers)}\n")
         bounds = " ".join(f"{value:.17g}" for value in (*lower, *upper))
         for marker in surface_markers:
-            handle.write(f"{marker} {bounds} 1 {marker} 0\n")
+            exported = surface_export_map[marker]
+            handle.write(f"{exported} {bounds} 1 {exported} 0\n")
         for marker in volume_markers:
-            handle.write(f"{marker} {bounds} 1 {marker} 0\n")
+            exported = volume_export_map[marker]
+            handle.write(f"{exported} {bounds} 1 {exported} 0\n")
         handle.write("$EndEntities\n")
-        node_entity = volume_markers[0]
+        node_entity = volume_export_map[volume_markers[0]]
         handle.write(
             f"$Nodes\n1 {mesh.n_nodes} 1 {mesh.n_nodes}\n"
             f"3 {node_entity} 0 {mesh.n_nodes}\n"
@@ -536,10 +581,14 @@ def _write_gmsh41_ascii(artifact: MeshArtifact, target: Path) -> None:
             f"$Elements\n{len(element_blocks)} {next_tag - 1} 1 {next_tag - 1}\n"
         )
         for dimension, marker, element_type, entries in element_blocks:
-            handle.write(f"{dimension} {marker} {element_type} {len(entries)}\n")
+            exported = (
+                volume_export_map[marker] if dimension == 3 else surface_export_map[marker]
+            )
+            handle.write(f"{dimension} {exported} {element_type} {len(entries)}\n")
             for tag, nodes in entries:
                 handle.write(f"{tag} {' '.join(str(int(node)) for node in nodes)}\n")
         handle.write("$EndElements\n")
+    return volume_export_map, surface_export_map
 
 
 def import_gmsh_mesh(
@@ -579,6 +628,28 @@ def import_gmsh_mesh(
             facet_global_ordinals=np.arange(mesh.n_boundary_faces, dtype=np.int64),
             cell_mesh_parts=mesh.cell_mesh_parts,
         )
+    volume_translation = {
+        int(exported): int(fullmag)
+        for fullmag, exported in dict(
+            sidecar.get("volume_marker_fullmag_to_gmsh", {})
+        ).items()
+    }
+    surface_translation = {
+        int(exported): int(fullmag)
+        for fullmag, exported in dict(
+            sidecar.get("surface_marker_fullmag_to_gmsh", {})
+        ).items()
+    }
+    if not sidecar and (region_map is not None or boundary_map is not None):
+        external = _import_meshio().read(source)
+        for name, values in (external.field_data or {}).items():
+            marker, dimension = (int(value) for value in np.asarray(values).reshape(-1)[:2])
+            if dimension == 3 and region_map is not None and name in region_map:
+                volume_translation[marker] = int(region_map[name])
+            if dimension == 2 and boundary_map is not None and name in boundary_map:
+                surface_translation[marker] = int(boundary_map[name])
+    if volume_translation or surface_translation:
+        mesh = _remap_mesh_markers(mesh, volume_translation, surface_translation)
     regions_raw = region_map
     if regions_raw is None:
         regions_raw = {
@@ -614,4 +685,37 @@ def import_gmsh_mesh(
         boundary_map={str(name): int(marker) for name, marker in dict(boundaries_raw).items()},
         build_report=None,
         provenance={"origin": "gmsh_import", "source": str(source)},
+    )
+
+
+def _remap_mesh_markers(
+    mesh: MeshData,
+    volume_translation: Mapping[int, int],
+    surface_translation: Mapping[int, int],
+) -> MeshData:
+    element_markers = np.asarray(
+        [volume_translation.get(int(marker), int(marker)) for marker in mesh.element_markers],
+        dtype=np.int32,
+    )
+    boundary_markers = np.asarray(
+        [surface_translation.get(int(marker), int(marker)) for marker in mesh.boundary_markers],
+        dtype=np.int32,
+    )
+    cell_mesh_parts = np.asarray(
+        ["far_air" if marker == 0 else "magnetic" for marker in element_markers]
+    )
+    return MeshData(
+        nodes=mesh.nodes,
+        cell_types=mesh.cell_types,
+        cell_offsets=mesh.cell_offsets,
+        cell_nodes=mesh.cell_nodes,
+        element_markers=element_markers,
+        facet_types=mesh.facet_types,
+        facet_roles=mesh.facet_roles,
+        facet_offsets=mesh.facet_offsets,
+        facet_nodes=mesh.facet_nodes,
+        boundary_markers=boundary_markers,
+        cell_global_ordinals=np.arange(mesh.n_elements, dtype=np.int64),
+        facet_global_ordinals=np.arange(mesh.n_boundary_faces, dtype=np.int64),
+        cell_mesh_parts=cell_mesh_parts,
     )

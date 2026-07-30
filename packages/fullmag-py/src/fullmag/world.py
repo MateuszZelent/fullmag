@@ -79,6 +79,7 @@ from fullmag.model.planar_monitor import (
     StudyMonitorRegistry,
 )
 from fullmag.model.study import (
+    DEFAULT_RELAXATION_TORQUE_TOLERANCE_T,
     AdaptiveRefinement,
     Eigenmodes,
     FieldOrientation,
@@ -2313,6 +2314,7 @@ _state = _WorldState()
 _capture_enabled = False
 _capture_skip_geometry_assets = False
 _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM = DEFAULT_RELAXATION_TORQUE_TOLERANCE_APM
+_RELAXATION_DEFAULT_TORQUE_TOLERANCE_T = DEFAULT_RELAXATION_TORQUE_TOLERANCE_T
 _RELAX_UNSET = object()
 
 
@@ -2590,17 +2592,33 @@ def _resolve_flat_relax_stop(
     *,
     stop: RelaxStop | None,
     tol: object,
+    tolA: object,
+    tolT: object,
     energy_tolerance: object,
     max_steps: object,
     max_relaxation_time_s: object,
     max_pseudotime_s: object,
     max_physical_time_s: object,
 ) -> tuple[RelaxStop | None, float | None, float | None, int | None, float | None]:
-    resolved_tol = (
-        DEFAULT_RELAXATION_TORQUE_TOLERANCE_APM
-        if tol is _RELAX_UNSET
-        else None if tol is None else float(tol)
-    )
+    if tol is not _RELAX_UNSET:
+        raise ValueError("tol has been removed; use tolT or tolA")
+    if tolA is not _RELAX_UNSET and tolT is not _RELAX_UNSET:
+        raise ValueError("provide only one of tolT or tolA")
+    if tolA is _RELAX_UNSET:
+        tol_tesla = (
+            _RELAXATION_DEFAULT_TORQUE_TOLERANCE_T
+            if tolT is _RELAX_UNSET
+            else float(tolT)
+        )
+        if not math.isfinite(tol_tesla) or tol_tesla <= 0.0:
+            raise ValueError("tolT must be finite and positive")
+        resolved_tol = tol_tesla / _MU_0
+        authored_tol = tolT
+    else:
+        resolved_tol = float(tolA)
+        if not math.isfinite(resolved_tol) or resolved_tol <= 0.0:
+            raise ValueError("tolA must be finite and positive")
+        authored_tol = tolA
     resolved_energy = (
         None
         if energy_tolerance is _RELAX_UNSET or energy_tolerance is None
@@ -2629,7 +2647,7 @@ def _resolve_flat_relax_stop(
         )
     else:
         scalar_values = (
-            ("torque_tolerance", tol, resolved_tol, stop.torque_tolerance_apm),
+            ("torque_tolerance", authored_tol, resolved_tol, stop.torque_tolerance_apm),
             (
                 "energy_tolerance",
                 energy_tolerance,
@@ -2660,6 +2678,8 @@ def _resolve_flat_relax_stop(
 def relax_stage(
     *,
     tol: object = _RELAX_UNSET,
+    tolA: object = _RELAX_UNSET,
+    tolT: object = _RELAX_UNSET,
     max_steps: object = _RELAX_UNSET,
     algorithm: str = "llg_overdamped",
     energy_tolerance: object = _RELAX_UNSET,
@@ -2687,6 +2707,8 @@ def relax_stage(
     ) = _resolve_flat_relax_stop(
         stop=stop,
         tol=tol,
+        tolA=tolA,
+        tolT=tolT,
         energy_tolerance=energy_tolerance,
         max_steps=max_steps,
         max_relaxation_time_s=max_relaxation_time_s,
@@ -3537,6 +3559,8 @@ class StudyStagesBuilder:
         *,
         stage_id: str | None = None,
         tol: object = _RELAX_UNSET,
+        tolA: object = _RELAX_UNSET,
+        tolT: object = _RELAX_UNSET,
         max_steps: object = _RELAX_UNSET,
         algorithm: str = "llg_overdamped",
         energy_tolerance: object = _RELAX_UNSET,
@@ -3558,6 +3582,8 @@ class StudyStagesBuilder:
         captured_stage = _capture_stage(
             relax_stage(
                 tol=tol,
+                tolA=tolA,
+                tolT=tolT,
                 max_steps=max_steps,
                 algorithm=algorithm,
                 energy_tolerance=energy_tolerance,
@@ -3926,13 +3952,17 @@ class StudyStagesBuilder:
         *,
         stage_id: str | None = None,
         method: str = "bb",
-        tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM,
+        tol: object = _RELAX_UNSET,
+        tolA: object = _RELAX_UNSET,
+        tolT: object = _RELAX_UNSET,
         max_steps: int = 50_000,
         energy_tolerance: float | None = None,
     ) -> "StudyStagesBuilder":
         return self.add_stage(
             relax_stage(
                 tol=tol,
+                tolA=tolA,
+                tolT=tolT,
                 max_steps=max_steps,
                 algorithm=_resolve_minimize_algorithm(method),
                 energy_tolerance=energy_tolerance,
@@ -4484,12 +4514,29 @@ class StudyMeshHandle:
     def __init__(self, owner: "StudyBuilder") -> None:
         self._owner = owner
 
+    def __call__(self, *args: object, **kwargs: object) -> None:
+        raise _mesh_api_migration_error(
+            "study.mesh(...)",
+            "study.objects.mesh.defaults(...) or body.mesh(...)",
+        )
+
     def _current_artifact(self):
-        from fullmag.meshing.persistence import MeshArtifact, mesh_data_from_ir
+        from fullmag.meshing.persistence import (
+            MeshArtifact,
+            mesh_authoring_fingerprint,
+            mesh_data_from_ir,
+        )
 
         active = _state._active_mesh_artifact
-        if isinstance(active, MeshArtifact):
+        current_authoring = _current_mesh_authoring_document()
+        if (
+            isinstance(active, MeshArtifact)
+            and active.authoring_fingerprint
+            == mesh_authoring_fingerprint(current_authoring)
+        ):
             return active
+        if isinstance(active, MeshArtifact):
+            _clear_bound_mesh_artifact()
         assets = _build_explicit_mesh_assets()
         domain = (assets or {}).get("fem_domain_mesh_asset")
         if not isinstance(domain, Mapping) or not isinstance(domain.get("mesh"), Mapping):
@@ -4500,7 +4547,7 @@ class StudyMeshHandle:
         return MeshArtifact(
             mesh=mesh,
             mesh_name=str(mesh_ir.get("mesh_name", "study_domain")),
-            authoring_document=_current_mesh_authoring_document(),
+            authoring_document=current_authoring,
             authoring_fingerprint="",
             topology_fingerprint=mesh.topology_fingerprint_v3(),
             region_markers=[dict(entry) for entry in domain.get("region_markers", [])],
@@ -4564,6 +4611,7 @@ class StudyMeshHandle:
                 )
             except MeshConfigurationMismatch as exc:
                 differences = exc.differences
+                _clear_bound_mesh_artifact()
             else:
                 _bind_mesh_artifact(artifact, target)
                 return MeshPersistenceResult(
@@ -4598,7 +4646,11 @@ class StudyMeshHandle:
         boundary_map: Mapping[str, int] | None = None,
         coordinate_unit: str | None = None,
     ) -> MeshPersistenceResult:
-        from fullmag.meshing.persistence import import_gmsh_mesh
+        from fullmag.meshing.persistence import (
+            import_gmsh_mesh,
+            load_mesh_artifact,
+            save_mesh_artifact,
+        )
 
         artifact = import_gmsh_mesh(
             path,
@@ -4606,12 +4658,30 @@ class StudyMeshHandle:
             boundary_map=boundary_map,
             coordinate_unit=coordinate_unit,
         )
-        _bind_mesh_artifact(artifact, Path(path))
+        import hashlib
+
+        source = Path(path)
+        cache_dir = Path.cwd() / ".fullmag" / "local" / "cache" / "imported_meshes"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_key = hashlib.sha256(source.read_bytes()).hexdigest()
+        native_path = cache_dir / f"{cache_key}.fullmag-mesh"
+        save_mesh_artifact(
+            native_path,
+            mesh=artifact.mesh,
+            mesh_name=artifact.mesh_name,
+            authoring_document=_current_mesh_authoring_document(),
+            region_markers=artifact.region_markers,
+            object_region_markers=artifact.object_region_markers,
+            boundary_map=artifact.boundary_map,
+            provenance=artifact.provenance,
+        )
+        bound_artifact = load_mesh_artifact(native_path)
+        _bind_mesh_artifact(bound_artifact, native_path)
         return MeshPersistenceResult(
             action="imported",
-            path=Path(path),
-            topology_fingerprint=artifact.topology_fingerprint,
-            authoring_fingerprint=artifact.authoring_fingerprint,
+            path=source,
+            topology_fingerprint=bound_artifact.topology_fingerprint,
+            authoring_fingerprint=bound_artifact.authoring_fingerprint,
         )
 
 
@@ -5187,6 +5257,8 @@ class StudyBuilder:
         self,
         *,
         tol: object = _RELAX_UNSET,
+        tolA: object = _RELAX_UNSET,
+        tolT: object = _RELAX_UNSET,
         max_steps: object = _RELAX_UNSET,
         algorithm: str = "llg_overdamped",
         energy_tolerance: object = _RELAX_UNSET,
@@ -5204,6 +5276,8 @@ class StudyBuilder:
     ) -> Any:
         return relax(
             tol=tol,
+            tolA=tolA,
+            tolT=tolT,
             max_steps=max_steps,
             algorithm=algorithm,
             energy_tolerance=energy_tolerance,
@@ -5224,13 +5298,17 @@ class StudyBuilder:
         self,
         *,
         method: str = "bb",
-        tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM,
+        tol: object = _RELAX_UNSET,
+        tolA: object = _RELAX_UNSET,
+        tolT: object = _RELAX_UNSET,
         max_steps: int = 50_000,
         energy_tolerance: float | None = None,
     ) -> Any:
         return minimize(
             method=method,
             tol=tol,
+            tolA=tolA,
+            tolT=tolT,
             max_steps=max_steps,
             energy_tolerance=energy_tolerance,
         )
@@ -6658,10 +6736,6 @@ def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
 
 
 def _current_mesh_authoring_document() -> dict[str, object]:
-    from fullmag.meshing.persistence import MeshArtifact
-
-    if isinstance(_state._active_mesh_artifact, MeshArtifact):
-        return dict(_state._active_mesh_artifact.authoring_document)
     geometries = _collect_flat_geometries()
     geometry_payloads: list[dict[str, object]] = []
     for geometry in geometries:
@@ -6677,20 +6751,33 @@ def _current_mesh_authoring_document() -> dict[str, object]:
                 payload["source_sha256"] = hashlib.sha256(source_path.read_bytes()).hexdigest()
         geometry_payloads.append(payload)
     fem_hint = _resolve_flat_fem_hint()
-    workflow = _collect_mesh_workflow_metadata()
-    if isinstance(workflow, dict):
-        workflow = {
-            key: value
-            for key, value in workflow.items()
-            if key not in {"domain_mesh_source", "domain_region_markers", "domain_object_region_markers"}
-        }
+    if (
+        _state._domain_mesh_source is not None
+        and _state._backend != "fem"
+        and not _state._default_mesh_spec.is_configured()
+        and not any(handle._mesh_spec.is_configured() for handle in _state._magnets)
+    ):
+        fem_hint = None
+    fem_payload = fem_hint.to_ir() if fem_hint is not None else None
+    if isinstance(fem_payload, dict):
+        fem_payload.pop("mesh", None)
     return {
         "geometries": geometry_payloads,
-        "fem": fem_hint.to_ir() if fem_hint is not None else None,
+        "fem": fem_payload,
         "study_universe": (
             _state._study_universe.to_ir() if _state._study_universe is not None else None
         ),
-        "mesh_workflow": workflow,
+        "default_mesh": _mesh_spec_to_metadata(_state._default_mesh_spec),
+        "per_geometry_mesh": [
+            {
+                "geometry": handle._name,
+                "mesh": _mesh_spec_to_metadata(handle._mesh_spec),
+            }
+            for handle in _state._magnets
+        ],
+        "periodic_boundary_conditions": (
+            _state._pbc.to_ir() if _state._pbc is not None else None
+        ),
         "object_regions": [
             region.to_ir()
             for handle in _state._magnets
@@ -6725,6 +6812,14 @@ def _bind_mesh_artifact(artifact: object, source: Path) -> None:
         "topology_fingerprint": artifact.topology_fingerprint,
         "authoring_fingerprint": artifact.authoring_fingerprint,
     }
+
+
+def _clear_bound_mesh_artifact() -> None:
+    _state._active_mesh_artifact = None
+    _state._domain_mesh_source = None
+    _state._domain_region_markers = None
+    _state._domain_object_region_markers = None
+    _state._extra_runtime_metadata.pop("mesh_persistence", None)
 
 
 def _build_explicit_mesh_assets() -> dict[str, Any] | None:
@@ -7856,8 +7951,11 @@ def run_while(
     relax_fn = globals()["relax"]
     if kwargs:
         if relax:
+            if "tol" in kwargs:
+                raise ValueError("tol has been removed; use tolT or tolA")
             allowed = {
-                "tol",
+                "tolA",
+                "tolT",
                 "algorithm",
                 "energy_tolerance",
                 "relax_alpha",
@@ -7895,9 +7993,8 @@ def run_while(
             if cfg.max_steps is not None:
                 chunk_steps = min(chunk_steps, cfg.max_steps)
             return relax_fn(
-                tol=float(
-                    relax_kwargs.get("tol", _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM)
-                ),
+                tolA=relax_kwargs.get("tolA", _RELAX_UNSET),
+                tolT=relax_kwargs.get("tolT", _RELAX_UNSET),
                 max_steps=chunk_steps,
                 algorithm=relax_algorithm,
                 energy_tolerance=relax_kwargs.get("energy_tolerance"),  # type: ignore[arg-type]
@@ -7941,9 +8038,8 @@ def run_while(
                     break
                 chunk_steps = min(chunk_steps, remaining)
             last_result = relax_fn(
-                tol=float(
-                    relax_kwargs.get("tol", _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM)
-                ),
+                tolA=relax_kwargs.get("tolA", _RELAX_UNSET),
+                tolT=relax_kwargs.get("tolT", _RELAX_UNSET),
                 max_steps=chunk_steps,
                 algorithm=relax_algorithm,
                 energy_tolerance=relax_kwargs.get("energy_tolerance"),  # type: ignore[arg-type]
@@ -8000,6 +8096,8 @@ def RunWhile(
 def relax(
     *,
     tol: object = _RELAX_UNSET,
+    tolA: object = _RELAX_UNSET,
+    tolT: object = _RELAX_UNSET,
     max_steps: object = _RELAX_UNSET,
     algorithm: str = "llg_overdamped",
     energy_tolerance: object = _RELAX_UNSET,
@@ -8019,8 +8117,10 @@ def relax(
 
     Parameters
     ----------
-    tol : float
-        Torque convergence tolerance (max |m × H_eff|).
+    tolT : float, optional
+        Torque convergence tolerance in tesla. Defaults to ``1e-6``.
+    tolA : float, optional
+        Torque convergence tolerance in A/m. Mutually exclusive with ``tolT``.
     max_steps : int
         Maximum number of relaxation steps.
     algorithm : str
@@ -8057,6 +8157,8 @@ def relax(
     ) = _resolve_flat_relax_stop(
         stop=stop,
         tol=tol,
+        tolA=tolA,
+        tolT=tolT,
         energy_tolerance=energy_tolerance,
         max_steps=max_steps,
         max_relaxation_time_s=max_relaxation_time_s,
@@ -8142,7 +8244,9 @@ def _relaxation_default_until_seconds(study: Relaxation) -> float:
 def minimize(
     *,
     method: str = "bb",
-    tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM,
+    tol: object = _RELAX_UNSET,
+    tolA: object = _RELAX_UNSET,
+    tolT: object = _RELAX_UNSET,
     max_steps: int = 50_000,
     energy_tolerance: float | None = None,
 ) -> Any:
@@ -8152,8 +8256,10 @@ def minimize(
     ----------
     method : str
         ``"bb"``/``"projected_gradient_bb"`` or ``"ncg"``/``"nonlinear_cg"``.
-    tol : float
-        Torque convergence tolerance (A/m).
+    tolT : float, optional
+        Torque convergence tolerance in tesla. Defaults to ``1e-6``.
+    tolA : float, optional
+        Torque convergence tolerance in A/m. Mutually exclusive with ``tolT``.
     max_steps : int
         Maximum minimization iterations.
     energy_tolerance : float, optional
@@ -8162,6 +8268,8 @@ def minimize(
     algorithm = _resolve_minimize_algorithm(method)
     return relax(
         tol=tol,
+        tolA=tolA,
+        tolT=tolT,
         max_steps=max_steps,
         algorithm=algorithm,
         energy_tolerance=energy_tolerance,
@@ -8172,13 +8280,17 @@ def minimize(
 def Minimize(
     *,
     method: str = "bb",
-    tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM,
+    tol: object = _RELAX_UNSET,
+    tolA: object = _RELAX_UNSET,
+    tolT: object = _RELAX_UNSET,
     max_steps: int = 50_000,
     energy_tolerance: float | None = None,
 ) -> Any:
     return minimize(
         method=method,
         tol=tol,
+        tolA=tolA,
+        tolT=tolT,
         max_steps=max_steps,
         energy_tolerance=energy_tolerance,
     )

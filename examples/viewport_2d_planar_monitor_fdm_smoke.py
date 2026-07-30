@@ -71,6 +71,6 @@ study.save("m", every=1e-15)
 study.stages.add_relax(
     algorithm="llg_overdamped",
     dt=1e-15,
-    tol=1e-3,
+    tolA=1e-3,
     max_steps=1,
 )

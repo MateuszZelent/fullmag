@@ -167,7 +167,7 @@ if run_stage in {"combined", "relax"}:
     study.stages.add_minimize(
         method="bb",
         max_steps=4000,
-        tol=equilibrium_torque_tolerance_a_per_m,
+        tolA=equilibrium_torque_tolerance_a_per_m,
     )
 
 # Keep the dynamic frequency-response stage on the same GPU PBC magnetostatic

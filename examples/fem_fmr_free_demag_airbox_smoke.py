@@ -57,7 +57,7 @@ study.save("mode", indices=tuple(range(N_MODES)))
 study.stages.add_relax(
     algorithm="projected_gradient_bb",
     max_steps=120,
-    tol=3e-3,
+    tolA=3e-3,
 )
 study.stages.add_eigenmodes(
     count=N_MODES,
