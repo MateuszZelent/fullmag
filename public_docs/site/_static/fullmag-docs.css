@@ -20,7 +20,9 @@ article main .table-wrapper {
   min-width: 0;
   max-width: 100%;
   box-sizing: border-box;
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  contain: inline-size;
   overscroll-behavior-inline: contain;
   -webkit-overflow-scrolling: touch;
 }
