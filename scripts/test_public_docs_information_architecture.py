@@ -161,6 +161,16 @@ class PublicDocumentationInformationArchitectureTests(unittest.TestCase):
         self.assertEqual(python_api.status, "partial")
         self.assertEqual(python_api.title, "Thermal Noise Python API")
 
+    def test_published_exchange_python_api_uses_reference_metadata(self) -> None:
+        exchange_api = next(
+            spec
+            for spec in PAGE_SPECS
+            if spec.path == "python-api/interactions/exchange.md"
+        )
+        self.assertEqual(exchange_api.doc_kind, "reference")
+        self.assertEqual(exchange_api.status, "partial")
+        self.assertEqual(exchange_api.title, "Exchange Python API")
+
     def test_index_scaffold_links_to_every_direct_child(self) -> None:
         index = next(spec for spec in PAGE_SPECS if spec.path == "python-api/index.md")
         rendered = render_page(index, Path("public_docs/site"))
