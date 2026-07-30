@@ -809,6 +809,7 @@ fn simulation_preparation_fixture(status: &str) -> SimulationPreparationSnapshot
         failure: (status == "failed").then(|| SimulationPreparationFailureSnapshot {
             error_code: "mesh_generation_failed".to_string(),
             summary: "Mesh generation failed".to_string(),
+            detail: Some("meshing: no valid tetrahedra".to_string()),
             stage_id: "meshing".to_string(),
             diagnostics_correlation_id: Some("diag-prep-7".to_string()),
         }),
@@ -16522,6 +16523,7 @@ async fn simulation_preparation_returns_failed_projection() {
     assert_eq!(body["status"], "failed");
     assert_eq!(body["stages"][5]["status"], "failed");
     assert_eq!(body["failure"]["error_code"], "mesh_generation_failed");
+    assert_eq!(body["failure"]["detail"], "meshing: no valid tetrahedra");
     assert_eq!(body["failure"]["stage_id"], "meshing");
     assert_eq!(body["failure"]["diagnostics_correlation_id"], "diag-prep-7");
 }
@@ -16758,6 +16760,9 @@ fn simulation_preparation_openapi_registers_route_and_bounded_schemas() {
         .is_some_and(|values| values.iter().any(|value| value == "mesh_postprocessing")));
     assert!(schemas["PreparationFailureResource"]["properties"]
         .get("diagnostics_correlation_id")
+        .is_some());
+    assert!(schemas["PreparationFailureResource"]["properties"]
+        .get("detail")
         .is_some());
     assert!(schemas["PreparationExecutionSummary"]["properties"]
         .get("backend")

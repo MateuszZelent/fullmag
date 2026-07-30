@@ -266,6 +266,9 @@ fn wait_for_failed_preparation_close(
             "[fullmag] simulation preparation failed: {}",
             failure.summary
         );
+        if let Some(detail) = failure.detail {
+            eprintln!("[fullmag] mesh failure detail: {detail}");
+        }
         if let Some(correlation_id) = failure.diagnostics_correlation_id {
             eprintln!("[fullmag] diagnostic correlation id: {correlation_id}");
         }

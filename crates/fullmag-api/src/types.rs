@@ -742,6 +742,7 @@ pub(crate) struct SimulationPreparationLogEntrySnapshot {
 pub(crate) struct SimulationPreparationFailureSnapshot {
     pub error_code: String,
     pub summary: String,
+    pub detail: Option<String>,
     pub stage_id: String,
     pub diagnostics_correlation_id: Option<String>,
 }

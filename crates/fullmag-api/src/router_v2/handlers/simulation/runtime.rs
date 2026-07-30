@@ -159,6 +159,10 @@ pub async fn get_simulation_preparation(
             Ok(PreparationFailureResource {
                 error_code: bounded_preparation_string(&failure.error_code, 128),
                 summary: bounded_preparation_string(&failure.summary, 1024),
+                detail: failure
+                    .detail
+                    .as_deref()
+                    .map(|value| bounded_preparation_string(value, 1024)),
                 stage_id: preparation_stage_id(&failure.stage_id)?,
                 diagnostics_correlation_id: failure
                     .diagnostics_correlation_id
