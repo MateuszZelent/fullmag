@@ -375,6 +375,69 @@ describe("geometry lifecycle command contributions", () => {
     ).toBe("Backend does not expose cylinder geometry authoring.");
   });
 
+  it("opens and commits thin-film drafts as box primitives without a mesh policy", async () => {
+    const registry = registryWithLifecycleCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const selection = new SelectionController(bus);
+    const resources = new ResourceInvalidationController(bus);
+    const now = vi.spyOn(Date, "now").mockReturnValue(12345);
+    const commitTransaction = vi.fn<
+      (transaction: unknown) => Promise<{
+        committed_scene: { revision: number };
+        scene_revision: number;
+        transaction_kind: string;
+      }>
+    >(async () => ({
+      committed_scene: { revision: 22 },
+      scene_revision: 22,
+      transaction_kind: "create_object",
+    }));
+
+    expect(
+      await registry.execute("geometry.add-thin-film", {
+        selection,
+        source: "test",
+      }),
+    ).toEqual({ status: "completed" });
+    expect(selection.get()).toEqual({
+      kind: "builder.primitive",
+      label: "New thin film",
+      moduleSource: "geometry-authoring",
+      nodeId: "geometry:draft:thin-film",
+      objectId: null,
+      ref: null,
+    });
+
+    expect(
+      await registry.execute("geometry.commit-object-draft", {
+        api: {
+          model: { commitTransaction },
+        } as never,
+        resources,
+        selection,
+        source: "test",
+      }),
+    ).toEqual({ status: "completed" });
+    expect(commitTransaction).toHaveBeenCalledWith({
+      geometry: {
+        geometry_kind: "Box",
+        geometry_params: { size: [1e-7, 1e-7, 1e-8] },
+      },
+      kind: "create_object",
+      name: "New thin film",
+      object_id: "box-9ix",
+      transform: {
+        rotation: [0, 0, 0],
+        scale: [1, 1, 1],
+        translation: [0, 0, 0],
+      },
+    });
+    expect(commitTransaction.mock.calls[0]?.[0]).not.toHaveProperty("mesh_policy");
+    expect(commitTransaction.mock.calls[0]?.[0]).not.toHaveProperty("swept_prism");
+    expect(commitTransaction.mock.calls[0]?.[0]).not.toHaveProperty("fallback");
+    now.mockRestore();
+  });
+
   it("disables selected mesh build for validation blockers", () => {
     const registry = registryWithLifecycleCommands();
     const selection = new SelectionController(new EventBus<KernelEventMap>());

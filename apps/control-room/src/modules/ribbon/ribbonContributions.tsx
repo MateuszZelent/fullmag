@@ -243,7 +243,7 @@ const geometryTab: RibbonTabContent = {
         { id: "geometry.add-microstrip-antenna", icon: icon(RadioTower), label: "Microstrip", iconColor: "text-rose-300" },
         { id: "builder-add-ellipsoid",     icon: icon(Circle),   label: "Ellipsoid",      disabled: true, iconColor: "text-purple-300" },
         { id: "builder-add-disk",          icon: icon(Disc),     label: "Disk",           disabled: true, iconColor: "text-sky-400" },
-        { id: "builder-add-thin_film",     icon: icon(Box),      label: "Thin Film",      disabled: true, iconColor: "text-lime-300" },
+        { id: "geometry.add-thin-film",    icon: icon(Box),      label: "Thin Film",      iconColor: "text-lime-300" },
         { id: "builder-add-pillar",        icon: icon(Cylinder), label: "Pillar",         disabled: true, iconColor: "text-fuchsia-300" },
         { id: "builder-add-nanowire",      icon: icon(Minus),    label: "Nanowire",       disabled: true, iconColor: "text-rose-300" },
         { id: "builder-add-ring",          icon: icon(Circle),   label: "Ring",           disabled: true, iconColor: "text-amber-300" },

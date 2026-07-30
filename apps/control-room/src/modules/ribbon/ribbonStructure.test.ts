@@ -4063,11 +4063,22 @@ describe("ribbon structure", () => {
     );
   });
 
+  it("routes Thin Film to the enabled geometry command", () => {
+    const thinFilmAction = ALL_TAB_CONTENT.geometry.groups
+      .find((group) => group.id === "builder-create")
+      ?.actions.find((action) => action.id === "geometry.add-thin-film");
+
+    expect(thinFilmAction).toMatchObject({
+      id: "geometry.add-thin-film",
+      label: "Thin Film",
+    });
+    expect(thinFilmAction).not.toHaveProperty("disabled");
+  });
+
   it("keeps unsupported Geometry builder controls explicitly disabled", () => {
     const unsupportedIds = new Set([
       "builder-add-ellipsoid",
       "builder-add-disk",
-      "builder-add-thin_film",
       "builder-add-pillar",
       "builder-add-nanowire",
       "builder-add-ring",
