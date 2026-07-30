@@ -916,16 +916,16 @@ PY
 docker run --rm --network none \
   --user "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}" \
   -v "${SOURCE_SNAPSHOT_ROOT}:/workspace:ro" \
-  -v "${FULLMAG_CONTAINER_TARGET_DIR}:/workspace/managed-runtime-target" \
-  -e TMPDIR="/workspace/managed-runtime-target/tmp" \
+  -v "${FULLMAG_CONTAINER_TARGET_DIR}:/managed-runtime-target" \
+  -e TMPDIR="/managed-runtime-target/tmp" \
   -w /workspace \
   "${docker_image_id}" \
   python3 scripts/build_managed_fem_runtime_manifest.py \
-    --runtime-root "/workspace/managed-runtime-target/runtime-export-staging.$$" \
+    --runtime-root "/managed-runtime-target/runtime-export-staging.$$" \
     --variant "${FULLMAG_FEM_RUNTIME_VARIANT}" \
     --requested-cuda-architectures "${FULLMAG_CUDA_ARCHITECTURES}" \
     --hypre-build-metadata "/opt/fullmag-deps/share/fullmag/hypre-build-metadata.json" \
-    --runtime-diagnostics-json "/workspace/managed-runtime-target/runtime-export-staging.$$/runtime-diagnostics.json" \
+    --runtime-diagnostics-json "/managed-runtime-target/runtime-export-staging.$$/runtime-diagnostics.json" \
     --docker-image-id "${docker_image_id}" \
     --observed-docker-image-id "${observed_docker_image_id}" \
     --created-at "${created_at}" \

@@ -435,19 +435,20 @@ def test_export_script_recreates_unversioned_fullmag_native_library_links() -> N
     assert 'copy_native_library_group "$FDM_LIB" libfullmag_fdm' in script
 
 
-def test_export_script_preserves_release_cache_while_refreshing_build_identity() -> None:
+def test_export_script_refreshes_identity_before_configured_release_clean() -> None:
     script = EXPORT_SCRIPT.read_text(encoding="utf-8")
-    clean_index = script.find("cargo +nightly clean -p fullmag-build-info")
+    identity_clean_index = script.find("cargo +nightly clean -p fullmag-build-info")
+    release_clean_index = script.find("cargo +nightly clean --workspace --release")
     build_index = script.find("cargo +nightly build")
     copy_index = script.find('FEM_LIB="$(only_native_lib_dir')
 
-    assert clean_index != -1
+    assert identity_clean_index != -1
+    assert release_clean_index != -1
     assert build_index != -1
     assert copy_index != -1
-    assert clean_index < build_index < copy_index
-    assert "cargo +nightly clean --workspace --release" not in script
-    assert "stale_fem_native_artifacts" not in script
-    assert "stale fullmag-fem-sys native artifacts remain after targeted clean" not in script
+    assert identity_clean_index < release_clean_index < build_index < copy_index
+    assert "stale_fem_native_artifacts" in script
+    assert "stale fullmag-fem-sys native artifacts remain after targeted clean" in script
 
 
 def test_export_script_defaults_to_bounded_parallel_cargo_builds() -> None:
@@ -457,14 +458,16 @@ def test_export_script_defaults_to_bounded_parallel_cargo_builds() -> None:
     assert 'cargo +nightly build -j "$cargo_jobs"' in script
 
 
-def test_managed_runtime_staleness_ignores_test_only_sources() -> None:
+def test_managed_runtime_staleness_uses_exact_source_snapshot_identity() -> None:
     justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
     ensure_recipe = justfile.split("ensure-managed-fem-runtime:", 1)[1].split(
         "\ninspect-managed-fem-frequency-domain-deps:", 1
     )[0]
 
-    assert '! -path \\"*/tests/*\\"' in ensure_recipe
-    assert '! -name \\"tests.rs\\"' in ensure_recipe
+    assert "capture_source_snapshot_identity.py" in ensure_recipe
+    assert '--require-source-snapshot-sha256 "$source_snapshot"' in ensure_recipe
+    assert '! -path \\"*/tests/*\\"' not in ensure_recipe
+    assert '! -name \\"tests.rs\\"' not in ensure_recipe
 
 
 def test_export_script_restores_runtime_bundle_to_host_owner() -> None:
@@ -1391,8 +1394,9 @@ def test_export_mounts_durable_staging_for_container_postprocessing() -> None:
     exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
 
     assert 'FULLMAG_RUNTIME_EXPORT_STAGING="/workspace/target/runtime-export-staging.$$"' in exporter
-    assert '-v "${FULLMAG_CONTAINER_TARGET_DIR}:/workspace/managed-runtime-target"' in exporter
-    assert '--runtime-root "/workspace/managed-runtime-target/runtime-export-staging.$$"' in exporter
+    assert '-v "${FULLMAG_CONTAINER_TARGET_DIR}:/managed-runtime-target"' in exporter
+    assert '--runtime-root "/managed-runtime-target/runtime-export-staging.$$"' in exporter
+    assert '-v "${FULLMAG_CONTAINER_TARGET_DIR}:/workspace/managed-runtime-target"' not in exporter
 
 
 def test_export_keeps_container_temp_registry_and_build_log_on_durable_ext4() -> None:
@@ -1403,7 +1407,7 @@ def test_export_keeps_container_temp_registry_and_build_log_on_durable_ext4() ->
     assert 'mkdir -p "${TMPDIR}" "${CARGO_HOME}"' in exporter
     assert 'tee "${TMPDIR}/fullmag-build.log"' in exporter
     assert "tee /tmp/fullmag-build.log" not in exporter
-    assert '-e TMPDIR="/workspace/managed-runtime-target/tmp"' in exporter
+    assert '-e TMPDIR="/managed-runtime-target/tmp"' in exporter
 
 
 def test_export_can_resume_safely_without_cleaning_completed_target() -> None:
