@@ -88,6 +88,12 @@ export interface AirboxSurfaceColorState {
 
 const AIRBOX_MESH_PART_GEOMETRY_UPLOAD_FRAME_BUDGET_MS = 3;
 
+export function resolveAirboxMeshPartSurfacePickIdentity(
+  input: Parameters<typeof resolveMeshPartSurfacePickIdentity>[0],
+) {
+  return resolveMeshPartSurfacePickIdentity(input);
+}
+
 export function BoundsBox({
   bounds,
   color,
@@ -399,7 +405,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
       return;
     }
     event.stopPropagation();
-    const identity = resolveMeshPartSurfacePickIdentity({
+    const identity = resolveAirboxMeshPartSurfacePickIdentity({
       expandedSurfaceFaces: false,
       faceIndex: event.faceIndex,
       part,

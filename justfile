@@ -4040,7 +4040,7 @@ run-cofeb-rings-relax-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" 
       printf "  fullmag: %s\n" "$app_log"; \
       printf "  smoke: %s\n" "$smoke_log"'
 
-run-viewport-3d-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" web_port="3193" api_port="8193":
+_run-viewport-3d-browser-smoke fixture smoke_script report_name smoke_log_name smoke_label max_steps_env max_steps_default smoke_timeout_env smoke_timeout_default fem_execution="gpu" cpu_threads="auto" web_port="3193" api_port="8193":
     just ensure-python
     just ensure-managed-fem-runtime
     bash -euo pipefail -c '\
@@ -4048,12 +4048,16 @@ run-viewport-3d-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" web_po
       case "$mode" in 0|cpu|CPU) mode="cpu" ;; gpu|GPU) mode="gpu" ;; *) echo "unsupported FEM execution mode: $mode (expected cpu or gpu)" >&2; exit 2 ;; esac; \
       if [ "{{cpu_threads}}" = "auto" ]; then cpu_threads_env=auto; else cpu_threads_env="{{cpu_threads}}"; fi; \
       api_url="http://localhost:{{api_port}}"; \
+      max_steps="$(printenv "{{max_steps_env}}" || true)"; \
+      if [ -z "$max_steps" ]; then max_steps="{{max_steps_default}}"; fi; \
+      smoke_timeout="$(printenv "{{smoke_timeout_env}}" || true)"; \
+      if [ -z "$smoke_timeout" ]; then smoke_timeout="{{smoke_timeout_default}}"; fi; \
       if command -v pnpm >/dev/null 2>&1; then PNPM_CMD=pnpm; \
       elif command -v corepack >/dev/null 2>&1; then PNPM_CMD="corepack pnpm"; \
       else echo "pnpm or corepack not found on PATH" >&2; exit 127; fi; \
-      report_dir="{{repo_root}}/.fullmag/reports/viewport-3d-mixed-target-smoke"; \
+      report_dir="{{repo_root}}/.fullmag/reports/{{report_name}}"; \
       app_log="$report_dir/fullmag-interactive.log"; \
-      smoke_log="$report_dir/mixed-target-smoke.log"; \
+      smoke_log="$report_dir/{{smoke_log_name}}"; \
       mkdir -p "$report_dir"; \
       sim_pid=""; \
       cleanup() { \
@@ -4069,15 +4073,15 @@ run-viewport-3d-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" web_po
       FULLMAG_RELAX_DEVICE="$mode" \
       FULLMAG_CPU_THREADS="$cpu_threads_env" \
       FULLMAG_API_PORT="{{api_port}}" \
-      FULLMAG_VIEWPORT3D_MIXED_TARGET_MAX_STEPS="${FULLMAG_VIEWPORT3D_MIXED_TARGET_MAX_STEPS:-2000}" \
-      "{{gpu_runtime_bin}}" --dev --web-port "{{web_port}}" -i examples/viewport_3d_mixed_targets_smoke.py \
+      "{{max_steps_env}}=$max_steps" \
+      "{{gpu_runtime_bin}}" --dev --web-port "{{web_port}}" -i "{{fixture}}" \
         > "$app_log" 2>&1 & \
       sim_pid=$!; \
       web_url="http://localhost:{{web_port}}/workspace"; \
       for _ in $(seq 1 600); do \
         curl -fsS "$web_url" >/dev/null 2>&1 && break; \
         if ! kill -0 "$sim_pid" >/dev/null 2>&1; then \
-          echo "Viewport 3D mixed-target fixture exited before control room became ready; see $app_log" >&2; \
+          echo "{{smoke_label}} fixture exited before control room became ready; see $app_log" >&2; \
           tail -n 120 "$app_log" >&2 || true; \
           exit 1; \
         fi; \
@@ -4091,11 +4095,17 @@ run-viewport-3d-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" web_po
       fi; \
       CONTROL_ROOM_API_BASE_URL="$api_url" \
       CONTROL_ROOM_URL="$web_url" \
-      CONTROL_ROOM_MIXED_TARGET_SMOKE_TIMEOUT_MS="${CONTROL_ROOM_MIXED_TARGET_SMOKE_TIMEOUT_MS:-180000}" \
-      $PNPM_CMD --dir apps/control-room smoke:viewport-3d-mixed-targets | tee "$smoke_log"; \
-      printf "\nViewport 3D mixed-target smoke logs:\n"; \
+      "{{smoke_timeout_env}}=$smoke_timeout" \
+      $PNPM_CMD --dir apps/control-room "{{smoke_script}}" | tee "$smoke_log"; \
+      printf "\n{{smoke_label}} logs:\n"; \
       printf "  fullmag: %s\n" "$app_log"; \
       printf "  smoke: %s\n" "$smoke_log"'
+
+run-viewport-3d-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" web_port="3193" api_port="8193":
+    just _run-viewport-3d-browser-smoke "examples/viewport_3d_mixed_targets_smoke.py" "smoke:viewport-3d-mixed-targets" "viewport-3d-mixed-target-smoke" "mixed-target-smoke.log" "Viewport 3D mixed-target smoke" "FULLMAG_VIEWPORT3D_MIXED_TARGET_MAX_STEPS" "2000" "CONTROL_ROOM_MIXED_TARGET_SMOKE_TIMEOUT_MS" "180000" "{{fem_execution}}" "{{cpu_threads}}" "{{web_port}}" "{{api_port}}"
+
+run-viewport-3d-mixed-topology-smoke fem_execution="gpu" cpu_threads="auto" web_port="3195" api_port="8196":
+    just _run-viewport-3d-browser-smoke "examples/viewport_3d_mixed_topology_smoke.py" "smoke:viewport-3d-mixed-topology" "viewport-3d-mixed-topology-smoke" "mixed-topology-smoke.log" "Viewport 3D mixed-topology smoke" "FULLMAG_VIEWPORT3D_MIXED_TOPOLOGY_MAX_STEPS" "50" "CONTROL_ROOM_MIXED_TOPOLOGY_SMOKE_TIMEOUT_MS" "180000" "{{fem_execution}}" "{{cpu_threads}}" "{{web_port}}" "{{api_port}}"
 
 run-viewport-2d-planar-monitor-smoke backend="fdm" device="cpu" web_port="3194" api_port="8194":
     just ensure-python

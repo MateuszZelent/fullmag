@@ -1,4 +1,8 @@
-"""Strict mixed-P1 FEM fixture for the viewport-3D browser smoke.
+"""Lightweight FEM fixture for the viewport-3d mixed-target smoke proof.
+
+This is intentionally small and box-based.  It exercises the production
+viewport data path with three magnetic targets plus an airbox without depending
+on the heavier CoFeB ring meshing case.
 
 Run with:
     fullmag --dev -i examples/viewport_3d_mixed_targets_smoke.py
@@ -14,47 +18,60 @@ import fullmag as fm
 NM = 1e-9
 MAX_STEPS = int(os.environ.get("FULLMAG_VIEWPORT3D_MIXED_TARGET_MAX_STEPS", "50"))
 
+TARGET_SIZE = (80 * NM, 40 * NM, 20 * NM)
+TARGET_SPACING = 140 * NM
+AIRBOX_SIZE = (520 * NM, 260 * NM, 180 * NM)
 
-fm.reset()
+
 study = fm.study("viewport_3d_mixed_targets_smoke")
-study.mode("strict")
+
 study.engine("fem")
 study.device("gpu", precision="double")
 study.interactive(True)
 study.wait_for_solve(True)
 
 study.universe(
-    mode="manual",
-    size=(100 * NM, 80 * NM, 65 * NM),
+    mode="auto",
+    size=AIRBOX_SIZE,
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )
 study.universe.mesh(
-    maximum_element_size=10 * NM,
-    minimum_element_size=3 * NM,
+    maximum_element_size=80 * NM,
+    minimum_element_size=20 * NM,
     maximum_element_growth_rate=1.5,
     grading="geometric",
 )
 study.airbox.visualization(show=True, mode="vectors", active_quantity_id="h_eff", wireframe=False)
 
-film = study.geometry(
-    fm.Box(size=(40 * NM, 20 * NM, 3 * NM), name="film"),
-    name="film",
+study.objects.mesh.defaults(
+    algorithm_2d=6,
+    algorithm_3d=10,
+    maximum_element_growth_rate=1.4,
+    smoothing_steps=1,
+    compute_quality=False,
+    per_element_quality=False,
 )
-film.Ms = 800e3
-film.Aex = 13e-12
-film.alpha = 0.1
-film.Ku1 = 0.0
-film.m = fm.texture.uniform(1.0, 0.0, 0.0)
-film.mesh.thin_film(
-    maximum_element_size=3 * NM,
-    layers=1,
-    topology="prismatic",
-    exact_layers=True,
-    transition="pyramid_to_tetrahedra",
-    order=1,
-)
-film.visualization(show=True, mode="surface", active_quantity_id="m")
+
+
+def add_target(name: str, x_center: float, magnetization: tuple[float, float, float]) -> object:
+    target = study.geometry(
+        fm.Box(size=TARGET_SIZE, name=name).translate((x_center, 0.0, 0.0)),
+        name=name,
+    )
+    target.Ms = 800e3
+    target.Aex = 13e-12
+    target.alpha = 0.1
+    target.Ku1 = 0.0
+    target.m = fm.texture.uniform(*magnetization)
+    target.mesh(maximum_element_size=25 * NM, minimum_element_size=10 * NM, order=1)
+    target.visualization(show=True, mode="surface", active_quantity_id="m")
+    return target
+
+
+add_target("permalloy_layer", -TARGET_SPACING, (1.0, 0.0, 0.0))
+add_target("cofeb_top_ring", 0.0, (0.0, 1.0, 0.0))
+add_target("cofeb_bottom_ring", TARGET_SPACING, (0.0, 0.0, 1.0))
 
 study.exchange()
 study.demag(realization="poisson_robin")

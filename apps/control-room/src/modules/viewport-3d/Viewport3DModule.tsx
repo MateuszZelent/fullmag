@@ -106,6 +106,13 @@ import { Viewport3DSettingsDialog } from "./components/Viewport3DSettingsDialog"
 import { Viewport3DCanvas } from "./Viewport3DCanvas";
 import { Viewport3DErrorBoundary } from "./Viewport3DErrorBoundary";
 import { type Viewport3DPartSelection } from "./viewport3dDomainAdapter";
+import {
+  currentViewport3DMeshCellAuditTopology,
+  listViewport3DMeshCellSelections,
+  resolveViewport3DMeshCellSelection,
+  type Viewport3DMeshCellSelectionIdentity,
+  type Viewport3DMeshCellSelectionRequest,
+} from "./viewport3dMeshCellSelection";
 import type {
   HysteresisReplayGlyphModel,
   HysteresisStepViewportTarget,
@@ -176,6 +183,16 @@ type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
 type Viewport3DCanvasCreatedState = Parameters<
   NonNullable<ComponentProps<typeof Viewport3DCanvas>["onCreated"]>
 >[0];
+
+declare global {
+  interface Window {
+    __FULLMAG_LIST_VIEWPORT_3D_MESH_CELLS__?: () =>
+      Viewport3DMeshCellSelectionIdentity[];
+    __FULLMAG_SELECT_VIEWPORT_3D_MESH_CELL__?: (
+      request: Viewport3DMeshCellSelectionRequest,
+    ) => Viewport3DMeshCellSelectionIdentity;
+  }
+}
 
 export function buildViewport3DVisualizationDebugFrameCommit({
   contextLost,
@@ -1172,6 +1189,13 @@ export default function Viewport3DModule({
       semanticTargetCatalog: sceneModel.semanticTargetCatalog,
       select,
   });
+  useViewport3DMeshCellAuditSelection({
+    onSelectPart,
+    topologyModel: currentViewport3DMeshCellAuditTopology(
+      sceneModel.topologyModel,
+      sceneModel.topologyFreshness,
+    ),
+  });
   const patchCameraState = useCallback(
     (patch: NonNullable<VisualizationStatePatch["camera"]>) => {
       kernel.cameraRegistry.patchCamera(patch);
@@ -1292,6 +1316,52 @@ export default function Viewport3DModule({
 
 function Viewport3DAuditRenderErrorInjection(): never {
   throw new Error("Maximum update depth exceeded (viewport audit injection)");
+}
+
+function useViewport3DMeshCellAuditSelection({
+  onSelectPart,
+  topologyModel,
+}: {
+  onSelectPart: (partSelection: Viewport3DPartSelection) => void;
+  topologyModel: Viewport3DSceneProps["topologyModel"];
+}) {
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production" && process.env.NEXT_PUBLIC_AUDIT_BUILD !== "1") {
+      return undefined;
+    }
+    const config = (window as Window & {
+      __FULLMAG_CONFIG__?: { enableAuditHooks?: unknown };
+    }).__FULLMAG_CONFIG__;
+    if (config?.enableAuditHooks !== true) return undefined;
+    if (!topologyModel) return undefined;
+
+    const list = () => listViewport3DMeshCellSelections(topologyModel);
+    const selectMeshCell = (request: Viewport3DMeshCellSelectionRequest) => {
+      const selection = resolveViewport3DMeshCellSelection(topologyModel, request);
+      if (!selection || !selection.elementFamily || !selection.globalCellOrdinal) {
+        throw new Error(
+          `Viewport mesh-cell audit selection was not found: ${JSON.stringify(request)}`,
+        );
+      }
+      onSelectPart(selection);
+      return {
+        carrier: request.carrier,
+        carrierPartId: selection.carrierPartId,
+        elementFamily: selection.elementFamily,
+        globalCellOrdinal: selection.globalCellOrdinal,
+      };
+    };
+    window.__FULLMAG_LIST_VIEWPORT_3D_MESH_CELLS__ = list;
+    window.__FULLMAG_SELECT_VIEWPORT_3D_MESH_CELL__ = selectMeshCell;
+    return () => {
+      if (window.__FULLMAG_LIST_VIEWPORT_3D_MESH_CELLS__ === list) {
+        delete window.__FULLMAG_LIST_VIEWPORT_3D_MESH_CELLS__;
+      }
+      if (window.__FULLMAG_SELECT_VIEWPORT_3D_MESH_CELL__ === selectMeshCell) {
+        delete window.__FULLMAG_SELECT_VIEWPORT_3D_MESH_CELL__;
+      }
+    };
+  }, [onSelectPart, topologyModel]);
 }
 
 function useViewport3DSelectionHandlers({
