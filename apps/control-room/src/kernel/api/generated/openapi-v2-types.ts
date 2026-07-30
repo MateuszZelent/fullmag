@@ -3151,9 +3151,12 @@ export interface components {
             wireframe: components["schemas"]["BasicLayerState"];
         };
         ApiErrorResponse: {
+            capability_reason?: string | null;
+            code: string;
             error: string;
             message: string;
             request_id?: string | null;
+            revision_context?: unknown;
         };
         ArtifactEntry: {
             kind: string;
@@ -12986,12 +12989,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description FEM topology unavailable for cross-section */
+            /** @description FEM topology unavailable or mixed topology is not supported for cross-section */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
             };
         };
     };
@@ -13054,12 +13059,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description FEM topology unavailable for cross-section */
+            /** @description FEM topology unavailable or mixed topology is not supported for cross-section image */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
             };
         };
     };
@@ -13106,12 +13113,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description FEM topology unavailable for cross-section */
+            /** @description FEM topology unavailable or mixed topology is not supported for cross-section quality */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
             };
         };
     };

@@ -29,6 +29,7 @@ import {
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
+import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import {
   formatCount,
@@ -83,6 +84,24 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
       <CrossSectionDraftEditor
         draft={workspace.draft}
       />
+    );
+  }
+
+  if (isMixedTopologyUnsupportedError(crossSection.error)) {
+    return (
+      <InspectorGroup title="Cross-Section Unsupported" badge="mixed topology">
+        <FeedbackBanner
+          kind="warning"
+          message="Mixed topology cross-sections are not supported yet. Meshes with prism and pyramid cells require a generic convex slicer, and Fullmag will not reinterpret them as tetrahedra."
+        />
+        <MeshResourceFields
+          fields={[
+            { label: "Current support", value: "tet4-only" },
+            { label: "Requested mesh", value: "mixed prism / pyramid / tet" },
+            { label: "Fallback", value: "disabled" },
+          ]}
+        />
+      </InspectorGroup>
     );
   }
 
@@ -235,6 +254,15 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
         )}
       </InspectorGroup>
     </div>
+  );
+}
+
+function isMixedTopologyUnsupportedError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "mixed_topology_not_supported"
   );
 }
 

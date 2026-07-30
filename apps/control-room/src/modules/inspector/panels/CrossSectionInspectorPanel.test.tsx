@@ -11,6 +11,11 @@ import {
 
 import { CrossSectionInspectorPanel } from "./CrossSectionInspectorPanel";
 
+const resourceMocks = vi.hoisted(() => ({
+  crossSection: null as null | Record<string, unknown>,
+  qualityEnabled: [] as boolean[],
+}));
+
 vi.mock("@/kernel/KernelContext", () => ({
   useKernel: () => ({
     layout: {
@@ -46,16 +51,23 @@ vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
 }));
 
 vi.mock("@/kernel/resources/crossSectionResources", () => ({
-  useCrossSectionQualityResource: () => ({
-    data: {
-      perElementQuality: new Float32Array([0.2, 0.8]),
-      range: { min: 0.2, max: 0.8 },
-    },
-    error: null,
-    status: "ready",
-  }),
-  useCrossSectionResource: () => ({
-    data: {
+  useCrossSectionQualityResource: (
+    _query: unknown,
+    options: { enabled?: boolean },
+  ) => {
+    resourceMocks.qualityEnabled.push(options.enabled ?? true);
+    return {
+      data: {
+        perElementQuality: new Float32Array([0.2, 0.8]),
+        range: { min: 0.2, max: 0.8 },
+      },
+      error: null,
+      status: "ready",
+    };
+  },
+  useCrossSectionResource: () =>
+    resourceMocks.crossSection ?? {
+      data: {
       bounds: { uMin: 0, uMax: 4, vMin: 0, vMax: 2 },
       intersectionEdgeNodeIds: new Uint32Array(16),
       intersectionEdgeT: new Float32Array(8),
@@ -77,10 +89,10 @@ vi.mock("@/kernel/resources/crossSectionResources", () => ({
         4, 2,
         2, 2,
       ]),
+      },
+      error: null,
+      status: "ready",
     },
-    error: null,
-    status: "ready",
-  }),
 }));
 
 const selection: Selection = {
@@ -103,6 +115,8 @@ const selection: Selection = {
 describe("CrossSectionInspectorPanel", () => {
   beforeEach(() => {
     resetCrossSectionWorkspaceForTests();
+    resourceMocks.crossSection = null;
+    resourceMocks.qualityEnabled.length = 0;
   });
 
   it("renders cut-plane parameters, quality stats, and selected parent tet", () => {
@@ -167,5 +181,25 @@ describe("CrossSectionInspectorPanel", () => {
     expect(html).toContain("Plot Parameters");
     expect(html).toContain("New Image");
     expect(html).toContain('aria-label="Position slider"');
+  });
+
+  it("renders a dedicated mixed-topology unsupported state without requesting quality", () => {
+    resourceMocks.crossSection = {
+      data: null,
+      error: Object.assign(new Error("cross-section slicing is tet4-only"), {
+        code: "mixed_topology_not_supported",
+        status: 409,
+      }),
+      status: "error",
+    };
+
+    const html = renderToStaticMarkup(
+      <CrossSectionInspectorPanel selection={selection} />,
+    );
+
+    expect(html).toContain("Mixed topology cross-sections are not supported");
+    expect(html).toContain("prism and pyramid cells");
+    expect(html).not.toContain("cross-section slicing is tet4-only");
+    expect(resourceMocks.qualityEnabled).toEqual([false]);
   });
 });

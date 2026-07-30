@@ -3,6 +3,7 @@ import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   collectFieldVectorIdentityIssues,
   ControlRoomApi,
+  ControlRoomApiError,
   MAX_TOPOLOGY_BYTES,
   parseFieldVectorResponseMetadata,
   transformFieldMetaForDisplay,
@@ -3293,6 +3294,56 @@ describe("ControlRoomApi", () => {
     expect(result.etag).toBe('"cross-section-quality-1"');
     expect([...result.data.perElementQuality]).toEqual([0.25]);
     expect(result.data.range).toEqual({ min: 0.25, max: 0.25 });
+  });
+
+  it("preserves the stable unsupported code from every mixed cross-section resource", async () => {
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            code: "mixed_topology_not_supported",
+            error:
+              "mixed_topology_not_supported: cross-section slicing is tet4-only",
+            message:
+              "mixed_topology_not_supported: cross-section slicing is tet4-only",
+          }),
+          {
+            headers: {
+              "content-type": "application/json",
+              ...contractHeaders,
+            },
+            status: 409,
+          },
+        ),
+    });
+
+    const requests = [
+      () =>
+        api.meshing.sharedDomain.crossSection({
+          plane: "xy",
+          positionPercent: 50,
+        }),
+      () =>
+        api.meshing.sharedDomain.crossSectionImage({
+          metric: "gamma",
+          plane: "xy",
+          positionPercent: 50,
+        }),
+      () =>
+        api.meshing.sharedDomain.crossSectionQuality({
+          metric: "gamma",
+          plane: "xy",
+          positionPercent: 50,
+        }),
+    ];
+
+    for (const request of requests) {
+      await expect(request()).rejects.toMatchObject({
+        code: "mixed_topology_not_supported",
+        status: 409,
+      } satisfies Partial<ControlRoomApiError>);
+    }
   });
 
   it("returns not-modified for fresh binary topology resources", async () => {

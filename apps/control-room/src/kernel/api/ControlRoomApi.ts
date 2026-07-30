@@ -602,6 +602,7 @@ export class ControlRoomApiError extends Error {
     message: string,
     readonly status: number,
     readonly requestId: string | null = null,
+    readonly code: string | null = null,
   ) {
     super(message);
     this.name = "ControlRoomApiError";
@@ -2772,9 +2773,14 @@ export class ControlRoomApi {
         }
 
         if (!response.ok || result.error) {
+          const apiError = parseOpenApiError(result.error);
           throw new ControlRoomApiError(
-            await formatResponseError(response),
+            apiError.message === "Request failed"
+              ? await formatResponseError(response)
+              : apiError.message,
             response.status,
+            response.headers.get("x-request-id"),
+            apiError.code,
           );
         }
 
@@ -3353,36 +3359,61 @@ function readOpenApiResult<T>(result: {
   }
 
   if (!response.ok) {
+    const apiError = parseOpenApiError(result.error);
     throw new ControlRoomApiError(
-      formatOpenApiError(result.error),
+      apiError.message,
       response.status,
       response.headers.get("x-request-id"),
+      apiError.code,
     );
   }
 
   return result.data as T;
 }
 
-function formatOpenApiError(error: unknown): string {
+interface ParsedOpenApiError {
+  code: string | null;
+  message: string;
+}
+
+function parseOpenApiError(error: unknown): ParsedOpenApiError {
   if (error == null) {
-    return "Request failed";
+    return { code: null, message: "Request failed" };
+  }
+
+  if (error instanceof ArrayBuffer) {
+    const text = new TextDecoder().decode(error);
+    if (!text) {
+      return { code: null, message: "Request failed" };
+    }
+    try {
+      return parseOpenApiError(JSON.parse(text));
+    } catch {
+      return { code: null, message: text };
+    }
   }
 
   if (typeof error === "string") {
-    return error;
+    return { code: null, message: error };
   }
 
   if (typeof error === "object") {
     const record = error as Record<string, unknown>;
+    const code = typeof record.code === "string" ? record.code : null;
     if (typeof record.message === "string") {
-      return record.message;
+      return { code, message: record.message };
     }
     if (typeof record.error === "string") {
-      return record.error;
+      return { code, message: record.error };
     }
+    return { code, message: "Request failed" };
   }
 
-  return "Request failed";
+  return { code: null, message: "Request failed" };
+}
+
+function formatOpenApiError(error: unknown): string {
+  return parseOpenApiError(error).message;
 }
 
 async function formatResponseError(response: Response): Promise<string> {

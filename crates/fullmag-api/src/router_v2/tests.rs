@@ -7678,6 +7678,69 @@ async fn mesh_shared_domain_cross_section_returns_binary_fmcs_payload() {
 }
 
 #[tokio::test]
+async fn mixed_mesh_cross_section_endpoints_return_stable_unsupported_code() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload_with_manifest();
+        mesh.nodes.extend([[1.0, 1.0, 0.0], [1.0, 0.0, 1.0]]);
+        mesh.cells = fullmag_ir::FemConnectivityIR {
+            types: vec![fullmag_ir::FemCellTypeIR::Prism6],
+            offsets: vec![0, 6],
+            nodes: vec![0, 1, 2, 3, 4, 5],
+            global_ordinals: vec![901],
+            mesh_parts: Vec::new(),
+        };
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let app = build_v2_router().with_state(state);
+
+    for uri in [
+        "/v2/sessions/current/meshing/meshes/shared-domain/cross-section?plane=xy&position_percent=50",
+        "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image?plane=xy&position_percent=50&metric=volume&resolution=512",
+        "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality?plane=xy&position_percent=50&metric=gamma",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT, "{uri}");
+        let body: serde_json::Value =
+            serde_json::from_slice(&body_bytes(response).await).expect("JSON error body");
+        assert_eq!(body["code"], "mixed_topology_not_supported", "{uri}");
+        assert!(
+            body["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("tet4-only")),
+            "{uri}: {body}"
+        );
+    }
+}
+
+#[test]
+fn openapi_types_cross_section_conflicts_as_api_errors() {
+    let openapi = crate::openapi_v2::openapi_json();
+    for path in [
+        "/v2/sessions/current/meshing/meshes/shared-domain/cross-section",
+        "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image",
+        "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality",
+    ] {
+        assert_eq!(
+            openapi["paths"][path]["get"]["responses"]["409"]["content"]["application/json"]
+                ["schema"]["$ref"],
+            "#/components/schemas/ApiErrorResponse",
+            "{path}"
+        );
+    }
+    assert!(
+        openapi["components"]["schemas"]["ApiErrorResponse"]["required"]
+            .as_array()
+            .is_some_and(|required| required.contains(&serde_json::json!("code")))
+    );
+}
+
+#[tokio::test]
 async fn mesh_shared_domain_cross_section_image_returns_png_payload() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {

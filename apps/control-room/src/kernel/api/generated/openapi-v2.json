@@ -113,6 +113,15 @@
       },
       "ApiErrorResponse": {
         "properties": {
+          "capability_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "code": {
+            "type": "string"
+          },
           "error": {
             "type": "string"
           },
@@ -124,9 +133,11 @@
               "string",
               "null"
             ]
-          }
+          },
+          "revision_context": {}
         },
         "required": [
+          "code",
           "error",
           "message"
         ],
@@ -29992,7 +30003,14 @@
             "description": "No active workspace"
           },
           "409": {
-            "description": "FEM topology unavailable for cross-section"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "FEM topology unavailable or mixed topology is not supported for cross-section"
           }
         },
         "tags": [
@@ -30128,7 +30146,14 @@
             "description": "No active workspace"
           },
           "409": {
-            "description": "FEM topology unavailable for cross-section"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "FEM topology unavailable or mixed topology is not supported for cross-section image"
           }
         },
         "tags": [
@@ -30183,7 +30208,14 @@
             "description": "No active workspace"
           },
           "409": {
-            "description": "FEM topology unavailable for cross-section"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "FEM topology unavailable or mixed topology is not supported for cross-section quality"
           }
         },
         "tags": [

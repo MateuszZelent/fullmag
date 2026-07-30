@@ -53,6 +53,8 @@ use fullmag_authoring::{
 };
 use fullmag_runner::{FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload};
 
+const MIXED_TOPOLOGY_NOT_SUPPORTED: &str = "mixed_topology_not_supported";
+
 #[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct MeshSharedDomainCrossSectionQuery {
@@ -778,6 +780,31 @@ pub async fn get_mesh_shared_domain_quality(
     }))
 }
 
+fn require_tet4_cross_section_topology(
+    mesh: &FemMeshPayload,
+    resource_label: &str,
+) -> Result<Vec<[u32; 4]>, ApiError> {
+    if mesh
+        .cells
+        .types
+        .iter()
+        .any(|cell_type| *cell_type != fullmag_ir::FemCellTypeIR::Tet4)
+    {
+        return Err(ApiError::conflict_code(
+            MIXED_TOPOLOGY_NOT_SUPPORTED,
+            format!(
+                "{resource_label} is tet4-only; prism, pyramid, and other non-tetrahedral cells require the future generic convex slicer"
+            ),
+        ));
+    }
+
+    mesh.require_tet4_elements().map_err(|error| {
+        ApiError::conflict(format!(
+            "{resource_label} requires valid tet4 topology: {error}"
+        ))
+    })
+}
+
 #[utoipa::path(
     get,
     path = "/v2/sessions/current/meshing/meshes/shared-domain/cross-section",
@@ -787,7 +814,7 @@ pub async fn get_mesh_shared_domain_quality(
         (status = 304, description = "Cross-section geometry not modified for the supplied ETag"),
         (status = 204, description = "Not applicable (FDM)"),
         (status = 404, description = "No active workspace"),
-        (status = 409, description = "FEM topology unavailable for cross-section"),
+        (status = 409, description = "FEM topology unavailable or mixed topology is not supported for cross-section", body = crate::schemas::common::ApiErrorResponse),
     ),
     tag = "meshing"
 )]
@@ -809,11 +836,7 @@ pub async fn get_mesh_shared_domain_cross_section(
     let Some(mesh) = snapshot.fem_mesh.as_ref() else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
-    let elements = mesh.require_tet4_elements().map_err(|error| {
-        ApiError::conflict(format!(
-            "FMMT v1 cross-section requires tet4 topology: {error}"
-        ))
-    })?;
+    let elements = require_tet4_cross_section_topology(mesh, "cross-section")?;
     let cut_norm = query.position_percent / 100.0;
     let resolved = resolve_slice_query(
         &FieldSliceQuery {
@@ -863,7 +886,7 @@ pub async fn get_mesh_shared_domain_cross_section(
         (status = 204, description = "No FEM mesh or no data for the requested metric"),
         (status = 400, description = "Invalid query parameters"),
         (status = 404, description = "No active workspace"),
-        (status = 409, description = "FEM topology unavailable for cross-section"),
+        (status = 409, description = "FEM topology unavailable or mixed topology is not supported for cross-section image", body = crate::schemas::common::ApiErrorResponse),
     ),
     tag = "meshing"
 )]
@@ -893,11 +916,7 @@ pub async fn get_mesh_shared_domain_cross_section_image(
     let Some(mesh) = snapshot.fem_mesh.as_ref() else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
-    let elements = mesh.require_tet4_elements().map_err(|error| {
-        ApiError::conflict(format!(
-            "FMMT v1 cross-section image requires tet4 topology: {error}"
-        ))
-    })?;
+    let elements = require_tet4_cross_section_topology(mesh, "cross-section image")?;
     let artifact = snapshot
         .mesh_workspace
         .as_ref()
@@ -1022,7 +1041,7 @@ pub async fn get_mesh_shared_domain_cross_section_image(
         (status = 304, description = "Cross-section quality not modified for the supplied ETag"),
         (status = 204, description = "No per-element quality data artifact or requested metric available"),
         (status = 404, description = "No active workspace"),
-        (status = 409, description = "FEM topology unavailable for cross-section"),
+        (status = 409, description = "FEM topology unavailable or mixed topology is not supported for cross-section quality", body = crate::schemas::common::ApiErrorResponse),
     ),
     tag = "meshing"
 )]
@@ -1044,11 +1063,7 @@ pub async fn get_mesh_shared_domain_cross_section_quality(
     let Some(mesh) = snapshot.fem_mesh.as_ref() else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
-    let elements = mesh.require_tet4_elements().map_err(|error| {
-        ApiError::conflict(format!(
-            "FMMT v1 cross-section quality requires tet4 topology: {error}"
-        ))
-    })?;
+    let elements = require_tet4_cross_section_topology(mesh, "cross-section quality")?;
     let artifact = snapshot
         .mesh_workspace
         .as_ref()
