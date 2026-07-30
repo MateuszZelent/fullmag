@@ -568,6 +568,13 @@ def validate_bundle(
                 f"managed FEM native library {name} hash mismatch: "
                 f"expected {expected}, got {actual}"
             )
+        if "soname" not in entry or (
+            entry["soname"] is not None
+            and (not isinstance(entry["soname"], str) or not entry["soname"])
+        ):
+            raise ValueError(
+                f"managed FEM native library {name} soname must be null or a nonempty string"
+            )
         expected_soname = entry.get("soname")
         actual_soname = read_soname(path, readelf)
         if actual_soname != expected_soname:

@@ -704,6 +704,43 @@ def test_managed_runtime_validator_rejects_missing_or_mismatched_api(tmp_path: P
     assert "api hash mismatch" in invalid.stderr
 
 
+def test_managed_runtime_validator_requires_soname_key_but_allows_absent_dt_soname(
+    tmp_path: Path,
+) -> None:
+    runtime, ldd, readelf = write_fake_schema_v2_bundle(tmp_path)
+    manifest_path = runtime / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["native_libraries"]["libceed"]["soname"] = None
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    readelf.write_text(
+        readelf.read_text(encoding="utf-8").replace(
+            "print(f' 0x000000000000000e (SONAME) Library soname: [{soname}]')",
+            "if name != 'libceed.so.0.12.0':\n"
+            "    print(f' 0x000000000000000e (SONAME) Library soname: [{soname}]')",
+        ),
+        encoding="utf-8",
+    )
+
+    valid = validate_fake_bundle(runtime, ldd, readelf)
+
+    assert valid.returncode == 0, valid.stderr
+
+    for label, mutate in (
+        ("missing", lambda entry: entry.pop("soname")),
+        ("empty", lambda entry: entry.__setitem__("soname", "")),
+        ("numeric", lambda entry: entry.__setitem__("soname", 1)),
+    ):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        entry = manifest["native_libraries"]["libceed"]
+        mutate(entry)
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        invalid = validate_fake_bundle(runtime, ldd, readelf)
+
+        assert invalid.returncode == 2, label
+        assert "native library libceed soname must be null or a nonempty string" in invalid.stderr
+
+
 def test_managed_runtime_validator_requires_exact_build_identity(
     tmp_path: Path,
 ) -> None:
