@@ -46,11 +46,15 @@ article > main table .math {
   overflow-wrap: anywhere;
 }
 
-article > main .math,
+article > main div.math,
 article > main pre {
   display: block;
   max-width: 100%;
   overflow-x: auto;
+}
+
+article > main span.math {
+  display: inline;
 }
 
 #main-header {

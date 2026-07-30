@@ -423,9 +423,9 @@ def test_export_script_recreates_unversioned_fullmag_native_library_links() -> N
     assert 'copy_native_library_group "$FDM_LIB" libfullmag_fdm' in script
 
 
-def test_export_script_cleans_workspace_release_artifacts_before_building() -> None:
+def test_export_script_preserves_release_cache_while_refreshing_build_identity() -> None:
     script = EXPORT_SCRIPT.read_text(encoding="utf-8")
-    clean_index = script.find("cargo +nightly clean --workspace --release")
+    clean_index = script.find("cargo +nightly clean -p fullmag-build-info")
     build_index = script.find("cargo +nightly build")
     copy_index = script.find('FEM_LIB="$(only_native_lib_dir')
 
@@ -433,6 +433,24 @@ def test_export_script_cleans_workspace_release_artifacts_before_building() -> N
     assert build_index != -1
     assert copy_index != -1
     assert clean_index < build_index < copy_index
+    assert "cargo +nightly clean --workspace --release" not in script
+
+
+def test_export_script_defaults_to_bounded_parallel_cargo_builds() -> None:
+    script = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    assert ': "${FULLMAG_FEM_RUNTIME_CARGO_JOBS:=8}"' in script
+    assert 'cargo +nightly build -j "$cargo_jobs"' in script
+
+
+def test_managed_runtime_staleness_ignores_test_only_sources() -> None:
+    justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+    ensure_recipe = justfile.split("ensure-managed-fem-runtime:", 1)[1].split(
+        "\ninspect-managed-fem-frequency-domain-deps:", 1
+    )[0]
+
+    assert '! -path \\"*/tests/*\\"' in ensure_recipe
+    assert '! -name \\"tests.rs\\"' in ensure_recipe
 
 
 def test_export_script_restores_runtime_bundle_to_host_owner() -> None:

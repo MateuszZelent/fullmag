@@ -1,0 +1,210 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_prefix:
+        description: 'Iterative version prefix (e.g. 0.1.0)'
+        required: true
+        default: '0.1.0'
+        type: string
+      custom_tag:
+        description: 'Explicit tag override (leave blank to auto-generate v<prefix>-YYYYMMDD-HHMMSS)'
+        required: false
+        default: ''
+        type: string
+      is_prerelease:
+        description: 'Mark as GitHub pre-release'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.tag.outputs.tag_name }}
+      timestamp: ${{ steps.tag.outputs.timestamp }}
+      version_prefix: ${{ inputs.version_prefix }}
+      is_prerelease: ${{ inputs.is_prerelease }}
+    steps:
+      - name: Compute release tag
+        id: tag
+        run: |
+          set -euo pipefail
+          TIMESTAMP="$(date -u +'%Y%m%d-%H%M%S')"
+          PREFIX="${{ inputs.version_prefix }}"
+          CUSTOM_TAG="${{ inputs.custom_tag }}"
+
+          if [ -n "$CUSTOM_TAG" ]; then
+            TAG_NAME="$CUSTOM_TAG"
+          else
+            TAG_NAME="v${PREFIX}-${TIMESTAMP}"
+          fi
+
+          echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "timestamp=${TIMESTAMP}" >> "$GITHUB_OUTPUT"
+          echo "Computed tag: ${TAG_NAME}"
+
+  build-linux:
+    needs: prepare-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.8.1
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build Rust binaries (CLI & UI)
+        run: cargo build --release -p fullmag-cli -p fullmag-desktop
+
+      - name: Build Control Room Web App
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --dir apps/control-room build
+
+      - name: Build Python wheel package
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build packages/fullmag-py
+
+      - name: Assemble Linux release bundle
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.prepare-release.outputs.tag_name }}"
+          DIST_DIR="dist/fullmag-${TAG}-linux-x86_64"
+          mkdir -p "${DIST_DIR}/bin" "${DIST_DIR}/share/control-room" "${DIST_DIR}/python"
+
+          cp target/release/fullmag "${DIST_DIR}/bin/"
+          cp target/release/fullmag-ui "${DIST_DIR}/bin/"
+          if [ -d "apps/control-room/out" ]; then
+            cp -r apps/control-room/out/* "${DIST_DIR}/share/control-room/"
+          elif [ -d "apps/control-room/dist" ]; then
+            cp -r apps/control-room/dist/* "${DIST_DIR}/share/control-room/"
+          fi
+          if compgen -G "packages/fullmag-py/dist/*.whl" >/dev/null; then
+            cp packages/fullmag-py/dist/*.whl "${DIST_DIR}/python/"
+          fi
+          if [ -f "README.md" ]; then cp README.md "${DIST_DIR}/"; fi
+
+          tar -czvf "fullmag-${TAG}-linux-x86_64.tar.gz" -C dist "fullmag-${TAG}-linux-x86_64"
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fullmag-${{ needs.prepare-release.outputs.tag_name }}-linux-x86_64
+          path: fullmag-*-linux-x86_64.tar.gz
+
+  build-windows:
+    needs: prepare-release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.8.1
+
+      - name: Build Rust binaries (CLI & UI)
+        shell: powershell
+        run: cargo build --release -p fullmag-cli -p fullmag-desktop
+
+      - name: Build Control Room Web App
+        shell: powershell
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --dir apps/control-room build
+
+      - name: Assemble Windows release bundle
+        shell: powershell
+        run: |
+          $TAG = "${{ needs.prepare-release.outputs.tag_name }}"
+          $BUNDLE = "fullmag-$TAG-windows-x86_64"
+          $DIST = "dist\$BUNDLE"
+          New-Item -ItemType Directory -Force -Path "$DIST\bin", "$DIST\share\control-room"
+
+          Copy-Item target\release\fullmag.exe "$DIST\bin\"
+          Copy-Item target\release\fullmag-ui.exe "$DIST\bin\"
+          if (Test-Path apps\control-room\out) {
+            Copy-Item -Recurse apps\control-room\out\* "$DIST\share\control-room\"
+          } elseif (Test-Path apps\control-room\dist) {
+            Copy-Item -Recurse apps\control-room\dist\* "$DIST\share\control-room\"
+          }
+          if (Test-Path README.md) { Copy-Item README.md "$DIST\" }
+
+          Compress-Archive -Path "$DIST" -DestinationPath "$BUNDLE.zip"
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fullmag-${{ needs.prepare-release.outputs.tag_name }}-windows-x86_64
+          path: fullmag-*-windows-x86_64.zip
+
+  publish-release:
+    needs: [prepare-release, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Display downloaded artifacts
+        run: ls -la release-artifacts/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare-release.outputs.tag_name }}
+          name: Fullmag Release ${{ needs.prepare-release.outputs.tag_name }}
+          body: |
+            ## Fullmag Release `${{ needs.prepare-release.outputs.tag_name }}`
+
+            - **Release Tag**: `${{ needs.prepare-release.outputs.tag_name }}`
+            - **Base Iteration**: `${{ needs.prepare-release.outputs.version_prefix }}`
+            - **Build Timestamp (UTC)**: `${{ needs.prepare-release.outputs.timestamp }}`
+            - **Commit**: `${{ github.sha }}`
+            - **Target Platforms**: Linux (x86_64), Windows (x86_64)
+
+            ### Package Assets
+            - `fullmag-${{ needs.prepare-release.outputs.tag_name }}-linux-x86_64.tar.gz`
+            - `fullmag-${{ needs.prepare-release.outputs.tag_name }}-windows-x86_64.zip`
+          prerelease: ${{ needs.prepare-release.outputs.is_prerelease == 'true' }}
+          files: release-artifacts/*
+          token: ${{ secrets.GITHUB_TOKEN }}

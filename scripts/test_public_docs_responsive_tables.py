@@ -54,7 +54,7 @@ class ResponsivePublicDocumentationTableTests(unittest.TestCase):
     def test_long_content_uses_local_horizontal_scrollports(self) -> None:
         css = CSS.read_text(encoding="utf-8")
 
-        for selector in ("article > main .math", "article > main pre"):
+        for selector in ("article > main div.math", "article > main pre"):
             rules = self._rules_for_selector(css, selector)
             self.assertTrue(
                 any(
