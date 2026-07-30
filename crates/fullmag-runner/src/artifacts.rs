@@ -38,6 +38,33 @@ fn execution_provenance_json(
     Ok(serde_json::to_value(execution_provenance).expect("ExecutionProvenance must serialize"))
 }
 
+pub(crate) fn artifact_provenance_json(
+    context: &FieldArtifactContext,
+    provenance: &crate::types::ExecutionProvenance,
+) -> serde_json::Value {
+    let mut value = serde_json::to_value(provenance).expect("ExecutionProvenance must serialize");
+    let object = value
+        .as_object_mut()
+        .expect("ExecutionProvenance must serialize to an object");
+    object.insert(
+        "problem_name".to_string(),
+        serde_json::Value::String(context.problem_name.clone()),
+    );
+    object.insert(
+        "ir_version".to_string(),
+        serde_json::Value::String(context.ir_version.clone()),
+    );
+    object.insert(
+        "source_hash".to_string(),
+        serde_json::to_value(&context.source_hash).expect("source hash must serialize"),
+    );
+    object.insert(
+        "execution_mode".to_string(),
+        serde_json::to_value(context.execution_mode).expect("execution mode must serialize"),
+    );
+    value
+}
+
 fn runtime_threading_summary(problem: &fullmag_ir::ProblemIR) -> serde_json::Value {
     let resolved_cpu_threads = u32::try_from(crate::configured_cpu_threads(problem)).ok();
     serde_json::json!({
@@ -2718,14 +2745,7 @@ fn write_prescribed_current_transport_artifacts(
             "coverage": coverage,
             "solve_region": solve_region,
             "layout": context.layout.clone(),
-            "provenance": {
-                "problem_name": context.problem_name,
-                "ir_version": context.ir_version,
-                "source_hash": context.source_hash,
-                "execution_mode": context.execution_mode,
-                "execution_engine": provenance.execution_engine,
-                "precision": provenance.precision,
-            },
+            "provenance": artifact_provenance_json(context, provenance),
             "values": values,
         });
         let artifact_path = output_dir
@@ -2875,14 +2895,7 @@ pub(crate) fn write_field_file(
         "time": time,
         "solver_dt": solver_dt,
         "layout": context.layout,
-        "provenance": {
-            "problem_name": context.problem_name,
-            "ir_version": context.ir_version,
-            "source_hash": context.source_hash,
-            "execution_mode": context.execution_mode,
-            "execution_engine": provenance.execution_engine,
-            "precision": provenance.precision,
-        },
+        "provenance": artifact_provenance_json(context, provenance),
         "values": values,
     });
     fs::write(path, serde_json::to_string_pretty(&field_json).unwrap())
@@ -3067,14 +3080,7 @@ fn write_layer_field_file(
         "solver_dt": solver_dt,
         "layer": layer.manifest_entry.clone(),
         "layout": context.layout.clone(),
-        "provenance": {
-            "problem_name": context.problem_name,
-            "ir_version": context.ir_version,
-            "source_hash": context.source_hash,
-            "execution_mode": context.execution_mode,
-            "execution_engine": provenance.execution_engine,
-            "precision": provenance.precision,
-        },
+        "provenance": artifact_provenance_json(context, provenance),
         "values": values,
     });
     fs::write(path, serde_json::to_string_pretty(&field_json).unwrap())
@@ -3236,6 +3242,29 @@ mod tests {
         };
 
         assert!(execution_provenance_json(&plan, &provenance).is_err());
+    }
+
+    #[test]
+    fn field_and_current_artifact_provenance_preserves_optional_mfem_version() {
+        let problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let plan = test_fem_execution_plan();
+        let context = build_field_context(&problem, &plan);
+        let mut provenance = ExecutionProvenance {
+            execution_engine: "fem_native_gpu".to_string(),
+            mfem_version: Some("4.9".to_string()),
+            ..ExecutionProvenance::default()
+        };
+
+        assert_eq!(
+            artifact_provenance_json(&context, &provenance)["mfem_version"],
+            "4.9"
+        );
+
+        provenance.mfem_version = None;
+        assert!(!artifact_provenance_json(&context, &provenance)
+            .as_object()
+            .expect("artifact provenance must be an object")
+            .contains_key("mfem_version"));
     }
 
     #[test]

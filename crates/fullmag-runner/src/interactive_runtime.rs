@@ -239,6 +239,23 @@ mod tests {
         assert!(!interactive.contains("StageFemMeshAsset::build_from_fem_plan"));
     }
 
+    #[test]
+    fn strict_interactive_fem_attaches_mfem_identity_before_recording_initial_fields() {
+        let runtime_source = include_str!("interactive_runtime.rs");
+        let version_attachment = runtime_source
+            .find("provenance.mfem_version = Some(crate::native_fem::strict_gpu_mfem_version()?);")
+            .expect("strict interactive FEM must attach the loaded MFEM version");
+        let native_recorder = runtime_source
+            .rfind("ArtifactRecorder::streaming(self.provenance.clone(), writer)")
+            .expect("native FEM interactive runtime must create an artifact recorder");
+        let initial_fields = runtime_source
+            .rfind("capture_initial_native_fem_runtime_fields")
+            .expect("native FEM interactive runtime must capture its initial fields");
+
+        assert!(version_attachment < native_recorder);
+        assert!(native_recorder < initial_fields);
+    }
+
     fn make_soa_fdm_plan() -> FdmPlanIR {
         FdmPlanIR {
             grid: GridDimensions { cells: [4, 2, 1] },
@@ -541,6 +558,7 @@ mod tests {
             Some(fallback),
             Some(decision.clone()),
             None,
+            fullmag_ir::ExecutionMode::Strict,
         )
         .expect("construct persistent FEM runtime from the pinned decision");
         let serialized = serde_json::to_value(runtime.execution_provenance())
@@ -1102,6 +1120,7 @@ impl InteractiveFemPreviewRuntime {
             resolution.fallback,
             resolution.fem_crossover_decision,
             None,
+            plan.common.execution_mode,
         )
     }
 
@@ -1124,6 +1143,7 @@ impl InteractiveFemPreviewRuntime {
             resolution.fallback,
             resolution.fem_crossover_decision,
             stage_asset,
+            problem.validation_profile.execution_mode,
         )
     }
 
@@ -1133,10 +1153,18 @@ impl InteractiveFemPreviewRuntime {
         fallback: Option<ResolvedFallback>,
         crossover_decision: Option<crate::types::FemCrossoverDecision>,
         stage_asset: Option<&crate::types::StageFemMeshAsset>,
+        execution_mode: fullmag_ir::ExecutionMode,
     ) -> Result<Self, RunError> {
         #[cfg(not(feature = "fem-gpu"))]
         {
-            let _ = (plan, engine, fallback, crossover_decision, stage_asset);
+            let _ = (
+                plan,
+                engine,
+                fallback,
+                crossover_decision,
+                stage_asset,
+                execution_mode,
+            );
             return Err(RunError {
                 message:
                     "interactive native FEM runtime requested but the runner was built without fem-gpu"
@@ -1164,6 +1192,11 @@ impl InteractiveFemPreviewRuntime {
             let device_info = backend.device_info()?;
             let antenna_field = crate::antenna_fields::compute_antenna_field(&effective_plan)?;
             let mut provenance = fem_gpu_execution_provenance(&effective_plan, &device_info)?;
+            if execution_mode == fullmag_ir::ExecutionMode::Strict
+                && provenance.execution_engine == "fem_native_gpu"
+            {
+                provenance.mfem_version = Some(crate::native_fem::strict_gpu_mfem_version()?);
+            }
             attach_resolved_fallback_to_provenance(&mut provenance, fallback);
             attach_fem_crossover_decision_to_provenance(&mut provenance, crossover_decision);
             let inner = InteractiveFemPreviewRuntimeInner::Gpu(GpuInteractiveFemPreviewRuntime {

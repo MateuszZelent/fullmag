@@ -11,8 +11,8 @@
 //! - `gpu`: force native FEM GPU, fail if unavailable
 
 use fullmag_ir::{
-    BackendPlanIR, FdmMultilayerPlanIR, FdmPlanIR, FemEigenPlanIR, FemMeshPartSelector, FemPlanIR,
-    ExecutionMode, OutputIR, ProblemIR, RelaxationAlgorithmIR,
+    BackendPlanIR, ExecutionMode, FdmMultilayerPlanIR, FdmPlanIR, FemEigenPlanIR,
+    FemMeshPartSelector, FemPlanIR, OutputIR, ProblemIR, RelaxationAlgorithmIR,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -5322,8 +5322,8 @@ fn execute_native_fem(
     let gpu_state_info = backend.gpu_state_info()?;
     let gpu_rk_plan_info = backend.gpu_rk_plan_info()?;
     let execution_engine = native_fem_execution_engine(plan);
-    let execution_mode = native_fem_execution_mode(plan);
-    validate_all_in_gpu_fem_runtime_contract(execution_mode, &gpu_rk_plan_info)?;
+    let native_execution_mode = native_fem_execution_mode(plan);
+    validate_all_in_gpu_fem_runtime_contract(native_execution_mode, &gpu_rk_plan_info)?;
     let demag_policy = crate::native_fem::resolved_native_fem_demag_solver_policy(plan);
     runtime_info_once(&format!(
         "native FEM backend active: engine={} device='{}' cc={} driver={} runtime={} mfem_device={} assembly_mode=legacy_sparse llg_mode={} demag_solver={} preconditioner={} demag_mode={} hypre_gpu_policy={} demag_residency={}",
