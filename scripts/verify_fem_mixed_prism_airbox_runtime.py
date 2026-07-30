@@ -223,9 +223,14 @@ def _validate_runtime_manifest(path: Path) -> dict[str, object]:
     native_library_identity: dict[str, dict[str, object]] = {}
     for name in REQUIRED_NATIVE_LIBRARIES:
         entry = _object(native_libraries.get(name), f"runtime native library {name}")
-        for field in ("path", "soname", "loaded_soname"):
+        for field in ("path", "loaded_soname"):
             if not isinstance(entry.get(field), str) or not entry[field]:
                 raise ContractError(f"runtime native library {name}.{field} must be present")
+        if "soname" not in entry or (
+            entry["soname"] is not None
+            and (not isinstance(entry["soname"], str) or not entry["soname"])
+        ):
+            raise ContractError(f"runtime native library {name}.soname must be present")
         _canonical_sha256(entry.get("sha256"), f"runtime native library {name}.sha256")
         if entry.get("cuda_required") is not True:
             raise ContractError(f"runtime native library {name}.cuda_required must be true")

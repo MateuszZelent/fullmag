@@ -834,6 +834,38 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                         runtime_log=bundle[3], runtime_manifest=manifest_path,
                     )
 
+    def test_schema_3_runtime_requires_soname_key_but_allows_absent_dt_soname(self) -> None:
+        mutations = (
+            ("absent_dt_soname", lambda entry: entry.__setitem__("soname", None), True),
+            ("missing_soname", lambda entry: entry.pop("soname"), False),
+            ("empty_soname", lambda entry: entry.__setitem__("soname", ""), False),
+            ("numeric_soname", lambda entry: entry.__setitem__("soname", 1), False),
+        )
+        for label, mutate, accepted in mutations:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                bundle = self._write_valid_bundle(root, "cpu")
+                manifest_path = bundle[4]
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                entry = manifest["native_libraries"]["libceed"]
+                self.assertIsInstance(entry, dict)
+                mutate(entry)
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+                if accepted:
+                    validate_runtime_artifacts(
+                        bundle[0], bundle[1], bundle[2], device="cpu",
+                        runtime_log=bundle[3], runtime_manifest=manifest_path,
+                    )
+                else:
+                    with self.assertRaisesRegex(
+                        ContractError, "runtime native library libceed.soname must be present"
+                    ):
+                        validate_runtime_artifacts(
+                            bundle[0], bundle[1], bundle[2], device="cpu",
+                            runtime_log=bundle[3], runtime_manifest=manifest_path,
+                        )
+
     def test_source_snapshot_recomputes_all_canonical_digests(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
