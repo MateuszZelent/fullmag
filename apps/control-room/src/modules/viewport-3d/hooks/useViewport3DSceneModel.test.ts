@@ -249,7 +249,10 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("topologyModel: topologyRenderModelForGeometry");
     expect(source).toContain("Boolean(fieldCompatibleTopologyRenderModel) &&");
     expect(source).toContain(
-      "useViewport3DMeshQualityData(\n    Boolean(fieldCompatibleTopologyRenderModel && meshQualityOverlayVisible),\n  )",
+      "const tet4FmmqQualitySupported = topologySupportsTet4FmmqQuality(topology.data);",
+    );
+    expect(source).toContain(
+      "useViewport3DMeshQualityData(\n    Boolean(\n      fieldCompatibleTopologyRenderModel &&\n        meshQualityOverlayVisible &&\n        tet4FmmqQualitySupported,\n    ),\n  )",
     );
   });
 

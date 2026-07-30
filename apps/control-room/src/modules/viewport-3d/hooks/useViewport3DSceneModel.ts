@@ -203,6 +203,7 @@ import {
 } from "../viewport3dPrimitiveModel";
 import {
   buildMeshQualityVertexColors,
+  topologySupportsTet4FmmqQuality,
   type MeshQualityColorMetric,
 } from "../viewport3dQualityMapping";
 import { buildViewport3DMeshSizeHighlightModel } from "../viewport3dMeshSizeHighlight";
@@ -2650,8 +2651,13 @@ export function useViewport3DSceneModel({
     selection.kind === "mesh.quality" ||
     selection.ref?.type === "mesh-quality-element";
   const meshQualityMetric = resolveSelectionMeshQualityMetric(selection);
+  const tet4FmmqQualitySupported = topologySupportsTet4FmmqQuality(topology.data);
   const meshQualityData = useViewport3DMeshQualityData(
-    Boolean(fieldCompatibleTopologyRenderModel && meshQualityOverlayVisible),
+    Boolean(
+      fieldCompatibleTopologyRenderModel &&
+        meshQualityOverlayVisible &&
+        tet4FmmqQualitySupported,
+    ),
   );
   const meshQualityColors = useMemo(
     () =>

@@ -152,7 +152,7 @@ describe("buildMeshQualityVertexColors", () => {
     expect(colors).toBeNull();
   });
 
-  it("maps homogeneous prism quality from canonical CSR", () => {
+  it("rejects homogeneous prism quality because FMMQ is tet4-only", () => {
     const topology = topologyFixture();
     topology.cellCount = 2;
     topology.cellNodes = new Uint32Array([
@@ -167,9 +167,6 @@ describe("buildMeshQualityVertexColors", () => {
 
     const colors = buildMeshQualityVertexColors(topology, qualityFixture(), "gamma");
 
-    expect(colors?.range).toEqual({ max: 1, min: 0 });
-    expect(Array.from(colors?.colors.slice(18, 21) ?? [])).toEqual(
-      Array.from(Float32Array.from(magnitudeColorRgb(1))),
-    );
+    expect(colors).toBeNull();
   });
 });
