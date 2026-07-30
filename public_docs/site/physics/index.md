@@ -27,7 +27,6 @@ interactions/index
 
 conventions
 geometry-and-materials
-exchange-demag-zeeman
 ```
 
 ## Publication rule

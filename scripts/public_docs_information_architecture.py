@@ -16,7 +16,6 @@ LEGACY_NAVIGATION_PATHS = frozenset(
     {
         "physics/conventions.md",
         "physics/geometry-and-materials.md",
-        "physics/exchange-demag-zeeman.md",
     }
 )
 
@@ -110,6 +109,7 @@ LEGACY_NAVIGATION_REDIRECTS = {
 LEGACY_REDIRECTS = {
     **LEGACY_INTERACTION_REDIRECTS,
     **LEGACY_NAVIGATION_REDIRECTS,
+    "physics/exchange-demag-zeeman.md": "physics/interactions/index.md",
 }
 
 _TITLES = {
@@ -352,7 +352,6 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
             "physics/interactions/index.md",
             "physics/conventions.md",
             "physics/geometry-and-materials.md",
-            "physics/exchange-demag-zeeman.md",
         ),
     ),
     *_section("physics/foundations", "Physics Foundations", ("conventions-and-units", "micromagnetic-energy", "effective-field", "llg-equation", "boundary-conditions", "observables"), "the physics foundations reference"),

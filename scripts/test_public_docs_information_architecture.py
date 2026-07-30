@@ -106,7 +106,11 @@ class PublicDocumentationInformationArchitectureTests(unittest.TestCase):
             "physics/interactions/exchange/index.html"
         )
         self.assertEqual(legacy_redirects._redirects(), expected)
-        self.assertEqual(len(expected), 68)
+        self.assertEqual(len(expected), 69)
+        self.assertEqual(
+            expected["physics/exchange-demag-zeeman.html"],
+            "physics/interactions/index.html",
+        )
         for path in (
             "physics/solvers/index.html",
             "physics/solvers/fdm/index.html",

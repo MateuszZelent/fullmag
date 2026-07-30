@@ -13,7 +13,8 @@ source_of_truth: docs/physics/0400-fdm-exchange-demag-zeeman.md
 :::{admonition} Review candidate
 :class: note
 
-This is the first FullMag interaction page written against the implementation hierarchy. It is
+This is the first FullMag interaction page written against the interaction-first documentation
+structure. It is
 ready for scientific and editorial review, but it does **not** claim that every backend is
 qualified. In particular, current-revision executed-device proof is missing for FDM CUDA Exchange
 and for the newest mixed-element FEM CUDA path.
