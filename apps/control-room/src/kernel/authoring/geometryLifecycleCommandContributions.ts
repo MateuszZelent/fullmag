@@ -19,7 +19,7 @@ import {
   MODEL_GEOMETRY_VALIDATION_PATH,
   MODEL_SCENE_PATH,
 } from "../api/apiPaths";
-import type { JsonObject, JsonValue } from "../api/apiTypes";
+import type { JsonObject, JsonValue, MeshCapabilitiesResource } from "../api/apiTypes";
 import type { CommandDetailResource } from "../api/apiTypes";
 import type { CommandContext, CommandContribution } from "../commands/commandTypes";
 import type { Selection } from "../selection/selectionTypes";
@@ -261,10 +261,7 @@ function meshCapabilityDisabledReason(
     return null;
   }
   const option = resolveMeshEditorCapabilities(
-    context.resourceData[MESHING_CAPABILITIES_PATH] as {
-      mesh_capabilities?: unknown;
-      mesh_adaptivity_state?: unknown;
-    } | null,
+    context.resourceData[MESHING_CAPABILITIES_PATH] as MeshCapabilitiesResource | null,
   ).option(capability);
   return meshEditorCapabilityBlocks(option) ? option.reason : null;
 }

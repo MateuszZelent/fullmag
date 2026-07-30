@@ -27,7 +27,8 @@ use crate::field_slice::{resolve_slice_query, FieldSliceQuery, SlicePlane};
 use crate::schemas::mesh::{
     MeshActiveBuildResource, MeshBuildDiagnosticsResource, MeshBuildHistoryResource,
     MeshBuildPolicyDiffResource, MeshBuildProvenanceResource, MeshBuildPublishedResourcesResource,
-    MeshCapabilitiesResource, MeshHistogramBinElementsResource, MeshInterfaceConfigReplaceRequest,
+    MeshCapabilitiesResource, MeshCapabilityMatrixResource, MeshFeatureCapabilityResource,
+    MeshHistogramBinElementsResource, MeshInterfaceConfigReplaceRequest,
     MeshInterfaceConfigResource, MeshInterfaceQualityResource, MeshInterfaceReportResource,
     MeshLastSuccessfulBuildResource, MeshMixedCertificateFamilyQualityGateResource,
     MeshMixedCertificateQualityEvidenceResource, MeshMixedCertificateQualityEvidenceStatus,
@@ -143,7 +144,7 @@ pub async fn get_mesh_capabilities(
 fn projected_mesh_capabilities(
     snapshot: &SessionStateResponse,
     mesh_workspace: &Value,
-) -> Option<Value> {
+) -> Option<MeshCapabilityMatrixResource> {
     let mut projected = mesh_workspace
         .get("mesh_capabilities")
         .and_then(Value::as_object)
@@ -151,15 +152,33 @@ fn projected_mesh_capabilities(
         .unwrap_or_default();
     for id in fullmag_runner::MIXED_P1_MESH_FEATURE_CAPABILITY_IDS {
         projected.remove(id);
-        if let Some(capabilities) = snapshot.capabilities.as_ref() {
-            if let Some(capability) = capabilities.feature_capabilities.get(id) {
-                if let Ok(value) = serde_json::to_value(capability) {
-                    projected.insert(id.to_string(), value);
-                }
-            }
-        }
     }
-    (!projected.is_empty()).then_some(Value::Object(projected))
+    let feature = |id: &str| {
+        snapshot
+            .capabilities
+            .as_ref()?
+            .feature_capabilities
+            .get(id)
+            .and_then(|capability| {
+                serde_json::from_value::<MeshFeatureCapabilityResource>(
+                    serde_json::to_value(capability).ok()?,
+                )
+                .ok()
+            })
+    };
+    let matrix = MeshCapabilityMatrixResource {
+        mixed_p1: feature("mesh.topology.mixed_p1"),
+        swept_prism: feature("mesh.swept.prism"),
+        pyramid_tet: feature("mesh.transition.pyramid_tet"),
+        exact_layer_count: feature("mesh.exact_layer_count"),
+        additional: projected.into_iter().collect(),
+    };
+    (matrix.mixed_p1.is_some()
+        || matrix.swept_prism.is_some()
+        || matrix.pyramid_tet.is_some()
+        || matrix.exact_layer_count.is_some()
+        || !matrix.additional.is_empty())
+    .then_some(matrix)
 }
 
 #[utoipa::path(

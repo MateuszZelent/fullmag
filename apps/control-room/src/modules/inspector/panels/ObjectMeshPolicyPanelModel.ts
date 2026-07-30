@@ -1,6 +1,9 @@
 import type {
   JsonObject,
   JsonValue,
+  MeshCapabilitiesResource,
+  MeshCapabilityMatrixResource,
+  MeshFeatureCapabilityResource,
   MeshObjectConfigReplaceRequest,
   MeshObjectConfigResource,
 } from "@/kernel/api/apiTypes";
@@ -107,43 +110,32 @@ const LAYERED_PRISM_EXECUTABLE_STATUSES = new Set([
   "validated",
 ]);
 
-function capabilityRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
+function capabilityValue(
+  capabilities: MeshCapabilityMatrixResource | null | undefined,
+  id: (typeof LAYERED_PRISM_CAPABILITY_IDS)[number],
+): MeshFeatureCapabilityResource | null | undefined {
+  return capabilities?.[id];
 }
 
-function capabilityValue(capabilities: unknown, id: string): unknown {
-  const root = capabilityRecord(capabilities);
-  if (!root) return undefined;
-  if (root[id] !== undefined) return root[id];
-  let current: unknown = root;
-  for (const segment of id.split(".")) {
-    current = capabilityRecord(current)?.[segment];
-    if (current === undefined) return undefined;
-  }
-  return current;
+function capabilityStatus(
+  value: MeshFeatureCapabilityResource | null | undefined,
+): string {
+  return value?.status ?? "unavailable";
 }
 
-function capabilityStatus(value: unknown): string {
-  if (value === false) return "unsupported";
-  const status = capabilityRecord(value)?.status;
-  return typeof status === "string" ? status : "unavailable";
-}
-
-function capabilityReason(value: unknown, id: string, status: string): string {
-  const record = capabilityRecord(value);
-  for (const key of ["reason", "capability_reason", "disabled_reason"]) {
-    const reason = record?.[key];
-    if (typeof reason === "string" && reason.trim()) return reason;
-  }
+function capabilityReason(
+  value: MeshFeatureCapabilityResource | null | undefined,
+  id: string,
+  status: string,
+): string {
+  if (value?.reason?.trim()) return value.reason;
   return status === "unavailable"
     ? `Capability ${id} is not advertised by the meshing resource.`
     : `Capability ${id} is ${status}.`;
 }
 
 export function resolveObjectMeshTopologyCapabilities(
-  resource: { mesh_capabilities?: unknown } | null | undefined,
+  resource: Pick<MeshCapabilitiesResource, "mesh_capabilities"> | null | undefined,
 ): ObjectMeshTopologyCapabilities {
   const capabilities = resource?.mesh_capabilities;
   let allValidated = true;
@@ -168,14 +160,10 @@ export function resolveObjectMeshTopologyCapabilities(
     }
     allValidated &&= status === "validated";
   }
-  const exactLayerCount = capabilityRecord(
-    capabilityValue(capabilities, "mesh.exact_layer_count"),
+  const exactLayerCount = capabilityValue(capabilities, "mesh.exact_layer_count");
+  const supportedLayerCounts = (exactLayerCount?.supported_layer_counts ?? []).filter(
+    (value) => Number.isInteger(value) && value > 0,
   );
-  const supportedLayerCounts = Array.isArray(exactLayerCount?.supported_layer_counts)
-    ? exactLayerCount.supported_layer_counts.filter(
-        (value): value is number => Number.isInteger(value) && value > 0,
-      )
-    : [];
   if (
     supportedLayerCounts.length !== 3 ||
     supportedLayerCounts.some((value, index) => value !== index + 1)

@@ -1,3 +1,5 @@
+import type { MeshCapabilitiesResource } from "@/kernel/api/apiTypes";
+
 export type MeshEditorDiscretization = "fdm" | "fem";
 export type MeshEditorDevice = "cpu" | "gpu";
 export type MeshEditorPrecision = "single" | "double";
@@ -27,10 +29,10 @@ export interface MeshEditorCapabilityOption {
   status: MeshEditorCapabilityStatus;
 }
 
-export interface MeshEditorCapabilityResourceLike {
-  mesh_capabilities?: unknown | null;
-  mesh_adaptivity_state?: unknown | null;
-}
+export type MeshEditorCapabilityResourceLike = Pick<
+  MeshCapabilitiesResource,
+  "mesh_capabilities" | "mesh_adaptivity_state"
+>;
 
 export interface MeshEditorDraft {
   discretization: MeshEditorDiscretization;

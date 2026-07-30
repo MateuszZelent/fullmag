@@ -212,6 +212,10 @@ export type MeshBuildHistoryResource =
   components["schemas"]["MeshBuildHistoryResource"];
 export type MeshCapabilitiesResource =
   components["schemas"]["MeshCapabilitiesResource"];
+export type MeshCapabilityMatrixResource =
+  components["schemas"]["MeshCapabilityMatrixResource"];
+export type MeshFeatureCapabilityResource =
+  components["schemas"]["MeshFeatureCapabilityResource"];
 export type MeshHistogramBinElementsResource =
   components["schemas"]["MeshHistogramBinElementsResource"];
 export type MeshHistogramBinMetric =

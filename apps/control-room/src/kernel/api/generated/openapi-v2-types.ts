@@ -5628,10 +5628,17 @@ export interface components {
         MeshCapabilitiesResource: {
             /** @description Meshing adaptivity capability/state only. UI-wide gating remains owned by `status.capabilities`. */
             mesh_adaptivity_state?: unknown;
-            /** @description Meshing policy/build feature matrix only. UI-wide gating remains owned by `status.capabilities`. */
-            mesh_capabilities?: unknown;
+            mesh_capabilities?: null | components["schemas"]["MeshCapabilityMatrixResource"];
             /** Format: int64 */
             revision: number;
+        };
+        MeshCapabilityMatrixResource: {
+            "mesh.exact_layer_count"?: null | components["schemas"]["MeshFeatureCapabilityResource"];
+            "mesh.swept.prism"?: null | components["schemas"]["MeshFeatureCapabilityResource"];
+            "mesh.topology.mixed_p1"?: null | components["schemas"]["MeshFeatureCapabilityResource"];
+            "mesh.transition.pyramid_tet"?: null | components["schemas"]["MeshFeatureCapabilityResource"];
+        } & {
+            [key: string]: unknown;
         };
         MeshCommandTarget: {
             /** @enum {string} */
@@ -5651,6 +5658,12 @@ export interface components {
             geometry_name: string;
             /** Format: int32 */
             marker: number;
+        };
+        MeshFeatureCapabilityResource: {
+            reason?: string | null;
+            scope?: string | null;
+            status: string;
+            supported_layer_counts?: number[];
         };
         MeshHistogramBinElementsResource: {
             /** Format: int32 */

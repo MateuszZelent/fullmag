@@ -361,6 +361,8 @@ use utoipa::OpenApi;
         crate::schemas::workspace::WorkspaceLayoutReplaceRequest,
         crate::schemas::mesh::MeshSummaryResource,
         crate::schemas::mesh::MeshCapabilitiesResource,
+        crate::schemas::mesh::MeshCapabilityMatrixResource,
+        crate::schemas::mesh::MeshFeatureCapabilityResource,
         crate::schemas::mesh::MeshLayeredPolicyResource,
         crate::schemas::mesh::MeshMixedLayerTopologyCertificateSummaryResource,
         crate::schemas::mesh::MeshMixedCertificateFamilyQualityGateResource,

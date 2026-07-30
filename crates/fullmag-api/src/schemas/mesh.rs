@@ -32,13 +32,46 @@ pub struct MeshSummaryResource {
 pub struct MeshCapabilitiesResource {
     pub revision: u64,
     /// Meshing policy/build feature matrix only. UI-wide gating remains owned by `status.capabilities`.
-    #[schema(additional_properties, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub mesh_capabilities: Option<Value>,
+    pub mesh_capabilities: Option<MeshCapabilityMatrixResource>,
     /// Meshing adaptivity capability/state only. UI-wide gating remains owned by `status.capabilities`.
     #[schema(additional_properties, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_adaptivity_state: Option<Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub struct MeshFeatureCapabilityResource {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_layer_counts: Vec<u32>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct MeshCapabilityMatrixResource {
+    #[serde(
+        rename = "mesh.topology.mixed_p1",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub mixed_p1: Option<MeshFeatureCapabilityResource>,
+    #[serde(rename = "mesh.swept.prism", skip_serializing_if = "Option::is_none")]
+    pub swept_prism: Option<MeshFeatureCapabilityResource>,
+    #[serde(
+        rename = "mesh.transition.pyramid_tet",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pyramid_tet: Option<MeshFeatureCapabilityResource>,
+    #[serde(
+        rename = "mesh.exact_layer_count",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub exact_layer_count: Option<MeshFeatureCapabilityResource>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]

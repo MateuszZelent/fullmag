@@ -9957,7 +9957,15 @@
             "description": "Meshing adaptivity capability/state only. UI-wide gating remains owned by `status.capabilities`."
           },
           "mesh_capabilities": {
-            "description": "Meshing policy/build feature matrix only. UI-wide gating remains owned by `status.capabilities`."
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshCapabilityMatrixResource",
+                "description": "Meshing policy/build feature matrix only. UI-wide gating remains owned by `status.capabilities`."
+              }
+            ]
           },
           "revision": {
             "format": "int64",
@@ -9968,6 +9976,52 @@
         "required": [
           "revision"
         ],
+        "type": "object"
+      },
+      "MeshCapabilityMatrixResource": {
+        "additionalProperties": {},
+        "properties": {
+          "mesh.exact_layer_count": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshFeatureCapabilityResource"
+              }
+            ]
+          },
+          "mesh.swept.prism": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshFeatureCapabilityResource"
+              }
+            ]
+          },
+          "mesh.topology.mixed_p1": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshFeatureCapabilityResource"
+              }
+            ]
+          },
+          "mesh.transition.pyramid_tet": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshFeatureCapabilityResource"
+              }
+            ]
+          }
+        },
         "type": "object"
       },
       "MeshCommandTarget": {
@@ -10048,6 +10102,37 @@
         "required": [
           "geometry_name",
           "marker"
+        ],
+        "type": "object"
+      },
+      "MeshFeatureCapabilityResource": {
+        "properties": {
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "supported_layer_counts": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "status"
         ],
         "type": "object"
       },

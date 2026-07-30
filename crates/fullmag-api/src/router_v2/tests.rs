@@ -8185,6 +8185,31 @@ fn openapi_registers_typed_mixed_topology_truth_fields() {
     let schemas = openapi["components"]["schemas"]
         .as_object()
         .expect("OpenAPI schemas");
+    let mesh_capabilities = &schemas["MeshCapabilitiesResource"]["properties"]["mesh_capabilities"];
+    assert_eq!(
+        mesh_capabilities["oneOf"][1]["$ref"], "#/components/schemas/MeshCapabilityMatrixResource",
+        "nullable mesh capability matrix must retain its typed schema: {mesh_capabilities}"
+    );
+    let exact_layer_count =
+        &schemas["MeshCapabilityMatrixResource"]["properties"]["mesh.exact_layer_count"];
+    let mixed_capability = exact_layer_count["oneOf"][1]["$ref"].as_str();
+    assert_eq!(
+        mixed_capability,
+        Some("#/components/schemas/MeshFeatureCapabilityResource")
+    );
+    assert_ne!(
+        schemas["MeshCapabilityMatrixResource"]["additionalProperties"], false,
+        "unknown capability entries must remain compatible"
+    );
+    let feature_properties = schemas["MeshFeatureCapabilityResource"]["properties"]
+        .as_object()
+        .expect("mesh feature capability properties");
+    for field in ["status", "reason", "scope", "supported_layer_counts"] {
+        assert!(
+            feature_properties.contains_key(field),
+            "missing field {field}"
+        );
+    }
     for schema in [
         "MeshLayeredPolicyResource",
         "MeshMixedLayerTopologyCertificateSummaryResource",
@@ -8229,8 +8254,8 @@ fn openapi_registers_typed_mixed_topology_truth_fields() {
     assert_eq!(orphan["tag"]["minimum"], 1);
     let histogram_path = "/v2/sessions/current/meshing/meshes/{mesh_id}/parts/{part_id}/histogram-bins/{metric}/{bin_index}/elements";
     assert_eq!(
-        openapi["paths"][histogram_path]["get"]["responses"]["409"]["content"]
-            ["application/json"]["schema"]["$ref"],
+        openapi["paths"][histogram_path]["get"]["responses"]["409"]["content"]["application/json"]
+            ["schema"]["$ref"],
         "#/components/schemas/ApiErrorResponse"
     );
     let quality_gates = schemas["MeshQualityGatesResource"]["properties"]
