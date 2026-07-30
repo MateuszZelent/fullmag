@@ -651,11 +651,12 @@ Clients must preserve `domain_generation_id` and mesh topology revision as
 exact revision tokens. JavaScript clients must not coerce FMVP v3 `u64`
 metadata into `number`, because valid backend revisions may exceed
 `Number.MAX_SAFE_INTEGER`.
-`sampled_node_indices` payloads are valid for vector glyph placement only;
-surface shaders require `full_domain` or `explicit_node_indices` data that can
-be matched to the target topology. FMVP v2 remains a legacy full-domain
-compatibility format and must not be treated as proof for scoped FEM surface
-mapping.
+`sampled_node_indices` payloads with a complete `node_indices` mapping and
+matching mesh topology are valid for vector glyph placement and the
+`surface_faces`/`thickness_average_z` surface projection modes. Raw nodal
+surface coloring still requires complete field coverage. FMVP v2 remains a
+legacy full-domain compatibility format and must not be treated as proof for
+scoped FEM surface mapping.
 
 The same rule applies to realtime fetch hints. If the active viewport consumes
 `component=magnitude&scope_kind=airbox&scope_id=part:__air__`, the invalidation

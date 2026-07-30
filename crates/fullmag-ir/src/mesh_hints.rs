@@ -1507,10 +1507,7 @@ impl MeshIR {
     }
 
     /// Dispatch a mixed-certificate fingerprint without changing periodic v6 identity.
-    pub fn mixed_topology_fingerprint_for_version(
-        &self,
-        version: &str,
-    ) -> Result<String, String> {
+    pub fn mixed_topology_fingerprint_for_version(&self, version: &str) -> Result<String, String> {
         match version {
             "v2" => Ok(self.topology_fingerprint_v6()),
             "v3" => self.mixed_topology_fingerprint_v3(),
@@ -2685,7 +2682,11 @@ mod mesh_validation_tests {
             },
             element_markers: vec![1, 0, 0, 4],
             facets: FemFacetConnectivityIR {
-                types: vec![FemFacetTypeIR::Tri3, FemFacetTypeIR::Quad4, FemFacetTypeIR::Tri3],
+                types: vec![
+                    FemFacetTypeIR::Tri3,
+                    FemFacetTypeIR::Quad4,
+                    FemFacetTypeIR::Tri3,
+                ],
                 roles: vec![
                     FemFacetRoleIR::Exterior,
                     FemFacetRoleIR::MaterialInterface,
@@ -2753,7 +2754,10 @@ mod mesh_validation_tests {
         let baseline = mesh.mixed_topology_fingerprint_v3().unwrap();
         let mut positive_zero = mesh.clone();
         positive_zero.nodes[0][1] = 0.0;
-        assert_ne!(positive_zero.mixed_topology_fingerprint_v3().unwrap(), baseline);
+        assert_ne!(
+            positive_zero.mixed_topology_fingerprint_v3().unwrap(),
+            baseline
+        );
         let mut nonfinite = mesh;
         nonfinite.periodic_boundary_pairs[0].tolerance = Some(f64::INFINITY);
         assert!(nonfinite.mixed_topology_fingerprint_v3().is_err());

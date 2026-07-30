@@ -1,6 +1,7 @@
 import type { FieldVectorQuery } from "@/kernel/api/apiTypes";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
+import type { SurfaceFieldProjectionMode } from "@/kernel/visualization/ObjectVisualizationController";
 
 import type {
   Viewport3DFieldComponentDemand,
@@ -215,6 +216,7 @@ export function viewport3DTargetFieldBufferCanServeSurface(
   buffer: Viewport3DTargetFieldBuffer | null | undefined,
   colorMode: string | null | undefined,
   quantityId?: string | null,
+  projectionMode: SurfaceFieldProjectionMode = "raw_nodal",
 ): boolean {
   if (!buffer || !colorMode) return false;
   if (!buffer.requestIdentityCompatible) return false;
@@ -222,10 +224,16 @@ export function viewport3DTargetFieldBufferCanServeSurface(
   if (!viewport3DTargetFieldBufferMatchesQuantity(buffer, quantityId)) {
     return false;
   }
-  if (!buffer.complete) return false;
-  if (!targetFieldBufferHasSurfaceCompatibleIndexing(buffer)) return false;
+  if (!buffer.complete && projectionMode === "raw_nodal") return false;
+  if (!targetFieldBufferHasSurfaceCompatibleIndexing(buffer, projectionMode)) {
+    return false;
+  }
+  const vectorSurfaceCapable =
+    buffer.capability === "full-vector-complete" ||
+    (projectionMode !== "raw_nodal" &&
+      buffer.capability === "full-vector-sampled");
   if (colorMode === "orientation" || colorMode === "hsl_sphere") {
-    return buffer.capability === "full-vector-complete";
+    return vectorSurfaceCapable;
   }
   if (colorMode === "monochrome") return false;
   const scalarComponent = scalarComponentForColorMode(colorMode);
@@ -234,7 +242,7 @@ export function viewport3DTargetFieldBufferCanServeSurface(
     return buffer.component === scalarComponent;
   }
   return (
-    buffer.capability === "full-vector-complete"
+    vectorSurfaceCapable
   );
 }
 
@@ -285,8 +293,13 @@ function resolveTargetFieldBufferCapability({
 
 function targetFieldBufferHasSurfaceCompatibleIndexing(
   buffer: Viewport3DTargetFieldBuffer,
+  projectionMode: SurfaceFieldProjectionMode,
 ): boolean {
-  if (buffer.indexing === "sampled_node_indices") return false;
+  if (buffer.indexing === "sampled_node_indices") {
+    return (
+      projectionMode !== "raw_nodal" && targetFieldBufferHasNodeIndexMap(buffer)
+    );
+  }
   if (buffer.indexing === "explicit_node_indices") {
     return targetFieldBufferHasNodeIndexMap(buffer);
   }

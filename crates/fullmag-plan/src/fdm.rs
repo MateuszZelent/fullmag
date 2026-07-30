@@ -1,7 +1,7 @@
 use fullmag_ir::{
-    AxisBoundary, BackendPlanIR, BackendTarget, CommonPlanMeta, DiscretizationHintsIR, EnergyTermIR,
-    ExchangeBoundaryCondition, ExchangeCouplingModeIR, ExecutionPlanIR, ExecutionPrecision,
-    FdmGridCertificateIR, FdmLayerPlanIR, FdmMaterialIR, FdmMultilayerPlanIR,
+    AxisBoundary, BackendPlanIR, BackendTarget, CommonPlanMeta, DiscretizationHintsIR,
+    EnergyTermIR, ExchangeBoundaryCondition, ExchangeCouplingModeIR, ExecutionPlanIR,
+    ExecutionPrecision, FdmGridCertificateIR, FdmLayerPlanIR, FdmMaterialIR, FdmMultilayerPlanIR,
     FdmMultilayerSummaryIR, FdmPlanIR, GeometryEntryIR, GridDimensions, InitialMagnetizationIR,
     IntegratorChoice, OutputPlanIR, ProblemIR, ProvenancePlanIR, RegionFrameIR, RegionShapeIR,
     RelaxationAlgorithmIR, SeedPolicy, ThermalSeedConfig, TimeDependenceIR, IR_VERSION,
@@ -445,12 +445,13 @@ pub(crate) fn plan_fdm(
     let mut external_field = None;
     let mut has_thermal_noise = false;
     let mut thermal_temperature = problem.temperature;
-    let mut thermal_seed_config = problem.temperature.filter(|temperature| *temperature > 0.0).map(|_| {
-        ThermalSeedConfig {
+    let mut thermal_seed_config = problem
+        .temperature
+        .filter(|temperature| *temperature > 0.0)
+        .map(|_| ThermalSeedConfig {
             policy: SeedPolicy::SystemEntropy,
             seed: None,
-        }
-    });
+        });
     let enable_oersted = problem.energy_terms.iter().any(|term| {
         matches!(
             term,
@@ -482,7 +483,9 @@ pub(crate) fn plan_fdm(
             EnergyTermIR::InterfacialDmi {
                 interface_normal, ..
             } => {
-                if interface_normal.is_some_and(|normal| !fdm_supports_interfacial_dmi_normal(normal)) {
+                if interface_normal
+                    .is_some_and(|normal| !fdm_supports_interfacial_dmi_normal(normal))
+                {
                     errors.push(
                         "InterfacialDmi.interface_normal is not executable in the current FDM lane: only the canonical +z interface normal is implemented; use +z or select FEM."
                             .to_string(),
@@ -1550,10 +1553,12 @@ mod tests {
     #[test]
     fn fdm_thermal_noise_lowers_temperature_and_fixed_seed() {
         let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
-        problem.energy_terms.push(fullmag_ir::EnergyTermIR::ThermalNoise {
-            temperature: 300.0,
-            seed: Some(123),
-        });
+        problem
+            .energy_terms
+            .push(fullmag_ir::EnergyTermIR::ThermalNoise {
+                temperature: 300.0,
+                seed: Some(123),
+            });
 
         let execution = plan_fdm(&problem, fullmag_ir::BackendTarget::Fdm)
             .expect("fixed-seed FDM thermal noise must lower into the executable plan");
@@ -1574,10 +1579,12 @@ mod tests {
     #[test]
     fn fdm_rejects_h_therm_until_the_field_is_materialized() {
         let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
-        problem.energy_terms.push(fullmag_ir::EnergyTermIR::ThermalNoise {
-            temperature: 300.0,
-            seed: Some(123),
-        });
+        problem
+            .energy_terms
+            .push(fullmag_ir::EnergyTermIR::ThermalNoise {
+                temperature: 300.0,
+                seed: Some(123),
+            });
         let fullmag_ir::StudyIR::TimeEvolution { sampling, .. } = &mut problem.study else {
             panic!("bootstrap example must be time evolution");
         };
@@ -1847,7 +1854,9 @@ pub(crate) fn plan_fdm_multilayer(
                 if interfacial_dmi.is_some() {
                     errors.push("InterfacialDmi is declared more than once".to_string());
                 }
-                if interface_normal.is_some_and(|normal| !fdm_supports_interfacial_dmi_normal(normal)) {
+                if interface_normal
+                    .is_some_and(|normal| !fdm_supports_interfacial_dmi_normal(normal))
+                {
                     errors.push(
                         "InterfacialDmi.interface_normal is not executable in the current multilayer FDM lane: only the canonical +z interface normal is implemented; use +z or select FEM."
                             .to_string(),

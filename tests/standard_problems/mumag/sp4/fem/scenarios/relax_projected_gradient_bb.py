@@ -18,14 +18,14 @@ study.interactive(True)
 
 study.universe(
     mode="manual",
-    size=(800e-9, 250e-9, 200e-9),
+    size=(1000e-9, 400e-9, 350e-9),
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )
 study.universe.mesh(
-    minimum_element_size=15e-9,
+    minimum_element_size=10e-9,
     maximum_element_size=100e-9,
-    maximum_element_growth_rate=2.5,
+    maximum_element_growth_rate=1.8,
     grading="geometric",
 )
 
@@ -58,15 +58,15 @@ study.fem_demag_solver(
     solver="CG",
     preconditioner="AMG",
     rtol=1e-12,
-    max_iterations=500,
+    max_iterations=600,
 )
 study.build_domain_mesh()
 
 study.stages.add_relax(
     stage_id="relax",
     algorithm="projected_gradient_bb",
-    max_steps=50_000,
-    tolT=1e-6,
+    max_steps=2_000,
+    tolT=0.1e-6,
 ).autosave(
     fm.StageAutosave(
         table=fm.TableAutosave(
@@ -89,3 +89,6 @@ study.stages.add_relax(
         ],
     )
 )
+
+
+

@@ -1,6 +1,6 @@
 # Mesh and region discretization
 
-- Status: implemented for FEM linear-mesh persistence and Gmsh 4.1 interchange
+- Status: implemented for FEM linear-mesh persistence, COMSOL MPHTXT v4, and Gmsh 4.1 interchange
 - Owners: Fullmag core
 - Last updated: 2026-07-30
 - Related specs: `docs/specs/mesh-roundtrip-semantics-v1.md`, `docs/specs/geometry-policy-v0.md`, `docs/specs/material-assignment-and-spatial-fields-v0.md`
@@ -11,8 +11,9 @@
 Geometry, regions, material ownership, and boundary selections must survive
 numerical realization without becoming backend-specific public semantics. FEM
 mesh generation can dominate startup time, so Fullmag supports a lossless native
-mesh artifact for repeated execution and a separate Gmsh 4.1 interchange path
-for tools such as COMSOL.
+mesh artifact for repeated execution, COMSOL-native text (`.mphtxt`) exchange,
+and a separate Gmsh 4.1 interchange path for other mesh tools. Gmsh `.msh` is
+not described as a directly supported COMSOL import format.
 
 The persisted solver mesh remains a derived artifact. It does not replace the
 authored universe, geometry, object-region, or mesh-size configuration.
@@ -38,6 +39,9 @@ the same canonical fingerprint as the saved artifact.
 | $g_f$ | Immutable Fullmag global ordinal of facet $f$ inside one native mesh identity | $1$ |
 | $H_A$ | Mesh authoring fingerprint | $1$ |
 | $H_T$ | Mesh topology fingerprint | $1$ |
+| $\epsilon_{V,P}$ | Relative volume error recorded by the Python mixed-mesh certificate producer | $1$ |
+| $\epsilon_{V,R}$ | Relative volume error independently recomputed by the Rust validator | $1$ |
+| $\tau_V$ | Physical relative-volume acceptance limit for mixed-mesh certificates | $1$ |
 
 (assumptions-and-validity)=
 ## 4. Assumptions and validity
@@ -45,9 +49,10 @@ the same canonical fingerprint as the saved artifact.
 - Coordinates in native artifacts are always metres.
 - The first interchange version supports linear `tet4`, `prism6`, `pyramid5`,
   `hex8`, `tri3`, and `quad4` cells/facets.
-- Gmsh or COMSOL may renumber nodes, elements, and Physical Groups. External
+- Gmsh or COMSOL may renumber nodes, elements, Physical Groups, or geometric
+  entities. External
   import therefore creates a new topology identity.
-- A `.msh` file is not a lossless Fullmag cache. Fullmag-only ordinals, mesh
+- An `.msh` or `.mphtxt` file is not a lossless Fullmag cache. Fullmag-only ordinals, mesh
   parts, periodic descriptors, and semantic maps are recorded in the adjacent
   `.fullmag.json` sidecar and are revalidated on import.
 - Higher-order external elements and ambiguous or incomplete Physical Groups
@@ -61,11 +66,13 @@ the same canonical fingerprint as the saved artifact.
 | `study.mesh.save.path` | `str \| Path` | required | $1$ | Must end in .fullmag-mesh and resolve to a strictly valid shared-domain FEM mesh. | Native artifact destination. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset` |
 | `study.mesh.load.path` | `str \| Path` | required | $1$ | Schema, digests, authoring fingerprint, topology fingerprint, markers, and certificates must validate. | Native artifact source. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset` |
 | `study.mesh.save_or_load.path` | `str \| Path` | required | $1$ | Corrupt and unsupported artifacts fail closed; only missing or authoring-stale artifacts rebuild. | Reusable native artifact path. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset` |
-| `study.mesh.export.path` | `str \| Path` | required | $1$ | Must end in .msh and every marker must have a semantic name. | Gmsh interchange destination. | FEM CPU/GPU | `not stored; external artifact` |
-| `study.mesh.export.format` | `str` | auto | $1$ | auto or gmsh | Interchange format selector. | FEM CPU/GPU | `not stored; external artifact` |
-| `study.mesh.import_.path` | `str \| Path` | required | $1$ | Must be a supported Gmsh .msh file. | External mesh source. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset` |
+| `study.mesh.export.path` | `str \| Path` | required | $1$ | Must end in .mphtxt for COMSOL or .msh for Gmsh; every marker must have a semantic name. | Interchange destination. | FEM CPU/GPU | `not stored; external artifact` |
+| `study.mesh.export.format` | `str` | auto | $1$ | auto, comsol, or gmsh; auto resolves from suffix. | Interchange format selector. | FEM CPU/GPU | `not stored; external artifact` |
+| `study.mesh.import_.path` | `str \| Path` | required | $1$ | Must be a supported COMSOL .mphtxt v4 or Gmsh .msh file. | External mesh source. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset` |
 | `study.mesh.import_.region_map` | `Mapping[str, int] \| None` | None | $1$ | Required when a matching sidecar or unambiguous Physical Volume names are absent. | External volume name to canonical marker mapping. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset.region_markers` |
 | `study.mesh.import_.boundary_map` | `Mapping[str, int] \| None` | None | $1$ | Required for boundary selections not recoverable from sidecar or Physical Surface names. | External surface name to canonical marker mapping. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset.mesh.boundary_markers` |
+| `study.mesh.import_.region_entity_map` | `Mapping[int, int] \| None` | None | $1$ | COMSOL only; required without a matching sidecar. | COMSOL domain entity to canonical Fullmag volume marker. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset.element_markers` |
+| `study.mesh.import_.boundary_entity_map` | `Mapping[int, int] \| None` | None | $1$ | COMSOL only; required without a matching sidecar. | COMSOL boundary entity to canonical Fullmag boundary marker. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset.mesh.boundary_markers` |
 | `study.mesh.import_.coordinate_unit` | `str \| None` | None | $1$ | m, mm, um, or nm; required when no valid sidecar supplies the unit. | Unit of imported node coordinates. | FEM CPU/GPU | `normalized to geometry_assets.fem_domain_mesh_asset.mesh.nodes in metres` |
 
 ```python
@@ -88,8 +95,11 @@ film.mesh(maximum_element_size=3e-9)
 mesh_result = study.mesh.save_or_load("film.fullmag-mesh")
 
 # %%
-# Interchange is explicit and separate from native reuse.
-study.mesh.export("film.msh")
+# COMSOL-native interchange is explicit and separate from native reuse.
+study.mesh.export("film.mphtxt")
+
+# Gmsh remains available for general mesh-tool interchange.
+study.mesh.export("film.msh", format="gmsh")
 ```
 
 (problem-ir)=
@@ -172,7 +182,7 @@ validation.
 |---|---|---|---|
 | FDM | CPU | not applicable | Uses the separate FDM grid certificate |
 | FDM | GPU | not applicable | Uses the separate FDM grid certificate |
-| FEM | CPU | implemented | Native reuse and Gmsh interchange feed the existing validated `MeshIR` path |
+| FEM | CPU | implemented | Native reuse, COMSOL MPHTXT v4, and Gmsh interchange feed the existing validated `MeshIR` path |
 | FEM | GPU | implemented | Same mesh contract; runtime/device qualification remains owned by each GPU workflow |
 
 (implementation-mapping)=
@@ -180,7 +190,8 @@ validation.
 
 - `StudyMeshHandle` owns the public study facade.
 - `save_mesh_artifact()` and `load_mesh_artifact()` own the native container.
-- `export_gmsh_mesh()` and `import_gmsh_mesh()` own interchange.
+- `export_comsol_mesh()` and `import_comsol_mesh()` own COMSOL MPHTXT v4 interchange.
+- `export_gmsh_mesh()` and `import_gmsh_mesh()` own general Gmsh interchange.
 - `MeshData` remains the only Python typed-topology owner.
 - `build_geometry_assets_for_request()` inlines persisted topology into the
   existing `FemDomainMeshAssetIR` route.
@@ -190,15 +201,48 @@ validation.
 
 Tests prove native round-trip, digest rejection, authoring mismatch reporting,
 quality-report preservation, no-builder reuse, ProblemIR materialization,
-Gmsh export/import, sidecar unit enforcement, and Fullmag air marker zero
-round-trip. Final FEM execution evidence uses the repository container-backed
+COMSOL and Gmsh export/import, explicit external-entity mapping, sidecar unit
+enforcement, and Fullmag air marker zero round-trip. Final FEM execution evidence uses the repository container-backed
 `just` verification route.
+
+For an accepted mixed prism/pyramid/tetrahedron certificate, Python records a
+relative volume error $\epsilon_{V,P}$ and Rust independently recomputes
+$\epsilon_{V,R}$. NumPy/LAPACK determinant evaluation and reduction order are
+not bitwise identical to Rust scalar determinant arithmetic and sequential
+summation. The cross-language evidence comparison is therefore
+
+```{math}
+:label: mixed-mesh-volume-evidence-comparison
+
+\left|\epsilon_{V,P}-\epsilon_{V,R}\right|
+\leq
+\max\!\left(
+10^{-12}\max\!\left(\left|\epsilon_{V,P}\right|,
+                     \left|\epsilon_{V,R}\right|\right),
+4\times10^{-12}
+\right).
+```
+
+This comparison tolerance is not the physical mesh-acceptance tolerance. Both
+implementations still require the relative volume error itself to remain below
+$\tau_{V}=10^{-8}$, and dimensional volumes, authored bounds, topology,
+markers, conformity, and quality evidence retain their existing stricter
+checks. The comparison applies identically before FEM CPU and FEM GPU planning;
+FDM CPU and FDM GPU use the separate structured-grid certificate.
 
 (limitations)=
 ## 11. Limitations
 
-- Proprietary COMSOL mesh-operation history and selections not represented by
-  Physical Groups are not preserved.
+- Proprietary COMSOL mesh-operation history is not preserved.
+- COMSOL import supports Mesh serialization version 4. In COMSOL 6.4, export a
+  returned mesh with `fileversion=v44`; v64 Mesh serialization is rejected.
+- Complete COMSOL exports may include `vtx` and `edg` blocks. The importer
+  validates and consumes those blocks, then intentionally omits them from
+  `MeshData`, whose canonical solver topology begins at boundary facets and
+  volume cells. A provenance-pinned fixture created by COMSOL qualifies this
+  complete-file ingress.
+- When a COMSOL round-trip invalidates or omits the Fullmag sidecar, the caller
+  must provide both semantic name maps and external geometric-entity maps.
 - Higher-order curved elements are rejected.
 - An external mesh without names requires explicit maps; Fullmag does not guess
   geometric equivalence.
@@ -213,8 +257,8 @@ round-trip. Final FEM execution evidence uses the repository container-backed
   Journal for Numerical Methods in Engineering* 79(11), 2009,
   <https://doi.org/10.1002/nme.2579>.
 - Gmsh 4.1 file-format reference, <https://gmsh.info/doc/texinfo/gmsh.html#MSH-file-format>.
-- COMSOL Multiphysics Reference Manual, mesh import/export documentation; local
-  reference package: `docs/comsol/Manual_for_Micromagnetics_Module.pdf`.
+- COMSOL Multiphysics Programming Reference Manual, “Mesh” native text
+  serialization and mesh element type documentation.
 
 (source-code-index)=
 ## 13. Source-code index
@@ -224,6 +268,9 @@ round-trip. Final FEM execution evidence uses the repository container-backed
 | Public API | `packages/fullmag-py/src/fullmag/world.py` | `class StudyMeshHandle` | `save`, `load`, `save_or_load`, `export`, `import_` | FEM CPU/GPU | `test_mesh_persistence.py` |
 | Native artifact | `packages/fullmag-py/src/fullmag/meshing/persistence.py` | `save_mesh_artifact` | Atomic container writer | FEM CPU/GPU | Native round-trip and corruption tests |
 | Native validation | `packages/fullmag-py/src/fullmag/meshing/persistence.py` | `load_mesh_artifact` | Digest, fingerprint, topology, and semantic validation | FEM CPU/GPU | Mismatch/corruption tests |
+| COMSOL export | `packages/fullmag-py/src/fullmag/meshing/persistence.py` | `export_comsol_mesh` | COMSOL MPHTXT v4 and sidecar writer | FEM CPU/GPU | COMSOL interchange tests |
+| COMSOL import | `packages/fullmag-py/src/fullmag/meshing/persistence.py` | `import_comsol_mesh` | MPHTXT v4 parser, entity mapping, validation, and new identity | FEM CPU/GPU | COMSOL interchange tests |
+| Mixed volume evidence | `crates/fullmag-ir/src/mesh_assets.rs` | `validate_mixed_certificate_evidence_against_mesh` | Recomputes certificate evidence and distinguishes cross-language rounding tolerance from the physical volume-acceptance limit | FEM CPU/GPU | `fullmag-ir` mixed-certificate regression tests and managed SP4 two-stage smoke |
 | Gmsh export | `packages/fullmag-py/src/fullmag/meshing/persistence.py` | `export_gmsh_mesh` | Gmsh 4.1 and sidecar writer | FEM CPU/GPU | Interchange tests |
 | Gmsh import | `packages/fullmag-py/src/fullmag/meshing/persistence.py` | `import_gmsh_mesh` | Unit conversion, group mapping, new identity | FEM CPU/GPU | Interchange and air-marker tests |
 | Typed topology | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `class MeshData` | Canonical arrays, validation, fingerprints, quality serialization | FEM CPU/GPU | Persistence and meshing tests |

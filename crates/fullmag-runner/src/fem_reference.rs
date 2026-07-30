@@ -35,9 +35,9 @@ use crate::relaxation::{
     llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
 };
 use crate::scalar_metrics::{
-    apply_average_m_to_step_stats, average_magnetization_components,
-    scalar_outputs_request_average_m, scalar_row_due, set_object_average_m, single_object_scalars,
-    weighted_object_scalars,
+    apply_weighted_average_m_to_step_stats, average_magnetization_components,
+    scalar_outputs_request_average_m, scalar_row_due, single_object_scalars,
+    weighted_average_magnetization_components, weighted_object_scalars,
 };
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
@@ -647,6 +647,7 @@ fn execute_reference_fem_impl(
         &current_observables,
         &plan.object_segments,
         &plan.mesh_parts,
+        &problem.topology.magnetic_node_volumes,
     );
 
     let until_label = if until_seconds.is_finite() {
@@ -765,6 +766,7 @@ fn execute_reference_fem_impl(
             state.magnetization(),
             &plan.object_segments,
             &plan.mesh_parts,
+            &problem.topology.magnetic_node_volumes,
         );
 
         if !default_scalar_trace || !field_schedules.is_empty() {
@@ -835,7 +837,11 @@ fn execute_reference_fem_impl(
                     || (preview_due && preview_targets_global_scalar);
                 let mut update_stats = latest_stats.clone();
                 if due_scalar_row || scalar_outputs_request_average_m(&scalar_schedules) {
-                    apply_average_m_to_step_stats(&mut update_stats, state.magnetization());
+                    apply_weighted_average_m_to_step_stats(
+                        &mut update_stats,
+                        state.magnetization(),
+                        &problem.topology.magnetic_node_volumes,
+                    );
                 }
                 let action = (live.on_step)(StepUpdate {
                     stats: update_stats,
@@ -906,7 +912,11 @@ fn execute_reference_fem_impl(
                 || (preview_due && preview_targets_global_scalar);
             let mut update_stats = latest_stats.clone();
             if due_scalar_row || scalar_outputs_request_average_m(&scalar_schedules) {
-                apply_average_m_to_step_stats(&mut update_stats, state.magnetization());
+                apply_weighted_average_m_to_step_stats(
+                    &mut update_stats,
+                    state.magnetization(),
+                    &problem.topology.magnetic_node_volumes,
+                );
             }
             let action = (live.on_step)(StepUpdate {
                 stats: update_stats,
@@ -1113,6 +1123,7 @@ fn record_due_outputs(
             &observables,
             object_segments,
             mesh_parts,
+            &problem.topology.magnetic_node_volumes,
         );
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
@@ -1156,6 +1167,7 @@ fn record_scalar_snapshot(
         &observables,
         object_segments,
         mesh_parts,
+        &problem.topology.magnetic_node_volumes,
     );
     artifacts.record_scalar(&stats)?;
     steps.push(stats);
@@ -1216,6 +1228,7 @@ fn record_final_outputs(
             &observables,
             object_segments,
             mesh_parts,
+            &problem.topology.magnetic_node_volumes,
         );
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
@@ -1238,10 +1251,16 @@ fn enrich_step_stats_from_magnetization(
     magnetization: &[[f64; 3]],
     object_segments: &[FemObjectSegmentIR],
     mesh_parts: &[fullmag_ir::FemMeshPartIR],
+    magnetic_node_volumes: &[f64],
 ) -> StepStats {
-    apply_average_m_to_step_stats(&mut stats, magnetization);
-    stats.per_object_scalars =
-        fem_per_object_scalars(object_segments, mesh_parts, magnetization, &stats);
+    apply_weighted_average_m_to_step_stats(&mut stats, magnetization, magnetic_node_volumes);
+    stats.per_object_scalars = fem_per_object_scalars(
+        object_segments,
+        mesh_parts,
+        magnetization,
+        magnetic_node_volumes,
+        &stats,
+    );
     stats
 }
 
@@ -1303,6 +1322,7 @@ fn make_step_stats(
     observables: &StateObservables,
     object_segments: &[FemObjectSegmentIR],
     mesh_parts: &[fullmag_ir::FemMeshPartIR],
+    magnetic_node_volumes: &[f64],
 ) -> StepStats {
     let mut stats = StepStats {
         step,
@@ -1322,11 +1342,16 @@ fn make_step_stats(
         wall_time_ns,
         ..StepStats::default()
     };
-    apply_average_m_to_step_stats(&mut stats, &observables.magnetization);
+    apply_weighted_average_m_to_step_stats(
+        &mut stats,
+        &observables.magnetization,
+        magnetic_node_volumes,
+    );
     stats.per_object_scalars = fem_per_object_scalars(
         object_segments,
         mesh_parts,
         &observables.magnetization,
+        magnetic_node_volumes,
         &stats,
     );
     stats
@@ -1336,6 +1361,7 @@ fn fem_per_object_scalars(
     object_segments: &[FemObjectSegmentIR],
     mesh_parts: &[fullmag_ir::FemMeshPartIR],
     magnetization: &[[f64; 3]],
+    magnetic_node_volumes: &[f64],
     stats: &StepStats,
 ) -> std::collections::HashMap<String, std::collections::HashMap<String, f64>> {
     if object_segments.is_empty() {
@@ -1345,9 +1371,17 @@ fn fem_per_object_scalars(
     let mut weights_by_object: std::collections::HashMap<String, f64> =
         std::collections::HashMap::new();
     for segment in object_segments {
-        let weight = fem_segment_node_indices(mesh_parts, segment, magnetization.len())
-            .len()
-            .max(1) as f64;
+        let node_indices = fem_segment_node_indices(mesh_parts, segment, magnetization.len());
+        let weight = node_indices
+            .iter()
+            .filter_map(|index| magnetic_node_volumes.get(*index).copied())
+            .filter(|weight| weight.is_finite() && *weight > 0.0)
+            .sum::<f64>();
+        let weight = if weight > 0.0 {
+            weight
+        } else {
+            node_indices.len().max(1) as f64
+        };
         *weights_by_object
             .entry(segment.object_id.clone())
             .or_insert(0.0) += weight;
@@ -1363,12 +1397,14 @@ fn fem_per_object_scalars(
                 magnetization,
                 segment.node_start as usize,
                 segment.node_count as usize,
+                magnetic_node_volumes,
             );
         } else {
             set_object_average_m_by_indices(
                 &mut per_object,
                 &segment.object_id,
                 magnetization,
+                magnetic_node_volumes,
                 &node_indices,
             );
         }
@@ -1440,20 +1476,59 @@ fn set_object_average_m_by_indices(
     per_object: &mut std::collections::HashMap<String, std::collections::HashMap<String, f64>>,
     object_id: &str,
     magnetization: &[[f64; 3]],
+    magnetic_node_volumes: &[f64],
     node_indices: &[usize],
 ) {
-    let values = node_indices
-        .iter()
-        .filter_map(|index| magnetization.get(*index).copied())
-        .collect::<Vec<_>>();
+    let mut values = Vec::new();
+    let mut weighted_values = Vec::new();
+    let mut weights = Vec::new();
+    for index in node_indices {
+        let Some(value) = magnetization.get(*index).copied() else {
+            continue;
+        };
+        values.push(value);
+        if let Some(weight) = magnetic_node_volumes.get(*index).copied() {
+            weighted_values.push(value);
+            weights.push(weight);
+        }
+    }
     if values.is_empty() {
         return;
     }
-    let [mx, my, mz] = average_magnetization_components(&values);
+    let [mx, my, mz] = if weights
+        .iter()
+        .any(|weight| weight.is_finite() && *weight > 0.0)
+    {
+        weighted_average_magnetization_components(&weighted_values, &weights)
+    } else {
+        average_magnetization_components(&values)
+    };
     let entry = per_object.entry(object_id.to_string()).or_default();
     entry.insert("mx".to_string(), mx);
     entry.insert("my".to_string(), my);
     entry.insert("mz".to_string(), mz);
+}
+
+fn set_object_average_m(
+    per_object: &mut std::collections::HashMap<String, std::collections::HashMap<String, f64>>,
+    object_id: &str,
+    magnetization: &[[f64; 3]],
+    start: usize,
+    count: usize,
+    magnetic_node_volumes: &[f64],
+) {
+    if count == 0 || start >= magnetization.len() {
+        return;
+    }
+    let end = start.saturating_add(count).min(magnetization.len());
+    let node_indices = (start..end).collect::<Vec<_>>();
+    set_object_average_m_by_indices(
+        per_object,
+        object_id,
+        magnetization,
+        magnetic_node_volumes,
+        &node_indices,
+    );
 }
 
 fn select_field_values(
@@ -2207,9 +2282,61 @@ mod tests {
             [5.0, 0.0, 0.0],
         ];
 
-        let per_object = fem_per_object_scalars(&[segment], &[mesh_part], &magnetization, &stats);
+        let per_object = fem_per_object_scalars(
+            &[segment],
+            &[mesh_part],
+            &magnetization,
+            &[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            &stats,
+        );
 
         assert_eq!(per_object["body"]["mx"], 3.0);
+    }
+
+    #[test]
+    fn fem_step_stats_use_magnetic_node_volume_average_for_magnetization() {
+        let observables = StateObservables {
+            magnetization: vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            torque_field: Vec::new(),
+            exchange_field: Vec::new(),
+            demag_field: Vec::new(),
+            external_field: Vec::new(),
+            antenna_field: Vec::new(),
+            drive_field: Vec::new(),
+            effective_field: Vec::new(),
+            anisotropy_field: Vec::new(),
+            dmi_field: Vec::new(),
+            magnetoelastic_field: Vec::new(),
+            cubic_anisotropy_field: Vec::new(),
+            bulk_dmi_field: Vec::new(),
+            oersted_field: Vec::new(),
+            thermal_field: Vec::new(),
+            exchange_energy: 0.0,
+            demag_energy: 0.0,
+            external_energy: 0.0,
+            drive_energy: 0.0,
+            anisotropy_energy: 0.0,
+            dmi_energy: 0.0,
+            total_energy: 0.0,
+            max_dm_dt: 0.0,
+            max_h_eff: 0.0,
+            max_h_demag: 0.0,
+            max_torque_Apm: 0.0,
+            per_object_scalars: std::collections::HashMap::new(),
+        };
+
+        let stats = make_step_stats(0, 0.0, 0.0, 0, &observables, &[], &[], &[1.0, 2.0, 7.0]);
+
+        for (actual, expected) in [
+            (stats.mx, 0.1),
+            (stats.my, 0.2),
+            (stats.mz, 0.7),
+            (stats.per_object_scalars["free"]["mx"], 0.1),
+            (stats.per_object_scalars["free"]["my"], 0.2),
+            (stats.per_object_scalars["free"]["mz"], 0.7),
+        ] {
+            assert!((actual - expected).abs() < 1e-12);
+        }
     }
 
     #[test]

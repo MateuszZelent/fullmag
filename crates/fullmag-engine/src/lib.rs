@@ -2541,7 +2541,8 @@ mod tests {
 
         let epsilon = 1e-6_f64;
         let plus = vec![[(theta + epsilon).cos(), (theta + epsilon).sin(), 0.0]; grid.cell_count()];
-        let minus = vec![[(theta - epsilon).cos(), (theta - epsilon).sin(), 0.0]; grid.cell_count()];
+        let minus =
+            vec![[(theta - epsilon).cos(), (theta - epsilon).sin(), 0.0]; grid.cell_count()];
         let mut derivative_workspace = problem.create_workspace();
         let derivative = (problem.total_energy_from_vectors_ws(&plus, &mut derivative_workspace)
             - problem.total_energy_from_vectors_ws(&minus, &mut derivative_workspace))

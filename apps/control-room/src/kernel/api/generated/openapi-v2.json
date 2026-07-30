@@ -5269,7 +5269,7 @@
             ]
           },
           "max_samples": {
-            "description": "Optional hard cap for vector samples returned by the binary payload.\n\nFMVP v3 encodes sampled FEM responses with `sampled_node_indices`.\nSampled responses are valid for vector glyph placement only; surface\nshader coloring requires either full-domain data or an explicit complete\nnode-index mapping for the target surface.",
+            "description": "Optional hard cap for vector samples returned by the binary payload.\n\nFMVP v3 encodes sampled FEM responses with `sampled_node_indices`.\nSampled responses with a complete `node_indices` mapping and matching\nmesh topology are valid for vector glyph placement and surface projection\nmodes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still\nrequires complete field coverage.",
             "format": "int32",
             "minimum": 0,
             "type": [
@@ -14266,6 +14266,13 @@
       },
       "PreparationFailureResource": {
         "properties": {
+          "detail": {
+            "maxLength": 1024,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "diagnostics_correlation_id": {
             "maxLength": 256,
             "type": [
@@ -28609,7 +28616,7 @@
             }
           },
           {
-            "description": "Optional hard cap for vector samples returned by the binary payload.\n\nFMVP v3 encodes sampled FEM responses with `sampled_node_indices`.\nSampled responses are valid for vector glyph placement only; surface\nshader coloring requires either full-domain data or an explicit complete\nnode-index mapping for the target surface.",
+            "description": "Optional hard cap for vector samples returned by the binary payload.\n\nFMVP v3 encodes sampled FEM responses with `sampled_node_indices`.\nSampled responses with a complete `node_indices` mapping and matching\nmesh topology are valid for vector glyph placement and surface projection\nmodes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still\nrequires complete field coverage.",
             "in": "query",
             "name": "max_samples",
             "required": false,

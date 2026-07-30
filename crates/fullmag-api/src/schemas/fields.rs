@@ -105,9 +105,10 @@ pub struct FieldVectorQuery {
     /// Optional hard cap for vector samples returned by the binary payload.
     ///
     /// FMVP v3 encodes sampled FEM responses with `sampled_node_indices`.
-    /// Sampled responses are valid for vector glyph placement only; surface
-    /// shader coloring requires either full-domain data or an explicit complete
-    /// node-index mapping for the target surface.
+    /// Sampled responses with a complete `node_indices` mapping and matching
+    /// mesh topology are valid for vector glyph placement and surface projection
+    /// modes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still
+    /// requires complete field coverage.
     pub max_samples: Option<u32>,
     /// Optional persisted analysis snapshot id, for example a saved
     /// hysteresis-point magnetization state.

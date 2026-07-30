@@ -634,6 +634,13 @@ mod mesh_asset_validation_tests {
     }
 
     #[test]
+    fn mixed_relative_volume_evidence_allows_cross_language_rounding_only() {
+        assert!(!dimensionless_float_close(0.0, 1.0e-12));
+        assert!(mixed_relative_volume_error_close(0.0, 1.0e-12));
+        assert!(!mixed_relative_volume_error_close(0.0, 1.0e-9));
+    }
+
+    #[test]
     fn mixed_certificate_is_typed_preserved_and_bound_to_the_exact_mesh() {
         let value = mixed_certificate_asset_value();
         let asset: FemDomainMeshAssetIR = serde_json::from_value(value).unwrap();
@@ -1995,9 +2002,19 @@ fn float_close(left: f64, right: f64, relative: f64, absolute: f64) -> bool {
 // arithmetic by a few ulps. This applies only to dimensionless certificate
 // evidence; dimensional Jacobians and volumes retain their stricter checks.
 const MIXED_DIMENSIONLESS_ABSOLUTE_TOLERANCE: f64 = f64::EPSILON * 16.0;
+const MIXED_RELATIVE_VOLUME_ERROR_ABSOLUTE_TOLERANCE: f64 = 4.0e-12;
 
 fn dimensionless_float_close(left: f64, right: f64) -> bool {
     float_close(left, right, 1.0e-12, MIXED_DIMENSIONLESS_ABSOLUTE_TOLERANCE)
+}
+
+fn mixed_relative_volume_error_close(left: f64, right: f64) -> bool {
+    float_close(
+        left,
+        right,
+        1.0e-12,
+        MIXED_RELATIVE_VOLUME_ERROR_ABSOLUTE_TOLERANCE,
+    )
 }
 
 fn bounds_for_nodes(
@@ -2632,7 +2649,7 @@ fn validate_mixed_certificate_evidence_against_mesh(
         - evidence.expected_magnetic_volume)
         / evidence.expected_magnetic_volume)
         .abs();
-    if !dimensionless_float_close(
+    if !mixed_relative_volume_error_close(
         certificate.magnetic_relative_volume_error,
         magnetic_relative_volume_error,
     ) {
@@ -2657,7 +2674,7 @@ fn validate_mixed_certificate_evidence_against_mesh(
         - evidence.expected_shared_volume)
         / evidence.expected_shared_volume)
         .abs();
-    if !dimensionless_float_close(
+    if !mixed_relative_volume_error_close(
         certificate.shared_domain_relative_volume_error,
         shared_domain_relative_volume_error,
     ) {

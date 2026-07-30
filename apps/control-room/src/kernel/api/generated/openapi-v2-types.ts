@@ -4445,9 +4445,10 @@ export interface components {
              * @description Optional hard cap for vector samples returned by the binary payload.
              *
              *     FMVP v3 encodes sampled FEM responses with `sampled_node_indices`.
-             *     Sampled responses are valid for vector glyph placement only; surface
-             *     shader coloring requires either full-domain data or an explicit complete
-             *     node-index mapping for the target surface.
+             *     Sampled responses with a complete `node_indices` mapping and matching
+             *     mesh topology are valid for vector glyph placement and surface projection
+             *     modes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still
+             *     requires complete field coverage.
              */
             max_samples?: number | null;
             /**
@@ -6680,6 +6681,7 @@ export interface components {
             worker?: string | null;
         };
         PreparationFailureResource: {
+            detail?: string | null;
             diagnostics_correlation_id?: string | null;
             error_code: string;
             stage_id: components["schemas"]["PreparationStageId"];
@@ -11757,9 +11759,10 @@ export interface operations {
                  * @description Optional hard cap for vector samples returned by the binary payload.
                  *
                  *     FMVP v3 encodes sampled FEM responses with `sampled_node_indices`.
-                 *     Sampled responses are valid for vector glyph placement only; surface
-                 *     shader coloring requires either full-domain data or an explicit complete
-                 *     node-index mapping for the target surface.
+                 *     Sampled responses with a complete `node_indices` mapping and matching
+                 *     mesh topology are valid for vector glyph placement and surface projection
+                 *     modes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still
+                 *     requires complete field coverage.
                  */
                 max_samples?: number | null;
                 /**

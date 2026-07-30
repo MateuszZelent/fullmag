@@ -374,7 +374,9 @@ pub(crate) fn planned_study_controls(
     let user_integrator = requested_integrator.and_then(|requested| match requested {
         fullmag_ir::RequestedIntegratorIR::Auto => None,
         explicit => Some(match explicit {
-            fullmag_ir::RequestedIntegratorIR::Auto => unreachable!("auto has no concrete integrator"),
+            fullmag_ir::RequestedIntegratorIR::Auto => {
+                unreachable!("auto has no concrete integrator")
+            }
             fullmag_ir::RequestedIntegratorIR::Heun => IntegratorChoice::Heun,
             fullmag_ir::RequestedIntegratorIR::Rk4 => IntegratorChoice::Rk4,
             fullmag_ir::RequestedIntegratorIR::Rk23 => IntegratorChoice::Rk23,

@@ -72,13 +72,17 @@ Native reuse and external interchange are separate contracts:
 
 - `.fullmag-mesh` is the lossless native artifact used by
   `study.mesh.save()`, `study.mesh.load()`, and `study.mesh.save_or_load()`;
-- Gmsh 4.1 `.msh` plus `<mesh>.msh.fullmag.json` is the explicit interchange
-  representation used by `study.mesh.export()` and `study.mesh.import_()`.
+- COMSOL Multiphysics text v4 `.mphtxt` plus an adjacent `.fullmag.json`
+  sidecar is the direct COMSOL interchange representation;
+- Gmsh 4.1 `.msh` plus `<mesh>.msh.fullmag.json` remains the general mesh-tool
+  interchange representation.
 
 Native loading requires equality of the canonical mesh-authoring fingerprint
 and validates the topology fingerprint, member digests, semantic marker maps,
 mesh parts, periodic data, and available certificates. External import creates
 a new solver-mesh identity because node, element, and Physical Group numbering
-may change in COMSOL or another tool. In both cases the accepted topology enters
+may change in COMSOL or another tool. A returned COMSOL mesh without a matching
+sidecar requires explicit semantic maps and external geometric-entity maps. In
+all cases the accepted topology enters
 the existing `fem_domain_mesh_asset`; neither representation replaces universe
 or per-object authoring intent.
