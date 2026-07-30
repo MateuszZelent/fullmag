@@ -210,26 +210,62 @@ def _planner_owned_status_filter(
         for name in (PLAN_FILENAME, JSONL_FILENAME, TSV_FILENAME)
     }
     lock_path = (parent / f".{relative_output.name}.lock").as_posix()
-    staging_prefix = (parent / f".{relative_output.name}.tmp-").as_posix()
 
     def is_owned(path: str) -> bool:
-        return (
-            path in canonical_paths
-            or path == lock_path
-            or path.startswith(staging_prefix)
-        )
+        return path in canonical_paths or path == lock_path
 
     return is_owned
 
 
+def _git_index_entries(
+    dirty_paths: set[str],
+) -> dict[str, list[dict[str, object]]]:
+    if not dirty_paths:
+        return {}
+    entries_by_path = {path: [] for path in dirty_paths}
+    path_by_raw = {path.encode("utf-8"): path for path in dirty_paths}
+    raw_entries = _git_output("ls-files", "--stage", "-z")
+    try:
+        for raw_entry in raw_entries.split(b"\0"):
+            if not raw_entry:
+                continue
+            identity, separator, raw_path = raw_entry.partition(b"\t")
+            relative_path = path_by_raw.get(raw_path)
+            if relative_path is None:
+                continue
+            fields = identity.split(b" ")
+            if not separator or len(fields) != 3:
+                raise PlanError("cannot parse canonical git index entry")
+            mode, object_id, stage = (field.decode("ascii") for field in fields)
+            entries_by_path[relative_path].append(
+                {
+                    "mode": mode,
+                    "object_id": object_id,
+                    "stage": int(stage),
+                }
+            )
+    except (UnicodeDecodeError, ValueError) as error:
+        raise PlanError("cannot decode canonical git index") from error
+    for entries in entries_by_path.values():
+        entries.sort(
+            key=lambda entry: (
+                entry["stage"],
+                entry["mode"],
+                entry["object_id"],
+            )
+        )
+    return entries_by_path
+
+
 def _dirty_path_content(
     status_records: Sequence[dict[str, object]],
-) -> list[dict[str, str]]:
-    dirty_paths = sorted(
-        {path for record in status_records for path in record["paths"]}
-    )
-    identities: list[dict[str, str]] = []
-    for relative_path in dirty_paths:
+) -> list[dict[str, object]]:
+    dirty_path_set = {
+        path for record in status_records for path in record["paths"]
+    }
+    index_entries = _git_index_entries(dirty_path_set)
+    identities: list[dict[str, object]] = []
+    for relative_path in sorted(dirty_path_set):
         candidate = Path(relative_path)
         if candidate.is_absolute() or ".." in candidate.parts:
             raise PlanError(f"unsafe dirty path in git status: {relative_path}")
@@ -246,6 +282,7 @@ def _dirty_path_content(
                     "path": relative_path,
                     "kind": "regular_file",
                     "sha256": _sha256_file(path),
+                    "git_index_entries": index_entries[relative_path],
                 }
             )
             continue
@@ -261,6 +298,7 @@ def _dirty_path_content(
                     "path": relative_path,
                     "kind": "symlink_target",
                     "sha256": _sha256_bytes(os.fsencode(target)),
+                    "git_index_entries": index_entries[relative_path],
                 }
             )
             continue
@@ -283,8 +321,11 @@ def _source_identity(output_dir: Path | None = None) -> dict[str, object]:
     status_filter = _planner_owned_status_filter(output_dir)
     status_records = _git_status_records(status_filter)
     dirty_content = _dirty_path_content(status_records)
+    dirty_content_after = _dirty_path_content(status_records)
     if _git_status_records(status_filter) != status_records:
         raise PlanError("git source status changed while capturing the snapshot")
+    if dirty_content_after != dirty_content:
+        raise PlanError("dirty source content changed while capturing the snapshot")
     try:
         head_after = _git_output("rev-parse", "--verify", "HEAD").decode("ascii").strip()
     except UnicodeDecodeError as error:

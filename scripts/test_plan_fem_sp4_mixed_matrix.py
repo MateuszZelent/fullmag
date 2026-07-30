@@ -380,6 +380,38 @@ class FemSp4MixedMatrixPlannerTest(unittest.TestCase):
         self.assertNotEqual(first.get("dirty_path_content"), second.get("dirty_path_content"))
         self.assertNotEqual(first["source_snapshot_sha256"], second["source_snapshot_sha256"])
 
+    def test_distinct_staged_blobs_change_snapshot_with_same_worktree_and_status(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = self._source_repo(directory)
+            dispatch = source_root / DISPATCH_SOURCE
+            committed = dispatch.read_bytes()
+            with mock.patch.object(planner, "REPO_ROOT", source_root):
+                dispatch.write_bytes(b"staged variant A\n")
+                self._git(source_root, "add", "--", DISPATCH_SOURCE)
+                dispatch.write_bytes(committed)
+                first = planner.build_plan("stage1-layers")
+
+                dispatch.write_bytes(b"staged variant B\n")
+                self._git(source_root, "add", "--", DISPATCH_SOURCE)
+                dispatch.write_bytes(committed)
+                second = planner.build_plan("stage1-layers")
+
+        expected_status = [{"status": "MM", "paths": [DISPATCH_SOURCE]}]
+        self.assertEqual(first["git_status_porcelain_v1"], expected_status)
+        self.assertEqual(second["git_status_porcelain_v1"], expected_status)
+        self.assertEqual(
+            first["dirty_path_content"][0]["sha256"],
+            second["dirty_path_content"][0]["sha256"],
+        )
+        self.assertNotEqual(
+            first["dirty_path_content"][0]["git_index_entries"],
+            second["dirty_path_content"][0]["git_index_entries"],
+        )
+        self.assertNotEqual(first["dirty_path_content"], second["dirty_path_content"])
+        self.assertNotEqual(first["source_snapshot_sha256"], second["source_snapshot_sha256"])
+
     def test_deleted_dirty_source_outside_curated_set_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source_root = self._source_repo(directory)
@@ -543,6 +575,26 @@ class FemSp4MixedMatrixPlannerTest(unittest.TestCase):
                     visible["dirty_paths"],
                     ["matrix-output/unrelated-source.txt"],
                 )
+
+    def test_in_repo_output_does_not_hide_staging_prefix_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = self._source_repo(directory)
+            output_dir = source_root / "matrix-output"
+            adversarial = source_root / ".matrix-output.tmp-adversarial.py"
+            with mock.patch.object(planner, "REPO_ROOT", source_root):
+                adversarial.write_text("dirty variant A\n", encoding="utf-8")
+                first = planner.build_plan("stage1-layers", output_dir=output_dir)
+                adversarial.write_text("dirty variant B\n", encoding="utf-8")
+                second = planner.build_plan("stage1-layers", output_dir=output_dir)
+
+        expected_path = ".matrix-output.tmp-adversarial.py"
+        expected_status = [{"status": "??", "paths": [expected_path]}]
+        self.assertEqual(first["git_status_porcelain_v1"], expected_status)
+        self.assertEqual(second["git_status_porcelain_v1"], expected_status)
+        self.assertEqual(first["dirty_paths"], [expected_path])
+        self.assertEqual(second["dirty_paths"], [expected_path])
+        self.assertNotEqual(first["dirty_path_content"], second["dirty_path_content"])
+        self.assertNotEqual(first["source_snapshot_sha256"], second["source_snapshot_sha256"])
 
     def test_unknown_stage_fails_closed_without_writing_a_plan(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
