@@ -8,6 +8,8 @@ article main > section {
 
 article main .table-wrapper {
   display: block;
+  width: 100%;
+  min-width: 0;
   max-width: 100%;
   overflow-x: auto;
   overscroll-behavior-inline: contain;
@@ -18,17 +20,6 @@ article main .table-wrapper table {
   width: max-content;
   min-width: 100%;
   max-width: none;
-}
-
-article main table {
-  box-sizing: border-box;
-  display: block;
-  width: 100%;
-  min-width: 0;
-  max-width: 100%;
-  overflow-x: auto;
-  overscroll-behavior-inline: contain;
-  -webkit-overflow-scrolling: touch;
 }
 
 article main .table-wrapper th,
@@ -69,8 +60,7 @@ article > main span.math {
 }
 
 @media (max-width: 48rem) {
-  article main .table-wrapper,
-  article main table {
+  article main .table-wrapper {
     scrollbar-width: thin;
     background: linear-gradient(
       to right,

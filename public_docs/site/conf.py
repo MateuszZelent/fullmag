@@ -14,7 +14,12 @@ author = "FullMag contributors"
 release = os.environ.get("FULLMAG_DOCS_VERSION", "latest")
 version = release
 
-extensions = ["myst_parser", "sphinx_copybutton", "legacy_redirects"]
+extensions = [
+    "myst_parser",
+    "sphinx_copybutton",
+    "legacy_redirects",
+    "responsive_tables",
+]
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "internal", "generated", "README.md"]
 source_suffix = {".md": "markdown", ".rst": "restructuredtext"}
