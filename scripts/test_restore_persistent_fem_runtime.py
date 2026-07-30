@@ -9,6 +9,7 @@ import tarfile
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RESTORE_SCRIPT = REPO_ROOT / "scripts/restore_persistent_fem_runtime.sh"
+STORAGE_HELPER = REPO_ROOT / "scripts/lib/managed_fem_runtime_storage.sh"
 
 
 def _write_fake_validator(path: Path) -> None:
@@ -54,6 +55,8 @@ def test_restore_repairs_corrupt_same_name_variant_from_latest_archive(
     scripts = fake_repo / "scripts"
     scripts.mkdir(parents=True)
     shutil.copy2(RESTORE_SCRIPT, scripts / RESTORE_SCRIPT.name)
+    (scripts / "lib").mkdir()
+    shutil.copy2(STORAGE_HELPER, scripts / "lib" / STORAGE_HELPER.name)
     _write_fake_validator(scripts / "validate_managed_fem_runtime_bundle.py")
 
     bundle = tmp_path / "bundle"
@@ -71,16 +74,14 @@ def test_restore_repairs_corrupt_same_name_variant_from_latest_archive(
 
     env = os.environ.copy()
     env["FULLMAG_BUILD_ROOT"] = str(build_root)
+    durable_runtime_root = tmp_path / "durable-runtime"
+    env["FULLMAG_RUNTIME_VARIANTS_ROOT"] = str(durable_runtime_root / "variants")
     command = ["bash", str(scripts / RESTORE_SCRIPT.name)]
     first = subprocess.run(command, cwd=fake_repo, env=env, text=True, capture_output=True)
     assert first.returncode == 0, first.stderr
 
     manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
-    variant = (
-        fake_repo
-        / ".fullmag/runtimes/fem-gpu-variants"
-        / f"test-variant-{manifest_sha}"
-    )
+    variant = durable_runtime_root / "variants" / f"test-variant-{manifest_sha}"
     assert (variant / "bin/fullmag-fem-gpu").read_text(encoding="utf-8") == "known-good\n"
     assert (variant / "bin/fullmag-fem-gpu-link").is_symlink()
 
@@ -90,3 +91,6 @@ def test_restore_repairs_corrupt_same_name_variant_from_latest_archive(
     assert (variant / "bin/fullmag-fem-gpu").read_text(encoding="utf-8") == "known-good\n"
     assert not list(variant.parent.glob("*.restore-backup.*"))
     assert (fake_repo / ".fullmag/runtimes/fem-gpu-host").resolve() == variant.resolve()
+    variants_alias = fake_repo / ".fullmag/runtimes/fem-gpu-variants"
+    assert variants_alias.is_symlink()
+    assert variants_alias.resolve() == (durable_runtime_root / "variants").resolve()

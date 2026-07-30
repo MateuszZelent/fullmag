@@ -634,9 +634,8 @@ observe_managed_fem_image_tag fullmag/fem-gpu:local \"${{built_image_id}}\"
 def test_export_script_publishes_only_a_validated_hash_addressed_bundle() -> None:
     script = EXPORT_SCRIPT.read_text(encoding="utf-8")
 
-    assert 'STAGING_ROOT="${RUNTIME_ROOT}.staging.$$"' in script
-    assert 'STAGING_RELATIVE=".fullmag/runtimes/$(basename "${STAGING_ROOT}")"' in script
-    assert '-e FULLMAG_RUNTIME_EXPORT_STAGING="${STAGING_RELATIVE}"' in script
+    assert 'STAGING_ROOT="${FULLMAG_CONTAINER_TARGET_DIR}/runtime-export-staging.$$"' in script
+    assert '-e FULLMAG_RUNTIME_EXPORT_STAGING="/workspace/target/runtime-export-staging.$$"' in script
     assert 'publish_runtime_bundle() {' in script
     assert 'python3 scripts/validate_managed_fem_runtime_bundle.py' in script
     assert '--runtime-root "${STAGING_ROOT}"' in script
@@ -979,10 +978,13 @@ def test_export_uses_hash_addressed_variants_and_atomic_active_alias() -> None:
     exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
     justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
 
-    assert 'VARIANTS_ROOT="${RUNTIME_PARENT}/fem-gpu-variants"' in exporter
+    assert 'VARIANTS_ROOT="${FULLMAG_CONTAINER_TARGET_DIR}/runtime-variants"' in exporter
+    assert 'STAGING_ROOT="${FULLMAG_CONTAINER_TARGET_DIR}/runtime-export-staging.$$"' in exporter
+    assert '.fullmag/runtimes/fem-gpu-host.staging' not in exporter
     assert 'manifest_sha256="$(sha256sum "${STAGING_ROOT}/manifest.json"' in exporter
     assert 'variant_root="${VARIANTS_ROOT}/${FULLMAG_FEM_RUNTIME_VARIANT}-${manifest_sha256}"' in exporter
-    assert 'alias_target="fem-gpu-variants/' in exporter
+    assert 'alias_target="fem-gpu-variants/$(basename "${variant_root}")"' in exporter
+    assert 'migrate_managed_fem_runtime_variants "${variants_alias}" "${VARIANTS_ROOT}"' in exporter
     assert 'ln -sfn "${alias_target}" "${repo_next_alias}"' in exporter
     assert 'PERSISTENT_LATEST_ARCHIVE=' in exporter
     assert '--allow-unaddressed-staging' in exporter
@@ -994,6 +996,36 @@ def test_export_uses_hash_addressed_variants_and_atomic_active_alias() -> None:
     assert '--compare-exact "$exact_copy"' in justfile
     assert 'mv "$active" "$backup"' in justfile
     assert "restore-active-fem-gpu-runtime-directory-backup" in justfile
+
+
+def test_export_mounts_durable_staging_for_container_postprocessing() -> None:
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'FULLMAG_RUNTIME_EXPORT_STAGING="/workspace/target/runtime-export-staging.$$"' in exporter
+    assert '-v "${FULLMAG_CONTAINER_TARGET_DIR}:/workspace/managed-runtime-target"' in exporter
+    assert '--runtime-root "/workspace/managed-runtime-target/runtime-export-staging.$$"' in exporter
+
+
+def test_export_keeps_container_temp_registry_and_build_log_on_durable_ext4() -> None:
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    assert '-e TMPDIR="/workspace/target/tmp"' in exporter
+    assert '-e CARGO_HOME="/workspace/target/cargo-home"' in exporter
+    assert 'mkdir -p "${TMPDIR}" "${CARGO_HOME}"' in exporter
+    assert 'tee "${TMPDIR}/fullmag-build.log"' in exporter
+    assert "tee /tmp/fullmag-build.log" not in exporter
+    assert '-e TMPDIR="/workspace/managed-runtime-target/tmp"' in exporter
+
+
+def test_export_can_resume_safely_without_cleaning_completed_target() -> None:
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    assert ': "${FULLMAG_FEM_RUNTIME_REUSE_BUILD:=0}"' in exporter
+    assert 'case "${FULLMAG_FEM_RUNTIME_REUSE_BUILD}" in' in exporter
+    assert 'if [ "${FULLMAG_FEM_RUNTIME_REUSE_BUILD}" = "0" ]; then' in exporter
+    assert "cargo +nightly clean --workspace --release" in exporter
+    assert "cargo +nightly build -j \"$cargo_jobs\"" in exporter
+    assert "reusing the task-specific target through Cargo freshness checks" in exporter
 
 
 def test_export_defaults_to_exact_persistent_build_root() -> None:

@@ -276,6 +276,10 @@ class ManagedFemRuntimeTargetMountTest(unittest.TestCase):
                     REPO_ROOT / "scripts/lib/managed_fem_image_identity.sh",
                     library / "managed_fem_image_identity.sh",
                 )
+                shutil.copy2(
+                    REPO_ROOT / "scripts/lib/managed_fem_runtime_storage.sh",
+                    library / "managed_fem_runtime_storage.sh",
+                )
                 runtime_parent = repo_root / ".fullmag" / "runtimes"
                 self.assertFalse(runtime_parent.exists())
                 environment = os.environ.copy()
