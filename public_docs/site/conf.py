@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent / "_extensions"))
 
 project = "FullMag"
 copyright = "FullMag contributors"
@@ -10,7 +14,7 @@ author = "FullMag contributors"
 release = os.environ.get("FULLMAG_DOCS_VERSION", "latest")
 version = release
 
-extensions = ["myst_parser", "sphinx_copybutton"]
+extensions = ["myst_parser", "sphinx_copybutton", "legacy_redirects"]
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "internal", "generated", "README.md"]
 source_suffix = {".md": "markdown", ".rst": "restructuredtext"}

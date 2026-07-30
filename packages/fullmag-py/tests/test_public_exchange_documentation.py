@@ -11,7 +11,10 @@ import fullmag as fm
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-EXCHANGE_PAGE = REPOSITORY_ROOT / "public_docs/site/physics/exchange.md"
+EXCHANGE_PAGE = (
+    REPOSITORY_ROOT
+    / "public_docs/site/physics/interactions/exchange/index.md"
+)
 PYTHON_BLOCK = re.compile(r"```python\s*\n(.*?)```", re.DOTALL)
 JSON_BLOCK = re.compile(r"```json\s*\n(.*?)```", re.DOTALL)
 
