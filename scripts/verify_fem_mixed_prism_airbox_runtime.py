@@ -41,8 +41,12 @@ STEP0_FIELD_TOLERANCES = {
 STEP0_FIELD_OBSERVABLES = tuple(STEP0_FIELD_TOLERANCES)
 GPU_PGBB_CONTROL_READBACK_BASE = 3
 GPU_PGBB_CONTROL_READBACK_PER_STEP = 4
+GPU_LLG_CONTROL_READBACK_PER_STEP = 0
+GPU_NCG_CONTROL_READBACK_PER_STEP = 3
+GPU_CONTROL_READBACK_PER_REJECTED_ATTEMPT = 2
 GPU_SCALAR_RESULT_SLOTS = 32
 DOUBLE_BYTES = 8
+REQUIRED_NATIVE_LIBRARIES = ("fullmag_fem", "mfem", "hypre", "libceed")
 DIMENSIONLESS_RECOMPUTATION_ATOL = 16.0 * sys.float_info.epsilon
 MAX_MAGNETIZATION_NORM_DEFECT = 1.0e-9
 SCALAR_CSV_SERIALIZATION_RTOL = 1.0e-15
@@ -66,6 +70,13 @@ def _sha256_file(path: Path) -> str:
         return _sha256_bytes(path.read_bytes())
     except OSError as error:
         raise ContractError(f"cannot read required artifact {path}: {error}") from error
+
+
+def _canonical_json_bytes(value: object) -> bytes:
+    return (
+        json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        + "\n"
+    ).encode("utf-8")
 
 
 def _object(value: object, label: str) -> dict[str, Any]:
@@ -174,8 +185,29 @@ def _validate_source_identity(source: Path, bounded_source: Path) -> dict[str, o
 
 def _validate_runtime_manifest(path: Path) -> dict[str, object]:
     manifest = _read_json_object(path, "managed runtime manifest")
-    if manifest.get("schema") != 2 or manifest.get("runtime") != "fem-gpu-host":
-        raise ContractError("managed runtime manifest must be schema 2 fem-gpu-host")
+    schema = manifest.get("schema")
+    if schema == 2:
+        raise ContractError(
+            "managed runtime manifest schema 2 is legacy/unbound and cannot qualify"
+        )
+    if schema != 3 or manifest.get("runtime") != "fem-gpu-host":
+        raise ContractError("managed runtime manifest must be schema 3 fem-gpu-host")
+    build_identity = _object(
+        manifest.get("build_identity"), "runtime build_identity"
+    )
+    git_commit = build_identity.get("git_commit")
+    if (
+        not isinstance(git_commit, str)
+        or re.fullmatch(r"[0-9a-f]{40}", git_commit) is None
+    ):
+        raise ContractError("runtime build_identity.git_commit must be full 40-hex")
+    worktree_state = build_identity.get("worktree_state")
+    if worktree_state not in {"clean", "dirty"}:
+        raise ContractError("runtime build_identity.worktree_state must be clean or dirty")
+    source_snapshot_sha256 = _canonical_sha256(
+        build_identity.get("source_snapshot_sha256"),
+        "runtime build_identity.source_snapshot_sha256",
+    )
     for field in ("variant", "created_at", "docker_image_id"):
         if not isinstance(manifest.get(field), str) or not manifest[field]:
             raise ContractError(f"managed runtime manifest {field} must be present")
@@ -188,10 +220,30 @@ def _validate_runtime_manifest(path: Path) -> dict[str, object]:
         for field in ("launcher_sha256", "worker_sha256", "api_sha256")
     }
     native_libraries = _object(manifest.get("native_libraries"), "runtime native_libraries")
-    fullmag_fem = _object(native_libraries.get("fullmag_fem"), "runtime fullmag_fem")
-    fullmag_fem_sha256 = _canonical_sha256(
-        fullmag_fem.get("sha256"), "runtime fullmag_fem.sha256"
-    )
+    native_library_identity: dict[str, dict[str, object]] = {}
+    for name in REQUIRED_NATIVE_LIBRARIES:
+        entry = _object(native_libraries.get(name), f"runtime native library {name}")
+        for field in ("path", "soname", "loaded_soname"):
+            if not isinstance(entry.get(field), str) or not entry[field]:
+                raise ContractError(f"runtime native library {name}.{field} must be present")
+        _canonical_sha256(entry.get("sha256"), f"runtime native library {name}.sha256")
+        if entry.get("cuda_required") is not True:
+            raise ContractError(f"runtime native library {name}.cuda_required must be true")
+        for field in ("cubins", "ptx"):
+            values = entry.get(field)
+            if not isinstance(values, list) or not all(isinstance(item, str) for item in values):
+                raise ContractError(f"runtime native library {name}.{field} is invalid")
+        if not entry["cubins"] and not entry["ptx"]:
+            raise ContractError(f"runtime native library {name} has no CUDA code objects")
+        native_library_identity[name] = dict(entry)
+    fullmag_fem_sha256 = str(native_library_identity["fullmag_fem"]["sha256"])
+    build = _object(manifest.get("build"), "runtime build")
+    native_build_identity: dict[str, str] = {}
+    for field in ("mfem_version", "hypre_version", "libceed_version", "cuda_toolkit"):
+        value = build.get(field)
+        if not isinstance(value, str) or not value:
+            raise ContractError(f"runtime build.{field} must be present")
+        native_build_identity[field] = value
     diagnostics = _object(manifest.get("runtime_diagnostics"), "runtime diagnostics")
     device_identity: dict[str, object] = {}
     for field in ("device_name", "compute_capability", "cuda_driver_version"):
@@ -210,9 +262,134 @@ def _validate_runtime_manifest(path: Path) -> dict[str, object]:
         "created_at": manifest["created_at"],
         "docker_image_id": manifest["docker_image_id"],
         "source_manifest_sha256": source_manifest_sha256,
+        "runtime_git_commit": git_commit,
+        "runtime_worktree_state": worktree_state,
+        "runtime_source_snapshot_sha256": source_snapshot_sha256,
+        "runtime_source_identity_compatibility": "exact-schema-3",
         "integrity": integrity_identity,
         "libfullmag_fem_sha256": fullmag_fem_sha256,
+        "native_library_identity": native_library_identity,
+        "native_build_identity": native_build_identity,
         "gpu_device_identity": device_identity,
+    }
+
+
+def _validate_source_snapshot(
+    path: Path, runtime_identity: dict[str, object]
+) -> dict[str, object]:
+    snapshot = _read_json_object(path, "source snapshot identity")
+    expected_keys = {
+        "schema",
+        "head_commit_full",
+        "head_tree_sha256",
+        "git_status_porcelain_v1",
+        "dirty_path_content",
+        "source_snapshot_dirty",
+        "dirty_content_sha256",
+        "source_snapshot_sha256",
+    }
+    if set(snapshot) != expected_keys:
+        raise ContractError("source snapshot identity has incomplete or unknown fields")
+    if snapshot.get("schema") != "fullmag.source-snapshot.v2":
+        raise ContractError("source snapshot identity must use fullmag.source-snapshot.v2")
+    snapshot_sha256 = _canonical_sha256(
+        snapshot.get("source_snapshot_sha256"), "source snapshot SHA-256"
+    )
+    commit = snapshot.get("head_commit_full")
+    if not isinstance(commit, str) or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+        raise ContractError("source snapshot head_commit_full must be full 40-hex")
+    _canonical_sha256(snapshot.get("head_tree_sha256"), "source snapshot tree SHA-256")
+    status_records = snapshot.get("git_status_porcelain_v1")
+    dirty_content = snapshot.get("dirty_path_content")
+    if not isinstance(status_records, list) or not isinstance(dirty_content, list):
+        raise ContractError("source snapshot status and dirty content must be arrays")
+    for record in status_records:
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"status", "paths"}
+            or not isinstance(record.get("status"), str)
+            or len(record["status"]) != 2
+            or not isinstance(record.get("paths"), list)
+            or not record["paths"]
+            or len(record["paths"]) > 2
+            or not all(isinstance(item, str) and item for item in record["paths"])
+        ):
+            raise ContractError("source snapshot status record is invalid")
+    dirty_paths: list[str] = []
+    for entry in dirty_content:
+        if not isinstance(entry, dict):
+            raise ContractError("source snapshot dirty content entry is invalid")
+        required = {"path", "kind", "mode", "git_index_entries"}
+        if (
+            not required.issubset(entry)
+            or not isinstance(entry.get("path"), str)
+            or not entry["path"]
+        ):
+            raise ContractError("source snapshot dirty content entry is invalid")
+        dirty_paths.append(entry["path"])
+        index_entries = entry.get("git_index_entries")
+        if not isinstance(index_entries, list):
+            raise ContractError("source snapshot dirty content index entries are invalid")
+        for index_entry in index_entries:
+            if (
+                not isinstance(index_entry, dict)
+                or set(index_entry) != {"mode", "object_id", "stage"}
+                or index_entry.get("mode") not in {"100644", "100755", "120000"}
+                or not isinstance(index_entry.get("object_id"), str)
+                or re.fullmatch(r"[0-9a-f]{40,64}", index_entry["object_id"]) is None
+                or isinstance(index_entry.get("stage"), bool)
+                or not isinstance(index_entry.get("stage"), int)
+                or not 0 <= index_entry["stage"] <= 3
+            ):
+                raise ContractError("source snapshot dirty content index entry is invalid")
+        if entry.get("kind") == "missing":
+            if set(entry) != required or entry.get("mode") != "000000":
+                raise ContractError("source snapshot missing dirty entry is invalid")
+        else:
+            if set(entry) != required | {"sha256"}:
+                raise ContractError("source snapshot dirty content entry is invalid")
+            _canonical_sha256(entry.get("sha256"), "source snapshot dirty entry SHA-256")
+            if entry.get("kind") not in {"regular_file", "symlink_target"}:
+                raise ContractError("source snapshot dirty content kind is invalid")
+            if entry.get("mode") not in {"100644", "100755", "120000"}:
+                raise ContractError("source snapshot dirty content mode is invalid")
+    status_paths = [path for record in status_records for path in record["paths"]]
+    if dirty_paths != sorted(set(dirty_paths)) or set(dirty_paths) != set(status_paths):
+        raise ContractError("source snapshot dirty content paths do not match status records")
+    dirty = snapshot.get("source_snapshot_dirty")
+    if dirty is not True and dirty is not False:
+        raise ContractError("source snapshot dirty state must be boolean")
+    if dirty != bool(status_records):
+        raise ContractError("source snapshot dirty state does not match status records")
+    expected_dirty_digest = _sha256_bytes(_canonical_json_bytes(dirty_content))
+    if snapshot.get("dirty_content_sha256") != expected_dirty_digest:
+        raise ContractError("source snapshot dirty content digest is invalid")
+    core = {
+        key: snapshot[key]
+        for key in (
+            "schema",
+            "head_commit_full",
+            "head_tree_sha256",
+            "git_status_porcelain_v1",
+            "dirty_path_content",
+        )
+    }
+    expected_snapshot_digest = _sha256_bytes(_canonical_json_bytes(core))
+    if snapshot_sha256 != expected_snapshot_digest:
+        raise ContractError("source snapshot digest is invalid")
+    expected_state = "dirty" if dirty else "clean"
+    if snapshot_sha256 != runtime_identity.get("runtime_source_snapshot_sha256"):
+        raise ContractError("runtime source snapshot does not match captured source snapshot")
+    if commit != runtime_identity.get("runtime_git_commit"):
+        raise ContractError("runtime Git commit does not match captured source snapshot")
+    if expected_state != runtime_identity.get("runtime_worktree_state"):
+        raise ContractError("runtime worktree state does not match captured source snapshot")
+    return {
+        "source_snapshot_schema": snapshot["schema"],
+        "source_snapshot_sha256": snapshot_sha256,
+        "source_snapshot_git_commit": commit,
+        "source_snapshot_worktree_state": expected_state,
+        "source_snapshot_identity_sha256": _sha256_file(path),
     }
 
 
@@ -764,6 +941,22 @@ def _validate_persisted_lane_summary(
         raise ContractError(f"{device.upper()} summary must prove no fallback or degradation")
     if summary.get("qualification_status") != "implemented":
         raise ContractError(f"{device.upper()} summary qualification status is invalid")
+    if summary.get("runtime_source_identity_compatibility") != "exact-schema-3":
+        raise ContractError(
+            f"{device.upper()} summary runtime source identity is not exact schema 3"
+        )
+    runtime_git_commit = summary.get("runtime_git_commit")
+    if (
+        not isinstance(runtime_git_commit, str)
+        or re.fullmatch(r"[0-9a-f]{40}", runtime_git_commit) is None
+    ):
+        raise ContractError(f"{device.upper()} summary runtime Git commit is invalid")
+    _canonical_sha256(
+        summary.get("runtime_source_snapshot_sha256"),
+        f"{device} summary runtime source snapshot",
+    )
+    if summary.get("runtime_worktree_state") not in {"clean", "dirty"}:
+        raise ContractError(f"{device.upper()} summary runtime worktree state is invalid")
     if summary.get("accepted_steps") != 1 or summary.get("executed_steps") != 1:
         raise ContractError(f"{device.upper()} summary must prove one accepted executed step")
 
@@ -854,6 +1047,10 @@ def _validate_persisted_lane_summary(
                 "total_rhs_evals": _nonnegative_int(
                     summary.get("total_rhs_evals"),
                     "GPU summary total RHS evaluations",
+                ),
+                "rejected_attempts": _nonnegative_int(
+                    summary.get("rejected_attempts"),
+                    "GPU summary rejected attempts",
                 ),
             }
         )
@@ -1016,16 +1213,61 @@ def _validate_mixed_certificate(
     return topology_fingerprint, certificate
 
 
+def validated_algorithm_counter_budget(
+    algorithm: str,
+    executed_steps: int,
+    total_rhs_evals: int,
+    rejected_attempts: int,
+) -> dict[str, int]:
+    values = {
+        "executed_steps": executed_steps,
+        "total_rhs_evals": total_rhs_evals,
+        "rejected_attempts": rejected_attempts,
+    }
+    for label, value in values.items():
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ContractError(f"{label} must be a nonnegative integer")
+    if executed_steps < 1:
+        raise ContractError("executed_steps must be positive")
+    if rejected_attempts > total_rhs_evals:
+        raise ContractError("rejected_attempts cannot exceed total_rhs_evals")
+    if algorithm == "llg_overdamped":
+        minimum_rhs = executed_steps + rejected_attempts
+        if total_rhs_evals < minimum_rhs:
+            raise ContractError(
+                "LLG counters require at least one RHS evaluation per accepted or rejected attempt"
+            )
+        budget = (
+            GPU_LLG_CONTROL_READBACK_PER_STEP * executed_steps
+            + GPU_CONTROL_READBACK_PER_REJECTED_ATTEMPT * rejected_attempts
+        )
+    elif algorithm in {"projected_gradient_bb", "nonlinear_cg"}:
+        minimum_rhs = 2 * executed_steps + rejected_attempts
+        if total_rhs_evals < minimum_rhs:
+            raise ContractError(
+                f"{algorithm} counters require two RHS evaluations per step and one per rejection"
+            )
+        per_step = {
+            "projected_gradient_bb": GPU_PGBB_CONTROL_READBACK_PER_STEP,
+            "nonlinear_cg": GPU_NCG_CONTROL_READBACK_PER_STEP,
+        }[algorithm]
+        budget = (
+            GPU_PGBB_CONTROL_READBACK_BASE
+            + per_step * executed_steps
+            + max(0, total_rhs_evals - 2 * executed_steps)
+        )
+    else:
+        raise ContractError(f"unsupported relaxation algorithm: {algorithm!r}")
+    return {**values, "minimum_rhs_evals": minimum_rhs, "control_sync_budget": budget}
+
+
 def _expected_control_sync_budget(steps: dict[str, Any]) -> int:
-    logical_rhs_trials = max(
-        0,
-        steps["total_rhs_evals"] - 2 * steps["accepted_steps"],
-    )
-    return (
-        GPU_PGBB_CONTROL_READBACK_BASE
-        + GPU_PGBB_CONTROL_READBACK_PER_STEP * steps["accepted_steps"]
-        + logical_rhs_trials
-    )
+    return validated_algorithm_counter_budget(
+        EXPECTED_ALGORITHM,
+        steps["accepted_steps"],
+        steps["total_rhs_evals"],
+        steps["rejected_attempts"],
+    )["control_sync_budget"]
 
 
 def _validate_gpu_execution(
@@ -1043,6 +1285,11 @@ def _validate_gpu_execution(
             raise ContractError(
                 f"GPU execution {field} does not match the managed runtime manifest"
             )
+    native_build = _object(
+        runtime_identity.get("native_build_identity"), "runtime native build identity"
+    )
+    if execution.get("mfem_version") != native_build.get("mfem_version"):
+        raise ContractError("GPU execution MFEM version does not match the managed runtime")
 
     expected_execution = {
         "fem_assembly_mode": "legacy_sparse",
@@ -1122,6 +1369,8 @@ def _validate_gpu_execution(
         raise ContractError("GPU control-scalar bytes and syncs must have matching zero state")
 
     demag_runtime = _object(metadata.get("demag_runtime"), "GPU demag runtime")
+    if demag_runtime.get("hypre_version") != native_build.get("hypre_version"):
+        raise ContractError("GPU demag Hypre version does not match the managed runtime")
     if demag_runtime.get("mfem_device") != "cuda":
         raise ContractError("GPU demag runtime mfem_device must be exactly 'cuda'")
     relative_tolerance = _finite(
@@ -1168,6 +1417,7 @@ def validate_runtime_artifacts(
     device: str,
     runtime_log: Path | None = None,
     runtime_manifest: Path | None = None,
+    source_snapshot: Path | None = None,
 ) -> dict[str, object]:
     if device not in {"cpu", "gpu"}:
         raise ContractError("device must be cpu or gpu")
@@ -1175,6 +1425,11 @@ def validate_runtime_artifacts(
         raise ContractError("managed runtime manifest is required")
     source_identity = _validate_source_identity(source, bounded_source)
     runtime_identity = _validate_runtime_manifest(runtime_manifest)
+    if source_snapshot is None:
+        raise ContractError("captured source snapshot identity is required")
+    captured_source_identity = _validate_source_snapshot(
+        source_snapshot, runtime_identity
+    )
     metadata_path = artifacts / "metadata.json"
     scalars_path = artifacts / "scalars.csv"
     solver_steps_path = artifacts / "solver_steps.csv"
@@ -1342,6 +1597,7 @@ def validate_runtime_artifacts(
         "qualification_status": "implemented",
         **source_identity,
         **runtime_identity,
+        **captured_source_identity,
         "metadata_sha256": _sha256_file(metadata_path),
         "scalars_sha256": _sha256_file(scalars_path),
         "solver_steps_sha256": _sha256_file(solver_steps_path),
@@ -1533,6 +1789,11 @@ def compare_runtime_summaries(
         "runtime_manifest_sha256",
         "runtime_bundle_path",
         "runtime_bundle_name",
+        "runtime_git_commit",
+        "runtime_worktree_state",
+        "runtime_source_snapshot_sha256",
+        "source_snapshot_identity_sha256",
+        "runtime_source_identity_compatibility",
         "source_manifest_sha256",
         "libfullmag_fem_sha256",
         "canonical_source",
@@ -1722,6 +1983,14 @@ def compare_runtime_summaries(
         "runtime_manifest_sha256": cpu["runtime_manifest_sha256"],
         "runtime_bundle_path": cpu["runtime_bundle_path"],
         "runtime_bundle_name": cpu["runtime_bundle_name"],
+        "runtime_git_commit": cpu["runtime_git_commit"],
+        "runtime_worktree_state": cpu["runtime_worktree_state"],
+        "runtime_source_snapshot_sha256": cpu[
+            "runtime_source_snapshot_sha256"
+        ],
+        "runtime_source_identity_compatibility": cpu[
+            "runtime_source_identity_compatibility"
+        ],
         "source_manifest_sha256": cpu["source_manifest_sha256"],
         "libfullmag_fem_sha256": cpu["libfullmag_fem_sha256"],
         "canonical_source": cpu["canonical_source"],
@@ -1950,6 +2219,7 @@ def main() -> int:
     validate.add_argument("--device", choices=("cpu", "gpu"), required=True)
     validate.add_argument("--runtime-log", type=Path, required=True)
     validate.add_argument("--runtime-manifest", type=Path, required=True)
+    validate.add_argument("--source-snapshot", type=Path, required=True)
     validate.add_argument("--output", type=Path, required=True)
 
     compare = subparsers.add_parser("compare")
@@ -1977,6 +2247,7 @@ def main() -> int:
                 device=args.device,
                 runtime_log=args.runtime_log,
                 runtime_manifest=args.runtime_manifest,
+                source_snapshot=args.source_snapshot,
             )
             _write_json(args.output, summary)
         else:

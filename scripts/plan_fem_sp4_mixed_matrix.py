@@ -30,10 +30,16 @@ from tests.standard_problems.mumag.sp4.fem.matrix_contract import (  # noqa: E40
     SP4MatrixRunSpec,
     matrix_specs,
 )
+from scripts import capture_source_snapshot_identity  # noqa: E402
 
 
 SCHEMA = "fullmag.fem.sp4.mixed-matrix-plan.v1"
 QUALIFICATION_CLAIM = "implemented_evidence_only"
+DEFERRED_AXES = (
+    "stage4-all-tet-comparator",
+    "case-a-dynamics",
+    "case-b-dynamics",
+)
 STAGES = (STAGE1_LAYERS, STAGE2_AIRBOX, STAGE3_DEVICE)
 EXPECTED_STAGE_COUNTS = {
     STAGE1_LAYERS: 9,
@@ -47,8 +53,10 @@ RELEVANT_SOURCE_PATHS = (
     Path("justfile"),
     Path("scripts/check_fem_sp4_relaxation.py"),
     Path("scripts/plan_fem_sp4_mixed_matrix.py"),
+    Path("scripts/run_fem_sp4_mixed_matrix.py"),
     Path("scripts/select_fem_sp4_relaxation_state.py"),
     Path("scripts/verify_fem_standard_problem_4.sh"),
+    Path("scripts/verify_fem_mixed_prism_airbox_runtime.py"),
     Path("scripts/write_fem_magnetic_initial_state_from_shared_domain.py"),
     Path("tests/standard_problems/mumag/sp4/common/contract.py"),
     Path("tests/standard_problems/mumag/sp4/common/metrics.py"),
@@ -307,54 +315,33 @@ def _dirty_path_content(
 
 
 def _source_identity(output_dir: Path | None = None) -> dict[str, object]:
+    del output_dir
+    try:
+        canonical = capture_source_snapshot_identity.capture(REPO_ROOT)
+    except (OSError, capture_source_snapshot_identity.SourceIdentityError) as error:
+        raise PlanError(f"cannot capture canonical source snapshot: {error}") from error
     source_hashes = {
         path.as_posix(): _sha256_file(REPO_ROOT / path)
         for path in RELEVANT_SOURCE_PATHS
     }
-    try:
-        head_commit = _git_output("rev-parse", "--verify", "HEAD").decode("ascii").strip()
-    except UnicodeDecodeError as error:
-        raise PlanError("cannot decode git HEAD identity") from error
-    head_tree_sha256 = _sha256_bytes(
-        _git_output("ls-tree", "-r", "--full-tree", head_commit)
-    )
-    status_filter = _planner_owned_status_filter(output_dir)
-    status_records = _git_status_records(status_filter)
-    dirty_content = _dirty_path_content(status_records)
-    dirty_content_after = _dirty_path_content(status_records)
-    if _git_status_records(status_filter) != status_records:
-        raise PlanError("git source status changed while capturing the snapshot")
-    if dirty_content_after != dirty_content:
-        raise PlanError("dirty source content changed while capturing the snapshot")
     source_hashes_after = {
         path.as_posix(): _sha256_file(REPO_ROOT / path)
         for path in RELEVANT_SOURCE_PATHS
     }
     if source_hashes_after != source_hashes:
         raise PlanError("relevant source files changed while capturing the snapshot")
-    try:
-        head_after = _git_output("rev-parse", "--verify", "HEAD").decode("ascii").strip()
-    except UnicodeDecodeError as error:
-        raise PlanError("cannot decode git HEAD identity") from error
-    if head_after != head_commit:
-        raise PlanError("git HEAD changed while capturing the source snapshot")
-    snapshot_payload = {
-        "head_commit_full": head_commit,
-        "head_tree_sha256": head_tree_sha256,
-        "git_status_porcelain_v1": status_records,
-        "dirty_path_content": dirty_content,
-        "relevant_source_files_sha256": source_hashes,
-    }
+    dirty_paths = sorted(
+        {
+            path
+            for record in canonical["git_status_porcelain_v1"]
+            for path in record["paths"]
+        }
+    )
     return {
-        **snapshot_payload,
-        "source_snapshot_dirty": bool(status_records),
-        "dirty_paths": sorted(
-            {path for record in status_records for path in record["paths"]}
-        ),
-        "git_status_sha256": _sha256_bytes(_canonical_json_bytes(status_records)),
-        "source_snapshot_sha256": _sha256_bytes(
-            _canonical_json_bytes(snapshot_payload)
-        ),
+        "source_snapshot_schema": canonical["schema"],
+        **{key: value for key, value in canonical.items() if key != "schema"},
+        "dirty_paths": dirty_paths,
+        "relevant_source_files_sha256": source_hashes,
         "contract_sha256": source_hashes[MATRIX_CONTRACT_PATH.as_posix()],
     }
 
@@ -392,6 +379,7 @@ def build_plan(
     requested_stage: str,
     *,
     output_dir: Path | None = None,
+    source_identity: dict[str, object] | None = None,
 ) -> dict[str, object]:
     if requested_stage not in STAGES:
         raise PlanError(f"unsupported SP4 mixed matrix stage: {requested_stage}")
@@ -416,9 +404,10 @@ def build_plan(
         "requested_stage": requested_stage,
         "qualifying": False,
         "qualification_claim": QUALIFICATION_CLAIM,
+        "deferred_axes": list(DEFERRED_AXES),
         "run_spec_count": len(run_specs),
         "run_specs": run_specs,
-        **_source_identity(output_dir),
+        **dict(source_identity or _source_identity(output_dir)),
     }
     payload["plan_sha256"] = _sha256_bytes(_canonical_json_bytes(payload))
     return payload
@@ -621,8 +610,17 @@ def _raise_transaction_errors(
     raise combined
 
 
-def emit_plan(requested_stage: str, output_dir: Path) -> dict[str, object]:
-    plan = build_plan(requested_stage, output_dir=output_dir)
+def emit_plan(
+    requested_stage: str,
+    output_dir: Path,
+    *,
+    source_identity: dict[str, object] | None = None,
+) -> dict[str, object]:
+    plan = build_plan(
+        requested_stage,
+        output_dir=output_dir,
+        source_identity=source_identity,
+    )
     payloads = _output_payloads(plan)
     output_parent = output_dir.parent
     try:

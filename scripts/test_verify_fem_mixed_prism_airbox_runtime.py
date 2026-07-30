@@ -8,6 +8,7 @@ import json
 import math
 from pathlib import Path
 import struct
+import subprocess
 import tempfile
 import unittest
 
@@ -15,14 +16,50 @@ import scripts.verify_fem_mixed_prism_airbox_runtime as verifier
 from scripts.verify_fem_mixed_prism_airbox_runtime import (
     ContractError,
     prepare_bounded_scenario,
-    validate_runtime_artifacts,
 )
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def validate_runtime_artifacts(*args, runtime_manifest: Path, **kwargs):
+    return verifier.validate_runtime_artifacts(
+        *args,
+        runtime_manifest=runtime_manifest,
+        source_snapshot=runtime_manifest.parent / "source-snapshot.v2.json",
+        **kwargs,
+    )
+
+
 class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
+    @staticmethod
+    def _source_snapshot_payload() -> dict[str, object]:
+        dirty_content = [{
+            "path": "fixture",
+            "kind": "regular_file",
+            "mode": "100644",
+            "sha256": "9" * 64,
+            "git_index_entries": [],
+        }]
+        core = {
+            "schema": "fullmag.source-snapshot.v2",
+            "head_commit_full": "a" * 40,
+            "head_tree_sha256": "8" * 64,
+            "git_status_porcelain_v1": [{"status": "??", "paths": ["fixture"]}],
+            "dirty_path_content": dirty_content,
+        }
+        def canonical(value: object) -> bytes:
+            return (
+                json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+                + "\n"
+            ).encode("utf-8")
+        return {
+            **core,
+            "source_snapshot_dirty": True,
+            "dirty_content_sha256": hashlib.sha256(canonical(dirty_content)).hexdigest(),
+            "source_snapshot_sha256": hashlib.sha256(canonical(core)).hexdigest(),
+        }
+
     def test_canonical_scenario_requests_exact_step0_operator_fields(self) -> None:
         scenario = (
             REPO_ROOT
@@ -125,23 +162,47 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
     def _write_runtime_manifest(self, root: Path) -> Path:
         runtime_root = root / "fem-gpu-variants" / ("hypre-baseline-" + "f" * 64)
         runtime_root.mkdir(parents=True)
+        snapshot = self._source_snapshot_payload()
+        library = {
+            "path": "lib/library.so",
+            "sha256": "4" * 64,
+            "soname": "library.so",
+            "loaded_soname": "library.so",
+            "cuda_required": True,
+            "cubins": ["sm_89"],
+            "ptx": [],
+        }
         manifest = {
-            "schema": 2,
+            "schema": 3,
             "runtime": "fem-gpu-host",
             "variant": "hypre-baseline",
             "created_at": "2026-07-29T12:00:00+00:00",
             "docker_image_id": "sha256:" + "d" * 64,
             "source_manifest_sha256": "e" * 64,
+            "build_identity": {
+                "git_commit": "a" * 40,
+                "worktree_state": "dirty",
+                "source_snapshot_sha256": snapshot["source_snapshot_sha256"],
+            },
             "integrity": {
                 "launcher_sha256": "1" * 64,
                 "worker_sha256": "2" * 64,
                 "api_sha256": "3" * 64,
             },
             "native_libraries": {
-                "fullmag_fem": {
-                    "path": "lib/libfullmag_fem.so.0",
-                    "sha256": "4" * 64,
+                name: {
+                    **library,
+                    "path": f"lib/{name}.so",
+                    "soname": f"{name}.so",
+                    "loaded_soname": f"{name}.so",
                 }
+                for name in ("fullmag_fem", "mfem", "hypre", "libceed")
+            },
+            "build": {
+                "mfem_version": "4.9",
+                "hypre_version": "3.1.0",
+                "libceed_version": "0.12.0",
+                "cuda_toolkit": "12.8",
             },
             "runtime_diagnostics": {
                 "device_name": "NVIDIA GeForce RTX 4080",
@@ -151,6 +212,9 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
         }
         path = runtime_root / "manifest.json"
         path.write_text(json.dumps(manifest), encoding="utf-8")
+        (runtime_root / "source-snapshot.v2.json").write_text(
+            json.dumps(snapshot), encoding="utf-8"
+        )
         return path
 
     def _write_step0_operator_fields(
@@ -410,6 +474,7 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                 {
                     "device_name": "NVIDIA GeForce RTX 4080",
                     "compute_capability": "8.9",
+                    "mfem_version": "4.9",
                     "mfem_device": "cuda",
                     "fem_assembly_mode": "legacy_sparse",
                     "fem_execution_mode": "all_in_gpu_legacy_sparse",
@@ -437,6 +502,7 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                 "actual_iterations": 12,
                 "final_residual_norm": 1.0e-13,
                 "relative_tolerance": 1.0e-12,
+                "hypre_version": "3.1.0",
             }
             qualification["device_policy"] = {
                 "execution_mode": "all_in_gpu_legacy_sparse",
@@ -620,6 +686,19 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
 
             self.assertEqual(cpu_summary["execution_engine"], "fem_cpu_native")
             self.assertEqual(gpu_summary["execution_engine"], "fem_native_gpu")
+            self.assertEqual(cpu_summary["runtime_git_commit"], "a" * 40)
+            self.assertEqual(
+                cpu_summary["runtime_source_snapshot_sha256"],
+                self._source_snapshot_payload()["source_snapshot_sha256"],
+            )
+            self.assertEqual(
+                cpu_summary["runtime_source_identity_compatibility"],
+                "exact-schema-3",
+            )
+            self.assertEqual(
+                comparison["runtime_source_snapshot_sha256"],
+                self._source_snapshot_payload()["source_snapshot_sha256"],
+            )
             self.assertNotEqual(
                 cpu_summary["topology_fingerprint"],
                 cpu_summary["certificate_fingerprint"],
@@ -686,6 +765,132 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                 cpu_summary["final_scalar_values"]["E_ex"],  # type: ignore[index]
                 cpu_summary["final_energy_terms_j"]["E_ex"],  # type: ignore[index]
             )
+
+    def test_schema_2_runtime_is_legacy_unbound_and_cannot_qualify(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bundle = self._write_valid_bundle(root, "cpu")
+            manifest_path = bundle[4]
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["schema"] = 2
+            manifest.pop("build_identity")
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                ContractError,
+                "schema 2 is legacy/unbound and cannot qualify",
+            ):
+                validate_runtime_artifacts(
+                    bundle[0],
+                    bundle[1],
+                    bundle[2],
+                    device="cpu",
+                    runtime_log=bundle[3],
+                    runtime_manifest=manifest_path,
+                )
+
+    def test_schema_3_runtime_requires_exact_source_identity(self) -> None:
+        for field, value in (
+            ("git_commit", "a" * 8),
+            ("worktree_state", "unknown"),
+            ("source_snapshot_sha256", "b" * 8),
+        ):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                bundle = self._write_valid_bundle(root, "cpu")
+                manifest_path = bundle[4]
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest["build_identity"][field] = value
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+                with self.assertRaisesRegex(ContractError, "runtime build_identity"):
+                    validate_runtime_artifacts(
+                        bundle[0],
+                        bundle[1],
+                        bundle[2],
+                        device="cpu",
+                        runtime_log=bundle[3],
+                        runtime_manifest=manifest_path,
+                    )
+
+    def test_schema_3_runtime_requires_full_native_identity(self) -> None:
+        mutations = (
+            ("integrity", lambda manifest: manifest["integrity"].pop("worker_sha256")),
+            ("native_library", lambda manifest: manifest["native_libraries"].pop("hypre")),
+            ("build", lambda manifest: manifest["build"].pop("hypre_version")),
+            ("device", lambda manifest: manifest["runtime_diagnostics"].pop("device_name")),
+        )
+        for label, mutate in mutations:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                bundle = self._write_valid_bundle(root, "cpu")
+                manifest_path = bundle[4]
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                mutate(manifest)
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                with self.assertRaises(ContractError):
+                    validate_runtime_artifacts(
+                        bundle[0], bundle[1], bundle[2], device="cpu",
+                        runtime_log=bundle[3], runtime_manifest=manifest_path,
+                    )
+
+    def test_source_snapshot_recomputes_all_canonical_digests(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bundle = self._write_valid_bundle(root, "cpu")
+            snapshot_path = bundle[4].parent / "source-snapshot.v2.json"
+            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            snapshot["dirty_path_content"][0]["sha256"] = "7" * 64
+            snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+            with self.assertRaisesRegex(ContractError, "dirty content digest"):
+                validate_runtime_artifacts(
+                    bundle[0], bundle[1], bundle[2], device="cpu",
+                    runtime_log=bundle[3], runtime_manifest=bundle[4],
+                )
+
+    def test_validate_rejects_runtime_built_from_a_different_source_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bundle = self._write_valid_bundle(root, "cpu")
+            snapshot_path = root / "source-snapshot.v2.json"
+            snapshot = self._source_snapshot_payload()
+            snapshot["head_tree_sha256"] = "c" * 64
+            core = {
+                key: snapshot[key]
+                for key in (
+                    "schema",
+                    "head_commit_full",
+                    "head_tree_sha256",
+                    "git_status_porcelain_v1",
+                    "dirty_path_content",
+                )
+            }
+            snapshot["source_snapshot_sha256"] = hashlib.sha256(
+                (
+                    json.dumps(
+                        core,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    )
+                    + "\n"
+                ).encode("utf-8")
+            ).hexdigest()
+            snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                ContractError,
+                "runtime source snapshot does not match",
+            ):
+                verifier.validate_runtime_artifacts(
+                    bundle[0],
+                    bundle[1],
+                    bundle[2],
+                    device="cpu",
+                    runtime_log=bundle[3],
+                    runtime_manifest=bundle[4],
+                    source_snapshot=snapshot_path,
+                )
 
     def test_validate_rejects_missing_tampered_or_unbound_step0_artifacts(self) -> None:
         cases = ("missing_field", "tampered_chunk", "wrong_engine", "wrong_samples", "missing_step0")
@@ -1458,6 +1663,18 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
     def test_compare_rejects_runtime_source_topology_and_initial_state_drift(self) -> None:
         mutations = (
             ("runtime", lambda summary: summary.__setitem__("runtime_manifest_sha256", "0" * 64)),
+            (
+                "runtime_source",
+                lambda summary: summary.__setitem__(
+                    "runtime_source_snapshot_sha256", "0" * 64
+                ),
+            ),
+            (
+                "captured_source_file",
+                lambda summary: summary.__setitem__(
+                    "source_snapshot_identity_sha256", "0" * 64
+                ),
+            ),
             ("source", lambda summary: summary.__setitem__("bounded_source_sha256", "0" * 64)),
             ("topology", lambda summary: summary.__setitem__("topology_fingerprint", "sha256:" + "b" * 64)),
             (
@@ -1605,6 +1822,8 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
         )
         self.assertIn("verify_fem_mixed_prism_airbox_runtime.py compare", recipe)
         self.assertIn("runtime-manifest", recipe)
+        self.assertIn("runtime-manifest.v3.json", recipe)
+        self.assertNotIn("runtime-manifest.v2.json", recipe)
         self.assertIn('cpu/summary.v4.json', recipe)
         self.assertIn('gpu/summary.v4.json', recipe)
         self.assertIn('--cpu-artifacts "$run_dir/cpu/artifacts"', recipe)
@@ -1614,9 +1833,67 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
         self.assertNotIn('summary.v2.json', recipe)
         self.assertNotIn('comparison.v2.csv', recipe)
         self.assertIn("mktemp -d", recipe)
+        self.assertIn("capture_source_snapshot_identity.py", recipe)
+        self.assertEqual(
+            recipe.count('--compare "$run_dir/source-snapshot.v2.json"'), 3
+        )
+        self.assertIn("create_managed_fem_report_run_root", recipe)
+        self.assertIn("source-snapshot.v2.json", recipe)
+        self.assertIn("/mnt/fullmag-zfn2-native", recipe)
+        report_helper = (
+            REPO_ROOT / "scripts/lib/managed_fem_report_storage.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn('runs/run.XXXXXXXX', report_helper)
         self.assertNotIn("docker ", recipe)
         self.assertNotIn("--skip-geometry-assets", recipe)
         self.assertNotIn("FULLMAG_RUN_SLOW_REAL_ASSET_TESTS", recipe)
+
+    def test_common_report_storage_rejects_outside_and_symlink_paths(self) -> None:
+        helper = REPO_ROOT / "scripts/lib/managed_fem_report_storage.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            durable = root / "durable"
+            durable.mkdir()
+            outside = root / "outside" / "report"
+            symlink = durable / "link"
+            symlink.symlink_to(root / "outside", target_is_directory=True)
+            for label, report, expected in (
+                ("outside", outside, "contained by durable root"),
+                ("symlink", symlink / "report", "must not be a symlink"),
+            ):
+                completed = subprocess.run(
+                    (
+                        "bash", "-euo", "pipefail", "-c",
+                        'source "$1"; validate_managed_fem_report_path "$2" "$3"',
+                        "report-path-test", str(helper), str(durable), str(report),
+                    ),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                with self.subTest(label=label):
+                    self.assertEqual(completed.returncode, 2)
+                    self.assertIn(expected, completed.stderr)
+
+    def test_all_mixed_report_recipes_use_common_fail_closed_helper(self) -> None:
+        justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+        for recipe_name, next_recipe in (
+            ("verify-fem-mixed-prism-airbox-runtime:", "verify-fem-mixed-p1-native-contract:"),
+            ("verify-fem-sp4-mixed-matrix-smoke:", "verify-fem-sp4-mixed-matrix:"),
+            ("verify-fem-sp4-mixed-matrix:", "fem-managed-container-headless"),
+        ):
+            recipe = justfile.split(recipe_name, 1)[1].split(next_recipe, 1)[0]
+            with self.subTest(recipe=recipe_name):
+                self.assertIn("create_managed_fem_report_run_root", recipe)
+                helper_index = recipe.index("create_managed_fem_report_run_root")
+                report_mkdir_index = recipe.find("mkdir -p")
+                report_mktemp_index = recipe.find("mktemp -d")
+                self.assertTrue(
+                    report_mkdir_index == -1 or helper_index < report_mkdir_index
+                )
+                self.assertTrue(
+                    report_mktemp_index == -1 or helper_index < report_mktemp_index
+                )
 
     def test_worktree_gate_reuses_valid_shared_python_without_host_ensurepip(self) -> None:
         justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")

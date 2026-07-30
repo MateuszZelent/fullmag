@@ -15,6 +15,7 @@ import unittest
 from unittest import mock
 
 import scripts.plan_fem_sp4_mixed_matrix as planner
+from scripts import capture_source_snapshot_identity
 from tests.standard_problems.mumag.sp4.common.contract import (
     PRODUCTION_RELAXATION_ALGORITHMS,
 )
@@ -42,8 +43,10 @@ EXPECTED_RELEVANT_SOURCES = (
     "justfile",
     "scripts/check_fem_sp4_relaxation.py",
     "scripts/plan_fem_sp4_mixed_matrix.py",
+    "scripts/run_fem_sp4_mixed_matrix.py",
     "scripts/select_fem_sp4_relaxation_state.py",
     "scripts/verify_fem_standard_problem_4.sh",
+    "scripts/verify_fem_mixed_prism_airbox_runtime.py",
     "scripts/write_fem_magnetic_initial_state_from_shared_domain.py",
     "tests/standard_problems/mumag/sp4/common/contract.py",
     "tests/standard_problems/mumag/sp4/common/metrics.py",
@@ -286,6 +289,16 @@ class FemSp4MixedMatrixPlannerTest(unittest.TestCase):
         self.assertEqual(plan["requested_stage"], "stage1-layers")
         self.assertIs(plan["qualifying"], False)
         self.assertEqual(plan["qualification_claim"], "implemented_evidence_only")
+        self.assertEqual(
+            plan["deferred_axes"],
+            ["stage4-all-tet-comparator", "case-a-dynamics", "case-b-dynamics"],
+        )
+        canonical_identity = capture_source_snapshot_identity.capture(REPO_ROOT)
+        self.assertEqual(
+            plan["source_snapshot_sha256"],
+            canonical_identity["source_snapshot_sha256"],
+        )
+        self.assertEqual(plan["source_snapshot_schema"], canonical_identity["schema"])
         self.assertNotIn("capabilities", plan)
         self.assertEqual(
             plan.get("head_commit_full"),
@@ -333,10 +346,6 @@ class FemSp4MixedMatrixPlannerTest(unittest.TestCase):
         self.assertIs(dirty["source_snapshot_dirty"], True)
         self.assertEqual(dirty["git_status_porcelain_v1"], expected_status)
         self.assertEqual(dirty["dirty_paths"], [PROBLEM_SOURCE])
-        self.assertEqual(
-            dirty["git_status_sha256"],
-            hashlib.sha256(_canonical_json(expected_status)).hexdigest(),
-        )
         self.assertEqual(dirty["head_commit_full"], clean["head_commit_full"])
         self.assertEqual(dirty["head_tree_sha256"], clean["head_tree_sha256"])
         self.assertNotEqual(
@@ -346,14 +355,11 @@ class FemSp4MixedMatrixPlannerTest(unittest.TestCase):
         if "dirty_path_content" not in dirty:
             self.fail("dirty snapshot must bind dirty_path_content")
         snapshot_payload = {
-            key: dirty[key]
-            for key in (
-                "head_commit_full",
-                "head_tree_sha256",
-                "git_status_porcelain_v1",
-                "dirty_path_content",
-                "relevant_source_files_sha256",
-            )
+            "schema": dirty["source_snapshot_schema"],
+            "head_commit_full": dirty["head_commit_full"],
+            "head_tree_sha256": dirty["head_tree_sha256"],
+            "git_status_porcelain_v1": dirty["git_status_porcelain_v1"],
+            "dirty_path_content": dirty["dirty_path_content"],
         }
         self.assertEqual(
             dirty["source_snapshot_sha256"],
@@ -412,14 +418,22 @@ class FemSp4MixedMatrixPlannerTest(unittest.TestCase):
         self.assertNotEqual(first["dirty_path_content"], second["dirty_path_content"])
         self.assertNotEqual(first["source_snapshot_sha256"], second["source_snapshot_sha256"])
 
-    def test_deleted_dirty_source_outside_curated_set_fails_closed(self) -> None:
+    def test_deleted_dirty_source_outside_curated_set_is_bound_as_missing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source_root = self._source_repo(directory)
             (source_root / DISPATCH_SOURCE).unlink()
 
             with mock.patch.object(planner, "REPO_ROOT", source_root):
-                with self.assertRaisesRegex(planner.PlanError, "missing dirty path"):
-                    planner.build_plan("stage1-layers")
+                plan = planner.build_plan("stage1-layers")
+
+        self.assertIs(plan["source_snapshot_dirty"], True)
+        missing = next(
+            entry
+            for entry in plan["dirty_path_content"]
+            if entry["path"] == DISPATCH_SOURCE
+        )
+        self.assertEqual(missing["kind"], "missing")
+        self.assertEqual(missing["mode"], "000000")
 
     def test_missing_execution_source_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -597,7 +611,7 @@ class FemSp4MixedMatrixPlannerTest(unittest.TestCase):
                 self.fail(f"stale lock file must be recoverable: {error}")
             self.assertEqual(recovered["requested_stage"], "stage1-layers")
 
-    def test_in_repo_output_is_idempotent_and_only_its_owned_status_is_excluded(
+    def test_in_repo_output_cannot_be_excluded_from_canonical_source_snapshot(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -608,29 +622,15 @@ class FemSp4MixedMatrixPlannerTest(unittest.TestCase):
                 original = {
                     name: (output_dir / name).read_bytes() for name in OUTPUT_FILES
                 }
-                try:
-                    second = planner.emit_plan("stage1-layers", output_dir)
-                except planner.PlanError as error:
-                    self.fail(f"in-repo identical plan must be idempotent: {error}")
-
-                unrelated = output_dir / "unrelated-source.txt"
-                unrelated.write_text("must remain visible\n", encoding="utf-8")
-                try:
-                    visible = planner.build_plan(
-                        "stage1-layers",
-                        output_dir=output_dir,
-                    )
-                except TypeError as error:
-                    self.fail(f"planner must accept its output status scope: {error}")
-                self.assertEqual(second, first)
+                with self.assertRaisesRegex(
+                    planner.PlanError, "incomplete or conflicting"
+                ):
+                    planner.emit_plan("stage1-layers", output_dir)
                 self.assertEqual(
                     {name: (output_dir / name).read_bytes() for name in OUTPUT_FILES},
                     original,
                 )
-                self.assertEqual(
-                    visible["dirty_paths"],
-                    ["matrix-output/unrelated-source.txt"],
-                )
+                self.assertEqual(first["source_snapshot_schema"], "fullmag.source-snapshot.v2")
 
     def test_in_repo_output_does_not_hide_staging_prefix_collision(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
