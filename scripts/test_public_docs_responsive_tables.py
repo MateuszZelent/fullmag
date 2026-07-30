@@ -18,10 +18,9 @@ class ResponsivePublicDocumentationTableTests(unittest.TestCase):
         ]
 
     def test_sphinx_registers_fullmag_documentation_css(self) -> None:
-        self.assertIn(
-            'html_css_files = ["fullmag-docs.css"]',
-            CONF.read_text(encoding="utf-8"),
-        )
+        conf = CONF.read_text(encoding="utf-8")
+        self.assertIn('html_css_files = ["fullmag-docs.css"]', conf)
+        self.assertIn('"responsive_tables"', conf)
 
     def test_tables_own_horizontal_overflow_without_hiding_the_page(self) -> None:
         css = CSS.read_text(encoding="utf-8")
@@ -58,24 +57,26 @@ class ResponsivePublicDocumentationTableTests(unittest.TestCase):
             )
         )
 
-    def test_unwrapped_direct_table_keeps_a_constrained_scrollport(self) -> None:
+    def test_wrapped_table_keeps_a_constrained_scrollport(self) -> None:
         css = CSS.read_text(encoding="utf-8")
-        direct_table_rules = self._rules_for_selector(css, "article main table")
+        wrapper_rules = self._rules_for_selector(css, "article main .table-wrapper")
+        table_rules = self._rules_for_selector(css, "article main .table-wrapper table")
 
         self.assertTrue(
             any(
                 re.search(r"display:\s*block", declarations)
                 and re.search(r"width:\s*100%", declarations)
+                and re.search(r"min-width:\s*0", declarations)
                 and re.search(r"max-width:\s*100%", declarations)
                 and re.search(r"overflow-x:\s*auto", declarations)
-                for declarations in direct_table_rules
+                for declarations in wrapper_rules
             )
         )
-        self.assertFalse(
+        self.assertTrue(
             any(
                 re.search(r"width:\s*max-content", declarations)
                 or re.search(r"max-width:\s*none", declarations)
-                for declarations in direct_table_rules
+                for declarations in table_rules
             )
         )
 
