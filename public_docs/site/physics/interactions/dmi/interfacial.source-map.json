@@ -1,0 +1,81 @@
+{
+  "document": {
+    "path": "public_docs/site/physics/interactions/dmi/interfacial.md",
+    "title": "Interfacial Dzyaloshinskii–Moriya interaction",
+    "interaction": "interfacial DMI"
+  },
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Double-precision centered-difference field and cell-volume energy reference."},
+    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "FP64 and FP32 fused field kernels and DMI energy reduction are present; executed-device qualification is separate."},
+    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "MFEM quadrature weak residual, lumped projection, material field, and energy path are present."},
+    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "CUDA tetrahedral residual, device field dispatch, and final energy reduction are present; runtime parity remains a gate."}
+  ],
+  "sources": [
+    {"id": "python-term", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class InterfacialDMI", "responsibility": "Explicit public constructor and energy-term serialization."},
+    {"id": "python-material", "path": "packages/fullmag-py/src/fullmag/model/structure.py", "symbol": "class Material", "responsibility": "Material Dind and Dind_field serialization."},
+    {"id": "python-validation", "path": "packages/fullmag-py/src/fullmag/_validation.py", "symbol": "as_vector3", "responsibility": "Public interface-normal shape and finite-value validation."},
+    {"id": "planner-fdm", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "FDM scalar term resolution, duplicate checks, and normal legality."},
+    {"id": "planner-fdm-normal", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "fdm_supports_interfacial_dmi_normal", "responsibility": "Canonical plus-z normal predicate."},
+    {"id": "planner-fem", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem", "responsibility": "FEM term resolution and resolved execution plan."},
+    {"id": "planner-fem-normal", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "resolve_interfacial_dmi_normal", "responsibility": "FEM default and normalization of the interface normal."},
+    {"id": "planner-fem-material", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "build_region_material_fields", "responsibility": "FEM material Dind field promotion."},
+    {"id": "fdm-cpu-field", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "interfacial_dmi_field", "responsibility": "Allocating FDM CPU centered-difference field."},
+    {"id": "fdm-cpu-energy", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "dmi_energy_from_soa", "responsibility": "FDM CPU cell-volume DMI energy."},
+    {"id": "fdm-gpu-fp64", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "combine_effective_field_fp64_kernel", "responsibility": "FDM CUDA FP64 fused interfacial field."},
+    {"id": "fdm-gpu-fp32", "path": "backends/fdm/gpu/cuda/interactions/demag_fp32.cu", "symbol": "combine_effective_field_fp32_kernel", "responsibility": "FDM CUDA FP32 fused interfacial field."},
+    {"id": "fdm-gpu-energy", "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu", "symbol": "reduce_dmi_energy_fp64", "responsibility": "FDM CUDA interfacial density and block reduction."},
+    {"id": "fem-cpu", "path": "backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp", "symbol": "compute_interfacial_dmi_field", "responsibility": "FEM CPU quadrature residual, field projection, and energy."},
+    {"id": "fem-residual", "path": "backends/fem/src/dmi_weak_residual.cpp", "symbol": "dmi_accumulate_interfacial_residual", "responsibility": "Interfacial first-variation component action."},
+    {"id": "fem-projection", "path": "backends/fem/src/dmi_weak_residual.cpp", "symbol": "dmi_project_lumped_field", "responsibility": "Lumped-mass effective-field projection."},
+    {"id": "fem-material-validation", "path": "backends/fem/core/fem_material_fields.cpp", "symbol": "validate_material_fields", "responsibility": "FEM nodal material-field length and value validation."},
+    {"id": "fem-gpu-kernel", "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu", "symbol": "dmi_element_residual_kernel", "responsibility": "FEM CUDA tetrahedral residual and energy kernel."},
+    {"id": "fem-gpu-field", "path": "backends/fem/gpu/cuda/integrators/rk/rk_dmi_fields.cu", "symbol": "gpu_rk_compute_dmi_field_contributions", "responsibility": "FEM CUDA device-resident field dispatch."},
+    {"id": "fem-gpu-energy", "path": "backends/fem/gpu/cuda/integrators/rk/rk_dmi_energy_reductions.cu", "symbol": "gpu_rk_reduce_final_dmi_energy_terms", "responsibility": "FEM CUDA final DMI energy reduction."}
+  ],
+  "symbols": [
+    {"id": "M", "latex": "$\\mathbf M$", "meaning": "physical magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
+    {"id": "v", "latex": "$\\mathbf v$", "meaning": "admissible variation/test field", "si_unit": "$1$"},
+    {"id": "nhat", "latex": "$\\hat{\\mathbf n}$", "meaning": "normalized interface normal", "si_unit": "$1$"},
+    {"id": "nu", "latex": "$\\boldsymbol\\nu$", "meaning": "outward magnetic-boundary normal", "si_unit": "$1$"},
+    {"id": "D", "latex": "$D$", "meaning": "interfacial DMI coefficient", "si_unit": "$\\mathrm{J\\,m^{-2}}$"},
+    {"id": "A", "latex": "$A$", "meaning": "exchange stiffness in the coupled boundary law", "si_unit": "$\\mathrm{J\\,m^{-1}}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "G", "latex": "$G_{ab}$", "meaning": "gradient component $\\partial_bm_a$", "si_unit": "$\\mathrm{m^{-1}}$"},
+    {"id": "mn", "latex": "$m_n$", "meaning": "projection $\\mathbf m\\cdot\\hat{\\mathbf n}$", "si_unit": "$1$"},
+    {"id": "wi", "latex": "$w_{\\mathrm i}$", "meaning": "local iDMI energy density", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "Ei", "latex": "$E_{\\mathrm i}$", "meaning": "total iDMI energy", "si_unit": "$\\mathrm{J}$"},
+    {"id": "Hi", "latex": "$\\mathbf H_{\\mathrm i}$", "meaning": "iDMI effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Omega", "latex": "$\\Omega_m$", "meaning": "magnetic integration domain", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "Vi", "latex": "$V_i$", "meaning": "FDM cell volume", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "wlump", "latex": "$w_i^{\\mathrm{lump}}$", "meaning": "FEM lumped nodal integration weight", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "gi", "latex": "$g_i$", "meaning": "assembled FEM residual at node $i$", "si_unit": "$\\mathrm{J}$"},
+    {"id": "i", "latex": "$i$", "meaning": "discrete cell or node index", "si_unit": "$1$"},
+    {"id": "dx", "latex": "$\\Delta x,\\Delta y,\\Delta z$", "meaning": "FDM cell sizes", "si_unit": "$\\mathrm{m}$"},
+    {"id": "partial", "latex": "$\\partial_a$", "meaning": "derivative with respect to coordinate $x_a$", "si_unit": "$\\mathrm{m^{-1}}$"},
+    {"id": "I", "latex": "$I$", "meaning": "three-dimensional identity tensor", "si_unit": "$1$"}
+  ],
+  "equations": [
+    {"id": "eq-interfacial-dmi-density", "symbols": ["wi", "D", "m", "nhat"], "sources": ["python-term", "fem-cpu", "fdm-cpu-energy"]},
+    {"id": "eq-interfacial-dmi-z-density", "symbols": ["wi", "D", "m"], "sources": ["fdm-cpu-energy", "fdm-gpu-energy"]},
+    {"id": "eq-interfacial-dmi-energy", "symbols": ["Ei", "wi", "Omega"], "sources": ["fem-cpu", "fdm-cpu-energy"]},
+    {"id": "eq-interfacial-dmi-variation", "symbols": ["Ei", "v", "D", "nhat", "m", "G"], "sources": ["fem-residual", "fem-gpu-kernel"]},
+    {"id": "eq-interfacial-dmi-effective-field", "symbols": ["Hi", "D", "mu0", "Ms", "m", "nhat"], "sources": ["fdm-cpu-field", "fem-projection"]},
+    {"id": "eq-interfacial-dmi-z-effective-field", "symbols": ["Hi", "D", "mu0", "Ms", "m"], "sources": ["fdm-cpu-field", "fdm-gpu-fp64", "fdm-gpu-fp32"]},
+    {"id": "eq-interfacial-dmi-boundary-variation", "symbols": ["Ei", "D", "nhat", "nu", "m", "v"], "sources": ["fem-residual"]},
+    {"id": "eq-interfacial-dmi-exchange-boundary", "symbols": ["A", "D", "nhat", "nu", "m"], "sources": ["fem-residual"]},
+    {"id": "eq-interfacial-dmi-fdm-field", "symbols": ["Hi", "D", "mu0", "Ms", "m", "Vi", "i"], "sources": ["fdm-cpu-field", "fdm-gpu-fp64", "fdm-gpu-fp32"]},
+    {"id": "eq-interfacial-dmi-fem-residual", "symbols": ["v", "wi", "G"], "sources": ["fem-cpu", "fem-residual", "fem-gpu-kernel"]},
+    {"id": "eq-interfacial-dmi-fem-projection", "symbols": ["Hi", "gi", "mu0", "Ms", "wlump", "i"], "sources": ["fem-projection", "fem-cpu"]}
+  ],
+  "public_api": {
+    "constructors": ["fullmag.InterfacialDMI", "fullmag.Material"],
+    "parameters": [
+      {"python": "InterfacialDMI.D", "type": "float", "default": "required", "si_unit": "$\\mathrm{J\\,m^{-2}}$", "validation": "finite", "meaning": "scalar interfacial DMI coefficient and chirality sign", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "`energy_terms[].D` for `kind=interfacial_dmi`"},
+      {"python": "InterfacialDMI.interface_normal", "type": "Sequence[float] | None", "default": "None", "si_unit": "$1$", "validation": "length 3; finite; FEM non-zero; FDM normalized +z only", "meaning": "interface symmetry axis", "backend_support": "FDM +z; FEM any non-zero normalized axis", "problem_ir": "`energy_terms[].interface_normal` when supplied"},
+      {"python": "Material.Dind", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-2}}$", "validation": "finite when supplied; FEM planner resolves active value", "meaning": "material-owned scalar iDMI coefficient", "backend_support": "FEM CPU/GPU; not a native FDM scalar route", "problem_ir": "`materials[].interfacial_dmi`"},
+      {"python": "Material.Dind_field", "type": "list[float] | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-2}}$", "validation": "FEM node cardinality and finite values validated downstream", "meaning": "spatial nodal iDMI coefficient", "backend_support": "FEM CPU/GPU", "problem_ir": "`materials[].dind_field`"}
+    ]
+  }
+}
