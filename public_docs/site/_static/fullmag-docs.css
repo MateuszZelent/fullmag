@@ -1,7 +1,8 @@
-article,
-article > main,
-article main,
-article main > section {
+main,
+main > .container,
+main article,
+main article > section,
+main article section {
   box-sizing: border-box;
   min-width: 0;
   max-width: 100%;
@@ -14,7 +15,7 @@ article main > section {
   max-width: 100%;
 }
 
-article main .table-wrapper {
+main article .table-wrapper {
   display: block;
   width: 100%;
   min-width: 0;
@@ -27,16 +28,16 @@ article main .table-wrapper {
   -webkit-overflow-scrolling: touch;
 }
 
-article main .table-wrapper table {
+main article .table-wrapper table {
   width: max-content;
   min-width: 100%;
   max-width: none;
 }
 
-article main .table-wrapper th,
-article main .table-wrapper td,
-article main table th,
-article main table td {
+main article .table-wrapper th,
+main article .table-wrapper td,
+main article table th,
+main article table td {
   min-width: 0;
   max-width: none;
   white-space: normal;
@@ -45,24 +46,24 @@ article main table td {
   vertical-align: top;
 }
 
-article main .table-wrapper code,
-article main .table-wrapper .math,
-article main table code,
-article main table .math,
-article main table mjx-container {
+main article .table-wrapper code,
+main article .table-wrapper .math,
+main article table code,
+main article table .math,
+main article table mjx-container {
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
 
-article > main div.math,
-article > main pre {
+main article div.math,
+main article pre {
   display: block;
   max-width: 100%;
   overflow-x: auto;
 }
 
-article > main span.math {
+main article span.math {
   display: inline;
 }
 
@@ -71,7 +72,7 @@ article > main span.math {
 }
 
 @media (max-width: 48rem) {
-  article main .table-wrapper {
+  main article .table-wrapper {
     scrollbar-width: thin;
     background: linear-gradient(
       to right,
