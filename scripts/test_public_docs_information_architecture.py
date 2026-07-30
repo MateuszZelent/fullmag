@@ -4,8 +4,10 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parents[1] / "public_docs/site/_extensions"))
 
 import public_docs_information_architecture as information_architecture
+import legacy_redirects
 
 from public_docs_information_architecture import (
     INTERACTION_SLUGS,
@@ -93,6 +95,25 @@ class PublicDocumentationInformationArchitectureTests(unittest.TestCase):
             )
             self.assertTrue(target.startswith("physics/interactions/"))
             self.assertIn(target, {spec.path for spec in PAGE_SPECS})
+
+    def test_deployed_redirects_match_manifest_and_cover_retired_indexes(self) -> None:
+        expected = {
+            source.removesuffix(".md") + ".html":
+                target.removesuffix(".md") + ".html"
+            for source, target in information_architecture.LEGACY_REDIRECTS.items()
+        }
+        expected["physics/exchange.html"] = (
+            "physics/interactions/exchange/index.html"
+        )
+        self.assertEqual(legacy_redirects._redirects(), expected)
+        self.assertEqual(len(expected), 68)
+        for path in (
+            "physics/solvers/index.html",
+            "physics/solvers/fdm/index.html",
+            "physics/solvers/fdm/cpu/index.html",
+            "physics/solvers/fdm/cpu/interactions/index.html",
+        ):
+            self.assertEqual(expected[path], "physics/interactions/index.html")
 
     def test_root_navigation_depth_exposes_interaction_subtrees(self) -> None:
         root = next(spec for spec in PAGE_SPECS if spec.path == "index.md")

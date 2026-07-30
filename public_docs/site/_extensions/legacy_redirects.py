@@ -5,36 +5,24 @@ from __future__ import annotations
 import html
 import json
 import posixpath
+import sys
 from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
 
-from sphinx.application import Sphinx
+if TYPE_CHECKING:
+    from sphinx.application import Sphinx
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 
-INTERACTION_TARGETS = {
-    "exchange": "physics/interactions/exchange/index.html",
-    "demagnetization": "physics/interactions/demagnetization/index.html",
-    "zeeman": "physics/interactions/zeeman/index.html",
-    "uniaxial-anisotropy": "physics/interactions/anisotropy/uniaxial.html",
-    "cubic-anisotropy": "physics/interactions/anisotropy/cubic.html",
-    "interfacial-dmi": "physics/interactions/dmi/interfacial.html",
-    "bulk-dmi": "physics/interactions/dmi/bulk.html",
-    "thermal-noise": "physics/interactions/thermal-noise/index.html",
-    "magnetoelastic": "physics/interactions/magnetoelastic/index.html",
-    "oersted-field": "physics/interactions/oersted-field/index.html",
-    "spin-transfer-torque": "physics/interactions/spin-transfer-torque/index.html",
-    "spin-orbit-torque": "physics/interactions/spin-orbit-torque/index.html",
-    "drift-diffusion-spin-torque": "physics/interactions/drift-diffusion-spin-torque/index.html",
-    "inter-region-couplings": "physics/interactions/inter-region-couplings/index.html",
-}
+from public_docs_information_architecture import LEGACY_REDIRECTS
 
 
 def _redirects() -> dict[str, str]:
-    redirects = {"physics/exchange.html": INTERACTION_TARGETS["exchange"]}
-    for solver in ("fdm", "fem"):
-        for device in ("cpu", "gpu"):
-            prefix = f"physics/solvers/{solver}/{device}/interactions"
-            for slug, target in INTERACTION_TARGETS.items():
-                redirects[f"{prefix}/{slug}.html"] = target
+    redirects = {
+        source.removesuffix(".md") + ".html": target.removesuffix(".md") + ".html"
+        for source, target in LEGACY_REDIRECTS.items()
+    }
+    redirects["physics/exchange.html"] = "physics/interactions/exchange/index.html"
     return redirects
 
 

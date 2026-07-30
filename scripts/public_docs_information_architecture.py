@@ -89,6 +89,28 @@ LEGACY_INTERACTION_REDIRECTS = {
     for backend in ("cpu", "gpu")
     for slug, target in _CANONICAL_INTERACTION_PATHS.items()
 }
+LEGACY_NAVIGATION_REDIRECTS = {
+    "physics/solvers/index.md": "physics/interactions/index.md",
+    **{
+        f"physics/solvers/{solver}/index.md": "physics/interactions/index.md"
+        for solver in ("fdm", "fem")
+    },
+    **{
+        f"physics/solvers/{solver}/{backend}/index.md": "physics/interactions/index.md"
+        for solver in ("fdm", "fem")
+        for backend in ("cpu", "gpu")
+    },
+    **{
+        f"physics/solvers/{solver}/{backend}/interactions/index.md":
+            "physics/interactions/index.md"
+        for solver in ("fdm", "fem")
+        for backend in ("cpu", "gpu")
+    },
+}
+LEGACY_REDIRECTS = {
+    **LEGACY_INTERACTION_REDIRECTS,
+    **LEGACY_NAVIGATION_REDIRECTS,
+}
 
 _TITLES = {
     "api": "API",
