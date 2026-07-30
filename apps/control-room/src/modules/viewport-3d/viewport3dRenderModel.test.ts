@@ -469,6 +469,53 @@ describe("viewport3dRenderModel", () => {
     expect(topologyModel?.magneticParts[0]?.volumeEdgeIndices).toBeNull();
   });
 
+  it("propagates aligned surface cell identity buffers into part render models", () => {
+    const part = {
+      boundary_face_count: 1,
+      boundary_face_start: 0,
+      id: "part-a",
+      label: "Part A",
+    };
+    const surfaceTriangleCellTypes = new Uint32Array([2]);
+    const surfaceTriangleGlobalCellOrdinals = new BigUint64Array([
+      BigInt("9007199254740993"),
+    ]);
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [part],
+      [],
+      undefined,
+      {},
+      {
+        topologyIndexBundle: {
+          airboxPartsById: new Map(),
+          fallbackSurfaceEdgeIndices: null,
+          fallbackSurfaceIndices: new Uint32Array(),
+          fallbackSurfaceNodeIndices: new Uint32Array(),
+          fallbackVolumeEdgeIndices: new Uint32Array(),
+          magneticPartsById: new Map([[part.id, {
+            edgeIndices: null,
+            surfaceIndices: new Uint32Array([0, 1, 2]),
+            surfaceNodeIndices: new Uint32Array([0, 1, 2]),
+            surfaceNodeSelection: { nodeIndices: [0, 1, 2] },
+            surfaceTriangleCellTypes,
+            surfaceTriangleFacetIndices: new Uint32Array([0]),
+            surfaceTriangleGlobalCellOrdinals,
+            volumeEdgeIndices: null,
+          }]]),
+        },
+        topologyIndexState: "ready",
+      },
+    );
+
+    expect(topologyModel?.magneticParts[0]?.surfaceTriangleCellTypes).toBe(
+      surfaceTriangleCellTypes,
+    );
+    expect(
+      topologyModel?.magneticParts[0]?.surfaceTriangleGlobalCellOrdinals,
+    ).toBe(surfaceTriangleGlobalCellOrdinals);
+  });
+
   it("uses canonical surface membership while topology indices are pending", () => {
     const topologyModel = buildViewport3DTopologyRenderModel(
       topologyFixture(),

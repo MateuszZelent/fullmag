@@ -50,6 +50,7 @@ interface PendingBuildJob {
   fallbackReason: string | null;
   mainAdoptMs: number;
   options: Viewport3DBuildScheduleOptions;
+  outputBytes: number | null;
   running: boolean;
   settled: boolean;
   startedAtMs: number | null;
@@ -117,6 +118,7 @@ export function createViewport3DBuildScheduler(
       lane: request.lane,
       mainAdoptMs: 0,
       options,
+      outputBytes: null,
       promise,
       queuedAtMs: now(),
       reject,
@@ -181,6 +183,9 @@ export function createViewport3DBuildScheduler(
       result = job.runner(job.request, {
         recordMainAdopt: (durationMs) => {
           job.mainAdoptMs += normalizeDurationMs(durationMs);
+        },
+        recordOutputBytes: (byteLength) => {
+          job.outputBytes = normalizeByteLength(byteLength);
         },
         recordFallback: (reason) => {
           job.fallbackReason = reason;
@@ -339,7 +344,7 @@ export function createViewport3DBuildScheduler(
       lane: job.lane,
       mainAdoptMs: job.mainAdoptMs,
       mainUploadMs: 0,
-      outputBytes: job.request.outputBytesEstimate,
+      outputBytes: job.outputBytes ?? job.request.outputBytesEstimate,
       queuedAtMs: job.queuedAtMs,
       queueWaitMs,
       revisionSummary: job.request.revisionSummary,
@@ -359,6 +364,10 @@ export function createViewport3DBuildScheduler(
     getPendingJobCount: () => jobsByKey.size,
     schedule,
   };
+}
+
+function normalizeByteLength(value: number): number {
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
 
 export function isViewport3DBuildAbortError(error: unknown): boolean {

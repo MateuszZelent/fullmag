@@ -1317,6 +1317,8 @@ function useViewport3DSelectionHandlers({
         viewportSelectionForMeshPart(address, {
           boundaryFaceIndex: partSelection.boundaryFaceIndex,
           carrierPartId: partSelection.carrierPartId,
+          elementFamily: partSelection.elementFamily,
+          globalCellOrdinal: partSelection.globalCellOrdinal,
           label: partSelection.label,
         }),
       );

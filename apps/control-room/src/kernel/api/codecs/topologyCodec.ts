@@ -14,11 +14,13 @@ export interface TopologyHeader {
   boundaryMarkerCount: number;
   cellConnectivityCount: number;
   cellCount: number;
+  cellGlobalOrdinalCount: number;
   cellMarkerCount: number;
   elementCount: number;
   elementMarkerCount: number;
   facetConnectivityCount: number;
   facetCount: number;
+  facetGlobalOrdinalCount: number;
   facetMarkerCount: number;
   headerLength: number;
   nodeCount: number;
@@ -29,12 +31,14 @@ export interface TopologyByteLayout {
   boundaryFaces: ByteRange;
   boundaryMarkers: ByteRange;
   cellMarkers: ByteRange;
+  cellGlobalOrdinals: ByteRange | null;
   cellNodes: ByteRange;
   cellOffsets: ByteRange | null;
   cellTypes: ByteRange | null;
   elementMarkers: ByteRange;
   expectedByteLength: number;
   facetMarkers: ByteRange;
+  facetGlobalOrdinals: ByteRange | null;
   facetNodes: ByteRange;
   facetOffsets: ByteRange | null;
   facetRoles: ByteRange | null;
@@ -45,10 +49,12 @@ export interface TopologyByteLayout {
 
 export interface TopologySections {
   cellMarkers: Uint32Array;
+  cellGlobalOrdinals: BigUint64Array;
   cellNodes: Uint32Array;
   cellOffsets: Uint32Array;
   cellTypes: Uint32Array;
   facetMarkers: Uint32Array;
+  facetGlobalOrdinals: BigUint64Array;
   facetNodes: Uint32Array;
   facetOffsets: Uint32Array;
   facetRoles: Uint32Array;
@@ -180,12 +186,14 @@ export function topologyByteLayout(header: TopologyHeader): TopologyByteLayout {
       boundaryFaces: facetNodes,
       boundaryMarkers: facetMarkers,
       cellMarkers,
+      cellGlobalOrdinals: null,
       cellNodes,
       cellOffsets: null,
       cellTypes: null,
       elementMarkers: cellMarkers,
       expectedByteLength,
       facetMarkers,
+      facetGlobalOrdinals: null,
       facetNodes,
       facetOffsets: null,
       facetRoles: null,
@@ -225,22 +233,49 @@ export function topologyByteLayout(header: TopologyHeader): TopologyByteLayout {
   const cellMarkersSection = sectionRange(offset, header.cellMarkerCount, 4, "cell markers");
   offset = cellMarkersSection.next;
   const facetMarkersSection = sectionRange(offset, header.facetMarkerCount, 4, "facet markers");
-  const expectedByteLength = checkedAdd(
-    "payload",
-    facetMarkersSection.range.start,
-    byteLength(facetMarkersSection.range),
-  );
+  const facetMarkerEnd = facetMarkersSection.next;
+  offset = facetMarkerEnd;
+  if (header.cellGlobalOrdinalCount > 0 || header.facetGlobalOrdinalCount > 0) {
+    offset = alignToEight(offset);
+  }
+  const cellGlobalOrdinalsSection = header.cellGlobalOrdinalCount > 0
+    ? sectionRange(
+        offset,
+        header.cellGlobalOrdinalCount,
+        8,
+        "cell global ordinals",
+      )
+    : null;
+  if (cellGlobalOrdinalsSection) offset = cellGlobalOrdinalsSection.next;
+  const facetGlobalOrdinalsSection = header.facetGlobalOrdinalCount > 0
+    ? sectionRange(offset, header.facetGlobalOrdinalCount, 8, "facet global ordinals")
+    : null;
+  const expectedByteLength = facetGlobalOrdinalsSection
+    ? checkedAdd(
+        "payload",
+        facetGlobalOrdinalsSection.range.start,
+        byteLength(facetGlobalOrdinalsSection.range),
+      )
+    : cellGlobalOrdinalsSection
+      ? checkedAdd(
+          "payload",
+          cellGlobalOrdinalsSection.range.start,
+          byteLength(cellGlobalOrdinalsSection.range),
+        )
+      : facetMarkerEnd;
 
   return {
     boundaryFaces: facetNodesSection.range,
     boundaryMarkers: facetMarkersSection.range,
     cellMarkers: cellMarkersSection.range,
+    cellGlobalOrdinals: cellGlobalOrdinalsSection?.range ?? null,
     cellNodes: cellNodesSection.range,
     cellOffsets: cellOffsetsSection.range,
     cellTypes: cellTypesSection.range,
     elementMarkers: cellMarkersSection.range,
     expectedByteLength,
     facetMarkers: facetMarkersSection.range,
+    facetGlobalOrdinals: facetGlobalOrdinalsSection?.range ?? null,
     facetNodes: facetNodesSection.range,
     facetOffsets: facetOffsetsSection.range,
     facetRoles: facetRolesSection.range,
@@ -323,6 +358,12 @@ export function decodeTopology(buffer: ArrayBuffer): DecodedTopology {
   const facetNodes = uint32View(buffer, layout.facetNodes, header.facetConnectivityCount);
   const cellMarkers = uint32View(buffer, layout.cellMarkers, header.cellMarkerCount);
   const facetMarkers = uint32View(buffer, layout.facetMarkers, header.facetMarkerCount);
+  const cellGlobalOrdinals = layout.cellGlobalOrdinals
+    ? bigUint64View(buffer, layout.cellGlobalOrdinals, header.cellGlobalOrdinalCount)
+    : new BigUint64Array(0);
+  const facetGlobalOrdinals = layout.facetGlobalOrdinals
+    ? bigUint64View(buffer, layout.facetGlobalOrdinals, header.facetGlobalOrdinalCount)
+    : new BigUint64Array(0);
   const cellTypes = layout.cellTypes
     ? uint32View(buffer, layout.cellTypes, header.cellCount)
     : new Uint32Array(header.cellCount).fill(1);
@@ -341,10 +382,12 @@ export function decodeTopology(buffer: ArrayBuffer): DecodedTopology {
 
   return decodeTopologySections(header, {
     cellMarkers,
+    cellGlobalOrdinals,
     cellNodes,
     cellOffsets,
     cellTypes,
     facetMarkers,
+    facetGlobalOrdinals,
     facetNodes,
     facetOffsets,
     facetRoles,
@@ -384,11 +427,13 @@ export function decodeTopologyHeader(buffer: ArrayBuffer): TopologyHeader {
       boundaryMarkerCount: facetMarkerCount,
       cellConnectivityCount: checkedElementCount("cell connectivity", cellCount, 4),
       cellCount,
+      cellGlobalOrdinalCount: 0,
       cellMarkerCount,
       elementCount: cellCount,
       elementMarkerCount: cellMarkerCount,
       facetConnectivityCount: checkedElementCount("facet connectivity", facetCount, 3),
       facetCount,
+      facetGlobalOrdinalCount: 0,
       facetMarkerCount,
       headerLength: FMMT_V1_HEADER_LEN,
       nodeCount,
@@ -414,22 +459,34 @@ export function decodeTopologyHeader(buffer: ArrayBuffer): TopologyHeader {
   const facetConnectivityCount = view.getUint32(24, true);
   const cellMarkerCount = view.getUint32(28, true);
   const facetMarkerCount = view.getUint32(32, true);
+  const cellGlobalOrdinalCount = view.getUint32(40, true);
+  const facetGlobalOrdinalCount = view.getUint32(44, true);
   if (
     (cellMarkerCount !== 0 && cellMarkerCount !== cellCount) ||
     (facetMarkerCount !== 0 && facetMarkerCount !== facetCount)
   ) {
     throw new Error("FMMT v2 marker counts must be zero or match cell and facet counts");
   }
+  if (
+    (cellGlobalOrdinalCount !== 0 && cellGlobalOrdinalCount !== cellCount) ||
+    (facetGlobalOrdinalCount !== 0 && facetGlobalOrdinalCount !== facetCount)
+  ) {
+    throw new Error(
+      "FMMT v2 global ordinal counts must be zero or match cell and facet counts",
+    );
+  }
   return {
     boundaryFaceCount: facetCount,
     boundaryMarkerCount: facetMarkerCount,
     cellConnectivityCount,
     cellCount,
+    cellGlobalOrdinalCount,
     cellMarkerCount,
     elementCount: cellCount,
     elementMarkerCount: cellMarkerCount,
     facetConnectivityCount,
     facetCount,
+    facetGlobalOrdinalCount,
     facetMarkerCount,
     headerLength,
     nodeCount,
@@ -451,7 +508,9 @@ export function decodeTopologySections(
     sections.facetOffsets.length !== header.facetCount + 1 ||
     sections.facetNodes.length !== header.facetConnectivityCount ||
     sections.cellMarkers.length !== header.cellMarkerCount ||
-    sections.facetMarkers.length !== header.facetMarkerCount
+    sections.cellGlobalOrdinals.length !== header.cellGlobalOrdinalCount ||
+    sections.facetMarkers.length !== header.facetMarkerCount ||
+    sections.facetGlobalOrdinals.length !== header.facetGlobalOrdinalCount
   ) {
     throw new Error("FMMT decoded section length does not match header");
   }
@@ -502,6 +561,7 @@ export function decodeTopologySections(
     boundaryMarkers: sections.facetMarkers,
     cellCount: header.cellCount,
     cellMarkers: sections.cellMarkers,
+    cellGlobalOrdinals: sections.cellGlobalOrdinals,
     cellNodes: sections.cellNodes,
     cellOffsets: sections.cellOffsets,
     cellTypes: sections.cellTypes,
@@ -509,6 +569,7 @@ export function decodeTopologySections(
     elementMarkers: sections.cellMarkers,
     facetCount: header.facetCount,
     facetMarkers: sections.facetMarkers,
+    facetGlobalOrdinals: sections.facetGlobalOrdinals,
     facetNodes: sections.facetNodes,
     facetOffsets: sections.facetOffsets,
     facetRoles: sections.facetRoles,
@@ -536,4 +597,13 @@ function float64View(buffer: ArrayBuffer, range: ByteRange, length: number): Flo
 function uint32View(buffer: ArrayBuffer, range: ByteRange, length: number): Uint32Array {
   if (length === 0) return new Uint32Array(0);
   return new Uint32Array(buffer, range.start, length);
+}
+
+function bigUint64View(
+  buffer: ArrayBuffer,
+  range: ByteRange,
+  length: number,
+): BigUint64Array {
+  if (length === 0) return new BigUint64Array(0);
+  return new BigUint64Array(buffer, range.start, length);
 }

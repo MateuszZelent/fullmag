@@ -2327,6 +2327,7 @@ export class ControlRoomApi {
   ): Promise<DecodedTopology> {
     const layout = topologyByteLayout(header);
     const sections: TopologySections = {
+      cellGlobalOrdinals: new BigUint64Array(header.cellGlobalOrdinalCount),
       cellMarkers: new Uint32Array(header.cellMarkerCount),
       cellNodes: new Uint32Array(header.cellConnectivityCount),
       cellOffsets:
@@ -2334,6 +2335,7 @@ export class ControlRoomApi {
           ? sequentialTopologyOffsets(header.cellCount, 4)
           : new Uint32Array(header.cellCount + 1),
       cellTypes: new Uint32Array(header.cellCount).fill(1),
+      facetGlobalOrdinals: new BigUint64Array(header.facetGlobalOrdinalCount),
       facetMarkers: new Uint32Array(header.facetMarkerCount),
       facetNodes: new Uint32Array(header.facetConnectivityCount),
       facetOffsets:
@@ -2351,6 +2353,8 @@ export class ControlRoomApi {
       [layout.facetNodes, sections.facetNodes],
       [layout.cellMarkers, sections.cellMarkers],
       [layout.facetMarkers, sections.facetMarkers],
+      [layout.cellGlobalOrdinals, sections.cellGlobalOrdinals],
+      [layout.facetGlobalOrdinals, sections.facetGlobalOrdinals],
       [layout.cellTypes, sections.cellTypes],
       [layout.cellOffsets, sections.cellOffsets],
       [layout.facetTypes, sections.facetTypes],

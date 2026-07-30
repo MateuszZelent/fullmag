@@ -108,6 +108,8 @@ export function visualizationObjectIdForMeshPartLike(part: {
   return objectId ? canonicalVisualizationSceneObjectId(objectId) : null;
 }
 
+export type MeshElementFamily = "hex8" | "prism6" | "pyramid5" | "tet4";
+
 export type SelectionRef =
   | {
       kind: "model.planar.monitor";
@@ -119,6 +121,8 @@ export type SelectionRef =
   | {
       boundaryFaceIndex?: number | null;
       carrierPartId?: string;
+      elementFamily?: MeshElementFamily | null;
+      globalCellOrdinal?: string | null;
       kind: ObjectSelectionKind;
       nodeId: string;
       objectId: string;
@@ -130,6 +134,8 @@ export type SelectionRef =
   | {
       boundaryFaceIndex?: number | null;
       carrierPartId?: string;
+      elementFamily?: MeshElementFamily | null;
+      globalCellOrdinal?: string | null;
       kind:
         | "airbox.root"
         | "airbox.mesh"
@@ -147,6 +153,8 @@ export type SelectionRef =
   | {
       boundaryFaceIndex?: number | null;
       carrierPartId?: string;
+      elementFamily?: MeshElementFamily | null;
+      globalCellOrdinal?: string | null;
       kind: "mesh-part" | "mesh-part-airbox";
       nodeId: string;
       objectId: string | null;
@@ -411,6 +419,9 @@ export function selectionRefEquals(
         nullableStringEquals(left.carrierPartId, right.carrierPartId) &&
         (left.boundaryFaceIndex ?? null) ===
           (right.boundaryFaceIndex ?? null) &&
+        (left.globalCellOrdinal ?? null) ===
+          (right.globalCellOrdinal ?? null) &&
+        nullableStringEquals(left.elementFamily, right.elementFamily) &&
         left.visualizationTargetId === right.visualizationTargetId
       );
     case "airbox":
@@ -421,6 +432,9 @@ export function selectionRefEquals(
         nullableStringEquals(left.carrierPartId, right.carrierPartId) &&
         (left.boundaryFaceIndex ?? null) ===
           (right.boundaryFaceIndex ?? null) &&
+        (left.globalCellOrdinal ?? null) ===
+          (right.globalCellOrdinal ?? null) &&
+        nullableStringEquals(left.elementFamily, right.elementFamily) &&
         left.visualizationTargetId === right.visualizationTargetId
       );
     case "mesh-part":
@@ -432,6 +446,9 @@ export function selectionRefEquals(
         nullableStringEquals(left.objectId, right.objectId) &&
         (left.boundaryFaceIndex ?? null) ===
           (right.boundaryFaceIndex ?? null) &&
+        (left.globalCellOrdinal ?? null) ===
+          (right.globalCellOrdinal ?? null) &&
+        nullableStringEquals(left.elementFamily, right.elementFamily) &&
         left.visualizationTargetId === right.visualizationTargetId
       );
     case "mesh-quality-element":

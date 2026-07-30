@@ -150,6 +150,8 @@ describe("resolveViewport3DMeshQualityLegend", () => {
     expect(source).toContain("viewportSelectionForMeshPart(address");
     expect(source).toContain("carrierPartId: partSelection.carrierPartId");
     expect(source).toContain("boundaryFaceIndex: partSelection.boundaryFaceIndex");
+    expect(source).toContain("globalCellOrdinal: partSelection.globalCellOrdinal");
+    expect(source).toContain("elementFamily: partSelection.elementFamily");
   });
 
   it("describes the active mesh quality metric and range", () => {

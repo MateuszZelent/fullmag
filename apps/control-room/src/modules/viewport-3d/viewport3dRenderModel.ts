@@ -99,7 +99,9 @@ export interface Viewport3DTopologyPartRenderModel<
   fullNodeSelection: Viewport3DNodeSelection;
   part: TPart;
   surfaceIndices: Uint32Array | null;
+  surfaceTriangleCellTypes?: Uint32Array | null;
   surfaceTriangleFacetIndices?: Uint32Array | null;
+  surfaceTriangleGlobalCellOrdinals?: BigUint64Array | null;
   surfaceNodeIndices: Uint32Array | null;
   surfaceNodeSelection: Viewport3DNodeSelection | null;
   volumeEdgeIndices: Uint32Array | null;
@@ -666,8 +668,14 @@ function buildViewport3DTopologyPartRenderModel<
     get surfaceIndices() {
       return topologyModel.surfaceIndices;
     },
+    get surfaceTriangleCellTypes() {
+      return topologyModel.surfaceTriangleCellTypes;
+    },
     get surfaceTriangleFacetIndices() {
       return topologyModel.surfaceTriangleFacetIndices;
+    },
+    get surfaceTriangleGlobalCellOrdinals() {
+      return topologyModel.surfaceTriangleGlobalCellOrdinals;
     },
     get surfaceNodeIndices() {
       return topologyModel.surfaceNodeIndices;
@@ -2205,7 +2213,9 @@ function buildPartTopologyModel(
   Viewport3DTopologyPartRenderModel,
   | "edgeIndices"
   | "surfaceIndices"
+  | "surfaceTriangleCellTypes"
   | "surfaceTriangleFacetIndices"
+  | "surfaceTriangleGlobalCellOrdinals"
   | "surfaceNodeIndices"
   | "surfaceNodeSelection"
   | "volumeEdgeIndices"
@@ -2245,6 +2255,14 @@ function buildPartTopologyModel(
             surfaceIndices(),
           ),
   );
+  const surfaceTriangleCellTypes = lazyValue(() =>
+    preparedIndices ? preparedIndices.surfaceTriangleCellTypes : null,
+  );
+  const surfaceTriangleGlobalCellOrdinals = lazyValue(() =>
+    preparedIndices
+      ? preparedIndices.surfaceTriangleGlobalCellOrdinals
+      : null,
+  );
   const surfaceNodeSelection = lazyValue(() => {
     if (preparedIndices) return preparedIndices.surfaceNodeSelection;
     if (part.surface_node_indices != null) {
@@ -2281,8 +2299,14 @@ function buildPartTopologyModel(
     get surfaceIndices() {
       return surfaceIndices();
     },
+    get surfaceTriangleCellTypes() {
+      return surfaceTriangleCellTypes();
+    },
     get surfaceTriangleFacetIndices() {
       return surfaceTriangleFacetIndices();
+    },
+    get surfaceTriangleGlobalCellOrdinals() {
+      return surfaceTriangleGlobalCellOrdinals();
     },
     get surfaceNodeIndices() {
       return surfaceNodeIndices();

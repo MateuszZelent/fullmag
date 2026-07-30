@@ -2,6 +2,7 @@
 
 import {
   buildViewport3DTopologyIndexBundle,
+  topologyIndexBundleByteLength,
   type Viewport3DTopologyIndexBundle,
   type Viewport3DTopologyIndexPartInput,
 } from "./viewport3dTopologyIndexModel";
@@ -18,6 +19,7 @@ export interface Viewport3DTopologyIndexBuildRequest {
   >;
   topology: {
     boundaryFaces: Uint32Array;
+    cellGlobalOrdinals?: BigUint64Array;
     cellNodes?: Uint32Array;
     cellOffsets?: Uint32Array;
     cellTypes?: Uint32Array;
@@ -104,14 +106,17 @@ export async function buildViewport3DTopologyIndicesOffMainThread(
       itemCount: request.topology.nodeCount,
       key: buildKey,
       lane: "topology-index",
-      outputBytesEstimate: estimateTopologyIndexBuildInputBytes(request),
+      outputBytesEstimate: estimateTopologyIndexBuildOutputBytes(request),
       revisionSummary: options.revisionSummary ?? buildKey,
     },
-    (_buildRequest, context) =>
-      executeViewport3DTopologyIndexBuild(request, {
+    async (_buildRequest, context) => {
+      const bundle = await executeViewport3DTopologyIndexBuild(request, {
         recordFallback: context.recordFallback,
         signal: context.signal,
-      }),
+      });
+      context.recordOutputBytes(topologyIndexBundleByteLength(bundle));
+      return bundle;
+    },
     {
       latestWins: options.latestWins,
       onDiagnosticRecord: options.onDiagnosticRecord,
@@ -202,11 +207,215 @@ function estimateTopologyIndexBuildInputBytes(
   return request.topology.boundaryFaces.byteLength +
     request.topology.indices.byteLength +
     (request.topology.cellNodes?.byteLength ?? 0) +
+    (request.topology.cellGlobalOrdinals?.byteLength ?? 0) +
     (request.topology.cellOffsets?.byteLength ?? 0) +
     (request.topology.cellTypes?.byteLength ?? 0) +
     (request.topology.facetNodes?.byteLength ?? 0) +
     (request.topology.facetOffsets?.byteLength ?? 0) +
     (request.topology.facetTypes?.byteLength ?? 0);
+}
+
+export function estimateTopologyIndexBuildOutputBytes(
+  request: Viewport3DTopologyIndexBuildRequest,
+): number {
+  const cellMetrics = estimateTopologyCellDerivedCounts(request.topology);
+  let outputBytes = 0;
+  outputBytes = saturatingByteAdd(
+    outputBytes,
+    cellMetrics.surfaceTriangleCount * 3 * Uint32Array.BYTES_PER_ELEMENT,
+    cellMetrics.surfaceFaceNodeCount * 2 * Uint32Array.BYTES_PER_ELEMENT,
+    Math.min(
+      request.topology.nodeCount,
+      cellMetrics.surfaceTriangleCount * 3,
+    ) * Uint32Array.BYTES_PER_ELEMENT,
+    cellMetrics.volumeEdgeCount * 2 * Uint32Array.BYTES_PER_ELEMENT,
+  );
+  for (const part of request.magneticParts) {
+    outputBytes = saturatingByteAdd(
+      outputBytes,
+      estimatePreparedPartOutputBytes(
+        part,
+        request.magneticSurfacePartsByPartId?.get(part.id) ?? [],
+        request.topology,
+        cellMetrics.volumeEdgeCount,
+      ),
+    );
+  }
+  for (const part of request.airboxParts) {
+    outputBytes = saturatingByteAdd(
+      outputBytes,
+      estimatePreparedPartOutputBytes(
+        part,
+        [],
+        request.topology,
+        cellMetrics.volumeEdgeCount,
+      ),
+    );
+  }
+  return outputBytes;
+}
+
+function estimatePreparedPartOutputBytes(
+  part: Viewport3DTopologyIndexPartInput,
+  supplemental: readonly Viewport3DTopologyIndexPartInput[],
+  topology: Viewport3DTopologyIndexBuildRequest["topology"],
+  topologyVolumeEdgeCount: number,
+): number {
+  let surfaceTriangleCount = estimatePartSurfaceTriangleCount(part, topology);
+  let surfaceFaceNodeCount = estimatePartSurfaceFaceNodeCount(part, topology);
+  for (const surfacePart of supplemental) {
+    surfaceTriangleCount += estimatePartSurfaceTriangleCount(
+      surfacePart,
+      topology,
+    );
+    surfaceFaceNodeCount += estimatePartSurfaceFaceNodeCount(
+      surfacePart,
+      topology,
+    );
+  }
+  const surfaceNodeCount = part.surface_node_indices
+    ? part.surface_node_indices.length
+    : Math.min(topology.nodeCount, surfaceTriangleCount * 3);
+  return saturatingByteAdd(
+    surfaceTriangleCount * 3 * Uint32Array.BYTES_PER_ELEMENT,
+    surfaceTriangleCount * Uint32Array.BYTES_PER_ELEMENT,
+    surfaceTriangleCount * Uint32Array.BYTES_PER_ELEMENT,
+    surfaceTriangleCount * BigUint64Array.BYTES_PER_ELEMENT,
+    surfaceFaceNodeCount * 2 * Uint32Array.BYTES_PER_ELEMENT,
+    surfaceNodeCount * Uint32Array.BYTES_PER_ELEMENT,
+    topologyVolumeEdgeCount * 2 * Uint32Array.BYTES_PER_ELEMENT,
+  );
+}
+
+function estimateTopologyCellDerivedCounts(
+  topology: Viewport3DTopologyIndexBuildRequest["topology"],
+): {
+  surfaceFaceNodeCount: number;
+  surfaceTriangleCount: number;
+  volumeEdgeCount: number;
+} {
+  let surfaceFaceNodeCount = 0;
+  let surfaceTriangleCount = 0;
+  let volumeEdgeCount = 0;
+  const cellTypes = topology.cellTypes;
+  if (cellTypes) {
+    for (const type of cellTypes) {
+      switch (type) {
+        case 1:
+          surfaceFaceNodeCount += 12;
+          surfaceTriangleCount += 4;
+          volumeEdgeCount += 6;
+          break;
+        case 2:
+          surfaceFaceNodeCount += 18;
+          surfaceTriangleCount += 8;
+          volumeEdgeCount += 9;
+          break;
+        case 3:
+          surfaceFaceNodeCount += 16;
+          surfaceTriangleCount += 6;
+          volumeEdgeCount += 8;
+          break;
+        case 4:
+          surfaceFaceNodeCount += 24;
+          surfaceTriangleCount += 12;
+          volumeEdgeCount += 12;
+          break;
+      }
+    }
+    return { surfaceFaceNodeCount, surfaceTriangleCount, volumeEdgeCount };
+  }
+  const tetraCount = Math.floor(topology.indices.length / 4);
+  return {
+    surfaceFaceNodeCount: tetraCount * 12,
+    surfaceTriangleCount: tetraCount * 4,
+    volumeEdgeCount: tetraCount * 6,
+  };
+}
+
+function estimatePartSurfaceTriangleCount(
+  part: Viewport3DTopologyIndexPartInput,
+  topology: Viewport3DTopologyIndexBuildRequest["topology"],
+): number {
+  if (part.surface_faces?.length) {
+    return part.surface_faces.reduce(
+      (total, face) => total + Math.max(0, face.length - 2),
+      0,
+    );
+  }
+  let triangleCount = 0;
+  forEachEstimatedPartFaceIndex(part, (faceIndex) => {
+    if (
+      topology.facetOffsets &&
+      topology.facetTypes &&
+      topology.facetOffsets.length === topology.facetTypes.length + 1 &&
+      faceIndex >= 0 &&
+      faceIndex < topology.facetTypes.length
+    ) {
+      const start = topology.facetOffsets[faceIndex] ?? 0;
+      const end = topology.facetOffsets[faceIndex + 1] ?? start;
+      triangleCount += Math.max(0, end - start - 2);
+      return;
+    }
+    if (faceIndex >= 0 && faceIndex * 3 + 2 < topology.boundaryFaces.length) {
+      triangleCount += 1;
+    }
+  });
+  return triangleCount;
+}
+
+function estimatePartSurfaceFaceNodeCount(
+  part: Viewport3DTopologyIndexPartInput,
+  topology: Viewport3DTopologyIndexBuildRequest["topology"],
+): number {
+  if (part.surface_faces?.length) {
+    return part.surface_faces.reduce(
+      (total, face) => total + Math.max(0, face.length),
+      0,
+    );
+  }
+  let nodeCount = 0;
+  forEachEstimatedPartFaceIndex(part, (faceIndex) => {
+    if (
+      topology.facetOffsets &&
+      topology.facetTypes &&
+      topology.facetOffsets.length === topology.facetTypes.length + 1 &&
+      faceIndex >= 0 &&
+      faceIndex < topology.facetTypes.length
+    ) {
+      const start = topology.facetOffsets[faceIndex] ?? 0;
+      const end = topology.facetOffsets[faceIndex + 1] ?? start;
+      nodeCount += Math.max(0, end - start);
+      return;
+    }
+    if (faceIndex >= 0 && faceIndex * 3 + 2 < topology.boundaryFaces.length) {
+      nodeCount += 3;
+    }
+  });
+  return nodeCount;
+}
+
+function forEachEstimatedPartFaceIndex(
+  part: Viewport3DTopologyIndexPartInput,
+  visit: (faceIndex: number) => void,
+): void {
+  if (part.boundary_face_indices?.length) {
+    for (const faceIndex of part.boundary_face_indices) visit(faceIndex);
+    return;
+  }
+  const count = Math.max(0, Math.floor(part.boundary_face_count));
+  const start = Math.max(0, Math.floor(part.boundary_face_start));
+  for (let index = 0; index < count; index += 1) visit(start + index);
+}
+
+function saturatingByteAdd(...values: number[]): number {
+  let total = 0;
+  for (const value of values) {
+    if (!Number.isFinite(value) || value < 0) return Number.MAX_SAFE_INTEGER;
+    total += value;
+    if (!Number.isSafeInteger(total)) return Number.MAX_SAFE_INTEGER;
+  }
+  return total;
 }
 
 class TopologyIndexWorkerClient {
@@ -244,6 +453,9 @@ class TopologyIndexWorkerClient {
     const boundaryFaces = new Uint32Array(input.topology.boundaryFaces);
     const indices = new Uint32Array(input.topology.indices);
     const cellNodes = cloneOptionalArray(input.topology.cellNodes);
+    const cellGlobalOrdinals = cloneOptionalBigUint64Array(
+      input.topology.cellGlobalOrdinals,
+    );
     const cellOffsets = cloneOptionalArray(input.topology.cellOffsets);
     const cellTypes = cloneOptionalArray(input.topology.cellTypes);
     const facetNodes = cloneOptionalArray(input.topology.facetNodes);
@@ -259,6 +471,7 @@ class TopologyIndexWorkerClient {
       ),
       topology: {
         boundaryFaces,
+        cellGlobalOrdinals,
         cellNodes,
         cellOffsets,
         cellTypes,
@@ -273,6 +486,7 @@ class TopologyIndexWorkerClient {
     addArrayBufferTransferable(transferables, boundaryFaces.buffer);
     addArrayBufferTransferable(transferables, indices.buffer);
     addArrayBufferTransferable(transferables, cellNodes?.buffer);
+    addArrayBufferTransferable(transferables, cellGlobalOrdinals?.buffer);
     addArrayBufferTransferable(transferables, cellOffsets?.buffer);
     addArrayBufferTransferable(transferables, cellTypes?.buffer);
     addArrayBufferTransferable(transferables, facetNodes?.buffer);
@@ -420,6 +634,12 @@ function cloneOptionalArray(
   source: Uint32Array | undefined,
 ): Uint32Array | undefined {
   return source ? new Uint32Array(source) : undefined;
+}
+
+function cloneOptionalBigUint64Array(
+  source: BigUint64Array | undefined,
+): BigUint64Array | undefined {
+  return source ? new BigUint64Array(source) : undefined;
 }
 
 function serializePartMap(

@@ -675,10 +675,15 @@ rejects before unsupported operator allocation.
 ### 4.6 API, binary transport, and control room
 
 FMMT v2 carries explicit canonical type enums, offsets plus connectivity,
-per-cell/per-facet markers, and versioned byte-range metadata. OpenAPI,
+per-cell/per-facet markers, exact optional `u64` global ordinals, and versioned
+byte-range metadata. Its 64-byte header uses reserved byte offsets 40 and 44
+for cell- and facet-global-ordinal counts. Each count is zero for a legacy v2
+payload or equals its entity count; nonzero counts append 8-byte-aligned cell
+and facet ordinal sections after the marker sections. OpenAPI,
 serializer, header/range reader, generated TypeScript, decoder, domain adapter,
-viewport triangulation, selection, histogram, and inspector surfaces consume
-that typed representation. FMMT v1 remains readable only for tetrahedral
+topology-index construction, viewport triangulation, and surface selection
+consume that typed representation. Histogram and Inspector integration are not
+claimed by this bounded transport change. FMMT v1 remains readable only for tetrahedral
 sessions; it must never carry disguised or truncated mixed cells.
 
 The UI must show requested topology, realized topology counts, certificate
@@ -690,7 +695,8 @@ In the unified workspace, a future Mesh-module command is capability-gated and
 uses the central command registry; resource hooks fetch revisioned FMMT v2
 topology; the FEM domain adapter preserves typed cells/facets; viewport layers
 derive render triangles without mutating solver connectivity; and the existing
-mesh Inspector/dock displays the certificate and rejection reason. This target
+mesh resources retain their existing certificate data. A later Inspector
+integration may present that certificate and rejection reason. This target
 does not introduce another workspace shell, direct component fetch, or a new
 docking model.
 
@@ -865,6 +871,12 @@ No lower level implies a higher one.
 | Certificate generation | `packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py` | `_attach_mixed_layer_topology_certificate` | recomputes and binds realized topology evidence | FEM CPU/GPU | Python/Rust cross-language validation |
 | Planner legality | `crates/fullmag-plan/src/mesh.rs` | `validate_mixed_p1_execution_scope` | enforces exact bounded relaxation tuples | FEM CPU/GPU | planner accept/reject matrix |
 | Capability publication | `crates/fullmag-runner/src/capabilities.rs` | `mixed_p1_feature_capabilities` | publishes bounded status and scope wording | FEM CPU/GPU | capability serialization tests |
+| FMMT v2 topology serialization | `crates/fullmag-api/src/field_store.rs` | `serialize_fem_mesh_topology_binary_v2` | emits typed CSR topology and exact optional `u64` cell/facet identities without changing the v2 version | FEM CPU/GPU shared transport | serializer layout, legacy-v2, malformed-count, and overflow tests |
+| FMMT v2 topology decoding | `apps/control-room/src/kernel/api/codecs/topologyCodec.ts` | `decodeTopology` | decodes full or range-fetched topology while preserving global ordinals as `BigUint64Array` | unified control room | codec malformed/range and chunked facade tests |
+| FMMT v2 byte layout | `apps/control-room/src/kernel/api/codecs/topologyCodec.ts` | `topologyByteLayout` | computes aligned optional cell/facet ordinal ranges for legacy, cell-only, facet-only, and combined v2 payloads | unified control room | direct four-variant layout tests |
+| FMMT v2 range loading | `apps/control-room/src/kernel/api/ControlRoomApi.ts` | `loadTopologySectionsByRange` | range-fetches every declared topology section into its exact typed-array representation | unified control room | chunked facade tests with exact `u64` identities |
+| Mixed topology render index | `apps/control-room/src/modules/viewport-3d/viewport3dTopologyIndexModel.ts` | `buildViewport3DTopologyIndexBundle` | derives render topology while retaining local owner indices and exact global cell ordinals | unified control room | mixed-cell, semantic-face-deduplication, and byte-accounting tests |
+| Mixed topology surface selection | `apps/control-room/src/modules/viewport-3d/layers/MeshPartLayer.tsx` | `resolveMeshPartSurfacePickIdentity` | returns exact decimal global cell identity only for complete aligned maps and preserves boundary-only legacy picks only when every identity map is absent | unified control room | exact-identity, partial-map, misalignment, and legacy tests |
 | Step-0 field authoring | `packages/fullmag-py/src/fullmag/model/study.py` | `class StageAutosave` | carries the three scheduled field autosaves without changing the physical model | FEM CPU/GPU shared contract | canonical SP4 scenario source contract |
 | Native step-0 dispatch | `crates/fullmag-runner/src/dispatch.rs` | `record_native_fem_initial_field_snapshots` | records requested native field snapshots before direct minimization and advances their schedules | FEM CPU/GPU | runner source and artifact-schedule contracts |
 | Native current-state statistics | `backends/fem/cpu/mfem/runtime/snapshot.cpp` | `context_snapshot_stats_mfem` | evaluates current-state fields, energies, and maximum torque without a solver step | FEM CPU/GPU | native runtime contracts; managed proof pending |

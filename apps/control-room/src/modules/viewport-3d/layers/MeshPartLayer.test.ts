@@ -9,6 +9,7 @@ import {
 
 import {
   createMeshPartSurfaceGeometry,
+  resolveMeshPartSurfacePickIdentity,
   resolveMeshPartBoundaryFaceIndexForPick,
   resolveMeshPartVisibleScalarColorState,
   resolveRetainedMeshPartScalarColors,
@@ -49,6 +50,129 @@ describe("MeshPartLayer", () => {
       part,
       surfaceTriangleFacetIndices: mapping,
     })).toBe(8);
+  });
+
+  it("resolves canonical cell identity only for actual surface hits", () => {
+    const surfacePick = resolveMeshPartSurfacePickIdentity({
+      expandedSurfaceFaces: false,
+      faceIndex: 1,
+      part: {
+        boundary_face_count: 1,
+        boundary_face_indices: [13],
+        boundary_face_start: 13,
+      },
+      surfaceHit: true,
+      surfaceTriangleCellTypes: new Uint32Array([2, 3]),
+      surfaceTriangleFacetIndices: new Uint32Array([13, 13]),
+      surfaceTriangleGlobalCellOrdinals: new BigUint64Array([
+        BigInt(7),
+        BigInt("9007199254740993"),
+      ]),
+    });
+    expect(surfacePick).toEqual({
+      boundaryFaceIndex: 13,
+      elementFamily: "pyramid5",
+      globalCellOrdinal: "9007199254740993",
+    });
+
+    expect(resolveMeshPartSurfacePickIdentity({
+      expandedSurfaceFaces: false,
+      faceIndex: 1,
+      part: {
+        boundary_face_count: 1,
+        boundary_face_indices: [13],
+        boundary_face_start: 13,
+      },
+      surfaceHit: false,
+      surfaceTriangleCellTypes: new Uint32Array([2, 3]),
+      surfaceTriangleFacetIndices: new Uint32Array([13, 13]),
+      surfaceTriangleGlobalCellOrdinals: new BigUint64Array([BigInt(7), BigInt(8)]),
+    })).toEqual({
+      boundaryFaceIndex: null,
+      elementFamily: null,
+      globalCellOrdinal: null,
+    });
+  });
+
+  it("fails closed for unresolved or misaligned surface cell mappings", () => {
+    expect(resolveMeshPartSurfacePickIdentity({
+      expandedSurfaceFaces: false,
+      faceIndex: 0,
+      part: {
+        boundary_face_count: 1,
+        boundary_face_start: 3,
+      },
+      surfaceHit: true,
+      surfaceTriangleCellTypes: new Uint32Array([0]),
+      surfaceTriangleFacetIndices: new Uint32Array([3]),
+      surfaceTriangleGlobalCellOrdinals: new BigUint64Array([BigInt(0)]),
+    })).toEqual({
+      boundaryFaceIndex: null,
+      elementFamily: null,
+      globalCellOrdinal: null,
+    });
+
+    expect(resolveMeshPartSurfacePickIdentity({
+      expandedSurfaceFaces: false,
+      faceIndex: 0,
+      part: {
+        boundary_face_count: 2,
+        boundary_face_start: 3,
+      },
+      surfaceHit: true,
+      surfaceTriangleCellTypes: new Uint32Array([2, 2]),
+      surfaceTriangleFacetIndices: new Uint32Array([3, 4]),
+      surfaceTriangleGlobalCellOrdinals: new BigUint64Array([BigInt(9)]),
+    })).toEqual({
+      boundaryFaceIndex: null,
+      elementFamily: null,
+      globalCellOrdinal: null,
+    });
+  });
+
+  it.each([
+    ["facet only", new Uint32Array([3]), undefined, undefined],
+    ["type only", undefined, new Uint32Array([2]), undefined],
+    ["ordinal only", undefined, undefined, new BigUint64Array([BigInt(9)])],
+    ["facet and type", new Uint32Array([3]), new Uint32Array([2]), undefined],
+  ])("fails closed for a partial %s identity map", (
+    _variant,
+    surfaceTriangleFacetIndices,
+    surfaceTriangleCellTypes,
+    surfaceTriangleGlobalCellOrdinals,
+  ) => {
+    expect(resolveMeshPartSurfacePickIdentity({
+      expandedSurfaceFaces: false,
+      faceIndex: 0,
+      part: {
+        boundary_face_count: 1,
+        boundary_face_start: 3,
+      },
+      surfaceHit: true,
+      surfaceTriangleCellTypes,
+      surfaceTriangleFacetIndices,
+      surfaceTriangleGlobalCellOrdinals,
+    })).toEqual({
+      boundaryFaceIndex: null,
+      elementFamily: null,
+      globalCellOrdinal: null,
+    });
+  });
+
+  it("keeps the boundary-only legacy pick when all identity maps are absent", () => {
+    expect(resolveMeshPartSurfacePickIdentity({
+      expandedSurfaceFaces: false,
+      faceIndex: 0,
+      part: {
+        boundary_face_count: 1,
+        boundary_face_start: 3,
+      },
+      surfaceHit: true,
+    })).toEqual({
+      boundaryFaceIndex: 3,
+      elementFamily: null,
+      globalCellOrdinal: null,
+    });
   });
   it("changes scalar upload retention identity when the requested field appearance changes", () => {
     const key = ({

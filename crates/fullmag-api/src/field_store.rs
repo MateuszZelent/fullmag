@@ -399,6 +399,12 @@ fn write_u32_values(out: &mut Vec<u8>, values: &[u32]) {
     }
 }
 
+fn write_u64_values(out: &mut Vec<u8>, values: &[u64]) {
+    for value in values {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+}
+
 fn fem_cell_type_code(cell_type: fullmag_ir::FemCellTypeIR) -> u32 {
     match cell_type {
         fullmag_ir::FemCellTypeIR::Tet4 => 1,
@@ -435,6 +441,14 @@ pub(crate) fn serialize_fem_mesh_topology_binary_v2(
         checked_u32_len(mesh.facets.nodes.len(), "facet connectivity count")?;
     let cell_marker_count = checked_u32_len(mesh.element_markers.len(), "cell marker count")?;
     let facet_marker_count = checked_u32_len(mesh.boundary_markers.len(), "facet marker count")?;
+    let cell_global_ordinal_count = checked_u32_len(
+        mesh.cells.global_ordinals.len(),
+        "cell global ordinal count",
+    )?;
+    let facet_global_ordinal_count = checked_u32_len(
+        mesh.facets.global_ordinals.len(),
+        "facet global ordinal count",
+    )?;
 
     if mesh
         .nodes
@@ -499,7 +513,7 @@ pub(crate) fn serialize_fem_mesh_topology_binary_v2(
         mesh.facets.types.len(),
     )?;
 
-    let expected_byte_len = checked_fem_mesh_topology_binary_v2_len(&[
+    let mut section_lengths = vec![
         (mesh.nodes.len(), 3 * std::mem::size_of::<f64>()),
         (mesh.cells.types.len(), std::mem::size_of::<u32>()),
         (mesh.cells.offsets.len(), std::mem::size_of::<u32>()),
@@ -510,7 +524,17 @@ pub(crate) fn serialize_fem_mesh_topology_binary_v2(
         (mesh.facets.nodes.len(), std::mem::size_of::<u32>()),
         (mesh.element_markers.len(), std::mem::size_of::<u32>()),
         (mesh.boundary_markers.len(), std::mem::size_of::<u32>()),
-    ])?;
+    ];
+    if !mesh.cells.global_ordinals.is_empty() {
+        section_lengths.push((mesh.cells.global_ordinals.len(), std::mem::size_of::<u64>()));
+    }
+    if !mesh.facets.global_ordinals.is_empty() {
+        section_lengths.push((
+            mesh.facets.global_ordinals.len(),
+            std::mem::size_of::<u64>(),
+        ));
+    }
+    let expected_byte_len = checked_fem_mesh_topology_binary_v2_len(&section_lengths)?;
 
     let mut out = Vec::with_capacity(expected_byte_len);
     out.extend_from_slice(b"FMMT");
@@ -529,6 +553,8 @@ pub(crate) fn serialize_fem_mesh_topology_binary_v2(
         out.extend_from_slice(&count.to_le_bytes());
     }
     out.extend_from_slice(&(FEM_MESH_TOPOLOGY_BINARY_V2_HEADER_LEN as u32).to_le_bytes());
+    out.extend_from_slice(&cell_global_ordinal_count.to_le_bytes());
+    out.extend_from_slice(&facet_global_ordinal_count.to_le_bytes());
     out.resize(FEM_MESH_TOPOLOGY_BINARY_V2_HEADER_LEN, 0);
 
     pad_to_eight(&mut out);
@@ -580,6 +606,14 @@ pub(crate) fn serialize_fem_mesh_topology_binary_v2(
     write_u32_values(&mut out, &mesh.element_markers);
     pad_to_eight(&mut out);
     write_u32_values(&mut out, &mesh.boundary_markers);
+    if !mesh.cells.global_ordinals.is_empty() {
+        pad_to_eight(&mut out);
+        write_u64_values(&mut out, &mesh.cells.global_ordinals);
+    }
+    if !mesh.facets.global_ordinals.is_empty() {
+        pad_to_eight(&mut out);
+        write_u64_values(&mut out, &mesh.facets.global_ordinals);
+    }
 
     debug_assert_eq!(out.len(), expected_byte_len);
 
@@ -619,7 +653,7 @@ mod tests {
                 nodes: vec![
                     0, 1, 2, 4, 0, 1, 2, 4, 5, 6, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 5, 6, 7,
                 ],
-                global_ordinals: vec![10, 11, 12, 13],
+                global_ordinals: vec![10, 11, 9_007_199_254_740_993, u64::MAX],
                 mesh_parts: Vec::new(),
             },
             element_markers: vec![1, 2, 3, 4],
@@ -636,7 +670,7 @@ mod tests {
                 ],
                 offsets: vec![0, 3, 7, 10],
                 nodes: vec![0, 1, 2, 0, 1, 5, 4, 4, 5, 6],
-                global_ordinals: vec![20, 21, 22],
+                global_ordinals: vec![20, 9_007_199_254_740_995, u64::MAX],
             },
             boundary_markers: vec![5, 6, 7],
             periodic_boundary_pairs: Vec::new(),
@@ -667,7 +701,9 @@ mod tests {
         assert_eq!(u32::from_le_bytes(binary[28..32].try_into().unwrap()), 4);
         assert_eq!(u32::from_le_bytes(binary[32..36].try_into().unwrap()), 3);
         assert_eq!(u32::from_le_bytes(binary[36..40].try_into().unwrap()), 64);
-        assert!(binary[40..64].iter().all(|value| *value == 0));
+        assert_eq!(u32::from_le_bytes(binary[40..44].try_into().unwrap()), 4);
+        assert_eq!(u32::from_le_bytes(binary[44..48].try_into().unwrap()), 3);
+        assert!(binary[48..64].iter().all(|value| *value == 0));
 
         assert_eq!(
             &binary[256..272],
@@ -679,7 +715,24 @@ mod tests {
         );
         assert_eq!(&binary[392..404], &[1, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0]);
         assert_eq!(&binary[408..420], &[1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0]);
-        assert_eq!(binary.len(), 508);
+        assert_eq!(u64::from_le_bytes(binary[512..520].try_into().unwrap()), 10,);
+        assert_eq!(
+            u64::from_le_bytes(binary[528..536].try_into().unwrap()),
+            9_007_199_254_740_993,
+        );
+        assert_eq!(
+            u64::from_le_bytes(binary[536..544].try_into().unwrap()),
+            u64::MAX,
+        );
+        assert_eq!(
+            u64::from_le_bytes(binary[552..560].try_into().unwrap()),
+            9_007_199_254_740_995,
+        );
+        assert_eq!(
+            u64::from_le_bytes(binary[560..568].try_into().unwrap()),
+            u64::MAX,
+        );
+        assert_eq!(binary.len(), 568);
     }
 
     #[test]
@@ -699,8 +752,11 @@ mod tests {
         let mut legacy_ordinals = mixed_topology_mesh();
         legacy_ordinals.cells.global_ordinals.clear();
         legacy_ordinals.facets.global_ordinals.clear();
-        serialize_fem_mesh_topology_binary_v2(&legacy_ordinals)
+        let binary = serialize_fem_mesh_topology_binary_v2(&legacy_ordinals)
             .expect("legacy empty global ordinal vectors remain legal");
+        assert_eq!(u32::from_le_bytes(binary[40..44].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(binary[44..48].try_into().unwrap()), 0);
+        assert_eq!(binary.len(), 508);
     }
 
     #[test]

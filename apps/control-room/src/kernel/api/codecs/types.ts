@@ -56,6 +56,8 @@ export interface DecodedTopology {
   cellOffsets?: Uint32Array;
   cellNodes?: Uint32Array;
   cellMarkers?: Uint32Array;
+  /** Exact backend-owned cell identities. Empty for legacy FMMT payloads. */
+  cellGlobalOrdinals?: BigUint64Array;
   /** Canonical CSR facet count. */
   facetCount?: number;
   /** Canonical Fullmag facet type codes: 1=tri3, 2=quad4. */
@@ -65,6 +67,8 @@ export interface DecodedTopology {
   facetOffsets?: Uint32Array;
   facetNodes?: Uint32Array;
   facetMarkers?: Uint32Array;
+  /** Exact backend-owned facet identities. Empty for legacy FMMT payloads. */
+  facetGlobalOrdinals?: BigUint64Array;
   formatVersion?: 1 | 2;
   /** @deprecated Use facetCount. Kept during the FMMT v1 migration window. */
   boundaryFaceCount: number;
