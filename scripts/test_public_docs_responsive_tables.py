@@ -111,6 +111,30 @@ class ResponsivePublicDocumentationTableTests(unittest.TestCase):
             )
         )
 
+    def test_clarity_article_main_has_a_constrained_fallback_scrollport(self) -> None:
+        css = CSS.read_text(encoding="utf-8")
+        main_rules = self._rules_for_selector(css, "article > main")
+        section_rules = self._rules_for_selector(css, "article > main > section")
+
+        self.assertTrue(
+            any(
+                re.search(r"box-sizing:\s*border-box", declarations)
+                and re.search(r"width:\s*100%", declarations)
+                and re.search(r"min-width:\s*0", declarations)
+                and re.search(r"max-width:\s*100%", declarations)
+                and re.search(r"overflow-x:\s*auto", declarations)
+                for declarations in main_rules
+            )
+        )
+        self.assertTrue(
+            any(
+                re.search(r"box-sizing:\s*border-box", declarations)
+                and re.search(r"min-width:\s*0", declarations)
+                and re.search(r"max-width:\s*100%", declarations)
+                for declarations in section_rules
+            )
+        )
+
     def test_long_content_uses_local_horizontal_scrollports(self) -> None:
         css = CSS.read_text(encoding="utf-8")
 
