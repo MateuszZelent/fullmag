@@ -139,28 +139,16 @@ class PublicDocumentationInformationArchitectureTests(unittest.TestCase):
         self.assertEqual(existing_exchange.doc_kind, "reference")
         self.assertEqual(existing_exchange.label, "public-docs-physics-exchange")
 
-    def test_terminal_interaction_scaffold_uses_the_canonical_shape(self) -> None:
-        exchange = next(
+    def test_published_zeeman_reference_uses_its_canonical_metadata(self) -> None:
+        zeeman = next(
             spec
             for spec in PAGE_SPECS
             if spec.path == "physics/interactions/zeeman/index.md"
         )
-        self.assertEqual(
-            render_page(exchange, Path("public_docs/site")),
-            """---
-title: Zeeman
-status: planned
-doc_kind: scaffold
-audience: user
-owner: fullmag-public-docs
----
-
-(public-docs-physics-interactions-zeeman-root)=
-# Zeeman
-
-This page reserves the public documentation location for the canonical Zeeman interaction reference.
-""",
-        )
+        self.assertEqual(zeeman.doc_kind, "reference")
+        self.assertEqual(zeeman.status, "partial")
+        self.assertEqual(zeeman.title, "Zeeman interaction")
+        self.assertEqual(zeeman.label, "public-docs-physics-interactions-zeeman")
 
     def test_index_scaffold_links_to_every_direct_child(self) -> None:
         index = next(spec for spec in PAGE_SPECS if spec.path == "python-api/index.md")
