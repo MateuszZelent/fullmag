@@ -40,6 +40,7 @@ import {
   MODEL_SCENE_PATH,
   SESSION_CURRENT_PATH,
   SIMULATION_COMMANDS_PATH,
+  SIMULATION_OBJECT_METRICS_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
   SIMULATION_STAGE_HYSTERESIS_ORIENTATION_PATH,
@@ -431,6 +432,17 @@ export class RealtimeInvalidationBridge {
         const fieldSampleChange =
           change.resource === "fields" && change.resource_id === "samples";
         const planarFieldChange = change.resource === "planar_fields";
+        const scalarChange = change.resource === "scalars";
+
+        if (scalarChange) {
+          this.queuePrefixInvalidation(
+            resourceFamilyPrefix(SIMULATION_OBJECT_METRICS_PATH),
+            dependentResourceRevision(
+              recommendedFetch ?? "scalars",
+              change.revision,
+            ),
+          );
+        }
 
         if (recommendedFetch && shouldInvalidateSessionStatus(recommendedFetch)) {
           statusRevision = latestRevision(

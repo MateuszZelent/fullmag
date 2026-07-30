@@ -28,5 +28,5 @@ study.solver(dt=1e-13)
 study.stages.add_relax(
     algorithm="llg_overdamped",
     max_steps=100_000,
-    tol=1e-12,
+    tolA=1e-12,
 )

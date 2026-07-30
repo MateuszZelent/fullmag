@@ -87,4 +87,5 @@ def test_authoritative_build_routes_refresh_the_embedded_identity() -> None:
     exporter = (ROOT / "scripts/export_fem_gpu_runtime.sh").read_text(encoding="utf-8")
 
     assert 'cargo +nightly clean -p fullmag-build-info' in makefile
-    assert "cargo +nightly clean --workspace --release" in exporter
+    assert "cargo +nightly clean -p fullmag-build-info" in exporter
+    assert "cargo +nightly clean --workspace --release" not in exporter

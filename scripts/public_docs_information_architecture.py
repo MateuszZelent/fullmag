@@ -16,11 +16,24 @@ LEGACY_NAVIGATION_PATHS = frozenset(
     {
         "physics/conventions.md",
         "physics/geometry-and-materials.md",
-        "physics/exchange-demag-zeeman.md",
     }
 )
 
 INTERACTION_SLUGS = (
+    "exchange",
+    "demagnetization",
+    "zeeman",
+    "anisotropy",
+    "dmi",
+    "thermal-noise",
+    "magnetoelastic",
+    "oersted-field",
+    "spin-transfer-torque",
+    "spin-orbit-torque",
+    "drift-diffusion-spin-torque",
+    "inter-region-couplings",
+)
+PYTHON_API_INTERACTION_SLUGS = (
     "exchange",
     "demagnetization",
     "zeeman",
@@ -36,6 +49,74 @@ INTERACTION_SLUGS = (
     "drift-diffusion-spin-torque",
     "inter-region-couplings",
 )
+DEMAGNETIZATION_SUBPAGES = (
+    "mathematical-formulation",
+    "boundary-conditions",
+    "fdm-convolution",
+    "fem-poisson-airbox",
+    "fem-bem",
+    "periodic-demag",
+    "validation",
+)
+DEMAGNETIZATION_REFERENCE_PAGES = frozenset(
+    {
+        "physics/interactions/demagnetization/index.md",
+        *(f"physics/interactions/demagnetization/{page}.md" for page in DEMAGNETIZATION_SUBPAGES),
+    }
+)
+DMI_SUBPAGES = (
+    "interfacial",
+    "bulk",
+    "boundary-conditions",
+    "validation",
+)
+ANISOTROPY_SUBPAGES = ("uniaxial", "cubic")
+
+_CANONICAL_INTERACTION_PATHS = {
+    "exchange": "physics/interactions/exchange/index.md",
+    "demagnetization": "physics/interactions/demagnetization/index.md",
+    "zeeman": "physics/interactions/zeeman/index.md",
+    "uniaxial-anisotropy": "physics/interactions/anisotropy/uniaxial.md",
+    "cubic-anisotropy": "physics/interactions/anisotropy/cubic.md",
+    "interfacial-dmi": "physics/interactions/dmi/interfacial.md",
+    "bulk-dmi": "physics/interactions/dmi/bulk.md",
+    "thermal-noise": "physics/interactions/thermal-noise/index.md",
+    "magnetoelastic": "physics/interactions/magnetoelastic/index.md",
+    "oersted-field": "physics/interactions/oersted-field/index.md",
+    "spin-transfer-torque": "physics/interactions/spin-transfer-torque/index.md",
+    "spin-orbit-torque": "physics/interactions/spin-orbit-torque/index.md",
+    "drift-diffusion-spin-torque": "physics/interactions/drift-diffusion-spin-torque/index.md",
+    "inter-region-couplings": "physics/interactions/inter-region-couplings/index.md",
+}
+LEGACY_INTERACTION_REDIRECTS = {
+    f"physics/solvers/{solver}/{backend}/interactions/{slug}.md": target
+    for solver in ("fdm", "fem")
+    for backend in ("cpu", "gpu")
+    for slug, target in _CANONICAL_INTERACTION_PATHS.items()
+}
+LEGACY_NAVIGATION_REDIRECTS = {
+    "physics/solvers/index.md": "physics/interactions/index.md",
+    **{
+        f"physics/solvers/{solver}/index.md": "physics/interactions/index.md"
+        for solver in ("fdm", "fem")
+    },
+    **{
+        f"physics/solvers/{solver}/{backend}/index.md": "physics/interactions/index.md"
+        for solver in ("fdm", "fem")
+        for backend in ("cpu", "gpu")
+    },
+    **{
+        f"physics/solvers/{solver}/{backend}/interactions/index.md":
+            "physics/interactions/index.md"
+        for solver in ("fdm", "fem")
+        for backend in ("cpu", "gpu")
+    },
+}
+LEGACY_REDIRECTS = {
+    **LEGACY_INTERACTION_REDIRECTS,
+    **LEGACY_NAVIGATION_REDIRECTS,
+    "physics/exchange-demag-zeeman.md": "physics/interactions/index.md",
+}
 
 _TITLES = {
     "api": "API",
@@ -55,6 +136,8 @@ _INTERACTION_TITLES = {
     "exchange": "Exchange",
     "demagnetization": "Demagnetization",
     "zeeman": "Zeeman",
+    "anisotropy": "Anisotropy",
+    "dmi": "DMI",
     "uniaxial-anisotropy": "Uniaxial Anisotropy",
     "cubic-anisotropy": "Cubic Anisotropy",
     "interfacial-dmi": "Interfacial DMI",
@@ -78,6 +161,7 @@ class PageSpec:
     doc_kind: str
     scope: str
     children: tuple[str, ...] = ()
+    navigation_maxdepth: int = 1
 
 
 def _title(slug: str) -> str:
@@ -88,12 +172,42 @@ def _label(path: str) -> str:
     return "public-docs-" + path.removesuffix(".md").replace("/", "-").replace("index", "root")
 
 
-def _scaffold(path: str, title: str, scope: str, children: tuple[str, ...] = ()) -> PageSpec:
-    return PageSpec(path, title, _label(path), "planned", "scaffold", scope, children)
+def _scaffold(
+    path: str,
+    title: str,
+    scope: str,
+    children: tuple[str, ...] = (),
+    navigation_maxdepth: int = 1,
+) -> PageSpec:
+    return PageSpec(
+        path,
+        title,
+        _label(path),
+        "planned",
+        "scaffold",
+        scope,
+        children,
+        navigation_maxdepth,
+    )
 
 
-def _reference(path: str, title: str, scope: str, children: tuple[str, ...] = ()) -> PageSpec:
-    return PageSpec(path, title, _label(path), "partial", "reference", scope, children)
+def _reference(
+    path: str,
+    title: str,
+    scope: str,
+    children: tuple[str, ...] = (),
+    navigation_maxdepth: int = 1,
+) -> PageSpec:
+    return PageSpec(
+        path,
+        title,
+        _label(path),
+        "partial",
+        "reference",
+        scope,
+        children,
+        navigation_maxdepth,
+    )
 
 
 PYTHON_API_REFERENCE_PAGES = {
@@ -110,6 +224,7 @@ PYTHON_API_REFERENCE_PAGES = {
     "python-api/dynamics/llg.md",
     "python-api/studies/time-evolution.md",
     "python-api/outputs/fields-and-scalars.md",
+    "python-api/interactions/demagnetization.md",
 }
 
 
@@ -133,22 +248,27 @@ def _section(
     )
 
 
-def _interaction_specs(solver: str, backend: str) -> tuple[PageSpec, ...]:
-    lane = f"{solver.upper()} {backend.upper()}"
-    directory = f"physics/solvers/{solver}/{backend}/interactions"
-    children = tuple(f"{directory}/{slug}.md" for slug in INTERACTION_SLUGS)
+def _interaction_subtree(
+    slug: str,
+    title: str,
+    subpages: tuple[str, ...] = (),
+) -> tuple[PageSpec, ...]:
+    directory = f"physics/interactions/{slug}"
+    children = tuple(f"{directory}/{subpage}.md" for subpage in subpages)
     return (
-        _scaffold(f"{directory}/index.md", f"Interactions — {lane}", f"the {lane} interaction reference", children),
+        (_reference if f"{directory}/index.md" in DEMAGNETIZATION_REFERENCE_PAGES else _scaffold)(
+            f"{directory}/index.md",
+            title,
+            f"the canonical {title} interaction reference",
+            children,
+        ),
         *(
-            PageSpec(
-                path=f"{directory}/{slug}.md",
-                title=f"{_INTERACTION_TITLES[slug]} — {lane}",
-                label=f"physics-{solver}-{backend}-{slug}",
-                status="planned",
-                doc_kind="scaffold",
-                scope=f"the {lane} realization of {_INTERACTION_TITLES[slug]}",
+            (_reference if f"{directory}/{subpage}.md" in DEMAGNETIZATION_REFERENCE_PAGES else _scaffold)(
+                f"{directory}/{subpage}.md",
+                _title(subpage),
+                f"the {title} reference for {_title(subpage)}",
             )
-            for slug in INTERACTION_SLUGS
+            for subpage in subpages
         ),
     )
 
@@ -166,6 +286,7 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
             "validation/index.md",
             "architecture/index.md",
         ),
+        4,
     ),
     _scaffold(
         "getting-started/index.md",
@@ -209,15 +330,18 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
         "python-api/interactions/index.md",
         "Interactions",
         "the Python API interaction reference",
-        tuple(f"python-api/interactions/{slug}.md" for slug in INTERACTION_SLUGS),
+        tuple(
+            f"python-api/interactions/{slug}.md"
+            for slug in PYTHON_API_INTERACTION_SLUGS
+        ),
     ),
     *(
-        _scaffold(
+        (_reference if f"python-api/interactions/{slug}.md" in PYTHON_API_REFERENCE_PAGES else _scaffold)(
             f"python-api/interactions/{slug}.md",
             _INTERACTION_TITLES[slug],
             f"the Python API reference for {_INTERACTION_TITLES[slug]}",
         )
-        for slug in INTERACTION_SLUGS
+        for slug in PYTHON_API_INTERACTION_SLUGS
     ),
     *_section("python-api/current-and-excitations", "Current and Excitations", ("current-transport", "prescribed-current", "regional-field-drive", "rf-drive", "microstrip-antenna", "cpw-antenna"), "the Python API current and excitations reference"),
     *_section("python-api/boundary-conditions", "Boundary Conditions", ("periodic-boundary-conditions", "floquet-boundary-conditions", "mechanical-boundary-conditions"), "the Python API boundary-conditions reference"),
@@ -232,61 +356,40 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
         "the physics documentation family",
         (
             "physics/foundations/index.md",
-            "physics/solvers/index.md",
+            "physics/interactions/index.md",
             "physics/conventions.md",
             "physics/geometry-and-materials.md",
-            "physics/exchange.md",
-            "physics/exchange-demag-zeeman.md",
         ),
     ),
     *_section("physics/foundations", "Physics Foundations", ("conventions-and-units", "micromagnetic-energy", "effective-field", "llg-equation", "boundary-conditions", "observables"), "the physics foundations reference"),
     _scaffold(
-        "physics/solvers/index.md",
-        "Physics Solvers",
-        "the solver realization reference",
-        ("physics/solvers/fdm/index.md", "physics/solvers/fem/index.md"),
+        "physics/interactions/index.md",
+        "Physical Interactions",
+        "the canonical physical-interaction documentation family",
+        tuple(f"physics/interactions/{slug}/index.md" for slug in INTERACTION_SLUGS),
     ),
-    _scaffold(
-        "physics/solvers/fdm/index.md",
-        "FDM Solver",
-        "the FDM solver reference",
-        ("physics/solvers/fdm/cpu/index.md", "physics/solvers/fdm/gpu/index.md"),
+    PageSpec(
+        "physics/interactions/exchange/index.md",
+        "Exchange interaction",
+        "public-docs-physics-exchange",
+        "partial",
+        "reference",
+        "the canonical Exchange physics reference",
     ),
-    _scaffold(
-        "physics/solvers/fdm/cpu/index.md",
-        "FDM CPU",
-        "the FDM CPU realization reference",
-        ("physics/solvers/fdm/cpu/interactions/index.md",),
+    *_interaction_subtree(
+        "demagnetization", "Demagnetization", DEMAGNETIZATION_SUBPAGES
     ),
-    *_interaction_specs("fdm", "cpu"),
-    _scaffold(
-        "physics/solvers/fdm/gpu/index.md",
-        "FDM GPU",
-        "the FDM GPU realization reference",
-        ("physics/solvers/fdm/gpu/interactions/index.md",),
+    *_interaction_subtree("anisotropy", "Anisotropy", ANISOTROPY_SUBPAGES),
+    *_interaction_subtree("dmi", "DMI", DMI_SUBPAGES),
+    *(
+        _scaffold(
+            f"physics/interactions/{slug}/index.md",
+            _INTERACTION_TITLES[slug],
+            f"the canonical {_INTERACTION_TITLES[slug]} interaction reference",
+        )
+        for slug in INTERACTION_SLUGS
+        if slug not in {"exchange", "demagnetization", "anisotropy", "dmi"}
     ),
-    *_interaction_specs("fdm", "gpu"),
-    _scaffold(
-        "physics/solvers/fem/index.md",
-        "FEM Solver",
-        "the FEM solver reference",
-        ("physics/solvers/fem/cpu/index.md", "physics/solvers/fem/gpu/index.md"),
-    ),
-    _scaffold(
-        "physics/solvers/fem/cpu/index.md",
-        "FEM CPU",
-        "the FEM CPU realization reference",
-        ("physics/solvers/fem/cpu/interactions/index.md",),
-    ),
-    *_interaction_specs("fem", "cpu"),
-    _scaffold(
-        "physics/solvers/fem/gpu/index.md",
-        "FEM GPU",
-        "the FEM GPU realization reference",
-        ("physics/solvers/fem/gpu/interactions/index.md",),
-    ),
-    *_interaction_specs("fem", "gpu"),
-    _reference("physics/exchange.md", "Exchange interaction", "the legacy Exchange physics reference"),
     _scaffold(
         "numerical-methods/index.md",
         "Numerical Methods",
@@ -387,6 +490,8 @@ def validate_tree(specs: Iterable[PageSpec]) -> list[str]:
             errors.append(f"{spec.path}: unrecognized status {spec.status!r}")
         if spec.doc_kind not in VALID_DOC_KINDS:
             errors.append(f"{spec.path}: unrecognized doc_kind {spec.doc_kind!r}")
+        if spec.navigation_maxdepth < 1:
+            errors.append(f"{spec.path}: navigation_maxdepth must be positive")
         if len(spec.children) != len(set(spec.children)):
             errors.append(f"{spec.path}: child navigation contains duplicates")
         for child in spec.children:
@@ -414,17 +519,9 @@ def render_page(spec: PageSpec, root: Path) -> str:
     )
     if spec.children:
         navigation = "\n".join(_relative_child(spec.path, child) for child in spec.children)
-        rendered += f"\n```{{toctree}}\n:maxdepth: 1\n\n{navigation}\n```\n"
-    if spec.path in {
-        "physics/solvers/fdm/cpu/interactions/exchange.md",
-        "physics/solvers/fdm/gpu/interactions/exchange.md",
-        "physics/solvers/fem/cpu/interactions/exchange.md",
-        "physics/solvers/fem/gpu/interactions/exchange.md",
-    }:
         rendered += (
-            "\n## Related pages\n\n"
-            "- {doc}`../../../../exchange`\n"
-            "- {doc}`../../../../../python-api/interactions/exchange`\n"
+            f"\n```{{toctree}}\n:maxdepth: {spec.navigation_maxdepth}\n\n"
+            f"{navigation}\n```\n"
         )
     return rendered
 

@@ -99,6 +99,6 @@ else:
     study.relax(
         algorithm="llg_overdamped",
         max_steps=MAX_STEPS,
-        tol=1e-30,
+        tolA=1e-30,
         dt=1e-13,
     )

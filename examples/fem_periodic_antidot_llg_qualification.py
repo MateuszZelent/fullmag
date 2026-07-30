@@ -58,7 +58,7 @@ study.stages.add_minimize(
     stage_id="relax",
     method="bb",
     max_steps=500,
-    tol=5.0e2,
+    tolA=5.0e2,
 )
 study.solver(
     integrator="rk45",

@@ -446,7 +446,28 @@ reconstructed from sparsely sampled output rows.
 
 ### 4.1 Python API surface
 
-Canonical authoring remains:
+The default public torque threshold is `tolT=1e-6`, expressed in tesla to
+match the `Max Torque` observable. `tolA` is the explicit alternative in
+amperes per metre. Exactly one of `tolT` and `tolA` may be supplied; omitting
+both selects `tolT=1e-6`. The public lowering is
+
+```{math}
+:label: relax-tolerance-unit-lowering
+
+H_{\mathrm{tol}} = \frac{B_{\mathrm{tol}}}{\mu_0},
+\qquad
+B_{\mathrm{tol}} = \mu_0 H_{\mathrm{tol}},
+\qquad
+\mu_0 = 4\pi\times10^{-7}\ \mathrm{T\,m\,A^{-1}}.
+```
+
+Thus `tolT=1e-6` lowers to
+`torque_tolerance_apm=0.7957747154594767`. `tol` is not a compatibility
+alias: it is rejected with a migration error requiring `tolT` or `tolA`.
+The canonical stop criterion remains A/m-valued because the runtime consumes
+`torque_tolerance_apm`.
+
+Canonical low-level authoring remains:
 
 ```python
 fm.Relaxation(
@@ -483,6 +504,8 @@ Migration:
 
 - `torque_tolerance` remains a deprecated alias for
   `torque_tolerance_apm` with identical A/m semantics;
+- public `relax`, `minimize`, and staged relaxation methods accept `tolT` or
+  `tolA` and reject `tol` as well as simultaneous unit parameters;
 - `max_physical_time_s` and `max_pseudotime_s` are deprecated aliases for
   `max_relaxation_time_s` only on `llg_overdamped`;
 - either legacy time field on a direct minimizer is an error;

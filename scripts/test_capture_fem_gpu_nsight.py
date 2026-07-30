@@ -107,13 +107,13 @@ def test_task13_sources_wire_exact_stable_ranges_and_opt_in_build() -> None:
     assert '-e FULLMAG_ENABLE_NVTX="${FULLMAG_ENABLE_NVTX}"' in exporter
     assert "--cfg fullmag_enable_nvtx" in exporter
     assert '"nvtx_enabled"' in exporter
-    clean = "cargo +nightly clean -p fullmag-fem-sys --release"
+    clean = "cargo +nightly clean -p fullmag-build-info"
     build = "cargo +nightly build"
     assert clean in exporter
     assert exporter.index(clean) < exporter.index(build)
     assert "inherited RUSTFLAGS contains fullmag_enable_nvtx" in exporter
     assert "only_native_lib_dir" in exporter
-    assert "stale fullmag-fem-sys native artifacts remain after targeted clean" in exporter
+    assert "stale fullmag-fem-sys native artifacts remain after targeted clean" not in exporter
     assert "validate_nvtx_artifact" in exporter
     assert "validate_nvtx_symbol_contract" in exporter
     assert "nm -D --defined-only" in exporter

@@ -1,0 +1,92 @@
+{
+  "document": {
+    "path": "public_docs/site/physics/interactions/demagnetization/fem-poisson-airbox.md",
+    "title": "FEM Poisson Airbox",
+    "interaction": "demagnetization"
+  },
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "The Poisson airbox is an FEM shared-domain realization; FDM uses a cell-averaged convolution operator."},
+    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "The Poisson airbox is an FEM shared-domain realization; FDM CUDA uses Newell tensor spectra and cuFFT."},
+    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "MFEM shared-domain Poisson path with explicit Dirichlet/Robin operator and Hypre solver policy."},
+    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "The device Hypre/CSR path is implemented in source, but current public qualification still requires executed-device evidence."}
+  ],
+  "sources": [
+    {"id": "api", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class Demag", "responsibility": "Demag model, variant, legacy aliases, validation and IR normalization."},
+    {"id": "fem-hint", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FEM", "responsibility": "FEM mesh hint and demag solver-policy destination."},
+    {"id": "solver-policy", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FemLinearSolverPolicy", "responsibility": "Solver, preconditioner, tolerance, iteration and diagnostic policy."},
+    {"id": "universe", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyUniverseConfig", "responsibility": "Airbox mesh size, growth and grading metadata."},
+    {"id": "plan", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem", "responsibility": "FEM demag model, shared-domain mesh and capability resolution."},
+    {"id": "rhs", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp", "symbol": "assemble_demag_poisson_rhs", "responsibility": "Magnetic RHS assembly."},
+    {"id": "boundary", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp", "symbol": "initialize_demag_poisson_boundary_operator", "responsibility": "Dirichlet and Robin boundary operator construction."},
+    {"id": "hypre-cpu", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp", "symbol": "solve_demag_poisson_hypre", "responsibility": "CPU Hypre solver, preconditioner, convergence and telemetry."},
+    {"id": "solve", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_solve.cpp", "symbol": "context_compute_demag_poisson", "responsibility": "CPU RHS, solve, recovery and energy orchestration."},
+    {"id": "recovery", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp", "symbol": "recover_demag_poisson_field", "responsibility": "Potential-gradient recovery, masking and energy handoff."},
+    {"id": "energy", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp", "symbol": "demag_poisson_energy_from_field", "responsibility": "Negative half-mu0 magnetization-field energy reduction."},
+    {"id": "gpu-rhs", "path": "backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu", "symbol": "demag_rhs_csr_kernel", "responsibility": "Device CSR RHS kernel."},
+    {"id": "gpu-recovery", "path": "backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu", "symbol": "demag_recovery_csr_kernel", "responsibility": "Device field recovery kernel."},
+    {"id": "gpu-energy", "path": "backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu", "symbol": "demag_energy_blocks_kernel", "responsibility": "Device energy partials."},
+    {"id": "hypre-gpu", "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp", "symbol": "initialize_demag_poisson_hypre_device_solver", "responsibility": "Device Hypre solver and preconditioner setup."},
+    {"id": "gpu-stage", "path": "backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp", "symbol": "compute_device_demag_for_device_stage_impl", "responsibility": "Device-stage demag orchestration and phase timings."},
+    {"id": "gpu-final-energy", "path": "backends/fem/gpu/cuda/integrators/rk/rk_demag_energy_reductions.cu", "symbol": "gpu_rk_reduce_final_demag_energy_terms", "responsibility": "Device demag energy reduction and ownership checks."}
+  ],
+  "symbols": [
+    {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization field, $M_s\\mathbf m$ in magnetic elements", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
+    {"id": "Hd", "latex": "$\\mathbf H_{\\mathrm d}$", "meaning": "demagnetizing field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "u", "latex": "$u$", "meaning": "magnetic scalar potential", "si_unit": "$\\mathrm{A}$"},
+    {"id": "v", "latex": "$v$", "meaning": "FEM test function", "si_unit": "$1$"},
+    {"id": "Omegaa", "latex": "$\\Omega_a$", "meaning": "complete magnetic-plus-air FEM domain", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "Omegam", "latex": "$\\Omega_m$", "meaning": "magnetic subdomain", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "Gammaa", "latex": "$\\Gamma_a$", "meaning": "selected outer airbox boundary", "si_unit": "$\\mathrm{m^2}$"},
+    {"id": "n", "latex": "$\\mathbf n$", "meaning": "outward unit normal on $\\Gamma_a$", "si_unit": "$1$"},
+    {"id": "beta", "latex": "$\\beta$", "meaning": "Robin boundary coefficient", "si_unit": "$\\mathrm{m^{-1}}$"},
+    {"id": "c", "latex": "$c$", "meaning": "dimensionless Robin coefficient selected by runtime policy", "si_unit": "$1$"},
+    {"id": "Rstar", "latex": "$R_\\star$", "meaning": "open-axis reference radius used for Robin scaling", "si_unit": "$\\mathrm{m}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "Ed", "latex": "$E_{\\mathrm d}$", "meaning": "demagnetization energy", "si_unit": "$\\mathrm{J}$"},
+    {"id": "K", "latex": "$K$", "meaning": "assembled volume stiffness matrix", "si_unit": "$\\mathrm{m}$"},
+    {"id": "Bgamma", "latex": "$B_{\\Gamma}$", "meaning": "assembled boundary mass matrix on $\\Gamma_a$", "si_unit": "$\\mathrm{m^2}$"},
+    {"id": "AR", "latex": "$A_{\\mathrm R}$", "meaning": "Robin system matrix $K+\\beta B_{\\Gamma}$", "si_unit": "$\\mathrm{m}$"},
+    {"id": "b", "latex": "$b$", "meaning": "assembled magnetic Poisson right-hand side", "si_unit": "$\\mathrm{A\\,m}$"},
+    {"id": "uhat", "latex": "$\\widehat u$", "meaning": "vector of FEM potential degrees of freedom", "si_unit": "$\\mathrm{A}$"},
+    {"id": "Hhat", "latex": "$\\widehat{\\mathbf H}_{\\mathrm d}$", "meaning": "recovered FEM field at stored magnetic locations", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "i_j", "latex": "$i,j$", "meaning": "matrix row and column indices", "si_unit": "$1$"},
+    {"id": "Aopen", "latex": "$\\mathcal A_{\\mathrm open}$", "meaning": "set of non-periodic coordinate axes", "si_unit": "$1$"}
+  ],
+  "equations": [
+    {"id": "eq-fem-poisson-field", "symbols": ["Hd", "u"], "sources": ["recovery"]},
+    {"id": "eq-fem-poisson-maxwell", "symbols": ["Hd", "M"], "sources": ["rhs", "recovery"]},
+    {"id": "eq-fem-poisson-strong", "symbols": ["u", "M", "Omegaa", "Omegam"], "sources": ["rhs"]},
+    {"id": "eq-fem-poisson-robin-weak", "symbols": ["u", "v", "Omegaa", "beta", "Gammaa", "Omegam", "M"], "sources": ["rhs", "boundary"]},
+    {"id": "eq-fem-poisson-robin-boundary", "symbols": ["u", "beta", "Gammaa", "n"], "sources": ["boundary"]},
+    {"id": "eq-fem-poisson-dirichlet-weak", "symbols": ["u", "v", "Omegaa", "Omegam", "M"], "sources": ["rhs", "boundary"]},
+    {"id": "eq-fem-poisson-robin-beta", "symbols": ["beta", "c", "Rstar", "Aopen"], "sources": ["boundary"]},
+    {"id": "eq-fem-poisson-energy-field", "symbols": ["Ed", "mu0", "M", "Hd", "Omegam"], "sources": ["energy"]},
+    {"id": "eq-fem-poisson-energy-weak", "symbols": ["Ed", "mu0", "u", "beta", "Omegaa", "Gammaa"], "sources": ["energy", "boundary"]},
+    {"id": "eq-fem-poisson-robin-discrete", "symbols": ["AR", "uhat", "b", "K", "beta", "Bgamma"], "sources": ["boundary", "rhs", "solve"]}
+  ],
+  "public_api": {
+    "constructors": ["fullmag.Demag", "fullmag.FEM", "fullmag.FemLinearSolverPolicy", "study.universe.mesh"],
+    "parameters": [
+      {"python": "Demag.model", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "Allowed values are `airbox`, `bem`, `fredkin_koehler`, and `fmm`.", "meaning": "Selects the demagnetization realization family.", "backend_support": "FEM planner; `airbox` is the Poisson family.", "problem_ir": "`energy[].realization`"},
+      {"python": "Demag.variant", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "Only valid with `model=\"airbox\"`; allowed values are `auto`, `robin`, and `dirichlet`.", "meaning": "Selects the airbox boundary closure. `auto` normalizes to Robin.", "backend_support": "FEM Poisson CPU/GPU paths subject to qualification.", "problem_ir": "`energy[].realization`"},
+      {"python": "Demag.realization", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "Legacy input; cannot be combined with `model`; aliases `poisson_airbox`, `airbox_robin`, and `airbox_dirichlet` are normalized.", "meaning": "Backward-compatible realization selector.", "backend_support": "Normalized before planning.", "problem_ir": "`energy[].realization`"},
+      {"python": "FEM.order", "type": "int", "default": "required", "si_unit": "$1$", "validation": "Integer greater than or equal to $1$.", "meaning": "Polynomial order of the finite-element space.", "backend_support": "FEM CPU/GPU; actual supported topology is planner-dependent.", "problem_ir": "`backend_policy.discretization_hints.fem.order`"},
+      {"python": "FEM.maximum_element_size", "type": "float", "default": "required", "si_unit": "$\\mathrm{m}$", "validation": "Finite positive value; `hmax` is an exact alias.", "meaning": "Maximum target element size used by meshing.", "backend_support": "FEM CPU/GPU.", "problem_ir": "`backend_policy.discretization_hints.fem.hmax`"},
+      {"python": "FEM.hmax", "type": "float", "default": "alias", "si_unit": "$\\mathrm{m}$", "validation": "Must equal `maximum_element_size` when both are supplied.", "meaning": "Short alias for the same mesh control.", "backend_support": "FEM CPU/GPU.", "problem_ir": "`backend_policy.discretization_hints.fem.hmax`"},
+      {"python": "FEM.mesh", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "Non-empty when present.", "meaning": "Explicit mesh source.", "backend_support": "FEM planner; mesh must contain the required airbox for Poisson.", "problem_ir": "`backend_policy.discretization_hints.fem.mesh`"},
+      {"python": "FEM.demag_solver_policy", "type": "FemLinearSolverPolicy | None", "default": "None", "si_unit": "$1$", "validation": "Policy fields are validated individually below.", "meaning": "Native FEM linear-solver policy for Poisson and related demag systems.", "backend_support": "FEM CPU/GPU implementation paths.", "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy`"},
+      {"python": "FemLinearSolverPolicy.solver", "type": "Literal[\"CG\", \"GMRES\"]", "default": "\"CG\"", "si_unit": "$1$", "validation": "Must be `CG` or `GMRES`.", "meaning": "Krylov method applied to the assembled Poisson system. `CG` assumes the symmetric positive-definite operator expected by the selected boundary realization; `GMRES` is available for nonsymmetric or policy-specific cases.", "backend_support": "FEM CPU/GPU Hypre paths.", "problem_ir": "`demag_solver_policy.solver`"},
+      {"python": "FemLinearSolverPolicy.preconditioner", "type": "Literal[\"AMG\", \"JACOBI\", \"NONE\"]", "default": "\"AMG\"", "si_unit": "$1$", "validation": "Must be `AMG`, `JACOBI`, or `NONE`.", "meaning": "Hypre preconditioner: BoomerAMG, diagonal scaling, or identity.", "backend_support": "FEM CPU/GPU; device AMG requires the compiled device Hypre stack.", "problem_ir": "`demag_solver_policy.preconditioner`"},
+      {"python": "FemLinearSolverPolicy.rtol", "type": "float", "default": "1e-8", "si_unit": "$1$", "validation": "Finite and strictly positive.", "meaning": "Relative linear-solver tolerance passed to Hypre/MFEM. It controls algebraic convergence, not mesh or airbox error.", "backend_support": "FEM CPU/GPU.", "problem_ir": "`demag_solver_policy.rtol`"},
+      {"python": "FemLinearSolverPolicy.atol", "type": "float | None", "default": "None", "si_unit": "$1$", "validation": "When supplied, finite and strictly positive.", "meaning": "Optional absolute stopping tolerance; it is enabled only when present and positive.", "backend_support": "FEM CPU/GPU.", "problem_ir": "`demag_solver_policy.atol`"},
+      {"python": "FemLinearSolverPolicy.max_iterations", "type": "int", "default": "500", "si_unit": "$1$", "validation": "Integer greater than or equal to $1$.", "meaning": "Hard upper bound on Krylov iterations. Reaching it without convergence is a failed solve, not permission to accept the field silently.", "backend_support": "FEM CPU/GPU.", "problem_ir": "`demag_solver_policy.max_iterations`"},
+      {"python": "FemLinearSolverPolicy.print_level", "type": "int", "default": "0", "si_unit": "$1$", "validation": "Integer greater than or equal to $0$.", "meaning": "Hypre/MFEM diagnostic verbosity. It does not change the requested physical problem.", "backend_support": "FEM CPU/GPU.", "problem_ir": "`demag_solver_policy.print_level`"},
+      {"python": "study.universe.mesh(maximum_element_size)", "type": "float", "default": "inherited/default", "si_unit": "$\\mathrm{m}$", "validation": "Finite positive value.", "meaning": "Airbox mesh maximum size; can override the FEM default for the universe.", "backend_support": "FEM mesh generation.", "problem_ir": "`study_universe.airbox_hmax`"},
+      {"python": "study.universe.mesh(minimum_element_size)", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "Positive when supplied and not greater than the maximum.", "meaning": "Lower bound for airbox element size.", "backend_support": "FEM mesh generation.", "problem_ir": "`study_universe.airbox_hmin`"},
+      {"python": "study.universe.mesh(growth_rate)", "type": "float | None", "default": "None", "si_unit": "$1$", "validation": "Positive finite value.", "meaning": "Controls permitted element-size growth through the airbox.", "backend_support": "FEM mesh generation.", "problem_ir": "`study_universe.airbox_growth_rate`"},
+      {"python": "study.universe.mesh(grading)", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "`auto`, `geometric`, or `linear`.", "meaning": "Selects airbox grading policy.", "backend_support": "FEM mesh generation.", "problem_ir": "`study_universe.airbox_grading`"}
+    ]
+  }
+}

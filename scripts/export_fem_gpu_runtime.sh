@@ -116,7 +116,7 @@ VARIANTS_ROOT="${FULLMAG_CONTAINER_TARGET_DIR}/runtime-variants"
 STAGING_ROOT="${FULLMAG_CONTAINER_TARGET_DIR}/runtime-export-staging.$$"
 readonly VARIANTS_ROOT STAGING_ROOT
 : "${FULLMAG_LOOP_SYSFS_ROOT:=/sys/class/block}"
-: "${FULLMAG_FEM_RUNTIME_CARGO_JOBS:=1}"
+: "${FULLMAG_FEM_RUNTIME_CARGO_JOBS:=8}"
 : "${FULLMAG_CUDA_ARCHITECTURES:=80-real;89-real;90-real;90-virtual}"
 : "${FULLMAG_HYPRE_GPU_ARCHITECTURES:=60 70 80 89 90}"
 : "${FULLMAG_HYPRE_MEMORY_VARIANT:=baseline}"
@@ -270,12 +270,13 @@ clear_runtime_bundle_contents() {
   mkdir -p "$runtime_root/include"
   mkdir -p "$runtime_root/openmpi/bin"
 }
-echo "[export_fem_gpu_runtime] preparing task-specific target cache"
+echo "[export_fem_gpu_runtime] refreshing build identity while preserving the task-specific release cache"
 if [ "${FULLMAG_ENABLE_NVTX}" = "0" ] &&
    [[ "${RUSTFLAGS:-}" == *fullmag_enable_nvtx* ]]; then
   echo "[export_fem_gpu_runtime] inherited RUSTFLAGS contains fullmag_enable_nvtx while FULLMAG_ENABLE_NVTX=0" >&2
   exit 2
 fi
+cargo +nightly clean -p fullmag-build-info
 if [ "${FULLMAG_FEM_RUNTIME_REUSE_BUILD}" = "0" ]; then
   echo "[export_fem_gpu_runtime] clearing release artifacts before a clean rebuild"
   cargo +nightly clean --workspace --release

@@ -140,7 +140,7 @@ for shape_name, rx, ry, rz in SHAPES:
             )
 
             result = study.relax(
-                tol=RELAX_TOL,
+                tolA=RELAX_TOL,
                 max_steps=RELAX_MAX_STEPS,
                 algorithm=RELAX_ALGORITHM,
                 relax_alpha=1.0,

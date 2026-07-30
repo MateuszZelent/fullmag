@@ -48,5 +48,5 @@ study.relax(
     max_error=1e-6,
     dt_min=1e-17,
     max_steps=1,
-    tol=1e-4,
+    tolA=1e-4,
 )

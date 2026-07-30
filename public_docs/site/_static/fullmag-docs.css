@@ -1,0 +1,82 @@
+article,
+article > main,
+article main,
+article main > section {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.drawer-content,
+.drawer-content > * {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+
+article main .table-wrapper {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: auto;
+  overflow-y: hidden;
+  contain: inline-size;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+article main .table-wrapper table {
+  width: max-content;
+  min-width: 100%;
+  max-width: none;
+}
+
+article main .table-wrapper th,
+article main .table-wrapper td,
+article main table th,
+article main table td {
+  min-width: 0;
+  max-width: none;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  vertical-align: top;
+}
+
+article main .table-wrapper code,
+article main .table-wrapper .math,
+article main table code,
+article main table .math,
+article main table mjx-container {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+article > main div.math,
+article > main pre {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+article > main span.math {
+  display: inline;
+}
+
+#main-header {
+  overflow-x: clip;
+}
+
+@media (max-width: 48rem) {
+  article main .table-wrapper {
+    scrollbar-width: thin;
+    background: linear-gradient(
+      to right,
+      transparent 95%,
+      color-mix(in srgb, currentColor 10%, transparent)
+    );
+  }
+}

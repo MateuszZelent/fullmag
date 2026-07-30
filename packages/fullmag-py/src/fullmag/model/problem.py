@@ -591,12 +591,46 @@ def build_geometry_assets_for_request(
                     )
 
         if explicit_domain_mesh_source is not None:
-            assets["fem_domain_mesh_asset"] = {
-                "mesh_source": explicit_domain_mesh_source,
-                "mesh": None,
-                "region_markers": explicit_domain_region_markers,
-                "object_region_markers": explicit_domain_object_region_markers or [],
-            }
+            source_suffix = Path(explicit_domain_mesh_source).suffix.lower()
+            if source_suffix in {".fullmag-mesh", ".msh"}:
+                from fullmag.meshing.persistence import (
+                    import_gmsh_mesh,
+                    load_mesh_artifact,
+                )
+
+                artifact = (
+                    load_mesh_artifact(explicit_domain_mesh_source)
+                    if source_suffix == ".fullmag-mesh"
+                    else import_gmsh_mesh(explicit_domain_mesh_source)
+                )
+                if artifact.region_markers != explicit_domain_region_markers:
+                    raise ValueError(
+                        "explicit shared-domain mesh region markers do not match the persisted artifact"
+                    )
+                if (
+                    explicit_domain_object_region_markers is not None
+                    and artifact.object_region_markers
+                    != explicit_domain_object_region_markers
+                ):
+                    raise ValueError(
+                        "explicit shared-domain object-region markers do not match the persisted artifact"
+                    )
+                persisted_domain_asset = {
+                    "mesh_source": explicit_domain_mesh_source,
+                    "mesh": artifact.mesh.to_ir(artifact.mesh_name),
+                    "region_markers": artifact.region_markers,
+                    "object_region_markers": artifact.object_region_markers,
+                }
+                if artifact.build_report is not None:
+                    persisted_domain_asset["build_report"] = artifact.build_report
+                assets["fem_domain_mesh_asset"] = persisted_domain_asset
+            else:
+                assets["fem_domain_mesh_asset"] = {
+                    "mesh_source": explicit_domain_mesh_source,
+                    "mesh": None,
+                    "region_markers": explicit_domain_region_markers,
+                    "object_region_markers": explicit_domain_object_region_markers or [],
+                }
         elif study_universe is not None:
             authored_regions = list(object_regions or [])
             domain_mesh, region_markers, build_report = (

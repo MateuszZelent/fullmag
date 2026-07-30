@@ -1,0 +1,70 @@
+{
+  "document": {
+    "path": "public_docs/site/physics/interactions/anisotropy/uniaxial.md",
+    "title": "Uniaxial magnetocrystalline anisotropy",
+    "interaction": "uniaxial magnetocrystalline anisotropy"
+  },
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Double-precision cell-local reference field and energy realization."},
+    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "FP64/FP32 standard and multilayer CUDA paths are present; executed-device qualification is separate."},
+    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "Nodal/lumped and spatial element-quadrature source paths are present."},
+    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "Device field/energy kernels and reductions are present; executed-device parity remains a qualification gate."}
+  ],
+  "sources": [
+    {"id": "python-uniaxial", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class UniaxialAnisotropy", "responsibility": "Compatibility public constructor and serialization."},
+    {"id": "python-material", "path": "packages/fullmag-py/src/fullmag/model/structure.py", "symbol": "class Material", "responsibility": "Canonical Ku1/Ku2/axis and spatial-field contract."},
+    {"id": "python-migration", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "_migrate_legacy_anisotropy_energy_terms", "responsibility": "Conflict-checked migration from legacy term to material fields."},
+    {"id": "planner-fdm", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "FDM native material resolution and legality."},
+    {"id": "planner-fem", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem", "responsibility": "FEM native material resolution and axis validation."},
+    {"id": "fdm-cpu-field", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "anisotropy_field", "responsibility": "FDM CPU local anisotropy field."},
+    {"id": "fdm-cpu-energy", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "anisotropy_energy_density_from_vectors", "responsibility": "FDM CPU anisotropy energy density."},
+    {"id": "fdm-gpu-fp64", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "anisotropy_field_fp64_kernel", "responsibility": "FDM CUDA FP64 local anisotropy field."},
+    {"id": "fdm-gpu-fp32", "path": "backends/fdm/gpu/cuda/interactions/demag_fp32.cu", "symbol": "anisotropy_field_fp32_kernel", "responsibility": "FDM CUDA FP32 local anisotropy field."},
+    {"id": "fdm-gpu-multilayer", "path": "backends/fdm/gpu/cuda/interactions/multilayer_anisotropy.cu", "symbol": "multilayer_anisotropy_field_kernel", "responsibility": "FDM CUDA multilayer local anisotropy field."},
+    {"id": "fdm-gpu-energy", "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu", "symbol": "reduce_uniaxial_anisotropy_energy_fp64", "responsibility": "FDM CUDA FP64 anisotropy energy reduction."},
+    {"id": "fem-cpu", "path": "backends/fem/cpu/mfem/interactions/anisotropy_uniaxial.cpp", "symbol": "compute_uniaxial_anisotropy_field", "responsibility": "FEM CPU uniaxial field and lumped energy."},
+    {"id": "fem-cpu-quadrature", "path": "backends/fem/cpu/mfem/interactions/anisotropy_uniaxial.cpp", "symbol": "uniaxial_anisotropy_energy_from_element_quadrature_material", "responsibility": "FEM CPU spatial-material energy integration."},
+    {"id": "fem-gpu-kernel", "path": "backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu", "symbol": "uniaxial_anisotropy_field_energy_blocks_kernel", "responsibility": "FEM CUDA uniaxial field and energy block contributions."},
+    {"id": "fem-gpu-field", "path": "backends/fem/gpu/cuda/integrators/rk/rk_anisotropy_field.cu", "symbol": "gpu_rk_compute_anisotropy_field_contributions", "responsibility": "FEM CUDA RK dispatch and device-buffer validation."},
+    {"id": "fem-gpu-energy", "path": "backends/fem/gpu/cuda/integrators/rk/rk_anisotropy_energy_reductions.cu", "symbol": "gpu_rk_reduce_final_anisotropy_energy_terms", "responsibility": "FEM CUDA final anisotropy energy reduction."}
+  ],
+  "symbols": [
+    {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization $\\mathbf M/M_s$", "si_unit": "$1$"},
+    {"id": "u", "latex": "$\\mathbf u$", "meaning": "normalized uniaxial easy-axis direction", "si_unit": "$1$"},
+    {"id": "q", "latex": "$q$", "meaning": "projection $\\mathbf m\\cdot\\mathbf u$", "si_unit": "$1$"},
+    {"id": "Ku1", "latex": "$K_{u1}$", "meaning": "first-order uniaxial anisotropy constant", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "Ku2", "latex": "$K_{u2}$", "meaning": "second-order uniaxial anisotropy constant", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "Hu", "latex": "$\\mathbf H_{\\mathrm u}$", "meaning": "uniaxial anisotropy effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "wu", "latex": "$w_{\\mathrm u}$", "meaning": "local uniaxial anisotropy energy density", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "Eu", "latex": "$E_{\\mathrm u}$", "meaning": "total uniaxial anisotropy energy", "si_unit": "$\\mathrm{J}$"},
+    {"id": "Omega", "latex": "$\\Omega_m$", "meaning": "magnetic integration domain", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "eta", "latex": "$\\boldsymbol\\eta$", "meaning": "admissible reduced-magnetization variation", "si_unit": "$1$"},
+    {"id": "i", "latex": "$i$", "meaning": "discrete cell or node index", "si_unit": "$1$"},
+    {"id": "Vi", "latex": "$V_i$", "meaning": "FDM cell volume", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "wi", "latex": "$w_i^{\\mathrm{lump}}$", "meaning": "FEM nodal lumped integration weight", "si_unit": "$\\mathrm{m^3}$"}
+  ],
+  "equations": [
+    {"id": "eq-uniaxial-projection", "symbols": ["q", "m", "u"], "sources": ["fdm-cpu-field", "fem-cpu"]},
+    {"id": "eq-uniaxial-energy-density", "symbols": ["wu", "Ku1", "Ku2", "q", "Eu", "Omega"], "sources": ["fdm-cpu-energy", "fem-cpu"]},
+    {"id": "eq-uniaxial-effective-field", "symbols": ["Hu", "Ku1", "Ku2", "q", "mu0", "Ms", "u", "Eu", "m"], "sources": ["fdm-cpu-field", "fem-cpu"]},
+    {"id": "eq-uniaxial-directional-derivative", "symbols": ["Eu", "Ku1", "Ku2", "q", "eta", "Omega", "mu0", "Ms", "Hu"], "sources": ["fem-cpu"]},
+    {"id": "eq-uniaxial-fdm-field", "symbols": ["Hu", "Ku1", "Ku2", "q", "mu0", "Ms", "u", "Eu", "i", "Vi"], "sources": ["fdm-cpu-field", "fdm-cpu-energy"]},
+    {"id": "eq-uniaxial-fem-lumped", "symbols": ["Eu", "Ku1", "Ku2", "q", "i", "wi"], "sources": ["fem-cpu"]}
+  ],
+  "public_api": {
+    "constructors": ["fullmag.UniaxialAnisotropy", "fullmag.Material"],
+    "parameters": [
+      {"python": "UniaxialAnisotropy.ku1", "type": "float", "default": "required", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite", "meaning": "first-order uniaxial constant", "backend_support": "FDM/FEM CPU/GPU after migration", "problem_ir": "`materials[].uniaxial_anisotropy`"},
+      {"python": "UniaxialAnisotropy.ku2", "type": "float", "default": "0.0", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite", "meaning": "second-order uniaxial constant", "backend_support": "FDM/FEM CPU/GPU after migration", "problem_ir": "`materials[].uniaxial_anisotropy_k2`"},
+      {"python": "UniaxialAnisotropy.axis", "type": "Sequence[float]", "default": "(0,0,1)", "si_unit": "$1$", "validation": "length 3; finite; non-zero when active", "meaning": "easy-axis direction, normalized by native realization", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "`materials[].anisotropy_axis`"},
+      {"python": "Material.Ku1", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite when supplied", "meaning": "canonical first-order material value", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "`materials[].uniaxial_anisotropy`"},
+      {"python": "Material.Ku2", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite when supplied", "meaning": "canonical second-order material value", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "`materials[].uniaxial_anisotropy_k2`"},
+      {"python": "Material.anisU", "type": "tuple[float,float,float] | None", "default": "None", "si_unit": "$1$", "validation": "length 3; finite; non-zero when active", "meaning": "canonical easy-axis direction", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "`materials[].anisotropy_axis`"},
+      {"python": "Material.Ku_field", "type": "list[float] | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite; mesh cardinality validated downstream", "meaning": "spatial Ku1 override", "backend_support": "FEM and allocating FDM reference paths where supported", "problem_ir": "`materials[].ku_field`"},
+      {"python": "Material.Ku2_field", "type": "list[float] | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite; mesh cardinality validated downstream", "meaning": "spatial Ku2 override", "backend_support": "FEM and allocating FDM reference paths where supported", "problem_ir": "`materials[].ku2_field`"}
+    ]
+  }
+}

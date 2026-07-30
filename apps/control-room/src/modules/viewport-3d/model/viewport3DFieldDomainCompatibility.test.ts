@@ -86,6 +86,24 @@ describe("resolveViewport3DFieldDomainCompatibility", () => {
     ).toMatchObject({ status: "degraded", reason: "fmvp-v2-legacy" });
   });
 
+  it("matches a manifest sha256 fingerprint with the raw FMVP digest", () => {
+    const digest = "72a6526603d5488bde1206de81d455638d624bdcd6209ef7638349de3cf4fcdc";
+
+    expect(
+      resolveViewport3DFieldDomainCompatibility({
+        domain: { ...domain, meshTopologyHash: `sha256:${digest}` },
+        field: {
+          domainGenerationId: "43",
+          formatVersion: 3,
+          indexing: "sampled_node_indices",
+          meshTopologyHash: digest,
+          meshTopologyRevision: "7",
+          pointCount: 4,
+        },
+      }),
+    ).toEqual({ reason: "compatible", status: "compatible" });
+  });
+
   it("does not pass an FMVP v3 field into a different FDM generation", () => {
     const field = {
       domainGenerationId: "generation-a",

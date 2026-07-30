@@ -81,7 +81,7 @@ def run_branch(branch: str) -> list[dict[str, float | str]]:
             body=body,
             field=(0.0, 0.0, 0.0),
             state_path=state_path,
-            tol=RELAX_TOL,
+            tolA=RELAX_TOL,
             max_steps=RELAX_MAX_STEPS,
             algorithm=RELAX_ALGORITHM,
             relax_alpha=1.0,

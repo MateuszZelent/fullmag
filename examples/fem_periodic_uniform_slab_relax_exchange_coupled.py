@@ -110,5 +110,5 @@ study.save("demag_phi", every=10e-12)
 study.stages.add_relax(
     algorithm="projected_gradient_bb",
     max_steps=120,
-    tol=5.0e2,  # A/m
+    tolA=5.0e2,  # A/m
 )

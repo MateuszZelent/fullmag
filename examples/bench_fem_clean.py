@@ -94,7 +94,7 @@ body.mesh(
 study.build_domain_mesh()
 
 study.solver(integrator="rk23", max_error=1e-6, gamma=233728.481992)
-study.stages.add_relax(max_steps=MAX_STEPS, tol=1e-8, algorithm="llg_overdamped")
+study.stages.add_relax(max_steps=MAX_STEPS, tolA=1e-8, algorithm="llg_overdamped")
 
 setup_time = time.perf_counter() - setup_start
 print(f"[bench] Setup complete in {setup_time:.2f}s", file=sys.stderr)

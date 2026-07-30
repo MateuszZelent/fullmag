@@ -79,7 +79,7 @@ def compare_numeric(
         fail(
             f"{name} mismatch: supercell={actual_number:.17g}, "
             f"unit_cell={expected_number:.17g}, diff={abs(actual_number - expected_number):.17g}, "
-            f"tol={tolerance:.17g}"
+            f"tolA={tolerance:.17g}"
         )
 
 

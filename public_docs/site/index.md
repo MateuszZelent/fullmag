@@ -29,7 +29,7 @@ public status and review.
 ## Start here
 
 ```{toctree}
-:maxdepth: 2
+:maxdepth: 4
 :caption: Public documentation
 
 getting-started/index

@@ -45,7 +45,7 @@ study.solver(dt=1e-13)
 study.relax(
     algorithm=ALGORITHM,
     max_steps=MAX_STEPS,
-    tol=1e-30,
+    tolA=1e-30,
     relax_alpha=None,
     dt=1e-13 if ALGORITHM == "llg_overdamped" else None,
 )

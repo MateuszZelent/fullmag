@@ -240,7 +240,7 @@ def relax_with_state(
 ) -> tuple[object, tuple[float, float, float], dict[str, float]]:
     study.b_ext(float(field[0]), float(field[1]), float(field[2]))
     result = study.relax(
-        tol=RELAX_TOL,
+        tolA=RELAX_TOL,
         max_steps=RELAX_MAX_STEPS,
         algorithm=RELAX_ALGORITHM,
     )

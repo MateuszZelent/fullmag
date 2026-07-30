@@ -319,7 +319,7 @@ if FMR_EQUILIBRIUM_SOURCE == "relax":
     study.stages.add_relax(
         algorithm="projected_gradient_bb",
         max_steps=RELAX_MAX_STEPS,
-        tol=RELAX_TOL,
+        tolA=RELAX_TOL,
     )
 study.stages.add_frequency_response(
     frequencies_hz=PROBE_FREQUENCIES_HZ,

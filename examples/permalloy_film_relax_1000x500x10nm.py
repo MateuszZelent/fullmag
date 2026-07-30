@@ -118,7 +118,7 @@ study.solver(integrator="rk23", max_error=1e-4, gamma=GAMMA)
 study.tableautosave(10e-12)
 study.stages.add_relax(
     algorithm="llg_overdamped",
-    tol=1e-4,
+    tolA=1e-4,
     max_steps=MAX_STEPS,
 )
 

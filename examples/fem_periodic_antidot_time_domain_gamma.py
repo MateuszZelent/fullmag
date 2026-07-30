@@ -117,5 +117,5 @@ study.runtime_metadata(
         "susceptibility_floor_fraction": 1e-6,
     },
 )
-study.stages.add_minimize(stage_id="relax", method="bb", max_steps=RELAX_STEPS, tol=5e2)
+study.stages.add_minimize(stage_id="relax", method="bb", max_steps=RELAX_STEPS, tolA=5e2)
 study.stages.add_run(stage_id="excite", until=UNTIL)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 import hashlib
 import itertools
 import json
@@ -1610,6 +1610,11 @@ class MeshData:
                         "periodic_boundary_pairs": self.periodic_boundary_pairs,
                         "periodic_node_pairs": self.periodic_node_pairs,
                         "periodic_mesh_certificate": self.periodic_mesh_certificate,
+                        "quality": asdict(self.quality) if self.quality is not None else None,
+                        "per_domain_quality": {
+                            str(marker): asdict(report)
+                            for marker, report in (self.per_domain_quality or {}).items()
+                        },
                         "realization_report": (
                             self.realization_report.to_dict()
                             if self.realization_report is not None
@@ -1649,6 +1654,17 @@ class MeshData:
             ),
             periodic_mesh_certificate_json=np.asarray(
                 json.dumps(self.periodic_mesh_certificate),
+            ),
+            quality_json=np.asarray(
+                json.dumps(asdict(self.quality) if self.quality is not None else None),
+            ),
+            per_domain_quality_json=np.asarray(
+                json.dumps(
+                    {
+                        str(marker): asdict(report)
+                        for marker, report in (self.per_domain_quality or {}).items()
+                    }
+                ),
             ),
             realization_report_json=np.asarray(
                 json.dumps(
@@ -1816,6 +1832,18 @@ class MeshData:
         periodic_mesh_certificate = None
         if "periodic_mesh_certificate_json" in data.files:
             periodic_mesh_certificate = json.loads(str(data["periodic_mesh_certificate_json"]))
+        quality = None
+        if "quality_json" in data.files:
+            quality = _mesh_quality_report_from_serialized(
+                json.loads(str(data["quality_json"]))
+            )
+        per_domain_quality = None
+        if "per_domain_quality_json" in data.files:
+            raw_per_domain_quality = json.loads(str(data["per_domain_quality_json"]))
+            per_domain_quality = {
+                int(marker): _mesh_quality_report_from_serialized(report)
+                for marker, report in raw_per_domain_quality.items()
+            }
         realization_report = None
         if "realization_report_json" in data.files:
             raw_report = json.loads(str(data["realization_report_json"]))
@@ -1840,6 +1868,8 @@ class MeshData:
             periodic_boundary_pairs=periodic_boundary_pairs,
             periodic_node_pairs=periodic_node_pairs,
             periodic_mesh_certificate=periodic_mesh_certificate,
+            quality=quality,
+            per_domain_quality=per_domain_quality,
             realization_report=realization_report,
             mixed_layer_topology_certificate=mixed_layer_topology_certificate,
         )
@@ -1862,6 +1892,11 @@ class MeshData:
             periodic_boundary_pairs=[dict(pair) for pair in payload.get("periodic_boundary_pairs", [])],
             periodic_node_pairs=[dict(pair) for pair in payload.get("periodic_node_pairs", [])],
             periodic_mesh_certificate=payload.get("periodic_mesh_certificate"),
+            quality=_mesh_quality_report_from_serialized(payload.get("quality")),
+            per_domain_quality={
+                int(marker): _mesh_quality_report_from_serialized(report)
+                for marker, report in dict(payload.get("per_domain_quality") or {}).items()
+            } or None,
             realization_report=_mesh_realization_report_from_serialized(
                 payload.get("realization_report")
             ),
@@ -1958,6 +1993,16 @@ class MeshData:
                 _build_mesh_statistics_report(mesh, mesh_name)
             )
         return ir
+
+
+def _mesh_quality_report_from_serialized(value: object) -> MeshQualityReport | None:
+    if value is None:
+        return None
+    if isinstance(value, MeshQualityReport):
+        return value
+    if not isinstance(value, dict):
+        raise TypeError("serialized mesh quality report must be an object or null")
+    return MeshQualityReport(**value)
 
 
 def _mesh_realization_report_from_serialized(

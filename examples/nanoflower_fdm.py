@@ -59,7 +59,7 @@ study.tableautosave(1e-13)
 # ── Stages ──────────────────────────────────────────────────
 study.wait_for_solve(True)
 study.stages.add_relax(
-    tol=1e-6,                       # torque tolerance (max_dm_dt)
+    tolA=1e-6,                       # torque tolerance (max_dm_dt)
     max_steps=100_000,               # limit kroków
     algorithm="llg_overdamped",     # algorytm relaksacji
 )
