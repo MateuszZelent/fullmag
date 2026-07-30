@@ -4,6 +4,7 @@ import csv
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -139,12 +140,16 @@ class MixedSP4MatrixExecutorTests(unittest.TestCase):
         artifact_dir: Path,
         environment: dict[str, str],
         log_path: Path,
+        *,
+        budget_exhausted: bool = False,
     ) -> int:
         artifact_dir.mkdir(parents=True)
         engine = "fem_cpu_native" if spec["device"] == "cpu" else "fem_native_gpu"
         fingerprint = "sha256:" + "a" * 64
         source_hash = hashlib.sha256(executor.BOUNDED_SOURCE.read_bytes()).hexdigest()
         cell_quality = {"prism6": 0.8, "pyramid5": 0.7, "tet4": 0.6}
+        final_torque_apm = 4.0 if budget_exhausted else 0.5
+        final_torque_t = final_torque_apm * (4e-7 * math.pi)
         metadata = {
             "source_hash": source_hash,
             "status": "completed",
@@ -265,13 +270,13 @@ class MixedSP4MatrixExecutorTests(unittest.TestCase):
             },
             f"fem_{spec['device']}_relaxation_qualification": {
                 "relaxation_algorithm": spec["relaxation_algorithm"],
-                "converged": True,
-                "stop_reason": "torque",
-                "stop_metric_kind": "max_torque_apm",
-                "stop_metric_unit": "A/m",
-                "stop_metric_name": "max_torque_apm",
-                "stop_metric_value": 0.5,
-                "stop_threshold": spec["torque_tolerance_apm"],
+                "converged": not budget_exhausted,
+                "stop_reason": "max_steps" if budget_exhausted else "torque",
+                "stop_metric_kind": "steps" if budget_exhausted else "max_torque_apm",
+                "stop_metric_unit": "count" if budget_exhausted else "A/m",
+                "stop_metric_name": "steps" if budget_exhausted else "max_torque_apm",
+                "stop_metric_value": 1.0 if budget_exhausted else final_torque_apm,
+                "stop_threshold": 1.0 if budget_exhausted else spec["torque_tolerance_apm"],
                 "executed_steps": 1,
                 "total_rhs_evals": 2,
                 "rejected_attempts": 0,
@@ -284,8 +289,8 @@ class MixedSP4MatrixExecutorTests(unittest.TestCase):
                     "E_dmi": 0.0,
                     "E_total": 0.5,
                 },
-                "final_torque_apm": 0.5,
-                "final_torque_t": 6.283185307179586e-7,
+                "final_torque_apm": final_torque_apm,
+                "final_torque_t": final_torque_t,
                 "norm_defect": 0.0,
             },
         }
@@ -377,8 +382,8 @@ class MixedSP4MatrixExecutorTests(unittest.TestCase):
                     "E_ex": 0.2,
                     "E_demag": 0.3,
                     "E_total": 0.5,
-                    "max_torque_Apm": 0.5,
-                    "max_torque_T": 6.283185307179586e-7,
+                    "max_torque_Apm": final_torque_apm,
+                    "max_torque_T": final_torque_t,
                 }
             )
         (artifact_dir / "m_final.json").write_text(
@@ -492,6 +497,192 @@ class MixedSP4MatrixExecutorTests(unittest.TestCase):
             )
             self.assertEqual(persisted, summary)
             self.assertEqual(summary["execution_identity"], self.execution_identity)
+
+    def test_one_step_runtime_smoke_accepts_max_step_completion(self) -> None:
+        def launch(
+            spec: dict[str, object],
+            artifact_dir: Path,
+            environment: dict[str, str],
+            log_path: Path,
+        ) -> int:
+            return self._successful_launch(
+                spec,
+                artifact_dir,
+                environment,
+                log_path,
+                budget_exhausted=True,
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            durable_root = Path(directory)
+            summary = executor.execute_matrix(
+                durable_root / "matrix",
+                durable_root=durable_root,
+                max_steps=1,
+                evidence_mode="one_step_runtime_smoke",
+                launch=launch,
+            )
+
+        self.assertEqual(summary["status"], "completed_nonqualifying")
+
+    def test_one_step_runtime_smoke_rejects_incomplete_budget_evidence(self) -> None:
+        [spec, *_] = executor.collect_execution_cases(self._plans())
+
+        def mutate_wrong_stop_reason(
+            qualification: dict[str, object],
+        ) -> None:
+            qualification["stop_reason"] = "torque"
+
+        def mutate_zero_steps(qualification: dict[str, object]) -> None:
+            qualification["executed_steps"] = 0
+
+        def mutate_two_steps(qualification: dict[str, object]) -> None:
+            qualification["executed_steps"] = 2
+
+        def mutate_missing_torque(qualification: dict[str, object]) -> None:
+            qualification.pop("final_torque_apm")
+
+        def mutate_nonfinite_torque(qualification: dict[str, object]) -> None:
+            qualification["final_torque_t"] = float("nan")
+
+        def mutate_budget_metric_kind(qualification: dict[str, object]) -> None:
+            qualification["stop_metric_kind"] = "max_torque_apm"
+
+        def mutate_budget_metric_name(qualification: dict[str, object]) -> None:
+            qualification["stop_metric_name"] = "max_torque_apm"
+
+        def mutate_budget_metric_unit(qualification: dict[str, object]) -> None:
+            qualification["stop_metric_unit"] = "A/m"
+
+        def mutate_budget_metric_value(qualification: dict[str, object]) -> None:
+            qualification["stop_metric_value"] = 0.0
+
+        def mutate_budget_metric_threshold(qualification: dict[str, object]) -> None:
+            qualification["stop_threshold"] = 2.0
+
+        mutations = {
+            "wrong_stop_reason": mutate_wrong_stop_reason,
+            "zero_steps": mutate_zero_steps,
+            "two_steps": mutate_two_steps,
+            "missing_torque": mutate_missing_torque,
+            "nonfinite_torque": mutate_nonfinite_torque,
+            "budget_metric_kind": mutate_budget_metric_kind,
+            "budget_metric_name": mutate_budget_metric_name,
+            "budget_metric_unit": mutate_budget_metric_unit,
+            "budget_metric_value": mutate_budget_metric_value,
+            "budget_metric_threshold": mutate_budget_metric_threshold,
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                artifact_dir = root / "artifacts"
+                log_path = root / executor.RUNTIME_LOG
+                self._successful_launch(
+                    spec,
+                    artifact_dir,
+                    {},
+                    log_path,
+                    budget_exhausted=True,
+                )
+                metadata_path = artifact_dir / "metadata.json"
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                qualification = metadata[
+                    "fem_cpu_relaxation_qualification"
+                ]
+                self.assertIsInstance(qualification, dict)
+                mutate(qualification)
+                metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+                with self.assertRaises(executor.ExecutionError):
+                    executor._validate_case_artifacts(
+                        spec,
+                        artifact_dir,
+                        log_path,
+                        max_steps=1,
+                        evidence_mode=executor.ONE_STEP_RUNTIME_SMOKE,
+                    )
+
+    def test_one_step_runtime_smoke_rejects_false_convergence_with_torque_stop(self) -> None:
+        [spec, *_] = executor.collect_execution_cases(self._plans())
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact_dir = root / "artifacts"
+            log_path = root / executor.RUNTIME_LOG
+            self._successful_launch(
+                spec,
+                artifact_dir,
+                {},
+                log_path,
+                budget_exhausted=True,
+            )
+            metadata_path = artifact_dir / "metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            qualification = metadata["fem_cpu_relaxation_qualification"]
+            self.assertIsInstance(qualification, dict)
+            qualification["stop_reason"] = "torque"
+            qualification["stop_metric_kind"] = "max_torque_apm"
+            qualification["stop_metric_name"] = "max_torque_apm"
+            qualification["stop_metric_unit"] = "A/m"
+            qualification["stop_metric_value"] = qualification["final_torque_apm"]
+            qualification["stop_threshold"] = spec["torque_tolerance_apm"]
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+            with self.assertRaisesRegex(executor.ExecutionError, "max_steps"):
+                executor._validate_case_artifacts(
+                    spec,
+                    artifact_dir,
+                    log_path,
+                    max_steps=1,
+                    evidence_mode=executor.ONE_STEP_RUNTIME_SMOKE,
+                )
+
+    def test_execute_matrix_rejects_invalid_evidence_mode_before_launch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            durable_root = Path(directory)
+            with self.assertRaisesRegex(executor.ExecutionError, "unsupported"):
+                executor.execute_matrix(
+                    durable_root / "matrix",
+                    durable_root=durable_root,
+                    evidence_mode="unknown",
+                    launch=self._successful_launch,
+                )
+
+    def test_one_step_runtime_smoke_rejects_nonunit_step_budget_before_launch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            durable_root = Path(directory)
+            with self.assertRaisesRegex(executor.ExecutionError, "max_steps=1"):
+                executor.execute_matrix(
+                    durable_root / "matrix",
+                    durable_root=durable_root,
+                    max_steps=2,
+                    evidence_mode=executor.ONE_STEP_RUNTIME_SMOKE,
+                    launch=self._successful_launch,
+                )
+
+    def test_full_matrix_rejects_one_step_max_step_completion(self) -> None:
+        def launch(
+            spec: dict[str, object],
+            artifact_dir: Path,
+            environment: dict[str, str],
+            log_path: Path,
+        ) -> int:
+            return self._successful_launch(
+                spec,
+                artifact_dir,
+                environment,
+                log_path,
+                budget_exhausted=True,
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            durable_root = Path(directory)
+            with self.assertRaisesRegex(executor.ExecutionError, "did not converge"):
+                executor.execute_matrix(
+                    durable_root / "matrix",
+                    durable_root=durable_root,
+                    max_steps=1,
+                    launch=launch,
+                )
 
     def test_stops_when_execution_identity_changes_after_launch(self) -> None:
         launches = 0
@@ -1205,6 +1396,7 @@ class MixedSP4MatrixExecutorTests(unittest.TestCase):
         self.assertIn("/mnt/fullmag-zfn2-native", recipes)
         self.assertIn("--durable-root", recipes)
         self.assertIn("--max-steps 1", recipes)
+        self.assertIn("--evidence-mode one_step_runtime_smoke", recipes)
         self.assertEqual(recipes.count("create_managed_fem_report_run_root"), 2)
         self.assertIn('echo "mixed SP4 matrix report root: $report_root"', recipes)
         self.assertNotIn(".fullmag/reports", recipes)

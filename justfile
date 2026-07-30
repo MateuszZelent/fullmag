@@ -4255,7 +4255,7 @@ verify-fem-sp4-mixed-matrix-smoke:
       source scripts/lib/managed_fem_report_storage.sh; \
       report_root="$(create_managed_fem_report_run_root "$durable_root" "$report_base" "/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4" "/sys/block")"; \
       echo "mixed SP4 matrix report root: $report_root"; \
-      python3 scripts/run_fem_sp4_mixed_matrix.py --durable-root "$durable_root" --report-root "$report_root" --max-steps 1
+      python3 scripts/run_fem_sp4_mixed_matrix.py --durable-root "$durable_root" --report-root "$report_root" --max-steps 1 --evidence-mode one_step_runtime_smoke
 
 verify-fem-sp4-mixed-matrix:
     just ensure-managed-fem-runtime

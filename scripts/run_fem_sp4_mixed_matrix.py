@@ -33,6 +33,9 @@ SUMMARY_FILENAME = "execution-summary.v1.json"
 RUN_MANIFEST = "run-manifest.v1.json"
 RUNTIME_LOG = "runtime.log"
 REQUIRED_ARTIFACTS = ("metadata.json", "scalars.csv", "m_final.json")
+FULL_MATRIX_CONVERGENCE = "full_matrix_convergence"
+ONE_STEP_RUNTIME_SMOKE = "one_step_runtime_smoke"
+EVIDENCE_MODES = (FULL_MATRIX_CONVERGENCE, ONE_STEP_RUNTIME_SMOKE)
 BOUNDED_SOURCE = REPO_ROOT / "tests/standard_problems/mumag/sp4/fem/problem.py"
 DEFAULT_RUNTIME_MANIFEST = REPO_ROOT / ".fullmag/runtimes/fem-gpu-host/manifest.json"
 PINNED_RUNTIME_MANIFEST = "runtime-manifest.schema3.json"
@@ -389,6 +392,7 @@ def _summary_base(
     plans: Sequence[dict[str, object]],
     cases: Sequence[dict[str, object]],
     max_steps: int,
+    evidence_mode: str,
 ) -> dict[str, object]:
     return {
         "schema": SCHEMA,
@@ -405,6 +409,7 @@ def _summary_base(
             "convergence_claimed": False,
         },
         "max_steps": max_steps,
+        "evidence_mode": evidence_mode,
         "planned_case_count": len(cases),
         "executed_case_count": 0,
         "completed_case_count": 0,
@@ -1134,7 +1139,10 @@ def _validate_case_artifacts(
     log_path: Path,
     max_steps: int,
     execution_identity: dict[str, object] | None = None,
+    evidence_mode: str = FULL_MATRIX_CONVERGENCE,
 ) -> dict[str, object]:
+    if evidence_mode not in EVIDENCE_MODES:
+        raise ExecutionError(f"unsupported mixed SP4 evidence mode: {evidence_mode}")
     if artifact_dir.is_symlink() or not artifact_dir.is_dir():
         raise ExecutionError(f"artifact directory must be a regular directory: {artifact_dir}")
     metadata_path = artifact_dir / "metadata.json"
@@ -1277,56 +1285,6 @@ def _validate_case_artifacts(
     )
     if qualification.get("relaxation_algorithm") != spec["relaxation_algorithm"]:
         raise ExecutionError("relaxation algorithm does not match the run spec")
-    if qualification.get("converged") is not True:
-        raise ExecutionError("mixed-P1 relaxation did not converge")
-    requested_tolerance_apm = _finite(
-        spec.get("torque_tolerance_apm"), "planned torque_tolerance_apm"
-    )
-    requested_tolerance_t = _finite(
-        spec.get("torque_tolerance_t"), "planned torque_tolerance_t"
-    )
-    if requested_tolerance_apm <= 0.0 or requested_tolerance_t <= 0.0:
-        raise ExecutionError("planned mixed-P1 torque tolerance must be positive")
-    _equal_float(
-        qualification.get("stop_threshold"),
-        requested_tolerance_apm,
-        "relaxation stop threshold",
-    )
-    expected_stop_provenance = {
-        "stop_reason": "torque",
-        "stop_metric_kind": "max_torque_apm",
-        "stop_metric_unit": "A/m",
-        "stop_metric_name": "max_torque_apm",
-    }
-    for field, expected in expected_stop_provenance.items():
-        if qualification.get(field) != expected:
-            raise ExecutionError(f"relaxation {field} does not prove torque convergence")
-    final_torque_apm = _finite(
-        qualification.get("final_torque_apm"), "final_torque_apm"
-    )
-    final_torque_t = _finite(
-        qualification.get("final_torque_t"), "final_torque_t"
-    )
-    stop_metric_value = _finite(
-        qualification.get("stop_metric_value"), "stop_metric_value"
-    )
-    if final_torque_apm < 0.0 or final_torque_t < 0.0 or stop_metric_value < 0.0:
-        raise ExecutionError("mixed-P1 relaxation torque must be nonnegative")
-    _equal_float(
-        final_torque_t,
-        final_torque_apm * (4e-7 * math.pi),
-        "final torque T/A/m conversion",
-    )
-    _equal_float(
-        stop_metric_value,
-        final_torque_apm,
-        "relaxation stop metric value",
-    )
-    if (
-        final_torque_apm > requested_tolerance_apm
-        or final_torque_t > requested_tolerance_t
-    ):
-        raise ExecutionError("mixed-P1 relaxation torque exceeds 1e-6 T")
     executed_steps = qualification.get("executed_steps")
     if (
         isinstance(executed_steps, bool)
@@ -1335,6 +1293,88 @@ def _validate_case_artifacts(
         or executed_steps > max_steps
     ):
         raise ExecutionError("executed relaxation steps exceed the requested max_steps")
+    final_torque_apm = _finite(
+        qualification.get("final_torque_apm"), "final_torque_apm"
+    )
+    final_torque_t = _finite(
+        qualification.get("final_torque_t"), "final_torque_t"
+    )
+    if final_torque_apm < 0.0 or final_torque_t < 0.0:
+        raise ExecutionError("mixed-P1 relaxation torque must be nonnegative")
+    _equal_float(
+        final_torque_t,
+        final_torque_apm * (4e-7 * math.pi),
+        "final torque T/A/m conversion",
+    )
+    converged = qualification.get("converged")
+    if evidence_mode == ONE_STEP_RUNTIME_SMOKE:
+        if max_steps != 1 or executed_steps != 1:
+            raise ExecutionError("one-step runtime smoke must execute exactly one relaxation step")
+        if converged is False:
+            expected_stop_provenance = {
+                "stop_reason": "max_steps",
+                "stop_metric_kind": "steps",
+                "stop_metric_name": "steps",
+                "stop_metric_unit": "count",
+            }
+            for field, expected in expected_stop_provenance.items():
+                if qualification.get(field) != expected:
+                    raise ExecutionError(
+                        "non-converged one-step runtime smoke must prove max_steps completion"
+                    )
+            _equal_float(
+                qualification.get("stop_metric_value"),
+                executed_steps,
+                "one-step runtime smoke stop metric value",
+            )
+            _equal_float(
+                qualification.get("stop_threshold"),
+                max_steps,
+                "one-step runtime smoke stop threshold",
+            )
+        elif converged is not True:
+            raise ExecutionError("one-step runtime smoke convergence state must be explicit")
+    elif converged is not True:
+        raise ExecutionError("mixed-P1 relaxation did not converge")
+
+    if converged is True:
+        requested_tolerance_apm = _finite(
+            spec.get("torque_tolerance_apm"), "planned torque_tolerance_apm"
+        )
+        requested_tolerance_t = _finite(
+            spec.get("torque_tolerance_t"), "planned torque_tolerance_t"
+        )
+        if requested_tolerance_apm <= 0.0 or requested_tolerance_t <= 0.0:
+            raise ExecutionError("planned mixed-P1 torque tolerance must be positive")
+        _equal_float(
+            qualification.get("stop_threshold"),
+            requested_tolerance_apm,
+            "relaxation stop threshold",
+        )
+        expected_stop_provenance = {
+            "stop_reason": "torque",
+            "stop_metric_kind": "max_torque_apm",
+            "stop_metric_unit": "A/m",
+            "stop_metric_name": "max_torque_apm",
+        }
+        for field, expected in expected_stop_provenance.items():
+            if qualification.get(field) != expected:
+                raise ExecutionError(f"relaxation {field} does not prove torque convergence")
+        stop_metric_value = _finite(
+            qualification.get("stop_metric_value"), "stop_metric_value"
+        )
+        if stop_metric_value < 0.0:
+            raise ExecutionError("mixed-P1 relaxation torque must be nonnegative")
+        _equal_float(
+            stop_metric_value,
+            final_torque_apm,
+            "relaxation stop metric value",
+        )
+        if (
+            final_torque_apm > requested_tolerance_apm
+            or final_torque_t > requested_tolerance_t
+        ):
+            raise ExecutionError("mixed-P1 relaxation torque exceeds 1e-6 T")
     energy_terms = _object(
         qualification.get("final_energy_terms_j"), "final energy terms"
     )
@@ -1577,11 +1617,16 @@ def execute_matrix(
     *,
     durable_root: Path,
     max_steps: int = 50_000,
+    evidence_mode: str = FULL_MATRIX_CONVERGENCE,
     launch: Launch = _default_launch,
     runtime_manifest: Path = DEFAULT_RUNTIME_MANIFEST,
 ) -> dict[str, object]:
     if isinstance(max_steps, bool) or max_steps <= 0:
         raise ExecutionError("max_steps must be a positive integer")
+    if evidence_mode not in EVIDENCE_MODES:
+        raise ExecutionError(f"unsupported mixed SP4 evidence mode: {evidence_mode}")
+    if evidence_mode == ONE_STEP_RUNTIME_SMOKE and max_steps != 1:
+        raise ExecutionError("one-step runtime smoke requires max_steps=1")
     report_root, durable_root = _validated_report_root(report_root, durable_root)
     _validate_durable_storage(durable_root)
     report_root.parent.mkdir(parents=True, exist_ok=True)
@@ -1616,7 +1661,7 @@ def execute_matrix(
             plan["plan_sha256"] for plan in plans
         ]:
             raise ExecutionError("mixed SP4 matrix source changed during plan emission")
-        summary = _summary_base(plans, cases, max_steps)
+        summary = _summary_base(plans, cases, max_steps, evidence_mode)
         summary["durable_root"] = str(durable_root)
         summary["report_root"] = str(report_root)
         summary["execution_identity"] = execution_identity
@@ -1653,6 +1698,7 @@ def execute_matrix(
                 "qualifying": False,
                 "qualification_claim": planner.QUALIFICATION_CLAIM,
                 "deferred_axes": list(planner.DEFERRED_AXES),
+                "evidence_mode": evidence_mode,
                 "scientific_scope": {
                     "status": (
                         "execution_only_deferred"
@@ -1731,6 +1777,7 @@ def execute_matrix(
                     log_path,
                     max_steps,
                     execution_identity,
+                    evidence_mode,
                 )
             except ExecutionError as error:
                 missing = [
@@ -1792,6 +1839,11 @@ def _parse_arguments(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--report-root", type=Path, required=True)
     parser.add_argument("--max-steps", type=int, default=50_000)
     parser.add_argument(
+        "--evidence-mode",
+        choices=EVIDENCE_MODES,
+        default=FULL_MATRIX_CONVERGENCE,
+    )
+    parser.add_argument(
         "--runtime-manifest", type=Path, default=DEFAULT_RUNTIME_MANIFEST
     )
     return parser.parse_args(argv)
@@ -1804,6 +1856,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.report_root,
             durable_root=arguments.durable_root,
             max_steps=arguments.max_steps,
+            evidence_mode=arguments.evidence_mode,
             runtime_manifest=arguments.runtime_manifest,
         )
     except (ExecutionError, planner.PlanError, OSError) as error:
