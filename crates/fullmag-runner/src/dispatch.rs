@@ -5404,6 +5404,9 @@ fn execute_native_fem(
     } else {
         ArtifactRecorder::in_memory(provenance.clone())
     };
+    if native_relaxation_step.is_some() && current_stats.step == 0 {
+        artifacts.record_scalar(&current_stats)?;
+    }
     if needs_initial_snapshot && current_stats.step == 0 {
         record_native_fem_initial_field_snapshots(
             &mut backend,
@@ -6264,6 +6267,17 @@ mod tests {
         assert!(
             execute_body.contains("current_stats.step == 0"),
             "initial native FEM field snapshots must be tied to the computed step-0 stats"
+        );
+        let scalar_pos = execute_body
+            .find("artifacts.record_scalar(&current_stats)?;")
+            .expect("native FEM direct minimization must record the existing step-0 stats");
+        let snapshot_pos = execute_body
+            .rfind(helper)
+            .expect("native FEM direct minimization must record step-0 fields");
+        assert!(
+            execute_body[..scalar_pos].contains("native_relaxation_step.is_some()")
+                && scalar_pos < snapshot_pos,
+            "step-0 scalar evidence must be direct-minimizer-only and precede field snapshots"
         );
         let helper_body = &source[helper_pos..execute_pos];
         assert!(

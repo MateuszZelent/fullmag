@@ -10,6 +10,7 @@ import json
 import math
 from pathlib import Path
 import re
+import struct
 import sys
 from typing import Any
 
@@ -18,8 +19,9 @@ CANONICAL_MAX_STEPS = "max_steps=50_000"
 BOUNDED_MAX_STEPS = "max_steps=1"
 EXPECTED_PROBLEM_NAME = "mumag_sp4_fem_relax_projected_gradient_bb"
 EXPECTED_ALGORITHM = "projected_gradient_bb"
-RUN_SCHEMA_VERSION = "fem_mixed_prism_airbox_runtime_run.v3"
-COMPARISON_SCHEMA_VERSION = "fem_mixed_prism_airbox_cpu_gpu.v2"
+RUN_SCHEMA_VERSION = "fem_mixed_prism_airbox_runtime_run.v4"
+COMPARISON_SCHEMA_VERSION = "fem_mixed_prism_airbox_cpu_gpu.v3"
+STEP0_OPERATOR_SCHEMA_VERSION = "fem_mixed_step0_operator_artifacts.v1"
 TOPOLOGY_FINGERPRINT = re.compile(r"^sha256:[0-9a-f]{64}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -31,6 +33,12 @@ ENERGY_ATOL_J = 1.0e-30
 TORQUE_RTOL = 1.0e-6
 TORQUE_ATOL_APM = 1.0e-9
 TORQUE_ATOL_T = 1.0e-15
+STEP0_FIELD_TOLERANCES = {
+    "H_ex": {"rtol": 5.0e-8, "atol_apm": 1.0e-6},
+    "H_demag": {"rtol": 5.0e-6, "atol_apm": 1.0e-6},
+    "H_eff": {"rtol": 5.0e-6, "atol_apm": 1.0e-6},
+}
+STEP0_FIELD_OBSERVABLES = tuple(STEP0_FIELD_TOLERANCES)
 GPU_PGBB_CONTROL_READBACK_BASE = 3
 GPU_PGBB_CONTROL_READBACK_PER_STEP = 4
 GPU_SCALAR_RESULT_SLOTS = 32
@@ -212,31 +220,267 @@ def _validate_scalar_artifact(path: Path) -> dict[str, object]:
     try:
         with path.open(newline="", encoding="utf-8") as stream:
             reader = csv.DictReader(stream)
-            required = {"step", "E_ex", "E_demag", "E_total", "max_torque_T"}
+            required = {
+                "step",
+                "time",
+                "solver_dt",
+                "E_ex",
+                "E_demag",
+                "E_ext",
+                "E_ani",
+                "E_dmi",
+                "E_total",
+                "max_torque_Apm",
+                "max_torque_T",
+            }
             missing = required - set(reader.fieldnames or ())
             if missing:
                 raise ContractError(f"scalars.csv is missing columns {sorted(missing)}")
             rows = list(reader)
     except OSError as error:
         raise ContractError(f"cannot read scalar artifact {path}: {error}") from error
-    if not rows:
-        raise ContractError("scalars.csv must contain at least one row")
-    final_values: dict[str, float] = {}
+    if len(rows) != 2:
+        raise ContractError(
+            f"scalars.csv must contain exactly step-0 and step-1 rows, got {len(rows)}"
+        )
+    steps = [
+        _nonnegative_int(row.get("step"), f"scalars.csv row {index} step")
+        for index, row in enumerate(rows)
+    ]
+    if steps != [0, 1]:
+        raise ContractError(f"scalars.csv steps must equal [0, 1], got {steps}")
+    scalar_fields = (
+        "E_ex",
+        "E_demag",
+        "E_ext",
+        "E_ani",
+        "E_dmi",
+        "E_total",
+        "max_torque_Apm",
+        "max_torque_T",
+    )
+    row_values: list[dict[str, float]] = []
     for index, row in enumerate(rows):
-        for field in ("E_ex", "E_demag", "E_total", "max_torque_T"):
-            value = _finite(row.get(field), f"scalars.csv row {index} {field}")
-            if index == len(rows) - 1:
-                final_values[field] = value
-    try:
-        final_step = int(rows[-1]["step"])
-    except (KeyError, TypeError, ValueError) as error:
-        raise ContractError("scalars.csv final step must be an integer") from error
-    if final_step != 1:
-        raise ContractError(f"scalars.csv final step must be 1, got {final_step}")
+        row_values.append(
+            {
+                field: _finite(row.get(field), f"scalars.csv row {index} {field}")
+                for field in scalar_fields
+            }
+        )
+    step0_time = _finite(rows[0].get("time"), "scalars.csv step-0 time")
+    step0_solver_dt = _finite(
+        rows[0].get("solver_dt"), "scalars.csv step-0 solver_dt"
+    )
+    if step0_time != 0.0 or step0_solver_dt != 0.0:
+        raise ContractError("scalars.csv step-0 time and solver_dt must both be zero")
+    for field in ("E_ext", "E_ani", "E_dmi"):
+        if row_values[0][field] != 0.0:
+            raise ContractError(f"scalars.csv step-0 inactive {field} must be zero")
     return {
-        "scalar_rows": len(rows),
-        "final_scalar_step": final_step,
-        "final_scalar_values": final_values,
+        "scalar_rows": 2,
+        "scalar_steps": steps,
+        "initial_scalar_step": 0,
+        "initial_scalar_values": row_values[0],
+        "initial_scalar_time_s": step0_time,
+        "initial_scalar_solver_dt_s": step0_solver_dt,
+        "final_scalar_step": 1,
+        "final_scalar_values": row_values[1],
+    }
+
+
+def _validate_step0_field_artifact(
+    artifacts: Path,
+    observable: str,
+    *,
+    expected_source_hash: str,
+    expected_engine: str,
+    expected_node_count: int,
+) -> dict[str, object]:
+    relative_path = Path("fields") / f"{observable}.zarr"
+    store = artifacts / relative_path
+    attrs_path = store / ".zattrs"
+    array_path = store / ".zarray"
+    samples_path = store / "samples.csv"
+    attrs = _read_json_object(attrs_path, f"{observable} Zarr attributes")
+    expected_attrs = {
+        "observable": observable,
+        "unit": "A/m",
+        "axes": ["sample", "component", "cell"],
+        "component_order": ["x", "y", "z"],
+        "storage_layout": "soa_component_major",
+        "sample_index_file": "samples.csv",
+    }
+    for key, expected in expected_attrs.items():
+        if attrs.get(key) != expected:
+            raise ContractError(f"{observable} Zarr attribute {key} must be {expected!r}")
+    provenance = _object(attrs.get("provenance"), f"{observable} Zarr provenance")
+    expected_provenance = {
+        "problem_name": EXPECTED_PROBLEM_NAME,
+        "source_hash": expected_source_hash,
+        "execution_mode": "strict",
+        "execution_engine": expected_engine,
+        "precision": "double",
+    }
+    for key, expected in expected_provenance.items():
+        if provenance.get(key) != expected:
+            raise ContractError(
+                f"{observable} Zarr provenance {key} must be {expected!r}"
+            )
+
+    array = _read_json_object(array_path, f"{observable} Zarr array metadata")
+    expected_array = {
+        "zarr_format": 2,
+        "shape": [2, 3, expected_node_count],
+        "chunks": [1, 3, expected_node_count],
+        "dtype": "<f8",
+        "compressor": None,
+        "order": "C",
+        "filters": None,
+        "dimension_separator": ".",
+    }
+    for key, expected in expected_array.items():
+        if array.get(key) != expected:
+            raise ContractError(
+                f"{observable} Zarr array metadata {key} must be {expected!r}"
+            )
+
+    try:
+        with samples_path.open(newline="", encoding="utf-8") as stream:
+            reader = csv.DictReader(stream)
+            required = {
+                "sample",
+                "step",
+                "time",
+                "solver_dt",
+                "chunk_key",
+                "dtype",
+                "scalar_bytes",
+                "cell_count",
+            }
+            missing = required - set(reader.fieldnames or ())
+            if missing:
+                raise ContractError(
+                    f"{observable} samples.csv is missing columns {sorted(missing)}"
+                )
+            rows = list(reader)
+    except OSError as error:
+        raise ContractError(
+            f"cannot read {observable} sample index {samples_path}: {error}"
+        ) from error
+    if len(rows) != 2:
+        raise ContractError(f"{observable} samples.csv must contain exactly two rows")
+    for sample, (row, expected_step) in enumerate(zip(rows, (0, 1))):
+        if _nonnegative_int(row.get("sample"), f"{observable} sample index") != sample:
+            raise ContractError(f"{observable} sample indices must equal [0, 1]")
+        if _nonnegative_int(row.get("step"), f"{observable} sample step") != expected_step:
+            raise ContractError(f"{observable} sample steps must equal [0, 1]")
+        if row.get("chunk_key") != f"{sample}.0.0":
+            raise ContractError(f"{observable} sample chunk key is invalid")
+        if row.get("dtype") != "<f8":
+            raise ContractError(f"{observable} sample dtype must be <f8")
+        if _nonnegative_int(row.get("scalar_bytes"), f"{observable} scalar bytes") != 8:
+            raise ContractError(f"{observable} sample scalar_bytes must be 8")
+        if _nonnegative_int(row.get("cell_count"), f"{observable} cell count") != expected_node_count:
+            raise ContractError(
+                f"{observable} sample cell_count must equal mesh.node_count"
+            )
+        time_s = _finite(row.get("time"), f"{observable} sample time")
+        solver_dt_s = _finite(row.get("solver_dt"), f"{observable} sample solver_dt")
+        if sample == 0 and (time_s != 0.0 or solver_dt_s != 0.0):
+            raise ContractError(
+                f"{observable} step-0 sample time and solver_dt must both be zero"
+            )
+
+    expected_payload_bytes = 3 * expected_node_count * DOUBLE_BYTES
+    chunk_hashes: dict[str, str] = {}
+    for chunk_key in ("0.0.0", "1.0.0"):
+        chunk_path = store / chunk_key
+        try:
+            payload = chunk_path.read_bytes()
+        except OSError as error:
+            raise ContractError(
+                f"cannot read {observable} Zarr chunk {chunk_path}: {error}"
+            ) from error
+        if len(payload) != expected_payload_bytes:
+            raise ContractError(
+                f"{observable} Zarr chunk {chunk_key} has {len(payload)} bytes; "
+                f"expected {expected_payload_bytes}"
+            )
+        values = struct.unpack(f"<{3 * expected_node_count}d", payload)
+        if not all(math.isfinite(value) for value in values):
+            raise ContractError(f"{observable} Zarr chunk {chunk_key} is non-finite")
+        chunk_hashes[chunk_key] = _sha256_bytes(payload)
+
+    return {
+        "relative_path": relative_path.as_posix(),
+        "unit": "A/m",
+        "node_count": expected_node_count,
+        "component_count": 3,
+        "dtype": "<f8",
+        "attrs_sha256": _sha256_file(attrs_path),
+        "array_sha256": _sha256_file(array_path),
+        "samples_sha256": _sha256_file(samples_path),
+        "step0_chunk_key": "0.0.0",
+        "step0_chunk_sha256": chunk_hashes["0.0.0"],
+        "final_chunk_key": "1.0.0",
+        "final_chunk_sha256": chunk_hashes["1.0.0"],
+    }
+
+
+def _validate_step0_operator_artifacts(
+    artifacts: Path,
+    *,
+    expected_source_hash: str,
+    expected_engine: str,
+    expected_node_count: int,
+    initial_state_sha256: str,
+    topology_fingerprint: str,
+    magnetic_node_indices: set[int],
+    scalar_evidence: dict[str, object],
+) -> dict[str, object]:
+    fields_dir = artifacts / "fields"
+    try:
+        stores = sorted(path.name for path in fields_dir.iterdir() if path.is_dir())
+    except OSError as error:
+        raise ContractError(f"cannot read required operator fields {fields_dir}: {error}") from error
+    expected_stores = sorted(f"{name}.zarr" for name in STEP0_FIELD_OBSERVABLES)
+    if stores != expected_stores:
+        raise ContractError(
+            f"operator field stores must equal {expected_stores}, got {stores}"
+        )
+    fields = {
+        observable: _validate_step0_field_artifact(
+            artifacts,
+            observable,
+            expected_source_hash=expected_source_hash,
+            expected_engine=expected_engine,
+            expected_node_count=expected_node_count,
+        )
+        for observable in STEP0_FIELD_OBSERVABLES
+    }
+    initial_values = _object(
+        scalar_evidence.get("initial_scalar_values"), "initial scalar values"
+    )
+    magnetic_nodes = sorted(magnetic_node_indices)
+    magnetic_nodes_sha256 = _sha256_bytes(
+        json.dumps(magnetic_nodes, separators=(",", ":")).encode("utf-8")
+    )
+    return {
+        "schema_version": STEP0_OPERATOR_SCHEMA_VERSION,
+        "step": 0,
+        "time_s": scalar_evidence["initial_scalar_time_s"],
+        "solver_dt_s": scalar_evidence["initial_scalar_solver_dt_s"],
+        "initial_state_sha256": initial_state_sha256,
+        "topology_fingerprint": topology_fingerprint,
+        "magnetic_node_count": len(magnetic_nodes),
+        "magnetic_node_indices_sha256": magnetic_nodes_sha256,
+        "fields": fields,
+        "energy_terms_j": {
+            name: initial_values[name] for name in ("E_ex", "E_demag", "E_total")
+        },
+        "max_torque_apm": initial_values["max_torque_Apm"],
+        "max_torque_t": initial_values["max_torque_T"],
+        "scalar_source": {"relative_path": "scalars.csv", "row_index": 0},
     }
 
 
@@ -1046,6 +1290,16 @@ def validate_runtime_artifacts(
         expected_node_count=mesh_node_count,
         magnetic_node_indices=magnetic_node_indices,
     )
+    step0_operator_artifacts = _validate_step0_operator_artifacts(
+        artifacts,
+        expected_source_hash=source_identity["bounded_source_sha256"],
+        expected_engine=engine,
+        expected_node_count=mesh_node_count,
+        initial_state_sha256=initial_state_sha256,
+        topology_fingerprint=topology_fingerprint,
+        magnetic_node_indices=magnetic_node_indices,
+        scalar_evidence=scalar_evidence,
+    )
     if abs(recomputed_norm_defect - norm_defect) > DIMENSIONLESS_RECOMPUTATION_ATOL:
         raise ContractError(
             "m_final.json recomputed norm_defect does not match relaxation qualification: "
@@ -1108,6 +1362,7 @@ def validate_runtime_artifacts(
         "initial_state_sha256": initial_state_sha256,
         "initial_norm_defect": initial_norm_defect,
         "initial_magnetization": initial_field_vectors,
+        "step0_operator_artifacts": step0_operator_artifacts,
         "final_energy_terms_j": energy_terms,
         "final_torque_apm": final_torque_apm,
         "final_torque_t": final_torque_t,
@@ -1120,8 +1375,121 @@ def validate_runtime_artifacts(
     }
 
 
+def _validated_step0_summary(
+    summary: dict[str, object], device: str
+) -> dict[str, Any]:
+    step0 = _object(
+        summary.get("step0_operator_artifacts"),
+        f"{device} step-0 operator artifacts",
+    )
+    if step0.get("schema_version") != STEP0_OPERATOR_SCHEMA_VERSION:
+        raise ContractError(f"{device.upper()} step-0 operator schema is invalid")
+    if step0.get("step") != 0 or step0.get("time_s") != 0.0 or step0.get("solver_dt_s") != 0.0:
+        raise ContractError(f"{device.upper()} step-0 operator coordinate is invalid")
+    if step0.get("initial_state_sha256") != summary.get("initial_state_sha256"):
+        raise ContractError(f"{device.upper()} step-0 initial-state identity is invalid")
+    if step0.get("topology_fingerprint") != summary.get("topology_fingerprint"):
+        raise ContractError(f"{device.upper()} step-0 topology identity is invalid")
+    fields = _object(step0.get("fields"), f"{device} step-0 fields")
+    if set(fields) != set(STEP0_FIELD_OBSERVABLES):
+        raise ContractError(f"{device.upper()} step-0 fields are incomplete")
+    energy = _object(step0.get("energy_terms_j"), f"{device} step-0 energy")
+    for name in ("E_ex", "E_demag", "E_total"):
+        _finite(energy.get(name), f"{device} step-0 {name}")
+    _finite(step0.get("max_torque_apm"), f"{device} step-0 max torque A/m")
+    _finite(step0.get("max_torque_t"), f"{device} step-0 max torque T")
+    return step0
+
+
+def _load_bound_step0_field(
+    artifacts: Path,
+    summary: dict[str, object],
+    step0: dict[str, Any],
+    observable: str,
+) -> tuple[list[float], int]:
+    descriptor = _object(
+        _object(step0.get("fields"), "step-0 fields").get(observable),
+        f"step-0 {observable}",
+    )
+    relative = descriptor.get("relative_path")
+    if relative != f"fields/{observable}.zarr":
+        raise ContractError(f"step-0 {observable} relative path is invalid")
+    store = artifacts / relative
+    bound_files = {
+        ".zattrs": "attrs_sha256",
+        ".zarray": "array_sha256",
+        "samples.csv": "samples_sha256",
+        str(descriptor.get("step0_chunk_key")): "step0_chunk_sha256",
+    }
+    for filename, hash_field in bound_files.items():
+        expected_hash = _canonical_sha256(
+            descriptor.get(hash_field), f"step-0 {observable} {hash_field}"
+        )
+        if _sha256_file(store / filename) != expected_hash:
+            raise ContractError(f"step-0 {observable} artifact hash changed for {filename}")
+    node_count = _nonnegative_int(
+        descriptor.get("node_count"), f"step-0 {observable} node_count"
+    )
+    if descriptor.get("component_count") != 3 or descriptor.get("dtype") != "<f8":
+        raise ContractError(f"step-0 {observable} descriptor shape is invalid")
+    payload = (store / str(descriptor["step0_chunk_key"])).read_bytes()
+    expected_len = 3 * node_count * DOUBLE_BYTES
+    if len(payload) != expected_len:
+        raise ContractError(f"step-0 {observable} payload length changed")
+    values = list(struct.unpack(f"<{3 * node_count}d", payload))
+    if not all(math.isfinite(value) for value in values):
+        raise ContractError(f"step-0 {observable} payload is non-finite")
+    return values, node_count
+
+
+def _load_bound_magnetic_nodes(
+    artifacts: Path, summary: dict[str, object], step0: dict[str, Any]
+) -> tuple[list[int], int]:
+    metadata_path = artifacts / "metadata.json"
+    if _sha256_file(metadata_path) != summary.get("metadata_sha256"):
+        raise ContractError("runtime metadata artifact changed after validation")
+    if _sha256_file(artifacts / "scalars.csv") != summary.get("scalars_sha256"):
+        raise ContractError("scalar artifact changed after validation")
+    metadata = _read_json_object(metadata_path, "runtime metadata")
+    mesh = _object(metadata.get("mesh"), "mesh metadata")
+    node_count = _nonnegative_int(mesh.get("node_count"), "mesh.node_count")
+    nodes = sorted(_magnetic_node_indices(metadata, node_count))
+    digest = _sha256_bytes(json.dumps(nodes, separators=(",", ":")).encode("utf-8"))
+    if digest != step0.get("magnetic_node_indices_sha256"):
+        raise ContractError("magnetic-node selection changed after validation")
+    if len(nodes) != step0.get("magnetic_node_count"):
+        raise ContractError("magnetic-node count changed after validation")
+    return nodes, node_count
+
+
+def _compare_scalar(
+    label: str, cpu_value: object, gpu_value: object, *, rtol: float, atol: float
+) -> dict[str, object]:
+    cpu_number = _finite(cpu_value, f"CPU {label}")
+    gpu_number = _finite(gpu_value, f"GPU {label}")
+    delta = abs(cpu_number - gpu_number)
+    allowed = atol + rtol * max(abs(cpu_number), abs(gpu_number))
+    if delta > allowed:
+        raise ContractError(
+            f"same-state {label} parity failed: delta={delta}, allowed={allowed}"
+        )
+    return {
+        "cpu": cpu_number,
+        "gpu": gpu_number,
+        "absolute_delta": delta,
+        "allowed_delta": allowed,
+        "rtol": rtol,
+        "atol": atol,
+        "status": "pass",
+    }
+
+
 def compare_runtime_summaries(
-    cpu: dict[str, object], gpu: dict[str, object]
+    cpu: dict[str, object],
+    gpu: dict[str, object],
+    *,
+    cpu_artifacts: Path,
+    gpu_artifacts: Path,
 ) -> dict[str, object]:
     lane_evidence = {
         "cpu": _validate_persisted_lane_summary(cpu, "cpu"),
@@ -1212,6 +1580,83 @@ def compare_runtime_summaries(
         "max_component_absolute_tolerance": 0.0,
         "status": "pass",
     }
+    cpu_step0 = _validated_step0_summary(cpu, "cpu")
+    gpu_step0 = _validated_step0_summary(gpu, "gpu")
+    cpu_nodes, cpu_node_count = _load_bound_magnetic_nodes(
+        cpu_artifacts, cpu, cpu_step0
+    )
+    gpu_nodes, gpu_node_count = _load_bound_magnetic_nodes(
+        gpu_artifacts, gpu, gpu_step0
+    )
+    if cpu_node_count != gpu_node_count or cpu_nodes != gpu_nodes:
+        raise ContractError("CPU/GPU magnetic-node operator domains differ")
+    field_parity: dict[str, object] = {}
+    for observable in STEP0_FIELD_OBSERVABLES:
+        cpu_field, cpu_field_nodes = _load_bound_step0_field(
+            cpu_artifacts, cpu, cpu_step0, observable
+        )
+        gpu_field, gpu_field_nodes = _load_bound_step0_field(
+            gpu_artifacts, gpu, gpu_step0, observable
+        )
+        if cpu_field_nodes != cpu_node_count or gpu_field_nodes != gpu_node_count:
+            raise ContractError(f"{observable} node count does not match metadata")
+        tolerance = STEP0_FIELD_TOLERANCES[observable]
+        deltas: list[float] = []
+        allowed_values: list[float] = []
+        for component in range(3):
+            for node in cpu_nodes:
+                offset = component * cpu_node_count + node
+                cpu_value = cpu_field[offset]
+                gpu_value = gpu_field[offset]
+                delta = abs(cpu_value - gpu_value)
+                allowed = tolerance["atol_apm"] + tolerance["rtol"] * max(
+                    abs(cpu_value), abs(gpu_value)
+                )
+                if delta > allowed:
+                    raise ContractError(
+                        f"same-state {observable} parity failed at component={component} "
+                        f"node={node}: delta={delta}, allowed={allowed}"
+                    )
+                deltas.append(delta)
+                allowed_values.append(allowed)
+        field_parity[observable] = {
+            "unit": "A/m",
+            "component_count": len(deltas),
+            "max_component_abs_delta": max(deltas),
+            "rms_component_abs_delta": math.sqrt(
+                sum(delta * delta for delta in deltas) / len(deltas)
+            ),
+            "max_allowed_delta": max(allowed_values),
+            "rtol": tolerance["rtol"],
+            "atol_apm": tolerance["atol_apm"],
+            "status": "pass",
+        }
+    cpu_energy = _object(cpu_step0.get("energy_terms_j"), "CPU step-0 energy")
+    gpu_energy = _object(gpu_step0.get("energy_terms_j"), "GPU step-0 energy")
+    energy_parity = {
+        name: _compare_scalar(
+            name,
+            cpu_energy.get(name),
+            gpu_energy.get(name),
+            rtol=ENERGY_RTOL,
+            atol=ENERGY_ATOL_J,
+        )
+        for name in ("E_ex", "E_demag", "E_total")
+    }
+    torque_apm_parity = _compare_scalar(
+        "max_torque_Apm",
+        cpu_step0.get("max_torque_apm"),
+        gpu_step0.get("max_torque_apm"),
+        rtol=TORQUE_RTOL,
+        atol=TORQUE_ATOL_APM,
+    )
+    torque_t_parity = _compare_scalar(
+        "max_torque_T",
+        cpu_step0.get("max_torque_t"),
+        gpu_step0.get("max_torque_t"),
+        rtol=TORQUE_RTOL,
+        atol=TORQUE_ATOL_T,
+    )
     artifact_hashes = {
         device: {
             field: summary.get(field)
@@ -1246,19 +1691,26 @@ def compare_runtime_summaries(
         "initial_state_identity": initial_state_identity,
         "gradient_policies": expected_policies,
         "same_state_operator_parity": {
-            "status": "not_evaluated",
-            "qualification_claimed": False,
-            "missing_artifacts": [
-                "step-0 H_ex",
-                "step-0 H_demag",
-                "step-0 H_eff",
-                "step-0 torque",
-                "step-0 energy terms",
-            ],
-            "reason": (
-                "the bounded run artifacts publish initial m but do not publish "
-                "step-0 operator fields or scalar summaries"
-            ),
+            "status": "pass",
+            "operator_parity_claimed": True,
+            "capability_promotion_claimed": False,
+            "scope": "step0_same_m_same_topology",
+            "state_identity": {
+                "initial_state_sha256": cpu["initial_state_sha256"],
+                "topology_fingerprint": cpu["topology_fingerprint"],
+                "magnetic_node_indices_sha256": cpu_step0[
+                    "magnetic_node_indices_sha256"
+                ],
+            },
+            "fields": field_parity,
+            "energy_terms_j": energy_parity,
+            "max_torque_apm": torque_apm_parity,
+            "max_torque_t": torque_t_parity,
+            "device_proof": {
+                "cpu_execution_engine": cpu["execution_engine"],
+                "gpu_execution_engine": gpu["execution_engine"],
+                "gpu_residency": lane_evidence["gpu"]["residency"],
+            },
         },
         "one_step_endpoint_parity": {
             "status": "not_applicable",
@@ -1400,6 +1852,8 @@ def main() -> int:
     compare = subparsers.add_parser("compare")
     compare.add_argument("--cpu-summary", type=Path, required=True)
     compare.add_argument("--gpu-summary", type=Path, required=True)
+    compare.add_argument("--cpu-artifacts", type=Path, required=True)
+    compare.add_argument("--gpu-artifacts", type=Path, required=True)
     compare.add_argument("--runtime-manifest", type=Path, required=True)
     compare.add_argument("--output", type=Path, required=True)
     compare.add_argument("--csv-output", type=Path, required=True)
@@ -1431,7 +1885,12 @@ def main() -> int:
                 raise ContractError("CPU summary runtime bundle is no longer active")
             if gpu_summary.get("runtime_manifest_sha256") != active_hash:
                 raise ContractError("GPU summary runtime bundle is no longer active")
-            comparison = compare_runtime_summaries(cpu_summary, gpu_summary)
+            comparison = compare_runtime_summaries(
+                cpu_summary,
+                gpu_summary,
+                cpu_artifacts=args.cpu_artifacts,
+                gpu_artifacts=args.gpu_artifacts,
+            )
             _write_json(args.output, comparison)
             write_comparison_csv(args.csv_output, comparison)
     except ContractError as error:

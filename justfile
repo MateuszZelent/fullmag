@@ -178,7 +178,7 @@ verify-fem-mixed-prism-airbox-runtime:
         "$canonical" "$run_dir/bounded_scenario.py" "$run_dir/cpu/artifacts" \
         --device cpu --runtime-log "$run_dir/cpu/runtime.log" \
         --runtime-manifest "$runtime_manifest" \
-        --output "$run_dir/cpu/summary.v3.json"; \
+        --output "$run_dir/cpu/summary.v4.json"; \
       FULLMAG_PYTHON="$managed_python" just fem-managed-headless gpu "$bounded" "$run_dir/gpu/artifacts" \
         2>&1 | tee "$run_dir/gpu/runtime.log"; \
       cmp "$runtime_manifest" "$run_dir/runtime-manifest.v2.json"; \
@@ -186,15 +186,17 @@ verify-fem-mixed-prism-airbox-runtime:
         "$canonical" "$run_dir/bounded_scenario.py" "$run_dir/gpu/artifacts" \
         --device gpu --runtime-log "$run_dir/gpu/runtime.log" \
         --runtime-manifest "$runtime_manifest" \
-        --output "$run_dir/gpu/summary.v3.json"; \
+        --output "$run_dir/gpu/summary.v4.json"; \
       python3 scripts/verify_fem_mixed_prism_airbox_runtime.py compare \
-        --cpu-summary "$run_dir/cpu/summary.v3.json" \
-        --gpu-summary "$run_dir/gpu/summary.v3.json" \
+        --cpu-summary "$run_dir/cpu/summary.v4.json" \
+        --gpu-summary "$run_dir/gpu/summary.v4.json" \
+        --cpu-artifacts "$run_dir/cpu/artifacts" \
+        --gpu-artifacts "$run_dir/gpu/artifacts" \
         --runtime-manifest "$runtime_manifest" \
-        --output "$run_dir/summary.v2.json" \
-        --csv-output "$run_dir/comparison.v2.csv"; \
+        --output "$run_dir/summary.v3.json" \
+        --csv-output "$run_dir/comparison.v3.csv"; \
       cmp "$runtime_manifest" "$run_dir/runtime-manifest.v2.json"; \
-      echo "validated managed CPU/GPU mixed prism-airbox runtime evidence: $run_dir/summary.v2.json"'
+      echo "validated managed CPU/GPU mixed prism-airbox runtime evidence: $run_dir/summary.v3.json"'
 
 verify-fem-mixed-p1-native-contract:
     docker compose --profile fem-gpu run --rm \

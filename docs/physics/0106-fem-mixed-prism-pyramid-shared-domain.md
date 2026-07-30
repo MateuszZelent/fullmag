@@ -294,13 +294,17 @@ the GPU capability can move beyond `implemented`, a managed identical-topology
 CPU/GPU run must prove matching topology fingerprints, correct CUDA/Hypre device
 identity, `device_hypre_poisson`, empty fallback trails, same-state
 field/energy/torque operator parity, and the residency counters above. The
-current bounded one-step gate proves runtime/topology identity, exact initial
-magnetization, and each lane's accepted-step contract, but its artifacts do not
-contain step-0 operator fields or scalar summaries. It therefore publishes
-same-state operator parity as `not_evaluated` and cannot promote the capability
-by itself. Source tests, CUDA allocation tests, successful setup/rollback, or a
-comparison of different first iterates do not promote executable or validated
-status.
+bounded one-step gate evaluates this operator contract before either direct
+minimizer takes its first step. Run schema
+`fem_mixed_prism_airbox_runtime_run.v4` binds the exact initial magnetization
+and topology to immutable step-0 `H_ex`, `H_demag`, and `H_eff` Zarr chunks and
+the step-0 exchange, demagnetization, total-energy, and maximum-torque scalar
+row. Comparison schema `fem_mixed_prism_airbox_cpu_gpu.v3` compares those
+quantities only on magnetic nodes and preserves each lane's independent
+accepted-step and residency proof. A passing step-0 comparison remains a
+bounded operator proof, not a capability promotion or a converged-state proof.
+Source tests, CUDA allocation tests, successful setup/rollback, or a comparison
+of different first iterates do not promote executable or validated status.
 
 ### 3.4 Exact-layer and shared-domain certificate
 
@@ -519,14 +523,18 @@ the writer's `{:.17e}` binary64 round-trip representation and therefore matches
 the JSON diagnostic exactly after parsing; this identity check has no
 solver-tolerance allowance.
 
-The report records same-state step-0 `H_ex`, `H_demag`, `H_eff`, energy, and
-torque parity as `not_evaluated`, because current run artifacts do not publish
-those quantities before the first accepted step. Converged-state parity remains
-a separate SP4 convergence-matrix gate with unchanged frozen tolerances. A
-passing bounded lane-contract report with operator parity still
-`not_evaluated` is not physics qualification: this note and the capability
-matrix remain `implemented` until the missing same-state artifacts and wider
-matrix are produced and reviewed.
+The report requires same-state step-0 `H_ex`, `H_demag`, `H_eff`, exchange,
+demagnetization, total energy, and maximum-torque parity. Each lane must publish
+scalar steps exactly `[0, 1]`; the step-0 row is the already computed native
+snapshot and does not execute a solver step. Each field series contains the
+step-0 sample and the forced final sample, while its authored cadence remains
+`every_steps=50_000` so the canonical 50,000-step scenario does not write a
+full field at every accepted step. The comparison requires the same initial
+magnetization hash and topology fingerprint before reading those values.
+Converged-state parity remains a separate SP4 convergence-matrix gate with
+unchanged frozen tolerances. A passing bounded operator comparison is not
+physics qualification: this note and the capability matrix remain
+`implemented` until the wider matrix is produced and reviewed.
 
 The ordinary Python API suite uses `--skip-geometry-assets` to keep authored
 `auto`, managed CPU override, and base-plus-relaxation-stage propagation under
@@ -717,6 +725,31 @@ the recorded qualification value by at most
 dimensionless allowance covers only cross-language floating-point
 recomputation; it is not an energy, torque, state-parity, or solver tolerance.
 
+The same gate treats the initial operator artifacts as identity-bearing
+evidence. The canonical stage requests exactly `H_ex`, `H_demag`, and `H_eff`
+through `FieldAutosave(..., every_steps=50_000)`. For each observable,
+`fields/<observable>.zarr` must be an uncompressed Zarr v2 array with axes
+`[sample, component, cell]`, component order `[x, y, z]`, binary64 values,
+shape `[2, 3, mesh.node_count]`, chunks `[1, 3, mesh.node_count]`, and samples
+at steps `[0, 1]`. The step-0 sample has time and solver timestep equal to zero.
+Its `.zattrs`, `.zarray`, `samples.csv`, and `0.0.0` payload are hashed into the
+run summary and bound to the bounded source hash, resolved engine, double
+precision, initial-state hash, and topology fingerprint. The comparison reads
+the immutable payloads but evaluates components only at
+`execution_plan.backend_plan.mesh_parts[role=magnetic_object]` node indices;
+pure-air nodes are outside the magnetic operator comparison.
+
+The step-0 `scalars.csv` row supplies `E_ex`, `E_demag`, `E_total`,
+`max_torque_Apm`, and `max_torque_T`. The maximum torque is the native scalar
+reduction; the gate does not claim that a host-derived full torque vector is a
+GPU-resident operator artifact. Frozen component tolerances are
+`rtol=5e-8`, `atol=1e-6 A/m` for `H_ex` and `rtol=5e-6`,
+`atol=1e-6 A/m` for `H_demag` and `H_eff`. Energy uses `rtol=1e-6` and
+`atol=1e-30 J`; both torque units use `rtol=1e-6`, with
+`atol=1e-9 A/m` and `atol=1e-15 T`, respectively. Every component uses
+`abs(cpu-gpu) <= atol + rtol * max(abs(cpu), abs(gpu))`. These are existing
+Fullmag CPU/GPU contracts and must not be tuned from this workload.
+
 The checked-in Gmsh 4.15.2 fixture is reproducible feasibility evidence only.
 It is not runtime, MFEM, CPU/GPU, physics, API, or viewport proof.
 
@@ -762,6 +795,8 @@ own fresh managed evidence:
   tamper rejection, legacy-v2 acceptance, plan packing, runner validation, and
   unknown-version rejection;
 - managed container runtime gates for FEM CPU and strict FEM GPU.
+- bounded same-state step-0 field, energy, and maximum-torque parity with
+  immutable Zarr/CSV identity and magnetic-node scoping.
 
 ### 5.4 Promotion levels
 
@@ -825,6 +860,12 @@ No lower level implies a higher one.
 | Certificate generation | `packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py` | `_attach_mixed_layer_topology_certificate` | recomputes and binds realized topology evidence | FEM CPU/GPU | Python/Rust cross-language validation |
 | Planner legality | `crates/fullmag-plan/src/mesh.rs` | `validate_mixed_p1_execution_scope` | enforces exact bounded relaxation tuples | FEM CPU/GPU | planner accept/reject matrix |
 | Capability publication | `crates/fullmag-runner/src/capabilities.rs` | `mixed_p1_feature_capabilities` | publishes bounded status and scope wording | FEM CPU/GPU | capability serialization tests |
+| Step-0 field authoring | `packages/fullmag-py/src/fullmag/model/study.py` | `class StageAutosave` | carries the three scheduled field autosaves without changing the physical model | FEM CPU/GPU shared contract | canonical SP4 scenario source contract |
+| Native step-0 dispatch | `crates/fullmag-runner/src/dispatch.rs` | `record_native_fem_initial_field_snapshots` | records requested native field snapshots before direct minimization and advances their schedules | FEM CPU/GPU | runner source and artifact-schedule contracts |
+| Native current-state statistics | `backends/fem/cpu/mfem/runtime/snapshot.cpp` | `context_snapshot_stats_mfem` | evaluates current-state fields, energies, and maximum torque without a solver step | FEM CPU/GPU | native runtime contracts; managed proof pending |
+| Native Zarr serialization | `crates/fullmag-runner/src/artifact_pipeline.rs` | `append_fem_snapshot` | writes immutable component-major field chunks and sample metadata | FEM CPU/GPU | artifact pipeline and gate tamper tests |
+| Step-0 artifact validation | `scripts/verify_fem_mixed_prism_airbox_runtime.py` | `validate_runtime_artifacts` | binds scalar and field artifacts to source, topology, state, engine, and precision | FEM CPU/GPU | focused verifier tests |
+| Same-state operator comparison | `scripts/verify_fem_mixed_prism_airbox_runtime.py` | `compare_runtime_summaries` | compares magnetic-node fields and step-0 energy/torque under frozen tolerances without capability promotion | FEM CPU/GPU | focused verifier tests; managed proof pending |
 | Exchange weak form | `backends/fem/cpu/mfem/interactions/exchange_operator.cpp` | `initialize_exchange_operator_mfem` | assembles topology-aware exchange operator | FEM CPU | native operator contracts; managed proof pending |
 | Uniform Zeeman energy | `backends/fem/cpu/mfem/interactions/zeeman_energy.cpp` | `zeeman_energy_from_field` | evaluates the existing Zeeman energy contract | FEM CPU | native energy contracts |
 | Poisson weak-form source | `backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp` | `assemble_demag_poisson_rhs` | assembles magnetic-cell Poisson RHS | FEM CPU | manufactured/operator contracts; managed proof pending |

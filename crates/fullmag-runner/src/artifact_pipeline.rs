@@ -1581,4 +1581,45 @@ mod stage_autosave_tests {
         pipeline.finish().unwrap();
         fs::remove_dir_all(root).unwrap();
     }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn accepted_step_operator_fields_include_step0_and_forced_step1_once() {
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-artifact-pipeline-step0-operator-fields-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let mut pipeline = ArtifactPipeline::start_with_stage_autosave(
+            root.clone(),
+            context(),
+            1,
+            Some(StageAutosavePipelineConfig {
+                stage_id: "relax".into(),
+                policy: policy(
+                    "zarr",
+                    serde_json::json!([
+                        {"quantity": "H_ex", "every_steps": 50_000},
+                        {"quantity": "H_demag", "every_steps": 50_000},
+                        {"quantity": "H_eff", "every_steps": 50_000}
+                    ]),
+                ),
+            }),
+        )
+        .unwrap();
+        let mut recorder =
+            ArtifactRecorder::streaming(ExecutionProvenance::default(), pipeline.sender());
+        assert_eq!(
+            recorder.due_accepted_step_fields(0, false),
+            ["H_demag", "H_eff", "H_ex"]
+        );
+        assert!(recorder.due_accepted_step_fields(1, false).is_empty());
+        assert_eq!(
+            recorder.due_accepted_step_fields(1, true),
+            ["H_demag", "H_eff", "H_ex"]
+        );
+        assert!(recorder.due_accepted_step_fields(1, true).is_empty());
+        drop(recorder);
+        pipeline.finish().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
 }

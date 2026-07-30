@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import ast
 import copy
 import csv
 import hashlib
 import json
 import math
 from pathlib import Path
+import struct
 import tempfile
 import unittest
 
@@ -21,6 +23,51 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
+    def test_canonical_scenario_requests_exact_step0_operator_fields(self) -> None:
+        scenario = (
+            REPO_ROOT
+            / "tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py"
+        )
+        tree = ast.parse(scenario.read_text(encoding="utf-8"))
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "FieldAutosave"
+        ]
+
+        self.assertEqual(len(calls), 3)
+        observed = {}
+        for call in calls:
+            self.assertEqual(len(call.args), 1)
+            self.assertIsInstance(call.args[0], ast.Constant)
+            cadence = next(
+                keyword.value
+                for keyword in call.keywords
+                if keyword.arg == "every_steps"
+            )
+            self.assertIsInstance(cadence, ast.Constant)
+            observed[call.args[0].value] = cadence.value
+        self.assertEqual(
+            observed,
+            {"H_ex": 50_000, "H_demag": 50_000, "H_eff": 50_000},
+        )
+
+    def test_active_native_direct_minimizer_records_step0_scalars_before_solver(self) -> None:
+        source = (REPO_ROOT / "crates/fullmag-runner/src/dispatch.rs").read_text(
+            encoding="utf-8"
+        )
+        execute_start = source.index("fn execute_native_fem(")
+        branch = source.index(
+            "if let Some(native_step_control) = native_relaxation_step", execute_start
+        )
+        before_solver = source[execute_start:branch]
+
+        self.assertIn("native_relaxation_step.is_some()", before_solver)
+        self.assertIn("current_stats.step == 0", before_solver)
+        self.assertIn("artifacts.record_scalar(&current_stats)?;", before_solver)
+
     def test_prepare_replaces_exactly_one_step_limit_without_mutating_source(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -105,6 +152,104 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
         path = runtime_root / "manifest.json"
         path.write_text(json.dumps(manifest), encoding="utf-8")
         return path
+
+    def _write_step0_operator_fields(
+        self,
+        artifacts: Path,
+        *,
+        device: str,
+        source_hash: str,
+        engine: str,
+        node_count: int,
+    ) -> None:
+        air_value = 900.0 if device == "cpu" else -900.0
+        fields = {
+            "H_ex": [
+                1.0,
+                2.0,
+                air_value,
+                3.0,
+                4.0,
+                air_value,
+                5.0,
+                6.0,
+                air_value,
+            ],
+            "H_demag": [
+                -0.5,
+                -1.0,
+                air_value,
+                -1.5,
+                -2.0,
+                air_value,
+                -2.5,
+                -3.0,
+                air_value,
+            ],
+            "H_eff": [
+                0.5,
+                1.0,
+                air_value,
+                1.5,
+                2.0,
+                air_value,
+                2.5,
+                3.0,
+                air_value,
+            ],
+        }
+        for observable, step0_values in fields.items():
+            store = artifacts / "fields" / f"{observable}.zarr"
+            store.mkdir(parents=True)
+            (store / ".zattrs").write_text(
+                json.dumps(
+                    {
+                        "observable": observable,
+                        "unit": "A/m",
+                        "axes": ["sample", "component", "cell"],
+                        "component_order": ["x", "y", "z"],
+                        "storage_layout": "soa_component_major",
+                        "sample_index_file": "samples.csv",
+                        "layout": {},
+                        "provenance": {
+                            "problem_name": verifier.EXPECTED_PROBLEM_NAME,
+                            "ir_version": "1",
+                            "source_hash": source_hash,
+                            "execution_mode": "strict",
+                            "execution_engine": engine,
+                            "precision": "double",
+                        },
+                    },
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            (store / ".zarray").write_text(
+                json.dumps(
+                    {
+                        "zarr_format": 2,
+                        "shape": [2, 3, node_count],
+                        "chunks": [1, 3, node_count],
+                        "dtype": "<f8",
+                        "compressor": None,
+                        "fill_value": 0.0,
+                        "order": "C",
+                        "filters": None,
+                        "dimension_separator": ".",
+                    },
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            (store / "samples.csv").write_text(
+                "sample,step,time,solver_dt,chunk_key,dtype,scalar_bytes,cell_count\n"
+                f"0,0,0.000000000000000e+00,0.000000000000000e+00,0.0.0,<f8,8,{node_count}\n"
+                f"1,1,0.000000000000000e+00,0.000000000000000e+00,1.0.0,<f8,8,{node_count}\n",
+                encoding="utf-8",
+            )
+            payload = struct.pack(f"<{len(step0_values)}d", *step0_values)
+            (store / "0.0.0").write_bytes(payload)
+            (store / "1.0.0").write_bytes(payload)
 
     def _write_valid_bundle(
         self, root: Path, device: str
@@ -309,15 +454,48 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
         with (artifacts / "scalars.csv").open("w", newline="", encoding="utf-8") as stream:
             writer = csv.DictWriter(
                 stream,
-                fieldnames=["step", "E_ex", "E_demag", "E_total", "max_torque_T"],
+                fieldnames=[
+                    "step",
+                    "time",
+                    "solver_dt",
+                    "E_ex",
+                    "E_demag",
+                    "E_ext",
+                    "E_ani",
+                    "E_dmi",
+                    "E_total",
+                    "max_torque_Apm",
+                    "max_torque_T",
+                ],
             )
             writer.writeheader()
             writer.writerow(
                 {
+                    "step": 0,
+                    "time": "0.000000000000000e+00",
+                    "solver_dt": "0.000000000000000e+00",
+                    "E_ex": "1.000000000000000e+00",
+                    "E_demag": "2.000000000000000e+00",
+                    "E_ext": "0.000000000000000e+00",
+                    "E_ani": "0.000000000000000e+00",
+                    "E_dmi": "0.000000000000000e+00",
+                    "E_total": "3.000000000000000e+00",
+                    "max_torque_Apm": "7.000000000000000e+00",
+                    "max_torque_T": "8.796459430051421e-06",
+                }
+            )
+            writer.writerow(
+                {
                     "step": 1,
+                    "time": "0.000000000000000e+00",
+                    "solver_dt": "0.000000000000000e+00",
                     "E_ex": format(energy_terms["E_ex"], ".15e"),
                     "E_demag": format(energy_terms["E_demag"], ".15e"),
+                    "E_ext": "0.000000000000000e+00",
+                    "E_ani": "0.000000000000000e+00",
+                    "E_dmi": "0.000000000000000e+00",
                     "E_total": format(energy_terms["E_total"], ".15e"),
+                    "max_torque_Apm": "4.000000000000000e+00",
                     "max_torque_T": format(final_torque_t, ".15e"),
                 }
             )
@@ -401,6 +579,13 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        self._write_step0_operator_fields(
+            artifacts,
+            device=device,
+            source_hash=hashlib.sha256(bounded_text.encode()).hexdigest(),
+            engine=engine,
+            node_count=3,
+        )
         runtime_log = root / f"{device}.log"
         runtime_log.write_text(
             f"resolved_engine_id={engine} fallback=None\n", encoding="utf-8"
@@ -424,7 +609,12 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
             gpu_summary = validate_runtime_artifacts(
                 gpu[0], gpu[1], gpu[2], device="gpu", runtime_log=gpu[3], runtime_manifest=gpu[4]
             )
-            comparison = verifier.compare_runtime_summaries(cpu_summary, gpu_summary)
+            comparison = verifier.compare_runtime_summaries(
+                cpu_summary,
+                gpu_summary,
+                cpu_artifacts=cpu[2],
+                gpu_artifacts=gpu[2],
+            )
             csv_path = root / "comparison.v1.csv"
             verifier.write_comparison_csv(csv_path, comparison)
 
@@ -436,8 +626,28 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                 "global/periodic v6 and mixed-certificate v3 identities are distinct",
             )
             self.assertEqual(gpu_summary["gpu_transfer_telemetry"]["control_scalar_host_sync_count"], 7)  # type: ignore[index]
-            self.assertEqual(comparison["schema_version"], "fem_mixed_prism_airbox_cpu_gpu.v2")
+            self.assertEqual(
+                cpu_summary["schema_version"],
+                "fem_mixed_prism_airbox_runtime_run.v4",
+            )
+            self.assertEqual(
+                comparison["schema_version"], "fem_mixed_prism_airbox_cpu_gpu.v3"
+            )
             self.assertEqual(comparison["status"], "pass")
+            self.assertEqual(
+                comparison["same_state_operator_parity"]["status"],  # type: ignore[index]
+                "pass",
+            )
+            self.assertTrue(
+                comparison["same_state_operator_parity"][  # type: ignore[index]
+                    "operator_parity_claimed"
+                ]
+            )
+            self.assertFalse(
+                comparison["same_state_operator_parity"][  # type: ignore[index]
+                    "capability_promotion_claimed"
+                ]
+            )
             self.assertEqual(
                 comparison["initial_state_identity"]["max_component_abs_delta"],  # type: ignore[index]
                 0.0,
@@ -451,6 +661,87 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                 cpu_summary["final_scalar_values"]["E_ex"],  # type: ignore[index]
                 cpu_summary["final_energy_terms_j"]["E_ex"],  # type: ignore[index]
             )
+
+    def test_validate_rejects_missing_tampered_or_unbound_step0_artifacts(self) -> None:
+        cases = ("missing_field", "tampered_chunk", "wrong_engine", "wrong_samples", "missing_step0")
+        for case in cases:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source, bounded, artifacts, runtime_log, manifest, _ = (
+                    self._write_valid_bundle(root, "cpu")
+                )
+                if case == "missing_field":
+                    (artifacts / "fields/H_ex.zarr/.zattrs").unlink()
+                elif case == "tampered_chunk":
+                    chunk = artifacts / "fields/H_demag.zarr/0.0.0"
+                    chunk.write_bytes(chunk.read_bytes() + b"tamper")
+                elif case == "wrong_engine":
+                    attrs_path = artifacts / "fields/H_eff.zarr/.zattrs"
+                    attrs = json.loads(attrs_path.read_text(encoding="utf-8"))
+                    attrs["provenance"]["execution_engine"] = "fem_native_gpu"
+                    attrs_path.write_text(json.dumps(attrs), encoding="utf-8")
+                elif case == "wrong_samples":
+                    samples = artifacts / "fields/H_ex.zarr/samples.csv"
+                    rows = samples.read_text(encoding="utf-8").splitlines()
+                    samples.write_text("\n".join([rows[0], rows[2], rows[1]]) + "\n", encoding="utf-8")
+                else:
+                    scalar_rows = (artifacts / "scalars.csv").read_text(
+                        encoding="utf-8"
+                    ).splitlines()
+                    (artifacts / "scalars.csv").write_text(
+                        "\n".join([scalar_rows[0], scalar_rows[2]]) + "\n",
+                        encoding="utf-8",
+                    )
+
+                with self.subTest(case=case), self.assertRaises(ContractError):
+                    validate_runtime_artifacts(
+                        source,
+                        bounded,
+                        artifacts,
+                        device="cpu",
+                        runtime_log=runtime_log,
+                        runtime_manifest=manifest,
+                    )
+
+    def test_compare_rejects_step0_field_energy_and_torque_outside_frozen_tolerances(self) -> None:
+        mutations = ("H_ex", "energy", "torque")
+        for mutation in mutations:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                cpu = self._write_valid_bundle(root, "cpu")
+                gpu = self._write_valid_bundle(root, "gpu")
+                if mutation == "H_ex":
+                    chunk = gpu[2] / "fields/H_ex.zarr/0.0.0"
+                    values = list(struct.unpack("<9d", chunk.read_bytes()))
+                    values[0] += 1.0
+                    chunk.write_bytes(struct.pack("<9d", *values))
+                else:
+                    scalar_path = gpu[2] / "scalars.csv"
+                    with scalar_path.open(newline="", encoding="utf-8") as stream:
+                        rows = list(csv.DictReader(stream))
+                        fieldnames = list(rows[0])
+                    if mutation == "energy":
+                        rows[0]["E_ex"] = "2.0"
+                    else:
+                        rows[0]["max_torque_Apm"] = "8.0"
+                    with scalar_path.open("w", newline="", encoding="utf-8") as stream:
+                        writer = csv.DictWriter(stream, fieldnames=fieldnames)
+                        writer.writeheader()
+                        writer.writerows(rows)
+
+                cpu_summary = validate_runtime_artifacts(
+                    cpu[0], cpu[1], cpu[2], device="cpu", runtime_log=cpu[3], runtime_manifest=cpu[4]
+                )
+                gpu_summary = validate_runtime_artifacts(
+                    gpu[0], gpu[1], gpu[2], device="gpu", runtime_log=gpu[3], runtime_manifest=gpu[4]
+                )
+                with self.subTest(mutation=mutation), self.assertRaises(ContractError):
+                    verifier.compare_runtime_summaries(
+                        cpu_summary,
+                        gpu_summary,
+                        cpu_artifacts=cpu[2],
+                        gpu_artifacts=gpu[2],
+                    )
 
     def test_validate_accepts_canonically_omitted_empty_ignored_terms(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -998,23 +1289,15 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
             (gpu[2] / "metadata.json").write_text(
                 json.dumps(gpu_metadata), encoding="utf-8"
             )
-            with (gpu[2] / "scalars.csv").open(
-                "w", newline="", encoding="utf-8"
-            ) as stream:
-                writer = csv.DictWriter(
-                    stream,
-                    fieldnames=["step", "E_ex", "E_demag", "E_total", "max_torque_T"],
-                )
+            scalar_path = gpu[2] / "scalars.csv"
+            with scalar_path.open(newline="", encoding="utf-8") as stream:
+                scalar_rows = list(csv.DictReader(stream))
+                scalar_fields = list(scalar_rows[0])
+            scalar_rows[1]["E_ex"] = "9.000000000000000e+00"
+            with scalar_path.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.DictWriter(stream, fieldnames=scalar_fields)
                 writer.writeheader()
-                writer.writerow(
-                    {
-                        "step": 1,
-                        "E_ex": 9.0,
-                        "E_demag": 2.345678901234567,
-                        "E_total": 3.5802467913580237,
-                        "max_torque_T": 5.123456789012345e-6,
-                    }
-                )
+                writer.writerows(scalar_rows)
 
             cpu_summary = validate_runtime_artifacts(
                 cpu[0], cpu[1], cpu[2], device="cpu", runtime_log=cpu[3], runtime_manifest=cpu[4]
@@ -1023,7 +1306,12 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                 gpu[0], gpu[1], gpu[2], device="gpu", runtime_log=gpu[3], runtime_manifest=gpu[4]
             )
 
-            comparison = verifier.compare_runtime_summaries(cpu_summary, gpu_summary)
+            comparison = verifier.compare_runtime_summaries(
+                cpu_summary,
+                gpu_summary,
+                cpu_artifacts=cpu[2],
+                gpu_artifacts=gpu[2],
+            )
 
             self.assertEqual(comparison["status"], "pass")
             self.assertEqual(
@@ -1048,7 +1336,12 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ContractError, "initial magnetization"):
-                verifier.compare_runtime_summaries(cpu_summary, gpu_summary)
+                verifier.compare_runtime_summaries(
+                    cpu_summary,
+                    gpu_summary,
+                    cpu_artifacts=cpu[2],
+                    gpu_artifacts=gpu[2],
+                )
 
     def test_compare_rejects_runtime_source_topology_and_initial_state_drift(self) -> None:
         mutations = (
@@ -1081,7 +1374,12 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                 )
                 mutate(gpu_summary)
                 with self.subTest(case=case), self.assertRaises(ContractError):
-                    verifier.compare_runtime_summaries(cpu_summary, gpu_summary)
+                    verifier.compare_runtime_summaries(
+                        cpu_summary,
+                        gpu_summary,
+                        cpu_artifacts=cpu[2],
+                        gpu_artifacts=gpu[2],
+                    )
 
     def test_compare_revalidates_persisted_lane_proofs(self) -> None:
         mutations = (
@@ -1168,7 +1466,12 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                 mutate(cpu_summary if device == "cpu" else gpu_summary)
 
                 with self.subTest(case=case), self.assertRaises(ContractError):
-                    verifier.compare_runtime_summaries(cpu_summary, gpu_summary)
+                    verifier.compare_runtime_summaries(
+                        cpu_summary,
+                        gpu_summary,
+                        cpu_artifacts=cpu[2],
+                        gpu_artifacts=gpu[2],
+                    )
 
     def test_just_recipe_is_append_only_managed_cpu_gpu_gate(self) -> None:
         justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
@@ -1190,12 +1493,14 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
         )
         self.assertIn("verify_fem_mixed_prism_airbox_runtime.py compare", recipe)
         self.assertIn("runtime-manifest", recipe)
-        self.assertIn('cpu/summary.v3.json', recipe)
-        self.assertIn('gpu/summary.v3.json', recipe)
-        self.assertIn('summary.v2.json', recipe)
-        self.assertIn('comparison.v2.csv', recipe)
-        self.assertNotIn('summary.v1.json', recipe)
-        self.assertNotIn('comparison.v1.csv', recipe)
+        self.assertIn('cpu/summary.v4.json', recipe)
+        self.assertIn('gpu/summary.v4.json', recipe)
+        self.assertIn('--cpu-artifacts "$run_dir/cpu/artifacts"', recipe)
+        self.assertIn('--gpu-artifacts "$run_dir/gpu/artifacts"', recipe)
+        self.assertIn('summary.v3.json', recipe)
+        self.assertIn('comparison.v3.csv', recipe)
+        self.assertNotIn('summary.v2.json', recipe)
+        self.assertNotIn('comparison.v2.csv', recipe)
         self.assertIn("mktemp -d", recipe)
         self.assertNotIn("docker ", recipe)
         self.assertNotIn("--skip-geometry-assets", recipe)
