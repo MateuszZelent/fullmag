@@ -590,6 +590,12 @@ def _validate_persisted_lane_summary(
             raw.get("hot_loop_control_scalar_d2h_bytes"),
             "GPU summary control scalar D2H bytes",
         )
+        total_syncs = _nonnegative_int(
+            raw.get("hot_loop_host_sync_count"),
+            "GPU summary total host sync count",
+        )
+        if total_syncs != control_syncs:
+            raise ContractError("GPU summary host syncs must be control-scalar-only")
         if control_syncs != _nonnegative_int(
             telemetry.get("control_scalar_host_sync_count"),
             "GPU summary control scalar host sync total",
@@ -598,14 +604,30 @@ def _validate_persisted_lane_summary(
             "GPU summary control scalar D2H total",
         ):
             raise ContractError("GPU summary control scalar telemetry is inconsistent")
-        if control_syncs > _nonnegative_int(
+        sync_budget = _expected_control_sync_budget(
+            {
+                "accepted_steps": summary["accepted_steps"],
+                "total_rhs_evals": _nonnegative_int(
+                    summary.get("total_rhs_evals"),
+                    "GPU summary total RHS evaluations",
+                ),
+            }
+        )
+        byte_budget = sync_budget * GPU_SCALAR_RESULT_SLOTS * DOUBLE_BYTES
+        if _nonnegative_int(
             telemetry.get("allowed_control_scalar_host_sync_count"),
             "GPU summary allowed control scalar sync count",
-        ) or control_bytes > _nonnegative_int(
+        ) != sync_budget or _nonnegative_int(
             telemetry.get("allowed_control_scalar_d2h_bytes"),
             "GPU summary allowed control scalar D2H bytes",
-        ):
+        ) != byte_budget:
+            raise ContractError("GPU summary control-scalar budget is not reproducible")
+        if control_syncs > sync_budget or control_bytes > byte_budget:
             raise ContractError("GPU summary exceeds the bounded control-scalar budget")
+        if control_bytes % DOUBLE_BYTES != 0:
+            raise ContractError("GPU summary control-scalar bytes must contain complete doubles")
+        if (control_syncs == 0) != (control_bytes == 0):
+            raise ContractError("GPU summary control-scalar bytes and syncs disagree")
         normalized_residency = {
             "mode": "device_source_of_truth",
             "transfer_telemetry": telemetry,

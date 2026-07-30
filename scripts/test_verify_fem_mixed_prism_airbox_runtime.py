@@ -1124,6 +1124,35 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                     "raw"
                 ].__setitem__("hot_loop_compute_d2h_bytes", 8),
             ),
+            (
+                "gpu_budget",
+                "gpu",
+                lambda summary: summary["residency"]["transfer_telemetry"].update(
+                    {
+                        "allowed_control_scalar_host_sync_count": 999,
+                        "allowed_control_scalar_d2h_bytes": 999,
+                    }
+                ),
+            ),
+            (
+                "gpu_total_sync",
+                "gpu",
+                lambda summary: summary["residency"]["transfer_telemetry"][
+                    "raw"
+                ].__setitem__("hot_loop_host_sync_count", 999),
+            ),
+            (
+                "gpu_unaligned_bytes",
+                "gpu",
+                lambda summary: (
+                    summary["residency"]["transfer_telemetry"].__setitem__(
+                        "control_scalar_d2h_bytes", 593
+                    ),
+                    summary["residency"]["transfer_telemetry"]["raw"].__setitem__(
+                        "hot_loop_control_scalar_d2h_bytes", 593
+                    ),
+                ),
+            ),
         )
         for case, device, mutate in mutations:
             with tempfile.TemporaryDirectory() as directory:
