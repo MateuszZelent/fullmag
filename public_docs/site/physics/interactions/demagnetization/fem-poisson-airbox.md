@@ -4,6 +4,7 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+source_of_truth: docs/physics/0430-fem-dipolar-demag-mfem-gpu-foundations.md
 ---
 
 (public-docs-physics-interactions-demagnetization-fem-poisson-airbox)=

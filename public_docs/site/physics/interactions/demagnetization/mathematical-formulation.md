@@ -4,6 +4,7 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+source_of_truth: docs/physics/0420-fdm-dipolar-demag-foundations.md
 ---
 
 (public-docs-physics-interactions-demagnetization-mathematical-formulation)=

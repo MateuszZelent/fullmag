@@ -4,6 +4,7 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+source_of_truth: docs/physics/0520-fem-robin-airbox-demag-bootstrap-reference.md
 ---
 
 (public-docs-physics-interactions-demagnetization-boundary-conditions)=
