@@ -150,6 +150,17 @@ class PublicDocumentationInformationArchitectureTests(unittest.TestCase):
         self.assertEqual(zeeman.title, "Zeeman interaction")
         self.assertEqual(zeeman.label, "public-docs-physics-interactions-zeeman")
 
+    def test_published_thermal_reference_uses_reference_metadata(self) -> None:
+        pages = {spec.path: spec for spec in PAGE_SPECS}
+        physics = pages["physics/interactions/thermal-noise/index.md"]
+        python_api = pages["python-api/interactions/thermal-noise.md"]
+        self.assertEqual(physics.doc_kind, "reference")
+        self.assertEqual(physics.status, "partial")
+        self.assertEqual(physics.title, "Thermal Brown noise")
+        self.assertEqual(python_api.doc_kind, "reference")
+        self.assertEqual(python_api.status, "partial")
+        self.assertEqual(python_api.title, "Thermal Noise Python API")
+
     def test_index_scaffold_links_to_every_direct_child(self) -> None:
         index = next(spec for spec in PAGE_SPECS if spec.path == "python-api/index.md")
         rendered = render_page(index, Path("public_docs/site"))

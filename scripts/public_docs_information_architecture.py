@@ -71,6 +71,7 @@ PHYSICS_REFERENCE_PAGES = frozenset(
         "physics/interactions/anisotropy/cubic.md",
         "physics/interactions/dmi/bulk.md",
         "physics/interactions/dmi/interfacial.md",
+        "physics/interactions/thermal-noise/index.md",
         "physics/interactions/zeeman/index.md",
     }
 )
@@ -165,12 +166,14 @@ REFERENCE_PAGE_TITLES = {
     "physics/interactions/anisotropy/cubic.md": "Cubic anisotropy",
     "physics/interactions/dmi/bulk.md": "Bulk Dzyaloshinskii–Moriya interaction",
     "physics/interactions/dmi/interfacial.md": "Interfacial Dzyaloshinskii–Moriya interaction",
+    "physics/interactions/thermal-noise/index.md": "Thermal Brown noise",
     "physics/interactions/zeeman/index.md": "Zeeman interaction",
     "python-api/interactions/bulk-dmi.md": "Bulk DMI Python API",
     "python-api/interactions/zeeman.md": "Zeeman Python API",
     "python-api/interactions/uniaxial-anisotropy.md": "Uniaxial anisotropy Python API",
     "python-api/interactions/cubic-anisotropy.md": "Cubic anisotropy Python API",
     "python-api/interactions/interfacial-dmi.md": "Interfacial DMI Python API",
+    "python-api/interactions/thermal-noise.md": "Thermal Noise Python API",
 }
 REFERENCE_PAGE_LABELS = {
     "physics/interactions/zeeman/index.md": "public-docs-physics-interactions-zeeman",
@@ -262,6 +265,7 @@ PYTHON_API_REFERENCE_PAGES = {
     "python-api/interactions/uniaxial-anisotropy.md",
     "python-api/interactions/cubic-anisotropy.md",
     "python-api/interactions/interfacial-dmi.md",
+    "python-api/interactions/thermal-noise.md",
 }
 
 
