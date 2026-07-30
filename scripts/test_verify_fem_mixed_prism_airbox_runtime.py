@@ -232,6 +232,17 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
         qualification = {
             "schema_version": f"fem_{device}_relaxation_qualification.v1",
             "relaxation_algorithm": "projected_gradient_bb",
+            "algorithm_policy": {
+                "realization": (
+                    "native_mfem_pgbb" if device == "cpu" else "native_cuda_pgbb"
+                ),
+                "metric": "mu0_ms_fem_lumped_volume",
+                **(
+                    {"preconditioner": "exchange_plus_mass_tangent_gradient"}
+                    if device == "cpu"
+                    else {"gradient_policy": "device_tangent_gradient"}
+                ),
+            },
             "executed_steps": 1,
             "final_energy_terms_j": energy_terms,
             "final_torque_apm": 4.0,
@@ -239,6 +250,15 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
             "norm_defect": 0.0,
         }
         if device == "cpu":
+            execution_provenance.update(
+                {
+                    "mfem_device": "cpu",
+                    "fem_execution_mode": "cpu_native",
+                    "fem_data_residency": "host_source_of_truth",
+                    "uses_cuda_kernels": False,
+                    "uses_gpu_poisson": False,
+                }
+            )
             metadata["fem_cpu_relaxation_qualification"] = qualification
         else:
             execution_provenance.update(
@@ -313,6 +333,11 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                     "demag_solves",
                     "demag_iterations",
                     "demag_residual",
+                    "accepted_energy_proof_available",
+                    "accepted_energy_delta_j",
+                    "accepted_energy_roundoff_bound_j",
+                    "accepted_energy_delta_upper_j",
+                    "armijo_increment_rhs_j",
                 ],
             )
             writer.writeheader()
@@ -324,8 +349,36 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                     "demag_solves": 1,
                     "demag_iterations": 12,
                     "demag_residual": 1.0e-13,
+                    "accepted_energy_proof_available": "true",
+                    "accepted_energy_delta_j": -2.0e-3,
+                    "accepted_energy_roundoff_bound_j": 1.0e-12,
+                    "accepted_energy_delta_upper_j": -1.999999999e-3,
+                    "armijo_increment_rhs_j": -1.0e-6,
                 }
             )
+        initial_values = [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0],
+        ]
+        (artifacts / "m_initial.json").write_text(
+            json.dumps(
+                {
+                    "observable": "m",
+                    "unit": "dimensionless",
+                    "step": 0,
+                    "time": 0.0,
+                    "solver_dt": 0.0,
+                    "provenance": {
+                        "source_hash": hashlib.sha256(bounded_text.encode()).hexdigest(),
+                        "execution_engine": engine,
+                        "precision": "double",
+                    },
+                    "values": initial_values,
+                }
+            ),
+            encoding="utf-8",
+        )
         (artifacts / "m_final.json").write_text(
             json.dumps(
                 {
@@ -383,11 +436,16 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                 "global/periodic v6 and mixed-certificate v3 identities are distinct",
             )
             self.assertEqual(gpu_summary["gpu_transfer_telemetry"]["control_scalar_host_sync_count"], 7)  # type: ignore[index]
-            self.assertEqual(comparison["schema_version"], "fem_mixed_prism_airbox_cpu_gpu.v1")
+            self.assertEqual(comparison["schema_version"], "fem_mixed_prism_airbox_cpu_gpu.v2")
             self.assertEqual(comparison["status"], "pass")
-            self.assertEqual(comparison["state_parity"]["max_component_abs_delta"], 0.0)  # type: ignore[index]
+            self.assertEqual(
+                comparison["initial_state_identity"]["max_component_abs_delta"],  # type: ignore[index]
+                0.0,
+            )
             self.assertEqual(comparison["qualification_status"], "implemented")
-            self.assertIn("E_ex", csv_path.read_text(encoding="utf-8"))
+            csv_text = csv_path.read_text(encoding="utf-8")
+            self.assertIn("initial_m_max_component_abs_delta", csv_text)
+            self.assertIn("cpu_accepted_armijo_rhs", csv_text)
             self.assertEqual(verifier.SCALAR_CSV_SERIALIZATION_RTOL, 1.0e-15)
             self.assertNotEqual(
                 cpu_summary["final_scalar_values"]["E_ex"],  # type: ignore[index]
@@ -797,7 +855,202 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                         runtime_manifest=manifest,
                     )
 
-    def test_compare_rejects_runtime_source_topology_state_energy_and_torque_drift(self) -> None:
+    def test_validate_rejects_missing_or_unexpected_gradient_policy(self) -> None:
+        cases = (
+            (
+                "cpu_missing",
+                "cpu",
+                lambda policy: policy.pop("preconditioner"),
+            ),
+            (
+                "cpu_unexpected",
+                "cpu",
+                lambda policy: policy.__setitem__(
+                    "preconditioner", "raw_tangent_gradient"
+                ),
+            ),
+            (
+                "gpu_missing",
+                "gpu",
+                lambda policy: policy.pop("gradient_policy"),
+            ),
+            (
+                "gpu_unexpected",
+                "gpu",
+                lambda policy: policy.__setitem__(
+                    "gradient_policy", "exchange_plus_mass_tangent_gradient"
+                ),
+            ),
+        )
+        for case, device, mutate in cases:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source, bounded, artifacts, runtime_log, manifest, metadata = (
+                    self._write_valid_bundle(root, device)
+                )
+                qualification = metadata[
+                    f"fem_{device}_relaxation_qualification"
+                ]
+                mutate(qualification["algorithm_policy"])  # type: ignore[index]
+                (artifacts / "metadata.json").write_text(
+                    json.dumps(metadata), encoding="utf-8"
+                )
+
+                with self.subTest(case=case), self.assertRaisesRegex(
+                    ContractError, "gradient policy"
+                ):
+                    validate_runtime_artifacts(
+                        source,
+                        bounded,
+                        artifacts,
+                        device=device,
+                        runtime_log=runtime_log,
+                        runtime_manifest=manifest,
+                    )
+
+    def test_validate_rejects_missing_or_tampered_initial_state(self) -> None:
+        for case in ("missing", "step", "value"):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source, bounded, artifacts, runtime_log, manifest, _ = (
+                    self._write_valid_bundle(root, "cpu")
+                )
+                path = artifacts / "m_initial.json"
+                if case == "missing":
+                    path.unlink()
+                else:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                    if case == "step":
+                        payload["step"] = 1
+                    else:
+                        payload["values"][0][0] = 0.5
+                    path.write_text(json.dumps(payload), encoding="utf-8")
+
+                with self.subTest(case=case), self.assertRaises(ContractError):
+                    validate_runtime_artifacts(
+                        source,
+                        bounded,
+                        artifacts,
+                        device="cpu",
+                        runtime_log=runtime_log,
+                        runtime_manifest=manifest,
+                    )
+
+    def test_validate_rejects_invalid_accepted_armijo_proof(self) -> None:
+        mutations = {
+            "unavailable": {"accepted_energy_proof_available": "false"},
+            "positive_upper": {
+                "accepted_energy_delta_j": "1e-3",
+                "accepted_energy_roundoff_bound_j": "0",
+                "accepted_energy_delta_upper_j": "1e-3",
+            },
+            "rhs_nonnegative": {"armijo_increment_rhs_j": "0"},
+            "armijo_failed": {
+                "accepted_energy_delta_j": "-1e-7",
+                "accepted_energy_roundoff_bound_j": "0",
+                "accepted_energy_delta_upper_j": "-1e-7",
+                "armijo_increment_rhs_j": "-1e-6",
+            },
+        }
+        for case, updates in mutations.items():
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source, bounded, artifacts, runtime_log, manifest, _ = (
+                    self._write_valid_bundle(root, "cpu")
+                )
+                path = artifacts / "solver_steps.csv"
+                with path.open(newline="", encoding="utf-8") as stream:
+                    row = next(csv.DictReader(stream))
+                row.update(updates)
+                with path.open("w", newline="", encoding="utf-8") as stream:
+                    writer = csv.DictWriter(stream, fieldnames=list(row))
+                    writer.writeheader()
+                    writer.writerow(row)
+
+                with self.subTest(case=case), self.assertRaisesRegex(
+                    ContractError, "Armijo|energy proof"
+                ):
+                    validate_runtime_artifacts(
+                        source,
+                        bounded,
+                        artifacts,
+                        device="cpu",
+                        runtime_log=runtime_log,
+                        runtime_manifest=manifest,
+                    )
+
+    def test_compare_accepts_policy_specific_one_step_endpoints(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cpu = self._write_valid_bundle(root, "cpu")
+            gpu = self._write_valid_bundle(root, "gpu")
+            gpu_field_path = gpu[2] / "m_final.json"
+            gpu_field = json.loads(gpu_field_path.read_text(encoding="utf-8"))
+            gpu_field["values"][0] = [0.8, 0.6, 0.0]
+            gpu_field_path.write_text(json.dumps(gpu_field), encoding="utf-8")
+            gpu_metadata = gpu[5]
+            gpu_metadata["fem_gpu_relaxation_qualification"][  # type: ignore[index]
+                "final_energy_terms_j"
+            ]["E_ex"] = 9.0
+            gpu_metadata["fem_gpu_relaxation_qualification"][  # type: ignore[index]
+                "final_torque_apm"
+            ] = 12.0
+            (gpu[2] / "metadata.json").write_text(
+                json.dumps(gpu_metadata), encoding="utf-8"
+            )
+            with (gpu[2] / "scalars.csv").open(
+                "w", newline="", encoding="utf-8"
+            ) as stream:
+                writer = csv.DictWriter(
+                    stream,
+                    fieldnames=["step", "E_ex", "E_demag", "E_total", "max_torque_T"],
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "step": 1,
+                        "E_ex": 9.0,
+                        "E_demag": 2.345678901234567,
+                        "E_total": 3.5802467913580237,
+                        "max_torque_T": 5.123456789012345e-6,
+                    }
+                )
+
+            cpu_summary = validate_runtime_artifacts(
+                cpu[0], cpu[1], cpu[2], device="cpu", runtime_log=cpu[3], runtime_manifest=cpu[4]
+            )
+            gpu_summary = validate_runtime_artifacts(
+                gpu[0], gpu[1], gpu[2], device="gpu", runtime_log=gpu[3], runtime_manifest=gpu[4]
+            )
+
+            comparison = verifier.compare_runtime_summaries(cpu_summary, gpu_summary)
+
+            self.assertEqual(comparison["status"], "pass")
+            self.assertEqual(
+                comparison["one_step_endpoint_parity"]["status"],  # type: ignore[index]
+                "not_applicable",
+            )
+
+    def test_compare_rejects_initial_state_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cpu = self._write_valid_bundle(root, "cpu")
+            gpu = self._write_valid_bundle(root, "gpu")
+            initial_path = gpu[2] / "m_initial.json"
+            initial = json.loads(initial_path.read_text(encoding="utf-8"))
+            initial["values"][0] = [0.0, 1.0, 0.0]
+            initial_path.write_text(json.dumps(initial), encoding="utf-8")
+            cpu_summary = validate_runtime_artifacts(
+                cpu[0], cpu[1], cpu[2], device="cpu", runtime_log=cpu[3], runtime_manifest=cpu[4]
+            )
+            gpu_summary = validate_runtime_artifacts(
+                gpu[0], gpu[1], gpu[2], device="gpu", runtime_log=gpu[3], runtime_manifest=gpu[4]
+            )
+
+            with self.assertRaisesRegex(ContractError, "initial magnetization"):
+                verifier.compare_runtime_summaries(cpu_summary, gpu_summary)
+
+    def test_compare_rejects_runtime_source_topology_and_initial_state_drift(self) -> None:
         mutations = (
             ("runtime", lambda summary: summary.__setitem__("runtime_manifest_sha256", "0" * 64)),
             ("source", lambda summary: summary.__setitem__("bounded_source_sha256", "0" * 64)),
@@ -808,9 +1061,12 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                     "certificate_fingerprint", "sha256:" + "b" * 64
                 ),
             ),
-            ("state", lambda summary: summary["final_magnetization"][0].__setitem__(0, 1.0 - 2.0e-9)),
-            ("energy", lambda summary: summary["final_energy_terms_j"].__setitem__("E_ex", 1.1)),
-            ("torque", lambda summary: summary.__setitem__("final_torque_apm", 5.0)),
+            (
+                "initial_state",
+                lambda summary: summary["initial_magnetization"][0].__setitem__(
+                    0, 0.5
+                ),
+            ),
         )
         for case, mutate in mutations:
             with tempfile.TemporaryDirectory() as directory:

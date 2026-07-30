@@ -2,7 +2,7 @@
 
 - Status: bounded FEM CPU/GPU double mixed-P1 relaxation lanes implemented in source/contracts; managed public-runtime proof pending; wider scopes fail closed
 - Owners: Fullmag core
-- Last updated: 2026-07-29
+- Last updated: 2026-07-30
 - Related ADRs: `docs/adr/0021-native-mixed-p1-fem-topology.md`
 - Related specs:
   - `docs/specs/capability-matrix-v0.md`
@@ -292,9 +292,14 @@ The same assembled operators serve PG-BB, nonlinear CG, and overdamped LLG;
 the relaxators must not inspect fixed-width tetrahedral connectivity. Before
 the GPU capability can move beyond `implemented`, a managed identical-topology
 CPU/GPU run must prove matching topology fingerprints, correct CUDA/Hypre device
-identity, `device_hypre_poisson`, empty fallback trails, field/energy/torque
-parity, and the residency counters above. Source tests, CUDA allocation tests,
-or successful setup/rollback alone do not promote executable or validated
+identity, `device_hypre_poisson`, empty fallback trails, same-state
+field/energy/torque operator parity, and the residency counters above. The
+current bounded one-step gate proves runtime/topology identity, exact initial
+magnetization, and each lane's accepted-step contract, but its artifacts do not
+contain step-0 operator fields or scalar summaries. It therefore publishes
+same-state operator parity as `not_evaluated` and cannot promote the capability
+by itself. Source tests, CUDA allocation tests, successful setup/rollback, or a
+comparison of different first iterates do not promote executable or validated
 status.
 
 ### 3.4 Exact-layer and shared-domain certificate
@@ -497,17 +502,31 @@ that copy through the existing managed FEM CPU and strict GPU headless routes.
 Its validator requires authored `auto`, separate managed `cpu` and `gpu`
 overrides, effective strict FEM double execution, `fem_cpu_native` and
 `fem_native_gpu`, no fallback, exact mixed certificate and topology identity,
-one executed step, final-field and scalar artifacts bound to that step and
-execution, and bounded CPU/GPU state, energy, and torque parity. GPU evidence
-must additionally prove the managed CUDA/Hypre device identity and bounded
-control-scalar-only readbacks. Its accepted solver-step row must prove at least
-one demagnetization solve and bind the iteration count and final residual to
-the GPU demag runtime diagnostics. The solver-step residual uses the writer's
-`{:.17e}` binary64 round-trip representation and therefore matches the JSON
-diagnostic exactly after parsing; this identity check has no solver-tolerance
-allowance. The recipe's existence is not runtime evidence: this note and the
-capability matrix remain `implemented` until the command actually passes and
-its immutable report is reviewed.
+one executed step, initial/final magnetization artifacts bound to the source
+and resolved engine, exact CPU/GPU initial-magnetization identity, and the
+frozen magnetization-norm bound on each lane. The CPU policy must be explicitly
+`exchange_plus_mass_tangent_gradient`; the GPU policy must be explicitly
+`device_tangent_gradient`. Because these are different search directions, the
+gate does not compare the two first accepted iterates, their final energies, or
+their final torques. Each accepted solver-step row must instead independently
+prove a native direct-increment Armijo decision
+`delta_upper_j <= armijo_rhs_j < 0`, and therefore energy nonincrease. GPU
+evidence must additionally prove the managed CUDA/Hypre device identity and
+bounded control-scalar-only readbacks. Its accepted solver-step row must prove
+at least one demagnetization solve and bind the iteration count and final
+residual to the GPU demag runtime diagnostics. The solver-step residual uses
+the writer's `{:.17e}` binary64 round-trip representation and therefore matches
+the JSON diagnostic exactly after parsing; this identity check has no
+solver-tolerance allowance.
+
+The report records same-state step-0 `H_ex`, `H_demag`, `H_eff`, energy, and
+torque parity as `not_evaluated`, because current run artifacts do not publish
+those quantities before the first accepted step. Converged-state parity remains
+a separate SP4 convergence-matrix gate with unchanged frozen tolerances. A
+passing bounded lane-contract report with operator parity still
+`not_evaluated` is not physics qualification: this note and the capability
+matrix remain `implemented` until the missing same-state artifacts and wider
+matrix are produced and reviewed.
 
 The ordinary Python API suite uses `--skip-geometry-assets` to keep authored
 `auto`, managed CPU override, and base-plus-relaxation-stage propagation under

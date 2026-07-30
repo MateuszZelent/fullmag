@@ -18,8 +18,8 @@ CANONICAL_MAX_STEPS = "max_steps=50_000"
 BOUNDED_MAX_STEPS = "max_steps=1"
 EXPECTED_PROBLEM_NAME = "mumag_sp4_fem_relax_projected_gradient_bb"
 EXPECTED_ALGORITHM = "projected_gradient_bb"
-RUN_SCHEMA_VERSION = "fem_mixed_prism_airbox_runtime_run.v2"
-COMPARISON_SCHEMA_VERSION = "fem_mixed_prism_airbox_cpu_gpu.v1"
+RUN_SCHEMA_VERSION = "fem_mixed_prism_airbox_runtime_run.v3"
+COMPARISON_SCHEMA_VERSION = "fem_mixed_prism_airbox_cpu_gpu.v2"
 TOPOLOGY_FINGERPRINT = re.compile(r"^sha256:[0-9a-f]{64}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -36,6 +36,7 @@ GPU_PGBB_CONTROL_READBACK_PER_STEP = 4
 GPU_SCALAR_RESULT_SLOTS = 32
 DOUBLE_BYTES = 8
 DIMENSIONLESS_RECOMPUTATION_ATOL = 16.0 * sys.float_info.epsilon
+MAX_MAGNETIZATION_NORM_DEFECT = 1.0e-9
 SCALAR_CSV_SERIALIZATION_RTOL = 1.0e-15
 TOLERANCE_SOURCE = {
     "state": "scripts/analysis/fem_gpu_benchmark.py:TASK11_CPU_GPU_MAGNETIZATION_ATOL",
@@ -89,6 +90,14 @@ def _nonnegative_int(value: object, label: str) -> int:
     if result < 0:
         raise ContractError(f"{label} must be a non-negative integer")
     return result
+
+
+def _strict_bool(value: object, label: str) -> bool:
+    if value is True or value == "true":
+        return True
+    if value is False or value == "false":
+        return False
+    raise ContractError(f"{label} must be true or false")
 
 
 def _canonical_sha256(value: object, label: str) -> str:
@@ -242,6 +251,11 @@ def _validate_solver_steps(path: Path) -> dict[str, Any]:
                 "demag_solves",
                 "demag_iterations",
                 "demag_residual",
+                "accepted_energy_proof_available",
+                "accepted_energy_delta_j",
+                "accepted_energy_roundoff_bound_j",
+                "accepted_energy_delta_upper_j",
+                "armijo_increment_rhs_j",
             }
             missing = required - set(reader.fieldnames or ())
             if missing:
@@ -259,6 +273,37 @@ def _validate_solver_steps(path: Path) -> dict[str, Any]:
     )
     if demag_residual < 0.0:
         raise ContractError("solver_steps.csv demag_residual must be non-negative")
+    if not _strict_bool(
+        rows[0].get("accepted_energy_proof_available"),
+        "solver_steps.csv accepted_energy_proof_available",
+    ):
+        raise ContractError("accepted energy proof must be available for the accepted PG-BB step")
+    energy_delta = _finite(
+        rows[0].get("accepted_energy_delta_j"),
+        "solver_steps.csv accepted_energy_delta_j",
+    )
+    roundoff_bound = _finite(
+        rows[0].get("accepted_energy_roundoff_bound_j"),
+        "solver_steps.csv accepted_energy_roundoff_bound_j",
+    )
+    delta_upper = _finite(
+        rows[0].get("accepted_energy_delta_upper_j"),
+        "solver_steps.csv accepted_energy_delta_upper_j",
+    )
+    armijo_rhs = _finite(
+        rows[0].get("armijo_increment_rhs_j"),
+        "solver_steps.csv armijo_increment_rhs_j",
+    )
+    if roundoff_bound < 0.0:
+        raise ContractError("accepted energy proof roundoff bound must be non-negative")
+    if energy_delta + roundoff_bound != delta_upper:
+        raise ContractError(
+            "accepted energy proof upper endpoint must equal delta plus roundoff bound"
+        )
+    if not (delta_upper <= armijo_rhs < 0.0):
+        raise ContractError(
+            "accepted Armijo proof must satisfy delta_upper <= armijo_rhs < 0"
+        )
     return {
         "accepted_steps": 1,
         "total_rhs_evals": _nonnegative_int(rows[0].get("rhs_evals"), "solver_steps.csv rhs_evals"),
@@ -272,6 +317,15 @@ def _validate_solver_steps(path: Path) -> dict[str, Any]:
             rows[0].get("demag_iterations"), "solver_steps.csv demag_iterations"
         ),
         "demag_residual": demag_residual,
+        "accepted_energy_proof": {
+            "available": True,
+            "delta_j": energy_delta,
+            "roundoff_bound_j": roundoff_bound,
+            "delta_upper_j": delta_upper,
+            "armijo_rhs_j": armijo_rhs,
+            "strict_armijo": True,
+            "energy_nonincrease": True,
+        },
     }
 
 
@@ -374,6 +428,85 @@ def _validate_final_field(
         if index in magnetic_node_indices
     )
     return result, norm_defect
+
+
+def _validate_initial_field(
+    path: Path,
+    *,
+    expected_source_hash: str,
+    expected_engine: str,
+    expected_precision: str,
+    expected_node_count: int,
+    magnetic_node_indices: set[int],
+) -> tuple[list[list[float]], float, str]:
+    values, norm_defect = _validate_final_field(
+        path,
+        expected_step=0,
+        expected_source_hash=expected_source_hash,
+        expected_engine=expected_engine,
+        expected_precision=expected_precision,
+        expected_node_count=expected_node_count,
+        magnetic_node_indices=magnetic_node_indices,
+    )
+    if norm_defect > MAX_MAGNETIZATION_NORM_DEFECT:
+        raise ContractError(
+            "m_initial.json norm_defect exceeds the frozen bound: "
+            f"{norm_defect} > {MAX_MAGNETIZATION_NORM_DEFECT}"
+        )
+    canonical_values = json.dumps(
+        values,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return values, norm_defect, _sha256_bytes(canonical_values)
+
+
+def _validate_gradient_policy(
+    qualification: dict[str, Any], device: str
+) -> dict[str, str]:
+    policy = _object(qualification.get("algorithm_policy"), "algorithm_policy")
+    if policy.get("metric") != "mu0_ms_fem_lumped_volume":
+        raise ContractError(
+            "PG-BB gradient policy metric must be mu0_ms_fem_lumped_volume"
+        )
+    if device == "cpu":
+        expected = {
+            "realization": "native_mfem_pgbb",
+            "gradient_policy": "exchange_plus_mass_tangent_gradient",
+        }
+        observed = {
+            "realization": policy.get("realization"),
+            "gradient_policy": policy.get("preconditioner"),
+        }
+    else:
+        expected = {
+            "realization": "native_cuda_pgbb",
+            "gradient_policy": "device_tangent_gradient",
+        }
+        observed = {
+            "realization": policy.get("realization"),
+            "gradient_policy": policy.get("gradient_policy"),
+        }
+    if observed != expected:
+        raise ContractError(
+            f"{device.upper()} PG-BB gradient policy must equal {expected}, got {observed}"
+        )
+    return {**expected, "metric": "mu0_ms_fem_lumped_volume"}
+
+
+def _validate_cpu_execution(execution: dict[str, Any]) -> dict[str, object]:
+    expected = {
+        "mfem_device": "cpu",
+        "fem_execution_mode": "cpu_native",
+        "fem_data_residency": "host_source_of_truth",
+        "uses_cuda_kernels": False,
+        "uses_gpu_poisson": False,
+    }
+    for field, value in expected.items():
+        if execution.get(field) != value:
+            raise ContractError(f"CPU execution {field} must be {value!r}")
+    return expected
 
 
 def _cross_check_final_scalars(
@@ -670,6 +803,7 @@ def validate_runtime_artifacts(
     metadata_path = artifacts / "metadata.json"
     scalars_path = artifacts / "scalars.csv"
     solver_steps_path = artifacts / "solver_steps.csv"
+    initial_field_path = artifacts / "m_initial.json"
     final_field_path = artifacts / "m_final.json"
     metadata = _read_json_object(metadata_path, "runtime metadata")
 
@@ -736,6 +870,7 @@ def validate_runtime_artifacts(
         raise ContractError(f"relaxation algorithm must be {EXPECTED_ALGORITHM}")
     if qualification.get("executed_steps") != 1:
         raise ContractError("FEM relaxation qualification executed_steps must be 1")
+    gradient_policy = _validate_gradient_policy(qualification, device)
     energy_terms = _object(
         qualification.get("final_energy_terms_j"), "final energy terms"
     )
@@ -761,6 +896,16 @@ def validate_runtime_artifacts(
     if mesh_node_count < 1:
         raise ContractError("mesh.node_count must be positive")
     magnetic_node_indices = _magnetic_node_indices(metadata, mesh_node_count)
+    initial_field_vectors, initial_norm_defect, initial_state_sha256 = (
+        _validate_initial_field(
+            initial_field_path,
+            expected_source_hash=source_identity["bounded_source_sha256"],
+            expected_engine=engine,
+            expected_precision="double",
+            expected_node_count=mesh_node_count,
+            magnetic_node_indices=magnetic_node_indices,
+        )
+    )
     final_field_vectors, recomputed_norm_defect = _validate_final_field(
         final_field_path,
         expected_step=qualification["executed_steps"],
@@ -775,6 +920,11 @@ def validate_runtime_artifacts(
             "m_final.json recomputed norm_defect does not match relaxation qualification: "
             f"delta={abs(recomputed_norm_defect - norm_defect)}, "
             f"allowed={DIMENSIONLESS_RECOMPUTATION_ATOL}"
+        )
+    if norm_defect > MAX_MAGNETIZATION_NORM_DEFECT:
+        raise ContractError(
+            "final magnetization norm_defect exceeds the frozen bound: "
+            f"{norm_defect} > {MAX_MAGNETIZATION_NORM_DEFECT}"
         )
     if runtime_log is None:
         raise ContractError("runtime log is required")
@@ -795,6 +945,12 @@ def validate_runtime_artifacts(
             runtime_identity,
             solver_step_evidence,
         )
+        residency = {
+            "mode": "device_source_of_truth",
+            "transfer_telemetry": gpu_transfer_telemetry,
+        }
+    else:
+        residency = _validate_cpu_execution(execution)
 
     return {
         "schema_version": RUN_SCHEMA_VERSION,
@@ -804,6 +960,7 @@ def validate_runtime_artifacts(
         "metadata_sha256": _sha256_file(metadata_path),
         "scalars_sha256": _sha256_file(scalars_path),
         "solver_steps_sha256": _sha256_file(solver_steps_path),
+        "m_initial_sha256": _sha256_file(initial_field_path),
         "m_final_sha256": _sha256_file(final_field_path),
         "runtime_log_sha256": _sha256_file(runtime_log),
         "topology_fingerprint": topology_fingerprint,
@@ -816,12 +973,17 @@ def validate_runtime_artifacts(
         "effective_device": device,
         "execution_engine": engine,
         "executed_steps": 1,
+        "gradient_policy": gradient_policy,
+        "initial_state_sha256": initial_state_sha256,
+        "initial_norm_defect": initial_norm_defect,
+        "initial_magnetization": initial_field_vectors,
         "final_energy_terms_j": energy_terms,
         "final_torque_apm": final_torque_apm,
         "final_torque_t": final_torque_t,
         "norm_defect": norm_defect,
         "final_magnetization": final_field_vectors,
         "gpu_transfer_telemetry": gpu_transfer_telemetry,
+        "residency": residency,
         **scalar_evidence,
         **solver_step_evidence,
     }
@@ -885,18 +1047,40 @@ def compare_runtime_summaries(
     if cpu.get("effective_device") != "cpu" or gpu.get("effective_device") != "gpu":
         raise ContractError("CPU/GPU summaries do not prove distinct strict devices")
 
-    cpu_vectors = cpu.get("final_magnetization")
-    gpu_vectors = gpu.get("final_magnetization")
+    expected_policies = {
+        "cpu": {
+            "realization": "native_mfem_pgbb",
+            "gradient_policy": "exchange_plus_mass_tangent_gradient",
+            "metric": "mu0_ms_fem_lumped_volume",
+        },
+        "gpu": {
+            "realization": "native_cuda_pgbb",
+            "gradient_policy": "device_tangent_gradient",
+            "metric": "mu0_ms_fem_lumped_volume",
+        },
+    }
+    for device, summary in (("cpu", cpu), ("gpu", gpu)):
+        observed = _object(summary.get("gradient_policy"), f"{device} gradient policy")
+        if observed != expected_policies[device]:
+            raise ContractError(
+                f"{device.upper()} summary gradient policy must equal "
+                f"{expected_policies[device]}"
+            )
+
+    cpu_vectors = cpu.get("initial_magnetization")
+    gpu_vectors = gpu.get("initial_magnetization")
     if not isinstance(cpu_vectors, list) or not isinstance(gpu_vectors, list):
-        raise ContractError("CPU/GPU final magnetization arrays are required")
+        raise ContractError("CPU/GPU initial magnetization arrays are required")
     if len(cpu_vectors) != len(gpu_vectors) or not cpu_vectors:
-        raise ContractError("CPU/GPU final magnetization shapes differ")
+        raise ContractError("CPU/GPU initial magnetization shapes differ")
     component_deltas: list[float] = []
     for index, (cpu_vector, gpu_vector) in enumerate(zip(cpu_vectors, gpu_vectors)):
         if not isinstance(cpu_vector, list) or not isinstance(gpu_vector, list):
-            raise ContractError(f"CPU/GPU magnetization vector {index} is malformed")
+            raise ContractError(f"CPU/GPU initial magnetization vector {index} is malformed")
         if len(cpu_vector) != 3 or len(gpu_vector) != 3:
-            raise ContractError(f"CPU/GPU magnetization vector {index} is not a three-vector")
+            raise ContractError(
+                f"CPU/GPU initial magnetization vector {index} is not a three-vector"
+            )
         component_deltas.extend(
             abs(
                 _finite(cpu_value, f"CPU m[{index}][{component}]")
@@ -908,52 +1092,21 @@ def compare_runtime_summaries(
     rms_component_delta = math.sqrt(
         sum(delta * delta for delta in component_deltas) / len(component_deltas)
     )
-    if max_component_delta > STATE_MAX_COMPONENT_ATOL:
+    if max_component_delta != 0.0 or cpu.get("initial_state_sha256") != gpu.get(
+        "initial_state_sha256"
+    ):
         raise ContractError(
-            "CPU/GPU final magnetization parity failed: "
+            "CPU/GPU initial magnetization identity failed: "
             f"max component delta={max_component_delta}"
         )
-    state_parity = {
+    initial_state_identity = {
+        "state_sha256": cpu["initial_state_sha256"],
         "component_count": len(component_deltas),
         "max_component_abs_delta": max_component_delta,
         "rms_component_abs_delta": rms_component_delta,
-        "max_component_absolute_tolerance": STATE_MAX_COMPONENT_ATOL,
+        "max_component_absolute_tolerance": 0.0,
         "status": "pass",
     }
-
-    cpu_energies = _object(cpu.get("final_energy_terms_j"), "CPU final energy terms")
-    gpu_energies = _object(gpu.get("final_energy_terms_j"), "GPU final energy terms")
-    comparisons = [
-        _close_comparison(
-            name,
-            cpu_energies.get(name),
-            gpu_energies.get(name),
-            relative_tolerance=ENERGY_RTOL,
-            absolute_tolerance=ENERGY_ATOL_J,
-            unit="J",
-        )
-        for name in ("E_ex", "E_demag", "E_total")
-    ]
-    comparisons.extend(
-        (
-            _close_comparison(
-                "final_torque_apm",
-                cpu.get("final_torque_apm"),
-                gpu.get("final_torque_apm"),
-                relative_tolerance=TORQUE_RTOL,
-                absolute_tolerance=TORQUE_ATOL_APM,
-                unit="A/m",
-            ),
-            _close_comparison(
-                "final_torque_t",
-                cpu.get("final_torque_t"),
-                gpu.get("final_torque_t"),
-                relative_tolerance=TORQUE_RTOL,
-                absolute_tolerance=TORQUE_ATOL_T,
-                unit="T",
-            ),
-        )
-    )
     artifact_hashes = {
         device: {
             field: summary.get(field)
@@ -961,6 +1114,7 @@ def compare_runtime_summaries(
                 "metadata_sha256",
                 "scalars_sha256",
                 "solver_steps_sha256",
+                "m_initial_sha256",
                 "m_final_sha256",
                 "runtime_log_sha256",
             )
@@ -984,17 +1138,60 @@ def compare_runtime_summaries(
         "topology_fingerprint_version": cpu["topology_fingerprint_version"],
         "gpu_device_identity": gpu["gpu_device_identity"],
         "artifact_hashes": artifact_hashes,
-        "state_parity": state_parity,
-        "comparisons": comparisons,
-        "tolerance_source": TOLERANCE_SOURCE,
+        "initial_state_identity": initial_state_identity,
+        "gradient_policies": expected_policies,
+        "same_state_operator_parity": {
+            "status": "not_evaluated",
+            "qualification_claimed": False,
+            "missing_artifacts": [
+                "step-0 H_ex",
+                "step-0 H_demag",
+                "step-0 H_eff",
+                "step-0 torque",
+                "step-0 energy terms",
+            ],
+            "reason": (
+                "the bounded run artifacts publish initial m but do not publish "
+                "step-0 operator fields or scalar summaries"
+            ),
+        },
+        "one_step_endpoint_parity": {
+            "status": "not_applicable",
+            "qualification_claimed": False,
+            "reason": (
+                "CPU and GPU execute different explicit PG-BB gradient policies; "
+                "their first accepted iterates are not a same-algorithm parity target"
+            ),
+        },
+        "converged_state_parity": {
+            "status": "deferred_to_sp4_convergence_matrix",
+            "qualification_claimed": False,
+            "frozen_tolerances": {
+                "state_max_component_atol": STATE_MAX_COMPONENT_ATOL,
+                "energy_rtol": ENERGY_RTOL,
+                "energy_atol_j": ENERGY_ATOL_J,
+                "torque_rtol": TORQUE_RTOL,
+                "torque_atol_apm": TORQUE_ATOL_APM,
+                "torque_atol_t": TORQUE_ATOL_T,
+            },
+            "tolerance_source": TOLERANCE_SOURCE,
+        },
         "cpu": {
             "execution_engine": cpu["execution_engine"],
+            "gradient_policy": cpu["gradient_policy"],
+            "accepted_energy_proof": cpu["accepted_energy_proof"],
+            "norm_defect": cpu["norm_defect"],
+            "residency": cpu["residency"],
             "final_energy_terms_j": cpu["final_energy_terms_j"],
             "final_torque_apm": cpu["final_torque_apm"],
             "final_torque_t": cpu["final_torque_t"],
         },
         "gpu": {
             "execution_engine": gpu["execution_engine"],
+            "gradient_policy": gpu["gradient_policy"],
+            "accepted_energy_proof": gpu["accepted_energy_proof"],
+            "norm_defect": gpu["norm_defect"],
+            "residency": gpu["residency"],
             "final_energy_terms_j": gpu["final_energy_terms_j"],
             "final_torque_apm": gpu["final_torque_apm"],
             "final_torque_t": gpu["final_torque_t"],
@@ -1005,10 +1202,12 @@ def compare_runtime_summaries(
 
 def write_comparison_csv(path: Path, comparison: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    state = _object(comparison.get("state_parity"), "state parity")
+    state = _object(
+        comparison.get("initial_state_identity"), "initial state identity"
+    )
     rows = [
         {
-            "quantity": "m_max_component_abs_delta",
+            "quantity": "initial_m_max_component_abs_delta",
             "unit": "1",
             "cpu": "",
             "gpu": "",
@@ -1017,7 +1216,7 @@ def write_comparison_csv(path: Path, comparison: dict[str, object]) -> None:
             "status": state["status"],
         },
         {
-            "quantity": "m_rms_component_abs_delta",
+            "quantity": "initial_m_rms_component_abs_delta",
             "unit": "1",
             "cpu": "",
             "gpu": "",
@@ -1026,22 +1225,31 @@ def write_comparison_csv(path: Path, comparison: dict[str, object]) -> None:
             "status": state["status"],
         },
     ]
-    comparisons = comparison.get("comparisons")
-    if not isinstance(comparisons, list):
-        raise ContractError("comparison rows are required")
-    rows.extend(
-        {
-            "quantity": row["name"],
-            "unit": row["unit"],
-            "cpu": row["cpu"],
-            "gpu": row["gpu"],
-            "absolute_delta": row["absolute_delta"],
-            "allowed_delta": row["allowed_delta"],
-            "status": row["status"],
-        }
-        for raw_row in comparisons
-        for row in (_object(raw_row, "comparison row"),)
-    )
+    for device in ("cpu", "gpu"):
+        lane = _object(comparison.get(device), f"{device} comparison lane")
+        proof = _object(lane.get("accepted_energy_proof"), f"{device} energy proof")
+        rows.extend(
+            (
+                {
+                    "quantity": f"{device}_accepted_energy_delta_upper",
+                    "unit": "J",
+                    "cpu": proof["delta_upper_j"] if device == "cpu" else "",
+                    "gpu": proof["delta_upper_j"] if device == "gpu" else "",
+                    "absolute_delta": "",
+                    "allowed_delta": proof["armijo_rhs_j"],
+                    "status": "pass",
+                },
+                {
+                    "quantity": f"{device}_accepted_armijo_rhs",
+                    "unit": "J",
+                    "cpu": proof["armijo_rhs_j"] if device == "cpu" else "",
+                    "gpu": proof["armijo_rhs_j"] if device == "gpu" else "",
+                    "absolute_delta": "",
+                    "allowed_delta": 0.0,
+                    "status": "pass",
+                },
+            )
+        )
     with path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(
             stream,
