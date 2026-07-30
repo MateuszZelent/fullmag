@@ -393,49 +393,52 @@ describe("geometry lifecycle command contributions", () => {
       transaction_kind: "create_object",
     }));
 
-    expect(
-      await registry.execute("geometry.add-thin-film", {
-        selection,
-        source: "test",
-      }),
-    ).toEqual({ status: "completed" });
-    expect(selection.get()).toEqual({
-      kind: "builder.primitive",
-      label: "New thin film",
-      moduleSource: "geometry-authoring",
-      nodeId: "geometry:draft:thin-film",
-      objectId: null,
-      ref: null,
-    });
+    try {
+      expect(
+        await registry.execute("geometry.add-thin-film", {
+          selection,
+          source: "test",
+        }),
+      ).toEqual({ status: "completed" });
+      expect(selection.get()).toEqual({
+        kind: "builder.primitive",
+        label: "New thin film",
+        moduleSource: "geometry-authoring",
+        nodeId: "geometry:draft:thin-film",
+        objectId: null,
+        ref: null,
+      });
 
-    expect(
-      await registry.execute("geometry.commit-object-draft", {
-        api: {
-          model: { commitTransaction },
-        } as never,
-        resources,
-        selection,
-        source: "test",
-      }),
-    ).toEqual({ status: "completed" });
-    expect(commitTransaction).toHaveBeenCalledWith({
-      geometry: {
-        geometry_kind: "Box",
-        geometry_params: { size: [1e-7, 1e-7, 1e-8] },
-      },
-      kind: "create_object",
-      name: "New thin film",
-      object_id: "box-9ix",
-      transform: {
-        rotation: [0, 0, 0],
-        scale: [1, 1, 1],
-        translation: [0, 0, 0],
-      },
-    });
-    expect(commitTransaction.mock.calls[0]?.[0]).not.toHaveProperty("mesh_policy");
-    expect(commitTransaction.mock.calls[0]?.[0]).not.toHaveProperty("swept_prism");
-    expect(commitTransaction.mock.calls[0]?.[0]).not.toHaveProperty("fallback");
-    now.mockRestore();
+      expect(
+        await registry.execute("geometry.commit-object-draft", {
+          api: {
+            model: { commitTransaction },
+          } as never,
+          resources,
+          selection,
+          source: "test",
+        }),
+      ).toEqual({ status: "completed" });
+      expect(commitTransaction).toHaveBeenCalledWith({
+        geometry: {
+          geometry_kind: "Box",
+          geometry_params: { size: [1e-7, 1e-7, 1e-8] },
+        },
+        kind: "create_object",
+        name: "New thin film",
+        object_id: "box-9ix",
+        transform: {
+          rotation: [0, 0, 0],
+          scale: [1, 1, 1],
+          translation: [0, 0, 0],
+        },
+      });
+      expect(commitTransaction.mock.calls[0]?.[0]).not.toHaveProperty("mesh_policy");
+      expect(commitTransaction.mock.calls[0]?.[0]).not.toHaveProperty("swept_prism");
+      expect(commitTransaction.mock.calls[0]?.[0]).not.toHaveProperty("fallback");
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("disables selected mesh build for validation blockers", () => {
