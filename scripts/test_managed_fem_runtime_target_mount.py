@@ -12,6 +12,7 @@ import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXPORTER = REPO_ROOT / "scripts" / "export_fem_gpu_runtime.sh"
+STORAGE_HELPER = REPO_ROOT / "scripts/lib/managed_fem_runtime_storage.sh"
 CANONICAL_STORAGE_ROOT = "/zfn2/mateuszz/git/fullmag"
 CANONICAL_IMAGE = f"{CANONICAL_STORAGE_ROOT}/build-volumes/fullmag-native.ext4"
 MOUNT_VIEW = "/mnt/fullmag-zfn2-native"
@@ -31,6 +32,7 @@ class ManagedFemRuntimeTargetMountTest(unittest.TestCase):
 
     def test_exporter_requires_ext4_bind_target_before_image_build(self) -> None:
         source = EXPORTER.read_text(encoding="utf-8")
+        storage_source = STORAGE_HELPER.read_text(encoding="utf-8")
 
         self.assertIn(
             'readonly FULLMAG_CONTAINER_TARGET_ROOT="${FULLMAG_NATIVE_MOUNT_VIEW}/managed-fem-runtime"',
@@ -67,9 +69,10 @@ class ManagedFemRuntimeTargetMountTest(unittest.TestCase):
             "FULLMAG_CONTAINER_TARGET_DIR",
         ):
             self.assertNotIn(f'"${{{variable}:=', source)
-        self.assertIn('findmnt -n -o FSTYPE --target "${FULLMAG_CONTAINER_TARGET_DIR}"', source)
-        self.assertIn('findmnt -n -o SOURCE --target "${FULLMAG_CONTAINER_TARGET_DIR}"', source)
-        self.assertIn('/loop/backing_file', source)
+        self.assertIn('findmnt -n -o FSTYPE --target "${probe_path}"', storage_source)
+        self.assertIn('findmnt -n -o SOURCE --target "${probe_path}"', storage_source)
+        self.assertIn('/loop/backing_file', storage_source)
+        self.assertIn("validate_managed_fem_runtime_storage_target", source)
         self.assertIn(
             "wsl.exe -d Ubuntu2 -u root -- mount -o remount,rw,noatime "
             "${FULLMAG_NATIVE_MOUNT_VIEW}",

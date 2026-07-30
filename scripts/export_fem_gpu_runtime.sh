@@ -57,45 +57,11 @@ print_container_target_remount_guidance() {
 }
 
 validate_container_target_dir() {
-  if ! mkdir -p "${FULLMAG_CONTAINER_TARGET_DIR}"; then
-    echo "[export_fem_gpu_runtime] cannot create managed container target directory: ${FULLMAG_CONTAINER_TARGET_DIR}" >&2
+  validate_managed_fem_runtime_storage_target \
+    "${FULLMAG_CONTAINER_TARGET_DIR}" \
+    "${FULLMAG_NATIVE_BUILD_IMAGE}" \
+    "${FULLMAG_LOOP_SYSFS_ROOT}" \
     print_container_target_remount_guidance
-    return 2
-  fi
-  local filesystem_type
-  filesystem_type="$(findmnt -n -o FSTYPE --target "${FULLMAG_CONTAINER_TARGET_DIR}" 2>/dev/null || true)"
-  if [ "${filesystem_type}" != "ext4" ]; then
-    echo "[export_fem_gpu_runtime] FULLMAG_CONTAINER_TARGET_DIR must be an ext4 filesystem: ${FULLMAG_CONTAINER_TARGET_DIR} (observed ${filesystem_type:-unknown})" >&2
-    print_container_target_remount_guidance
-    return 2
-  fi
-  local source_device
-  source_device="$(findmnt -n -o SOURCE --target "${FULLMAG_CONTAINER_TARGET_DIR}" 2>/dev/null || true)"
-  if ! [[ "${source_device}" =~ ^/dev/loop[0-9]+$ ]]; then
-    echo "[export_fem_gpu_runtime] managed native mount view must use a loop device backed by ${FULLMAG_NATIVE_BUILD_IMAGE}: ${FULLMAG_CONTAINER_TARGET_DIR} (observed source ${source_device:-unknown})" >&2
-    print_container_target_remount_guidance
-    return 2
-  fi
-  local loop_device_name="${source_device#/dev/}"
-  local backing_file_path="${FULLMAG_LOOP_SYSFS_ROOT}/${loop_device_name}/loop/backing_file"
-  local observed_backing_image=""
-  if ! IFS= read -r observed_backing_image < "${backing_file_path}"; then
-    echo "[export_fem_gpu_runtime] cannot read loop backing image for ${source_device}: ${backing_file_path}" >&2
-    print_container_target_remount_guidance
-    return 2
-  fi
-  if [ "${observed_backing_image}" != "${FULLMAG_NATIVE_BUILD_IMAGE}" ]; then
-    echo "[export_fem_gpu_runtime] managed native mount view has the wrong physical backing image: expected ${FULLMAG_NATIVE_BUILD_IMAGE}, observed ${observed_backing_image:-unknown}" >&2
-    print_container_target_remount_guidance
-    return 2
-  fi
-  local write_probe="${FULLMAG_CONTAINER_TARGET_DIR}/.fullmag-write-probe.$$"
-  if ! (umask 077 && : > "${write_probe}") 2>/dev/null; then
-    echo "[export_fem_gpu_runtime] managed ext4 container target is not writable: ${FULLMAG_CONTAINER_TARGET_DIR}" >&2
-    print_container_target_remount_guidance
-    return 2
-  fi
-  rm -f -- "${write_probe}"
 }
 
 cd "${REPO_ROOT}"

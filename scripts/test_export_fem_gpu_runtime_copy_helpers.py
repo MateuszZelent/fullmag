@@ -1030,6 +1030,9 @@ def test_export_can_resume_safely_without_cleaning_completed_target() -> None:
 
 def test_export_defaults_to_exact_persistent_build_root() -> None:
     exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+    storage_helper = (
+        REPO_ROOT / "scripts/lib/managed_fem_runtime_storage.sh"
+    ).read_text(encoding="utf-8")
 
     assert (
         'readonly FULLMAG_NATIVE_BUILD_STORAGE_ROOT="/zfn2/mateuszz/git/fullmag"'
@@ -1042,8 +1045,9 @@ def test_export_defaults_to_exact_persistent_build_root() -> None:
         in exporter
     )
     assert 'readonly FULLMAG_CONTAINER_TARGET_DIR=' in exporter
-    assert 'findmnt -n -o FSTYPE --target "${FULLMAG_CONTAINER_TARGET_DIR}"' in exporter
-    assert 'findmnt -n -o SOURCE --target "${FULLMAG_CONTAINER_TARGET_DIR}"' in exporter
+    assert "validate_managed_fem_runtime_storage_target" in exporter
+    assert 'findmnt -n -o FSTYPE --target "${probe_path}"' in storage_helper
+    assert 'findmnt -n -o SOURCE --target "${probe_path}"' in storage_helper
     assert '-v "${FULLMAG_CONTAINER_TARGET_DIR}:/workspace/target"' in exporter
     assert 'fullmag-managed-fem-runtime-build:/workspace/target' not in exporter
 

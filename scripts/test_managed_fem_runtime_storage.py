@@ -85,6 +85,10 @@ def test_export_and_restore_use_the_validated_storage_migration() -> None:
     assert 'migrate_managed_fem_runtime_variants "${variants_alias}"' in exporter
     assert 'source "${REPO_ROOT}/scripts/lib/managed_fem_runtime_storage.sh"' in restorer
     assert 'migrate_managed_fem_runtime_variants "${variants_alias}"' in restorer
+    assert "validate_managed_fem_runtime_storage_target" in restorer
+    assert restorer.index("validate_managed_fem_runtime_storage_target") < restorer.index(
+        'tar -C "${staging}"'
+    )
 
 
 def test_migration_rejects_mismatched_collision_without_deleting_legacy(tmp_path: Path) -> None:
@@ -117,6 +121,29 @@ def test_migration_accepts_only_an_exact_existing_durable_collision(tmp_path: Pa
     assert alias.is_symlink()
     assert alias.resolve() == durable.resolve()
     assert (durable_variant / "bin/worker").read_text(encoding="utf-8") == "identical"
+
+
+def test_migration_rejects_exact_collision_symlinked_outside_durable_root(
+    tmp_path: Path,
+) -> None:
+    alias = tmp_path / "repo/.fullmag/runtimes/fem-gpu-variants"
+    durable = tmp_path / "durable/variants"
+    external = tmp_path / "external"
+    validator = tmp_path / "validator.py"
+    _validator(validator)
+    legacy = _variant(alias, "same", "identical")
+    external_variant = external / "same"
+    shutil.copytree(legacy, external_variant, symlinks=True)
+    durable.mkdir(parents=True)
+    (durable / "same").symlink_to(external_variant, target_is_directory=True)
+
+    result = _migrate(alias, durable, validator)
+
+    assert result.returncode != 0
+    assert alias.is_dir() and not alias.is_symlink()
+    assert legacy.is_dir() and not legacy.is_symlink()
+    assert (legacy / "bin/worker").read_text(encoding="utf-8") == "identical"
+    assert (durable / "same").is_symlink()
 
 
 def test_migration_rejects_invalid_variant_before_deleting_any_source(tmp_path: Path) -> None:
