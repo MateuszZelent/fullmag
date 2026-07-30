@@ -4934,6 +4934,7 @@ fn cuda_execution_provenance(
             .to_string(),
         ),
         mfem_device: None,
+        mfem_version: None,
         demag_refresh_interval_s: None,
         fem_assembly_mode: None,
         fem_execution_mode: None,
