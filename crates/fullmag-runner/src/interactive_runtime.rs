@@ -208,7 +208,8 @@ mod tests {
     use super::{
         attach_fem_crossover_decision_to_provenance, attach_resolved_fallback_to_provenance,
         cached_display_refresh_due, cpu_execution_provenance, display_refresh_due,
-        InteractiveFdmPreviewRuntime, InteractiveFdmPreviewRuntimeInner,
+        normalize_runtime_context_signature, InteractiveFdmPreviewRuntime,
+        InteractiveFdmPreviewRuntimeInner,
     };
     use crate::dispatch::FdmEngine;
     use crate::fdm::cpu::reference::{
@@ -271,6 +272,36 @@ mod tests {
             enable_demag: true,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn runtime_context_signature_ignores_stage_controls_and_keeps_physical_identity() {
+        let first = make_soa_fdm_plan();
+        let mut second = first.clone();
+        second.integrator = Some(IntegratorChoice::Rk23);
+        second.fixed_timestep = Some(1e-15);
+        second.relaxation = Some(RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::LlgOverdamped,
+            stop: fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: Some(1e-6),
+                energy_tolerance_j: None,
+                max_steps: Some(50_000),
+                max_relaxation_time_s: None,
+            },
+        });
+
+        assert_eq!(
+            normalize_runtime_context_signature(&first),
+            normalize_runtime_context_signature(&second),
+            "a stage must change execution controls without changing the runtime context"
+        );
+
+        second.cell_size[0] *= 2.0;
+        assert_ne!(
+            normalize_runtime_context_signature(&first),
+            normalize_runtime_context_signature(&second),
+            "a physical grid change must remain a runtime boundary"
+        );
     }
 
     #[test]
@@ -896,6 +927,19 @@ impl InteractiveFdmPreviewRuntime {
         }
     }
 
+    pub fn can_continue_with_plan(&self, plan: &FdmPlanIR) -> bool {
+        let normalized = normalize_runtime_context_signature(plan);
+        match &self.inner {
+            InteractiveFdmPreviewRuntimeInner::Cpu(runtime) => {
+                normalize_runtime_context_signature(&runtime.plan_signature) == normalized
+            }
+            #[cfg(feature = "cuda")]
+            InteractiveFdmPreviewRuntimeInner::Cuda(runtime) => {
+                normalize_runtime_context_signature(&runtime.plan_signature) == normalized
+            }
+        }
+    }
+
     pub fn execution_provenance(&self) -> ExecutionProvenance {
         match &self.inner {
             InteractiveFdmPreviewRuntimeInner::Cpu(runtime) => runtime.provenance.clone(),
@@ -1153,6 +1197,20 @@ impl InteractiveFemPreviewRuntime {
             InteractiveFemPreviewRuntimeInner::Gpu(runtime) => {
                 runtime.plan_signature
                     == normalize_fem_plan_signature(&fem_plan_for_native_gpu(plan))
+            }
+        }
+    }
+
+    pub fn can_continue_with_plan(&self, plan: &FemPlanIR) -> bool {
+        match &self.inner {
+            InteractiveFemPreviewRuntimeInner::Cpu(runtime) => {
+                normalize_fem_runtime_context_signature(&runtime.plan_signature)
+                    == normalize_fem_runtime_context_signature(&fem_plan_for_cpu_native(plan))
+            }
+            #[cfg(feature = "fem-gpu")]
+            InteractiveFemPreviewRuntimeInner::Gpu(runtime) => {
+                normalize_fem_runtime_context_signature(&runtime.plan_signature)
+                    == normalize_fem_runtime_context_signature(&fem_plan_for_native_gpu(plan))
             }
         }
     }
@@ -1431,10 +1489,12 @@ impl CpuInteractiveFdmPreviewRuntime {
         interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
         on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
     ) -> Result<RunResult, RunError> {
-        if !self.plan_signature.eq(&normalize_plan_signature(plan)) {
+        if !normalize_runtime_context_signature(&self.plan_signature)
+            .eq(&normalize_runtime_context_signature(plan))
+        {
             return Err(RunError {
                 message:
-                    "interactive CPU runtime plan mismatch; caller must rebuild runtime before executing"
+                    "interactive CPU runtime context mismatch; caller must rebuild runtime before executing"
                         .to_string(),
             });
         }
@@ -1723,10 +1783,12 @@ impl CpuInteractiveFdmPreviewRuntime {
         artifact_writer: Option<ArtifactPipelineSender>,
         on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
     ) -> Result<ExecutedRun, RunError> {
-        if !self.plan_signature.eq(&normalize_plan_signature(plan)) {
+        if !normalize_runtime_context_signature(&self.plan_signature)
+            .eq(&normalize_runtime_context_signature(plan))
+        {
             return Err(RunError {
                 message:
-                    "interactive CPU runtime plan mismatch; caller must rebuild runtime before executing"
+                    "interactive CPU runtime context mismatch; caller must rebuild runtime before executing"
                         .to_string(),
             });
         }
@@ -2197,10 +2259,12 @@ impl CudaInteractiveFdmPreviewRuntime {
         interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
         on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
     ) -> Result<RunResult, RunError> {
-        if !self.plan_signature.eq(&normalize_plan_signature(plan)) {
+        if !normalize_runtime_context_signature(&self.plan_signature)
+            .eq(&normalize_runtime_context_signature(plan))
+        {
             return Err(RunError {
                 message:
-                    "interactive CUDA runtime plan mismatch; caller must rebuild runtime before executing"
+                    "interactive CUDA runtime context mismatch; caller must rebuild runtime before executing"
                         .to_string(),
             });
         }
@@ -2495,10 +2559,12 @@ impl CudaInteractiveFdmPreviewRuntime {
         artifact_writer: Option<ArtifactPipelineSender>,
         on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
     ) -> Result<ExecutedRun, RunError> {
-        if !self.plan_signature.eq(&normalize_plan_signature(plan)) {
+        if !normalize_runtime_context_signature(&self.plan_signature)
+            .eq(&normalize_runtime_context_signature(plan))
+        {
             return Err(RunError {
                 message:
-                    "interactive CUDA runtime plan mismatch; caller must rebuild runtime before executing"
+                    "interactive CUDA runtime context mismatch; caller must rebuild runtime before executing"
                         .to_string(),
             });
         }
@@ -2902,15 +2968,12 @@ impl CpuInteractiveFemPreviewRuntime {
         interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
         on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
     ) -> Result<RunResult, RunError> {
-        if !self
-            .plan_signature
-            .eq(&normalize_fem_plan_signature(&fem_plan_for_cpu_native(
-                plan,
-            )))
-        {
+        if !normalize_fem_runtime_context_signature(&self.plan_signature).eq(
+            &normalize_fem_runtime_context_signature(&fem_plan_for_cpu_native(plan)),
+        ) {
             return Err(RunError {
                 message:
-                    "interactive FEM CPU runtime plan mismatch; caller must rebuild runtime before executing"
+                    "interactive FEM CPU runtime context mismatch; caller must rebuild runtime before executing"
                         .to_string(),
             });
         }
@@ -3211,15 +3274,12 @@ impl CpuInteractiveFemPreviewRuntime {
         interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
         on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
     ) -> Result<ExecutedRun, RunError> {
-        if !self
-            .plan_signature
-            .eq(&normalize_fem_plan_signature(&fem_plan_for_cpu_native(
-                plan,
-            )))
-        {
+        if !normalize_fem_runtime_context_signature(&self.plan_signature).eq(
+            &normalize_fem_runtime_context_signature(&fem_plan_for_cpu_native(plan)),
+        ) {
             return Err(RunError {
                 message:
-                    "interactive FEM CPU runtime plan mismatch; caller must rebuild runtime before executing"
+                    "interactive FEM CPU runtime context mismatch; caller must rebuild runtime before executing"
                         .to_string(),
             });
         }
@@ -3646,15 +3706,12 @@ impl GpuInteractiveFemPreviewRuntime {
         interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
         on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
     ) -> Result<RunResult, RunError> {
-        if !self
-            .plan_signature
-            .eq(&normalize_fem_plan_signature(&fem_plan_for_native_gpu(
-                plan,
-            )))
-        {
+        if !normalize_fem_runtime_context_signature(&self.plan_signature).eq(
+            &normalize_fem_runtime_context_signature(&fem_plan_for_native_gpu(plan)),
+        ) {
             return Err(RunError {
                 message:
-                    "interactive FEM GPU runtime plan mismatch; caller must rebuild runtime before executing"
+                    "interactive FEM GPU runtime context mismatch; caller must rebuild runtime before executing"
                         .to_string(),
             });
         }
@@ -3908,15 +3965,12 @@ impl GpuInteractiveFemPreviewRuntime {
         interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
         on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
     ) -> Result<ExecutedRun, RunError> {
-        if !self
-            .plan_signature
-            .eq(&normalize_fem_plan_signature(&fem_plan_for_native_gpu(
-                plan,
-            )))
-        {
+        if !normalize_fem_runtime_context_signature(&self.plan_signature).eq(
+            &normalize_fem_runtime_context_signature(&fem_plan_for_native_gpu(plan)),
+        ) {
             return Err(RunError {
                 message:
-                    "interactive FEM GPU runtime plan mismatch; caller must rebuild runtime before executing"
+                    "interactive FEM GPU runtime context mismatch; caller must rebuild runtime before executing"
                         .to_string(),
             });
         }
@@ -4175,9 +4229,31 @@ fn normalize_plan_signature(plan: &FdmPlanIR) -> FdmPlanIR {
     normalized
 }
 
+fn normalize_runtime_context_signature(plan: &FdmPlanIR) -> FdmPlanIR {
+    let mut normalized = normalize_plan_signature(plan);
+    normalized.integrator = None;
+    normalized.fixed_timestep = None;
+    normalized.adaptive_timestep = None;
+    normalized.field_refresh = None;
+    normalized.relaxation = None;
+    normalized.time_stage = Default::default();
+    normalized
+}
+
 fn normalize_fem_plan_signature(plan: &FemPlanIR) -> FemPlanIR {
     let mut normalized = plan.clone();
     normalized.initial_magnetization.clear();
+    normalized
+}
+
+fn normalize_fem_runtime_context_signature(plan: &FemPlanIR) -> FemPlanIR {
+    let mut normalized = normalize_fem_plan_signature(plan);
+    normalized.integrator = None;
+    normalized.fixed_timestep = None;
+    normalized.adaptive_timestep = None;
+    normalized.field_refresh = None;
+    normalized.relaxation = None;
+    normalized.time_stage = Default::default();
     normalized
 }
 
@@ -5149,6 +5225,13 @@ impl InteractiveBackend for InteractiveFdmPreviewRuntime {
         Ok(self.matches_plan(fdm))
     }
 
+    fn can_continue_with_plan(&self, plan: &fullmag_ir::ExecutionPlanIR) -> Result<bool, RunError> {
+        let BackendPlanIR::Fdm(fdm) = &plan.backend_plan else {
+            return Ok(false);
+        };
+        Ok(self.can_continue_with_plan(fdm))
+    }
+
     fn geometry(&self) -> BackendGeometry {
         let grid = match &self.inner {
             InteractiveFdmPreviewRuntimeInner::Cpu(r) => r.original_grid,
@@ -5236,6 +5319,13 @@ impl InteractiveBackend for InteractiveFemPreviewRuntime {
             return Ok(false);
         };
         Ok(self.matches_plan(fem))
+    }
+
+    fn can_continue_with_plan(&self, plan: &fullmag_ir::ExecutionPlanIR) -> Result<bool, RunError> {
+        let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+            return Ok(false);
+        };
+        Ok(self.can_continue_with_plan(fem))
     }
 
     fn geometry(&self) -> BackendGeometry {

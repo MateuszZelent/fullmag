@@ -884,9 +884,9 @@ fn ensure_interactive_preview_runtime(
     field_every_n: u64,
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> Result<()> {
-    let needs_rebuild = runtime
-        .as_ref()
-        .map_or(true, |current| !current.matches_plan(plan).unwrap_or(true));
+    let needs_rebuild = runtime.as_ref().map_or(true, |current| {
+        !current.can_continue_with_plan(plan).unwrap_or(true)
+    });
     if needs_rebuild {
         *runtime = Some(create_interactive_preview_runtime(
             problem,
@@ -1172,6 +1172,18 @@ mod tests {
             !function_body.contains("cached_preview_quantity_ids()"),
             "idle preview refresh must not rebuild the cache from the vector-only preview list"
         );
+    }
+
+    #[test]
+    fn stage_runtime_reuse_uses_continuation_compatibility() {
+        let source = include_str!("interactive_runtime_host.rs");
+        let ensure = source
+            .split("fn ensure_interactive_preview_runtime(")
+            .nth(1)
+            .expect("interactive runtime ensure function");
+
+        assert!(ensure.contains("can_continue_with_plan(plan)"));
+        assert!(!ensure.contains("current.matches_plan(plan)"));
     }
 }
 

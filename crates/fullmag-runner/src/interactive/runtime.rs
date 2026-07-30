@@ -56,6 +56,12 @@ impl InteractiveRuntime {
         self.backend.matches_plan(plan)
     }
 
+    /// Check whether an execution stage can continue on the existing backend
+    /// context without rebuilding solver-owned state.
+    pub fn can_continue_with_plan(&self, plan: &ExecutionPlanIR) -> Result<bool, RunError> {
+        self.backend.can_continue_with_plan(plan)
+    }
+
     /// Get the current display selection.
     pub fn selected_display(&self) -> &DisplaySelection {
         &self.selected_display
