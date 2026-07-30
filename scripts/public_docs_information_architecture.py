@@ -64,6 +64,17 @@ DEMAGNETIZATION_REFERENCE_PAGES = frozenset(
         *(f"physics/interactions/demagnetization/{page}.md" for page in DEMAGNETIZATION_SUBPAGES),
     }
 )
+PHYSICS_REFERENCE_PAGES = frozenset(
+    {
+        *DEMAGNETIZATION_REFERENCE_PAGES,
+        "physics/interactions/anisotropy/uniaxial.md",
+        "physics/interactions/anisotropy/cubic.md",
+        "physics/interactions/dmi/bulk.md",
+        "physics/interactions/dmi/interfacial.md",
+        "physics/interactions/thermal-noise/index.md",
+        "physics/interactions/zeeman/index.md",
+    }
+)
 DMI_SUBPAGES = (
     "interfacial",
     "bulk",
@@ -150,6 +161,24 @@ _INTERACTION_TITLES = {
     "drift-diffusion-spin-torque": "Drift-Diffusion Spin Torque",
     "inter-region-couplings": "Inter-Region Couplings",
 }
+REFERENCE_PAGE_TITLES = {
+    "physics/interactions/anisotropy/uniaxial.md": "Uniaxial anisotropy",
+    "physics/interactions/anisotropy/cubic.md": "Cubic anisotropy",
+    "physics/interactions/dmi/bulk.md": "Bulk Dzyaloshinskii–Moriya interaction",
+    "physics/interactions/dmi/interfacial.md": "Interfacial Dzyaloshinskii–Moriya interaction",
+    "physics/interactions/thermal-noise/index.md": "Thermal Brown noise",
+    "python-api/interactions/exchange.md": "Exchange Python API",
+    "physics/interactions/zeeman/index.md": "Zeeman interaction",
+    "python-api/interactions/bulk-dmi.md": "Bulk DMI Python API",
+    "python-api/interactions/zeeman.md": "Zeeman Python API",
+    "python-api/interactions/uniaxial-anisotropy.md": "Uniaxial anisotropy Python API",
+    "python-api/interactions/cubic-anisotropy.md": "Cubic anisotropy Python API",
+    "python-api/interactions/interfacial-dmi.md": "Interfacial DMI Python API",
+    "python-api/interactions/thermal-noise.md": "Thermal Noise Python API",
+}
+REFERENCE_PAGE_LABELS = {
+    "physics/interactions/zeeman/index.md": "public-docs-physics-interactions-zeeman",
+}
 
 
 @dataclass(frozen=True)
@@ -168,8 +197,15 @@ def _title(slug: str) -> str:
     return " ".join(_TITLES.get(part, part.capitalize()) for part in slug.split("-"))
 
 
+def _page_title(path: str, fallback: str) -> str:
+    return REFERENCE_PAGE_TITLES.get(path, fallback)
+
+
 def _label(path: str) -> str:
-    return "public-docs-" + path.removesuffix(".md").replace("/", "-").replace("index", "root")
+    return REFERENCE_PAGE_LABELS.get(
+        path,
+        "public-docs-" + path.removesuffix(".md").replace("/", "-").replace("index", "root"),
+    )
 
 
 def _scaffold(
@@ -225,6 +261,13 @@ PYTHON_API_REFERENCE_PAGES = {
     "python-api/studies/time-evolution.md",
     "python-api/outputs/fields-and-scalars.md",
     "python-api/interactions/demagnetization.md",
+    "python-api/interactions/bulk-dmi.md",
+    "python-api/interactions/zeeman.md",
+    "python-api/interactions/uniaxial-anisotropy.md",
+    "python-api/interactions/cubic-anisotropy.md",
+    "python-api/interactions/interfacial-dmi.md",
+    "python-api/interactions/thermal-noise.md",
+    "python-api/interactions/exchange.md",
 }
 
 
@@ -256,16 +299,16 @@ def _interaction_subtree(
     directory = f"physics/interactions/{slug}"
     children = tuple(f"{directory}/{subpage}.md" for subpage in subpages)
     return (
-        (_reference if f"{directory}/index.md" in DEMAGNETIZATION_REFERENCE_PAGES else _scaffold)(
+        (_reference if f"{directory}/index.md" in PHYSICS_REFERENCE_PAGES else _scaffold)(
             f"{directory}/index.md",
             title,
             f"the canonical {title} interaction reference",
             children,
         ),
         *(
-            (_reference if f"{directory}/{subpage}.md" in DEMAGNETIZATION_REFERENCE_PAGES else _scaffold)(
+            (_reference if f"{directory}/{subpage}.md" in PHYSICS_REFERENCE_PAGES else _scaffold)(
                 f"{directory}/{subpage}.md",
-                _title(subpage),
+                _page_title(f"{directory}/{subpage}.md", _title(subpage)),
                 f"the {title} reference for {_title(subpage)}",
             )
             for subpage in subpages
@@ -338,7 +381,7 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     *(
         (_reference if f"python-api/interactions/{slug}.md" in PYTHON_API_REFERENCE_PAGES else _scaffold)(
             f"python-api/interactions/{slug}.md",
-            _INTERACTION_TITLES[slug],
+            _page_title(f"python-api/interactions/{slug}.md", _INTERACTION_TITLES[slug]),
             f"the Python API reference for {_INTERACTION_TITLES[slug]}",
         )
         for slug in PYTHON_API_INTERACTION_SLUGS
@@ -382,9 +425,9 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     *_interaction_subtree("anisotropy", "Anisotropy", ANISOTROPY_SUBPAGES),
     *_interaction_subtree("dmi", "DMI", DMI_SUBPAGES),
     *(
-        _scaffold(
+        (_reference if f"physics/interactions/{slug}/index.md" in PHYSICS_REFERENCE_PAGES else _scaffold)(
             f"physics/interactions/{slug}/index.md",
-            _INTERACTION_TITLES[slug],
+            _page_title(f"physics/interactions/{slug}/index.md", _INTERACTION_TITLES[slug]),
             f"the canonical {_INTERACTION_TITLES[slug]} interaction reference",
         )
         for slug in INTERACTION_SLUGS

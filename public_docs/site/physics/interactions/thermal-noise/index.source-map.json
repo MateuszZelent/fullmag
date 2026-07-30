@@ -1,0 +1,66 @@
+{
+  "document": {
+    "path": "public_docs/site/physics/interactions/thermal-noise/index.md",
+    "title": "Thermal Brown noise",
+    "interaction": "Brown stochastic thermal effective field"
+  },
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "partial", "reason": "Counter-based CPU Brown field is implemented; statistical qualification remains separate."},
+    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "FP64/FP32 CUDA Brown field kernels are present; executed-device variance and parity evidence remain open."},
+    {"solver": "FEM", "device": "CPU", "status": "partial", "reason": "Native nodal Brown sampler is sampling_correct but not statistically_validated."},
+    {"solver": "FEM", "device": "GPU", "status": "unsupported", "reason": "Strict public planner rejects ThermalNoise pending CAP-THERM-GPU-001; source presence is not public execution."}
+  ],
+  "sources": [
+    {"id": "python-term", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class ThermalNoise", "responsibility": "ThermalNoise validation and thermal_noise IR serialization."},
+    {"id": "python-problem", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "class Problem", "responsibility": "Problem temperature validation, duplicate-term rejection, and conflict checking."},
+    {"id": "python-flat", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class _WorldState", "responsibility": "Flat/study script-local thermal authoring state."},
+    {"id": "python-builder", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyBuilder", "responsibility": "Fluent thermal_noise delegation."},
+    {"id": "ir-plan", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "FDM temperature/seed resolution, output validation, and adaptive/multilayer gates."},
+    {"id": "ir-fem-plan", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem", "responsibility": "FEM temperature/seed resolution and strict GPU rejection."},
+    {"id": "fdm-cpu", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "thermal_field_add_into_step", "responsibility": "FDM CPU cell-volume Brown amplitude and counter-based normal field."},
+    {"id": "fdm-gpu-fp64", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "combine_effective_field_fp64_kernel", "responsibility": "FDM CUDA FP64 thermal effective-field composition."},
+    {"id": "fdm-gpu-fp32", "path": "backends/fdm/gpu/cuda/interactions/demag_fp32.cu", "symbol": "combine_effective_field_fp32_kernel", "responsibility": "FDM CUDA FP32 thermal effective-field composition."},
+    {"id": "fem-sigma", "path": "backends/fem/cpu/mfem/interactions/thermal_brown_sigma.cpp", "symbol": "thermal_brown_sigma", "responsibility": "FEM CPU nodal Brown standard-deviation formula and invalid-input zero policy."},
+    {"id": "fem-sampler", "path": "backends/fem/cpu/mfem/interactions/thermal_brown_sampler.cpp", "symbol": "refresh_thermal_brown_field", "responsibility": "FEM CPU volume resolution, RNG, mask, accepted-interval cache, and retry rescaling."},
+    {"id": "fem-add", "path": "backends/fem/cpu/mfem/interactions/thermal_brown_field.cpp", "symbol": "add_thermal_brown_field", "responsibility": "FEM CPU additive H_eff composition."},
+    {"id": "fem-gpu-kernel", "path": "backends/fem/gpu/cuda/interactions/thermal/thermal_kernels.cu", "symbol": "thermal_field_blocks_kernel", "responsibility": "FEM CUDA node-wise source kernel; not public planner support."},
+    {"id": "fem-gpu-gate", "path": "backends/fem/gpu/cuda/integrators/rk/rk_thermal_field.cu", "symbol": "gpu_rk_compute_thermal_field_contribution", "responsibility": "FEM CUDA dispatch checks and device launch."}
+  ],
+  "symbols": [
+    {"id": "Htherm", "latex": "$\\mathbf H_{\\mathrm{therm},i}^{\\,n}$", "meaning": "sampled thermal effective field at degree of freedom $i$ and accepted interval $n$", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "sigma", "latex": "$\\sigma_i^{\\,n}$", "meaning": "standard deviation of one Cartesian thermal-field component", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "xi", "latex": "$\\boldsymbol\\xi_i^{\\,n}$", "meaning": "three-component standard-normal draw", "si_unit": "$1$"},
+    {"id": "Heff", "latex": "$\\mathbf H_{\\mathrm{eff},i}^{\\,n}$", "meaning": "total effective field passed to the LLG RHS", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Hdet", "latex": "$\\mathbf H_{\\mathrm{det},i}^{\\,n}$", "meaning": "deterministic effective-field sum before Brown noise", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "alpha", "latex": "$\\alpha_i$", "meaning": "Gilbert damping", "si_unit": "$1$"},
+    {"id": "kB", "latex": "$k_{\\mathrm B}$", "meaning": "Boltzmann constant", "si_unit": "$\\mathrm{J\\,K^{-1}}$"},
+    {"id": "T", "latex": "$T$", "meaning": "absolute temperature", "si_unit": "$\\mathrm{K}$"},
+    {"id": "gamma0", "latex": "$\\gamma_{\\mu0}$", "meaning": "bare gyromagnetic input", "si_unit": "$\\mathrm{m\\,A^{-1}\\,s^{-1}}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "Ms", "latex": "$M_{s,i}$", "meaning": "saturation magnetization at degree of freedom $i$", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Vi", "latex": "$V_i$", "meaning": "FDM cell volume or FEM nodal volume", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "dt", "latex": "$\\Delta t_n$", "meaning": "timestep used for the sampled accepted interval", "si_unit": "$\\mathrm{s}$"},
+    {"id": "gamma-bar", "latex": "$\\bar\\gamma$", "meaning": "Gilbert-reduced ratio used only where the LLG RHS requires it", "si_unit": "$\\mathrm{m\\,A^{-1}\\,s^{-1}}$"},
+    {"id": "dx", "latex": "$\\Delta x$", "meaning": "FDM cell dimensions", "si_unit": "$\\mathrm{m}$"},
+    {"id": "dy", "latex": "$\\Delta y$", "meaning": "FDM cell dimensions", "si_unit": "$\\mathrm{m}$"},
+    {"id": "dz", "latex": "$\\Delta z$", "meaning": "FDM cell dimensions", "si_unit": "$\\mathrm{m}$"}
+  ],
+  "equations": [
+    {"id": "eq-thermal-field", "symbols": ["Htherm", "sigma", "xi"], "sources": ["fdm-cpu", "fdm-gpu-fp64", "fem-sigma", "fem-sampler"]},
+    {"id": "eq-thermal-sigma", "symbols": ["sigma", "alpha", "kB", "T", "gamma0", "mu0", "Ms", "Vi", "dt"], "sources": ["fdm-cpu", "fdm-gpu-fp64", "fem-sigma"]},
+    {"id": "eq-thermal-effective-field", "symbols": ["Heff", "Hdet", "Htherm"], "sources": ["fdm-gpu-fp64", "fem-add"]},
+    {"id": "eq-thermal-gamma-bar", "symbols": ["gamma-bar", "gamma0", "alpha"], "sources": ["fdm-cpu"]},
+    {"id": "eq-thermal-fdm-volume", "symbols": ["Vi", "dx", "dy", "dz"], "sources": ["fdm-cpu", "fdm-gpu-fp64"]},
+    {"id": "eq-thermal-variance", "symbols": ["sigma", "alpha", "kB", "T", "gamma0", "mu0", "Ms", "Vi", "dt"], "sources": ["fdm-cpu", "fem-sigma"]},
+    {"id": "eq-thermal-no-energy", "symbols": [], "sources": ["fem-add"]}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "ThermalNoise.temperature", "type": "float", "default": "required", "si_unit": "$\\mathrm{K}$", "validation": "strictly $T>0$; non-positive values raise `ValueError`", "meaning": "temperature used by Brown law", "backend_support": "FDM/FEM subject to planner lane", "problem_ir": "energy_terms[].temperature"},
+      {"python": "ThermalNoise.seed", "type": "int\\mid None", "default": "None", "si_unit": "$1$", "validation": "`None` = system entropy; supplied value positive; zero/negative raises `ValueError`", "meaning": "requested stochastic replay policy", "backend_support": "FDM CPU/GPU; FEM CPU; FEM GPU rejected", "problem_ir": "energy_terms[].seed"},
+      {"python": "Problem.temperature", "type": "float\\mid None", "default": "None", "si_unit": "$\\mathrm{K}$", "validation": "`None` disables; zero allowed; negative raises `ValueError`", "meaning": "top-level Brown temperature compatibility field", "backend_support": "planner-dependent", "problem_ir": "temperature"},
+      {"python": "fullmag.thermal_noise(temperature, seed=...)", "type": "function", "default": "—", "si_unit": "$\\mathrm{K}$ / $1$", "validation": "delegates to `ThermalNoise`; stores one script-local term", "meaning": "flat authoring convenience", "backend_support": "same as `ThermalNoise`", "problem_ir": "`energy_terms[]` and script-local top-level temperature"},
+      {"python": "StudyBuilder.thermal_noise(temperature, seed=...)", "type": "method", "default": "—", "si_unit": "$\\mathrm{K}$ / $1$", "validation": "delegates to flat function and returns builder", "meaning": "fluent authoring convenience", "backend_support": "same as `ThermalNoise`", "problem_ir": "same canonical lowering"}
+    ]
+  }
+}

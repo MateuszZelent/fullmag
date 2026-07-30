@@ -1,0 +1,63 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/interactions/exchange.md",
+    "title": "Exchange Python API",
+    "interaction": "bulk exchange authoring contract"
+  },
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "The Python lowering is backend neutral; FDM CPU is the double-precision reference realization."},
+    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "The planner consumes the same Exchange IR and resolves native FP64/FP32 CUDA realizations; qualification remains a runtime gate."},
+    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "The planner consumes the same Exchange IR and resolves native MFEM assembly and projection."},
+    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "The planner consumes the same Exchange IR and resolves the FP64 CUDA CSR lane; executed-device qualification remains separate."}
+  ],
+  "sources": [
+    {"id": "python-exchange", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class Exchange", "responsibility": "Public Exchange constructor and exact canonical lowering."},
+    {"id": "python-material", "path": "packages/fullmag-py/src/fullmag/model/structure.py", "symbol": "class Material", "responsibility": "Material A/Ms validation and exchange-related IR fields."},
+    {"id": "python-fdm", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDM", "responsibility": "FDM cell and exchange boundary-policy validation and lowering."},
+    {"id": "python-save-field", "path": "packages/fullmag-py/src/fullmag/model/outputs.py", "symbol": "class SaveField", "responsibility": "Exchange-field output request validation and lowering."},
+    {"id": "python-save-scalar", "path": "packages/fullmag-py/src/fullmag/model/outputs.py", "symbol": "class SaveScalar", "responsibility": "Exchange-energy output request validation and lowering."},
+    {"id": "python-flat-state", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class _WorldState", "responsibility": "Script-local exchange-enabled state used by the flat facade."},
+    {"id": "python-study-builder", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyBuilder", "responsibility": "Fluent study facade exposing exchange(enabled=...)."},
+    {"id": "planner-fdm", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "FDM exchange capability and output resolution."},
+    {"id": "planner-fem", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem", "responsibility": "FEM exchange capability and output resolution."},
+    {"id": "fdm-cpu-field", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "exchange_field_add_into_soa", "responsibility": "Persistent FDM CPU exchange field realization."},
+    {"id": "fem-cpu-operator", "path": "backends/fem/cpu/mfem/interactions/exchange_operator.cpp", "symbol": "initialize_exchange_operator_mfem", "responsibility": "FEM CPU exchange stiffness operator assembly."},
+    {"id": "fem-cpu-field", "path": "backends/fem/cpu/mfem/interactions/exchange_field.cpp", "symbol": "compute_exchange_for_magnetization", "responsibility": "FEM CPU exchange field and energy evaluation."}
+  ],
+  "symbols": [
+    {"id": "Eex", "latex": "$E_{\\mathrm{ex}}$", "meaning": "bulk exchange energy", "si_unit": "$\\mathrm{J}$"},
+    {"id": "Hex", "latex": "$\\mathbf H_{\\mathrm{ex}}$", "meaning": "exchange effective field passed to LLG", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
+    {"id": "A", "latex": "$A(\\mathbf x)$", "meaning": "local bulk exchange stiffness", "si_unit": "$\\mathrm{J\\,m^{-1}}$"},
+    {"id": "Ms", "latex": "$M_s$", "meaning": "local saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "Omega", "latex": "$\\Omega_m$", "meaning": "magnetic integration domain", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization, with $\\mathbf m=\\mathbf M/M_s$", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "IRex", "latex": "$\\mathrm{IR}_{\\mathrm{ex}}$", "meaning": "canonical exchange ProblemIR fragment", "si_unit": "$1$"},
+    {"id": "x", "latex": "$\\mathbf x$", "meaning": "spatial coordinate", "si_unit": "$\\mathrm{m}$"},
+    {"id": "grad", "latex": "$\\nabla$", "meaning": "spatial gradient operator", "si_unit": "$\\mathrm{m^{-1}}$"},
+    {"id": "variation", "latex": "$\\delta E/\\delta\\mathbf m$", "meaning": "variational derivative with respect to reduced magnetization", "si_unit": "$\\mathrm{J}$"}
+  ],
+  "equations": [
+    {"id": "eq-python-exchange-energy", "symbols": ["Eex", "m", "A", "Omega"], "sources": ["fem-cpu-operator", "fem-cpu-field"]},
+    {"id": "eq-python-exchange-effective-field", "symbols": ["Hex", "mu0", "variation", "Eex", "m", "Ms", "A"], "sources": ["fdm-cpu-field", "fem-cpu-field"]},
+    {"id": "eq-python-exchange-ir-term", "symbols": ["IRex"], "sources": ["python-exchange"]}
+  ],
+  "public_api": {
+    "constructors": ["fullmag.Exchange", "fullmag.Material", "fullmag.FDM", "fullmag.SaveField", "fullmag.SaveScalar"],
+    "parameters": [
+      {"python": "Exchange()", "type": "constructor", "default": "—", "si_unit": "$1$", "validation": "accepts no parameters; `to_ir()` is exact", "meaning": "enables one bulk exchange term", "backend_support": "FDM CPU/GPU and FEM CPU/GPU, subject to qualification", "problem_ir": "`energy_terms[] = {\"kind\": \"exchange\"}`"},
+      {"python": "Material.Ms", "type": "float", "default": "required", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "finite and $>0$; unusual-SI warning outside configured range", "meaning": "saturation magnetization in the exchange denominator", "backend_support": "all lanes; spatial realization differs", "problem_ir": "`materials[].saturation_magnetisation`"},
+      {"python": "Material.A", "type": "float", "default": "required", "si_unit": "$\\mathrm{J\\,m^{-1}}$", "validation": "finite and $>0$; unusual-SI warning outside $[10^{-14},10^{-8}]$", "meaning": "bulk exchange stiffness", "backend_support": "all lanes; heterogeneous realization differs", "problem_ir": "`materials[].exchange_stiffness`"},
+      {"python": "Material.Ms_field", "type": "list[float] \\mid None", "default": "`None`", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "mesh cardinality and lane legality validated downstream", "meaning": "spatial override for scalar $M_s$", "backend_support": "FEM lanes and allocating FDM CPU reference; not persistent FDM SoA/native CUDA", "problem_ir": "`materials[].ms_field`"},
+      {"python": "Material.A_field", "type": "list[float] \\mid None", "default": "`None`", "si_unit": "$\\mathrm{J\\,m^{-1}}$", "validation": "mesh cardinality and lane legality validated downstream", "meaning": "spatial override for scalar $A$; not a CUDA pair-coefficient table", "backend_support": "FEM lanes and allocating FDM CPU reference; not persistent FDM SoA/native CUDA", "problem_ir": "`materials[].a_field`"},
+      {"python": "FDM.cell", "type": "Sequence[float]", "default": "alias of `default_cell`", "si_unit": "$\\mathrm{m}$ per component", "validation": "exactly three finite, strictly positive components", "meaning": "backward-compatible uniform FDM cell size", "backend_support": "FDM CPU/GPU; FDM lane only", "problem_ir": "`backend_policy.discretization_hints.fdm.cell`"},
+      {"python": "FDM.default_cell", "type": "Sequence[float]", "default": "required unless `per_magnet` is supplied", "si_unit": "$\\mathrm{m}$ per component", "validation": "exactly three finite, strictly positive components", "meaning": "canonical default FDM cell size", "backend_support": "FDM CPU/GPU; FDM lane only", "problem_ir": "`backend_policy.discretization_hints.fdm.default_cell`"},
+      {"python": "FDM.boundary_correction", "type": "str \\mid None", "default": "`None`", "si_unit": "$1$", "validation": "one of `\"none\"`, `\"volume\"`, `\"full\"`", "meaning": "exchange sub-cell policy: binary, T0 volume, or T1 full correction", "backend_support": "FP64 FDM GPU has `volume`/`full`; other lanes are policy-dependent", "problem_ir": "`backend_policy.discretization_hints.fdm.boundary_correction`"},
+      {"python": "FDM.boundary_phi_floor", "type": "float \\mid None", "default": "`None`", "si_unit": "$1$", "validation": "strictly $0<\\varphi_{\\mathrm{floor}}<1$", "meaning": "lower bound for a magnetic volume fraction in T0/T1", "backend_support": "relevant to supported FP64 FDM GPU corrections", "problem_ir": "`...fdm.boundary_phi_floor`"},
+      {"python": "FDM.boundary_delta_min", "type": "float \\mid None", "default": "`None`", "si_unit": "$\\mathrm{m}$", "validation": "$\\delta_{\\min}\\geq0$", "meaning": "lower bound for T1 boundary distance", "backend_support": "relevant to supported FP64 FDM GPU T1", "problem_ir": "`...fdm.boundary_delta_min`"},
+      {"python": "fullmag.exchange(enabled=...)", "type": "`bool` keyword", "default": "`True`", "si_unit": "$1$", "validation": "coerced to `bool`; updates script-local intent", "meaning": "enables or disables exchange in the flat script surface", "backend_support": "flat authoring facade; resolved lane remains planner-dependent", "problem_ir": "script builder `exchange_enabled` and canonical energy selection"},
+      {"python": "StudyBuilder.exchange(enabled=...)", "type": "`bool` keyword", "default": "`True`", "si_unit": "$1$", "validation": "delegates to flat API and returns the builder", "meaning": "fluent form of the same script-local toggle", "backend_support": "same as `fullmag.exchange`", "problem_ir": "same canonical lowering"}
+    ]
+  }
+}

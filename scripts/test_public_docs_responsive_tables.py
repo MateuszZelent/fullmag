@@ -24,19 +24,24 @@ class ResponsivePublicDocumentationTableTests(unittest.TestCase):
 
     def test_tables_own_horizontal_overflow_without_hiding_the_page(self) -> None:
         css = CSS.read_text(encoding="utf-8")
-        self.assertRegex(css, r"\.table-wrapper[^\{]*\{[^}]*overflow-x:\s*auto")
+        self.assertRegex(css, r"main article \.table-wrapper[^\{]*\{[^}]*overflow-x:\s*auto")
         self.assertRegex(css, r"th\s*,\s*[^\{]*td[^\{]*\{[^}]*white-space:\s*normal")
         self.assertIn("overflow-wrap: anywhere", css)
         self.assertNotRegex(css, r"(?:html|body)[^\{]*\{[^}]*overflow-x:\s*hidden")
+
+    def test_table_rules_match_the_clarity_theme_dom(self) -> None:
+        css = CSS.read_text(encoding="utf-8")
+        self.assertIn("main article .table-wrapper", css)
+        self.assertNotIn("article main", css)
 
     def test_cells_do_not_force_intrinsic_table_width(self) -> None:
         css = CSS.read_text(encoding="utf-8")
         cell_rules = []
         for selector in (
-            "article main .table-wrapper th",
-            "article main .table-wrapper td",
-            "article main table th",
-            "article main table td",
+            "main article .table-wrapper th",
+            "main article .table-wrapper td",
+            "main article table th",
+            "main article table td",
         ):
             cell_rules.extend(self._rules_for_selector(css, selector))
 
@@ -47,7 +52,7 @@ class ResponsivePublicDocumentationTableTests(unittest.TestCase):
 
     def test_clarity_nested_main_content_is_constrained(self) -> None:
         css = CSS.read_text(encoding="utf-8")
-        rules = self._rules_for_selector(css, "article main")
+        rules = self._rules_for_selector(css, "main article")
 
         self.assertTrue(
             any(
@@ -59,8 +64,8 @@ class ResponsivePublicDocumentationTableTests(unittest.TestCase):
 
     def test_wrapped_table_keeps_a_constrained_scrollport(self) -> None:
         css = CSS.read_text(encoding="utf-8")
-        wrapper_rules = self._rules_for_selector(css, "article main .table-wrapper")
-        table_rules = self._rules_for_selector(css, "article main .table-wrapper table")
+        wrapper_rules = self._rules_for_selector(css, "main article .table-wrapper")
+        table_rules = self._rules_for_selector(css, "main article .table-wrapper table")
 
         self.assertTrue(
             any(
@@ -86,7 +91,7 @@ class ResponsivePublicDocumentationTableTests(unittest.TestCase):
         css = CSS.read_text(encoding="utf-8")
         content_rules = self._rules_for_selector(css, ".drawer-content")
         descendant_rules = self._rules_for_selector(css, ".drawer-content > *")
-        wrapper_rules = self._rules_for_selector(css, "article main .table-wrapper")
+        wrapper_rules = self._rules_for_selector(css, "main article .table-wrapper")
 
         for rules in (content_rules, descendant_rules):
             self.assertTrue(
@@ -106,10 +111,34 @@ class ResponsivePublicDocumentationTableTests(unittest.TestCase):
             )
         )
 
+    def test_clarity_article_main_has_a_constrained_fallback_scrollport(self) -> None:
+        css = CSS.read_text(encoding="utf-8")
+        main_rules = self._rules_for_selector(css, "article > main")
+        section_rules = self._rules_for_selector(css, "article > main > section")
+
+        self.assertTrue(
+            any(
+                re.search(r"box-sizing:\s*border-box", declarations)
+                and re.search(r"width:\s*100%", declarations)
+                and re.search(r"min-width:\s*0", declarations)
+                and re.search(r"max-width:\s*100%", declarations)
+                and re.search(r"overflow-x:\s*auto", declarations)
+                for declarations in main_rules
+            )
+        )
+        self.assertTrue(
+            any(
+                re.search(r"box-sizing:\s*border-box", declarations)
+                and re.search(r"min-width:\s*0", declarations)
+                and re.search(r"max-width:\s*100%", declarations)
+                for declarations in section_rules
+            )
+        )
+
     def test_long_content_uses_local_horizontal_scrollports(self) -> None:
         css = CSS.read_text(encoding="utf-8")
 
-        for selector in ("article > main div.math", "article > main pre"):
+        for selector in ("main article div.math", "main article pre"):
             rules = self._rules_for_selector(css, selector)
             self.assertTrue(
                 any(
