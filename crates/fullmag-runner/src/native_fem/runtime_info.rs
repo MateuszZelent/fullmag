@@ -35,6 +35,10 @@ pub(crate) fn runtime_build_info() -> Result<RuntimeBuildInfo, RunError> {
     RuntimeBuildInfo::from_ffi(info)
 }
 
+pub(crate) fn strict_gpu_mfem_version() -> Result<String, RunError> {
+    runtime_build_info().map(|info| info.mfem_version)
+}
+
 impl RuntimeBuildInfo {
     fn from_ffi(info: ffi::fullmag_fem_runtime_build_info) -> Result<Self, RunError> {
         if info.abi_version != ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_V1_ABI_VERSION
@@ -44,9 +48,19 @@ impl RuntimeBuildInfo {
                 message: "native FEM runtime build identity ABI is incompatible".to_string(),
             });
         }
-        let mfem_version = unsafe { CStr::from_ptr(info.mfem_version.as_ptr()) }
-            .to_string_lossy()
-            .to_string();
+        let Some(nul_index) = info.mfem_version.iter().position(|byte| *byte == 0) else {
+            return Err(RunError {
+                message: "native FEM runtime build identity MFEM version is not NUL terminated"
+                    .to_string(),
+            });
+        };
+        let mfem_version = std::str::from_utf8(unsafe {
+            std::slice::from_raw_parts(info.mfem_version.as_ptr().cast::<u8>(), nul_index)
+        })
+        .map_err(|_| RunError {
+            message: "native FEM runtime build identity MFEM version is not UTF-8".to_string(),
+        })?
+        .to_string();
         if mfem_version.is_empty() {
             return Err(RunError {
                 message: "native FEM runtime build identity did not publish MFEM version"
@@ -92,6 +106,29 @@ mod runtime_build_info_tests {
         let mut info = ffi::fullmag_fem_runtime_build_info {
             abi_version: 0,
             struct_size: std::mem::size_of::<ffi::fullmag_fem_runtime_build_info>() as u32,
+            mfem_version: [0; ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_MFEM_VERSION_CAPACITY],
+        };
+        info.mfem_version[..4].copy_from_slice(&[b'4' as _, b'.' as _, b'9' as _, 0]);
+
+        assert!(RuntimeBuildInfo::from_ffi(info).is_err());
+    }
+
+    #[test]
+    fn rejects_runtime_build_identity_without_bounded_nul_terminator() {
+        let info = ffi::fullmag_fem_runtime_build_info {
+            abi_version: ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_V1_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_runtime_build_info>() as u32,
+            mfem_version: [b'4' as _; ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_MFEM_VERSION_CAPACITY],
+        };
+
+        assert!(RuntimeBuildInfo::from_ffi(info).is_err());
+    }
+
+    #[test]
+    fn rejects_runtime_build_identity_with_struct_size_mismatch() {
+        let mut info = ffi::fullmag_fem_runtime_build_info {
+            abi_version: ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_V1_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_runtime_build_info>() as u32 - 1,
             mfem_version: [0; ffi::FULLMAG_FEM_RUNTIME_BUILD_INFO_MFEM_VERSION_CAPACITY],
         };
         info.mfem_version[..4].copy_from_slice(&[b'4' as _, b'.' as _, b'9' as _, 0]);

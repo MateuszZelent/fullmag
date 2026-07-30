@@ -12,7 +12,7 @@
 
 use fullmag_ir::{
     BackendPlanIR, FdmMultilayerPlanIR, FdmPlanIR, FemEigenPlanIR, FemMeshPartSelector, FemPlanIR,
-    OutputIR, ProblemIR, RelaxationAlgorithmIR,
+    ExecutionMode, OutputIR, ProblemIR, RelaxationAlgorithmIR,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -2021,8 +2021,28 @@ pub(crate) fn execute_fem<'a>(
     live: Option<LiveStepConsumer<'a>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    execute_fem_in_mode(
+        engine,
+        plan,
+        until_seconds,
+        outputs,
+        live,
+        artifact_writer,
+        ExecutionMode::Strict,
+    )
+}
+
+pub(crate) fn execute_fem_in_mode<'a>(
+    engine: FemEngine,
+    plan: &FemPlanIR,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    live: Option<LiveStepConsumer<'a>>,
+    artifact_writer: Option<ArtifactPipelineSender>,
+    execution_mode: ExecutionMode,
+) -> Result<ExecutedRun, RunError> {
     let stage_context = FemStageExecutionContext::from_fem_plan(plan);
-    execute_fem_with_context(
+    execute_fem_with_context_in_mode(
         engine,
         plan,
         &stage_context,
@@ -2030,6 +2050,7 @@ pub(crate) fn execute_fem<'a>(
         outputs,
         live,
         artifact_writer,
+        execution_mode,
     )
 }
 
@@ -2041,6 +2062,28 @@ pub(crate) fn execute_fem_with_context<'a>(
     outputs: &[OutputIR],
     live: Option<LiveStepConsumer<'a>>,
     artifact_writer: Option<ArtifactPipelineSender>,
+) -> Result<ExecutedRun, RunError> {
+    execute_fem_with_context_in_mode(
+        engine,
+        plan,
+        stage_context,
+        until_seconds,
+        outputs,
+        live,
+        artifact_writer,
+        ExecutionMode::Strict,
+    )
+}
+
+pub(crate) fn execute_fem_with_context_in_mode<'a>(
+    engine: FemEngine,
+    plan: &FemPlanIR,
+    stage_context: &FemStageExecutionContext,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    live: Option<LiveStepConsumer<'a>>,
+    artifact_writer: Option<ArtifactPipelineSender>,
+    execution_mode: ExecutionMode,
 ) -> Result<ExecutedRun, RunError> {
     let normalized_plan = normalized_fem_plan_for_runtime(plan)?;
     let pbc_decision = fem_static_periodic_decision(&normalized_plan);
@@ -2105,6 +2148,7 @@ pub(crate) fn execute_fem_with_context<'a>(
                 outputs,
                 live,
                 artifact_writer,
+                execution_mode,
             )
         }
         FemEngine::NativeGpu => {
@@ -2117,6 +2161,7 @@ pub(crate) fn execute_fem_with_context<'a>(
                 outputs,
                 live,
                 artifact_writer,
+                execution_mode,
             )
         }
     }?;
@@ -5244,6 +5289,7 @@ fn execute_native_fem(
     outputs: &[OutputIR],
     mut live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
+    execution_mode: ExecutionMode,
 ) -> Result<ExecutedRun, RunError> {
     let fem_mesh_generation_id = stage_context.generation_id();
     if until_seconds <= 0.0 {
@@ -5399,6 +5445,9 @@ fn execute_native_fem(
         Some(&gpu_state_info),
         Some(&gpu_rk_plan_info),
     );
+    if execution_mode == ExecutionMode::Strict && execution_engine == "fem_native_gpu" {
+        provenance.mfem_version = Some(native_fem::strict_gpu_mfem_version()?);
+    }
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)
     } else {
@@ -5548,6 +5597,7 @@ fn execute_native_fem(
     _outputs: &[OutputIR],
     _live: Option<LiveStepConsumer<'_>>,
     _artifact_writer: Option<ArtifactPipelineSender>,
+    _execution_mode: ExecutionMode,
 ) -> Result<ExecutedRun, RunError> {
     Err(RunError {
         message:

@@ -2666,6 +2666,9 @@ pub struct ExecutionProvenance {
     /// FEM-030: MFEM device string used for this run.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mfem_device: Option<String>,
+    /// MFEM major.minor version reported by the loaded native FEM runtime.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mfem_version: Option<String>,
     /// Canonical demag refresh cadence in seconds, if explicitly configured.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub demag_refresh_interval_s: Option<f64>,

@@ -54,6 +54,8 @@ void mfem_device_plan_import_is_owned_by_runtime_module() {
         read_text_file(root / "cpu" / "mfem" / "runtime" / "mfem_device.cpp");
     const std::string mfem_device_header =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "mfem_device.hpp");
+    const std::string runtime_build_info =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "runtime_build_info.cpp");
     const std::string fem_header =
         read_text_file(root.parent_path().parent_path() / "native" / "include" / "fullmag_fem.h");
 
@@ -96,6 +98,10 @@ void mfem_device_plan_import_is_owned_by_runtime_module() {
     check(
         api.find("fullmag_fem_get_runtime_build_info") != std::string::npos,
         "C ABI API must serve runtime-build identity from the loaded native library");
+    check(
+        runtime_build_info.find("mfem::GetVersionMajor()") != std::string::npos &&
+            runtime_build_info.find("mfem::GetVersionMinor()") != std::string::npos,
+        "runtime build identity must use the linked MFEM version API");
     check(
         mfem_device_header.find("Initialize native FEM MFEM device plan fields") !=
             std::string::npos,
@@ -222,8 +228,8 @@ void runtime_build_info_is_versioned_and_fails_closed_without_mfem_stack() {
         expected,
         sizeof(expected),
         "%d.%d",
-        MFEM_VERSION / 10000,
-        (MFEM_VERSION / 100) % 100);
+        mfem::GetVersionMajor(),
+        mfem::GetVersionMinor());
     check(rc == FULLMAG_FEM_OK, "MFEM-stack runtime build info must be available");
     check(
         std::strcmp(info.mfem_version, expected) == 0,

@@ -1877,22 +1877,24 @@ pub fn run_planned_problem(
             let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem, false)?;
             let crossover_decision = resolution.fem_crossover_decision.clone();
             let mut executed = if fem.relaxation.is_some() {
-                fem::relax::execute_fem_relax(
+                fem::relax::execute_fem_relax_in_mode(
                     fem_engine_kind(resolution.engine),
                     fem,
                     until_seconds,
                     &plan.output_plan.outputs,
                     None,
                     artifact_writer.clone(),
+                    plan.common.execution_mode,
                 )
             } else {
-                dispatch::execute_fem(
+                dispatch::execute_fem_in_mode(
                     resolution.engine,
                     fem,
                     until_seconds,
                     &plan.output_plan.outputs,
                     None,
                     artifact_writer.clone(),
+                    plan.common.execution_mode,
                 )
             }?;
             attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
@@ -2210,7 +2212,7 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
                 on_step: &mut on_step,
             });
             let mut executed = if fem.relaxation.is_some() {
-                fem::relax::execute_fem_relax_with_context(
+                fem::relax::execute_fem_relax_with_context_in_mode(
                     fem_engine_kind(resolution.engine),
                     fem,
                     fem_stage_context.as_ref().expect("FEM stage context"),
@@ -2218,9 +2220,10 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
                     &plan.output_plan.outputs,
                     live,
                     artifact_writer.clone(),
+                    plan.common.execution_mode,
                 )
             } else {
-                dispatch::execute_fem_with_context(
+                dispatch::execute_fem_with_context_in_mode(
                     resolution.engine,
                     fem,
                     fem_stage_context.as_ref().expect("FEM stage context"),
@@ -2228,6 +2231,7 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
                     &plan.output_plan.outputs,
                     live,
                     artifact_writer.clone(),
+                    plan.common.execution_mode,
                 )
             }?;
             attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
@@ -2615,7 +2619,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                 on_step: &mut on_step,
             });
             let mut executed = if fem.relaxation.is_some() {
-                fem::relax::execute_fem_relax_with_context(
+                fem::relax::execute_fem_relax_with_context_in_mode(
                     fem_engine_kind(resolution.engine),
                     fem,
                     fem_stage_context.as_ref().expect("FEM stage context"),
@@ -2623,9 +2627,10 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                     &plan.output_plan.outputs,
                     live,
                     artifact_writer.clone(),
+                    plan.common.execution_mode,
                 )
             } else {
-                dispatch::execute_fem_with_context(
+                dispatch::execute_fem_with_context_in_mode(
                     resolution.engine,
                     fem,
                     fem_stage_context.as_ref().expect("FEM stage context"),
@@ -2633,6 +2638,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                     &plan.output_plan.outputs,
                     live,
                     artifact_writer.clone(),
+                    plan.common.execution_mode,
                 )
             }?;
             attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
@@ -4939,9 +4945,9 @@ mod tests {
     fn fem_relaxation_entrypoints_route_through_fem_relax_module() {
         let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
             .expect("read lib.rs");
-        let route_count = source.matches("fem::relax::execute_fem_relax(").count()
+        let route_count = source.matches("fem::relax::execute_fem_relax_in_mode(").count()
             + source
-                .matches("fem::relax::execute_fem_relax_with_context(")
+                .matches("fem::relax::execute_fem_relax_with_context_in_mode(")
                 .count();
         assert!(
             route_count >= 3,

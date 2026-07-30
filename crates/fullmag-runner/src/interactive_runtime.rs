@@ -4797,6 +4797,7 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         dt_policy: None,
         llg_mode: None,
         mfem_device: None,
+        mfem_version: None,
         demag_refresh_interval_s: None,
         fem_assembly_mode: None,
         fem_execution_mode: None,
@@ -5002,6 +5003,7 @@ fn fem_gpu_execution_provenance(
             .to_string(),
         ),
         mfem_device: plan.mfem_device_string.clone(),
+        mfem_version: None,
         demag_refresh_interval_s: plan
             .field_refresh
             .as_ref()

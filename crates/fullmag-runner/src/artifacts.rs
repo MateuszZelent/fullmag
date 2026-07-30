@@ -26,39 +26,16 @@ fn execution_provenance_json(
     plan: &fullmag_ir::ExecutionPlanIR,
     execution_provenance: &crate::types::ExecutionProvenance,
 ) -> std::io::Result<serde_json::Value> {
-    let mut value =
-        serde_json::to_value(execution_provenance).expect("ExecutionProvenance must serialize");
     if plan.common.execution_mode == fullmag_ir::ExecutionMode::Strict
         && execution_provenance.execution_engine == "fem_native_gpu"
+        && execution_provenance.mfem_version.is_none()
     {
-        insert_mfem_version(&mut value, strict_gpu_runtime_mfem_version()?);
+        return Err(Error::new(
+            ErrorKind::Other,
+            "strict native FEM GPU artifacts require an MFEM version from the loaded runtime",
+        ));
     }
-    Ok(value)
-}
-
-fn insert_mfem_version(provenance: &mut serde_json::Value, mfem_version: String) {
-    provenance
-        .as_object_mut()
-        .expect("ExecutionProvenance must serialize to an object")
-        .insert(
-            "mfem_version".to_string(),
-            serde_json::Value::String(mfem_version),
-        );
-}
-
-#[cfg(feature = "fem-gpu")]
-fn strict_gpu_runtime_mfem_version() -> std::io::Result<String> {
-    crate::native_fem::runtime_build_info()
-        .map(|info| info.mfem_version)
-        .map_err(|error| Error::new(ErrorKind::Other, error.message))
-}
-
-#[cfg(not(feature = "fem-gpu"))]
-fn strict_gpu_runtime_mfem_version() -> std::io::Result<String> {
-    Err(Error::new(
-        ErrorKind::Other,
-        "strict native FEM GPU artifacts require the loaded native FEM runtime build identity",
-    ))
+    Ok(serde_json::to_value(execution_provenance).expect("ExecutionProvenance must serialize"))
 }
 
 fn runtime_threading_summary(problem: &fullmag_ir::ProblemIR) -> serde_json::Value {
@@ -3251,12 +3228,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn strict_gpu_artifact_provenance_inserts_loaded_mfem_version() {
-        let mut provenance = serde_json::json!({"execution_engine": "fem_native_gpu"});
+    fn strict_gpu_artifact_provenance_requires_loaded_mfem_version() {
+        let plan = test_fem_execution_plan();
+        let provenance = ExecutionProvenance {
+            execution_engine: "fem_native_gpu".to_string(),
+            ..ExecutionProvenance::default()
+        };
 
-        insert_mfem_version(&mut provenance, "4.9".to_string());
-
-        assert_eq!(provenance["mfem_version"], "4.9");
+        assert!(execution_provenance_json(&plan, &provenance).is_err());
     }
 
     #[test]
@@ -5472,6 +5451,7 @@ mod tests {
             dt_policy: None,
             llg_mode: None,
             mfem_device: None,
+            mfem_version: None,
             demag_refresh_interval_s: None,
             fem_assembly_mode: None,
             fem_execution_mode: None,
@@ -6345,6 +6325,7 @@ mod tests {
             dt_policy: None,
             llg_mode: None,
             mfem_device: None,
+            mfem_version: None,
             demag_refresh_interval_s: None,
             fem_assembly_mode: None,
             fem_execution_mode: None,
