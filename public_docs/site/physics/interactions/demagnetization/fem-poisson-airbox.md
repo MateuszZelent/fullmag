@@ -20,7 +20,7 @@ The realization solves for a scalar potential on a conforming mesh containing th
 and an exterior airbox. It currently has two outer closures:
 
 * Dirichlet: $u=0$ on the selected exterior boundary;
-* Robin: $partial_n u+eta u=0$ on the selected exterior boundary.
+* Robin: $\partial_n u+\beta u=0$ on the selected exterior boundary.
 
 The two closures are different discrete problems. They must not be compared as though they were
 two names for the same solver setting.
@@ -28,9 +28,9 @@ two names for the same solver setting.
 (demag-poisson-problem-statement)=
 ## 1. Physical problem and domain decomposition
 
-Let $Omega_m$ denote the magnetic subdomain and $Omega_a$ the complete FEM domain containing
-$Omega_m$ and the surrounding air. The outer boundary of the airbox is
-$Gamma_a=partialOmega_a$. The magnetization is $mathbf M=M_smathbf m$ in $Omega_m$ and is
+Let $\Omega_m$ denote the magnetic subdomain and $\Omega_a$ the complete FEM domain containing
+$\Omega_m$ and the surrounding air. The outer boundary of the airbox is
+$\Gamma_a=\partial\Omega_a$. The magnetization is $\mathbf M=M_s\mathbf m$ in $\Omega_m$ and is
 zero in the air elements. The scalar potential $u$ has units of amperes and produces the
 demagnetizing field
 
@@ -60,7 +60,7 @@ The magnetostatic equations in a source-free, quasistatic region are
 \nabla\cdot\left(\mathbf H_{\mathrm d}+\mathbf M\right)=0.
 ```
 
-With $mathbf H_{\mathrm d}=-\nabla u$, the potential equation used by the FEM right-hand-side
+With $\mathbf H_{\mathrm d}=-\nabla u$, the potential equation used by the FEM right-hand-side
 assembly is
 
 ```{math}
@@ -85,13 +85,13 @@ The Robin condition is
 
 ```{math}
 :label: eq-fem-poisson-robin-boundary
-\partial_nu+\beta u=0\quad\text{on }\Gamma_a,
+\partial_n u+\beta u=0\quad\text{on }\Gamma_a,
 \qquad
-\partial_nu=\mathbf n\cdot\nabla u.
+\partial_n u=\mathbf n\cdot\nabla u.
 ```
 
 For a Dirichlet airbox closure, the trial and test spaces satisfy $u=0$ and $v=0$ on the
-essential boundary $Gamma_a$, and the weak form has no Robin surface term:
+essential boundary $\Gamma_a$, and the weak form has no Robin surface term:
 
 ```{math}
 :label: eq-fem-poisson-dirichlet-weak
@@ -178,7 +178,7 @@ magnetization, and a scalar-potential representation. The following distinctions
 | Choice | Mathematical meaning | What it does not mean |
 |---|---|---|
 | Dirichlet | Prescribes $u=0$ on the selected airbox boundary. | It is not an exact infinite-domain condition; it is a finite-domain truncation. |
-| Robin | Adds $\partial_nu+\beta u=0$ and the surface matrix $\beta B_{\Gamma}$. | It is not a user-independent universal value of $\beta$; $\beta$ is scaled from the mesh. |
+| Robin | Adds $\partial_n u+\beta u=0$ and the surface matrix $\beta B_{\Gamma}$. | It is not a user-independent universal value of $\beta$; $\beta$ is scaled from the mesh. |
 | Airbox size | Controls distance between the magnetic body and $\Gamma_a$. | A larger airbox does not remove discretization error by itself. |
 | Airbox mesh size | Controls resolution in the exterior field. | It is not the same as magnetic-region resolution. |
 | Periodic boundary | Removes an axis from the open-axis reference and uses a separate reduced problem. | It is not equivalent to an open airbox. |
