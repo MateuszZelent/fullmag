@@ -647,6 +647,12 @@ def _optimize_mixed_pyramid_apices(gmsh: Any) -> float:
     return max(selected_factors)
 
 
+def _repair_mixed_tetrahedra(gmsh: Any) -> None:
+    """Repair Delaunay tetrahedra before certifying a mixed prism mesh."""
+    emit_progress("Gmsh: repairing mixed-domain tetrahedra")
+    gmsh.model.mesh.optimize("", niter=1)
+
+
 class SweepabilityResult:
     """Result of checking whether a geometry is sweepable."""
 
@@ -1343,6 +1349,7 @@ def generate_swept_box_mesh(
         with _GmshProgressLogger(gmsh):
             gmsh.model.mesh.generate(3)
         if airbox is not None:
+            _repair_mixed_tetrahedra(gmsh)
             _optimize_mixed_pyramid_apices(gmsh)
 
         # Extract → same pipeline as cylinder

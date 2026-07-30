@@ -33,6 +33,7 @@ from fullmag.meshing._gmsh_swept import (
     _extract_swept_mesh_data,
     _mixed_apex_factor_preserves_face_sides,
     _mixed_apex_candidate_preserves_face_sides,
+    _repair_mixed_tetrahedra,
     _iter_mixed_apex_face_side_constraints,
     _mixed_shared_faces_by_apex,
     _prepare_mixed_apex_face_side_constraints,
@@ -80,6 +81,14 @@ def test_mixed_face_frequency_counting_is_linear_in_face_count() -> None:
 
     assert len(frequencies) == len(faces)
     assert CountingFace.comparisons <= len(faces)
+
+
+def test_mixed_tetra_repair_uses_default_gmsh_optimizer() -> None:
+    gmsh = Mock()
+
+    _repair_mixed_tetrahedra(gmsh)
+
+    gmsh.model.mesh.optimize.assert_called_once_with("", niter=1)
 
 
 def test_gmsh_prism6_node_order_has_an_explicit_canonical_permutation() -> None:
