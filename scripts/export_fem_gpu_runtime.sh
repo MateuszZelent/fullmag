@@ -111,7 +111,7 @@ readonly FULLMAG_WORKTREE_TARGET_DIGEST="$(printf '%s' "${REPO_ROOT}" | sha256su
 readonly FULLMAG_WORKTREE_TARGET_ID="${FULLMAG_WORKTREE_TARGET_SLUG}-${FULLMAG_WORKTREE_TARGET_DIGEST}"
 readonly FULLMAG_CONTAINER_TARGET_DIR="${FULLMAG_CONTAINER_TARGET_ROOT}/${FULLMAG_WORKTREE_TARGET_ID}"
 : "${FULLMAG_LOOP_SYSFS_ROOT:=/sys/class/block}"
-: "${FULLMAG_FEM_RUNTIME_CARGO_JOBS:=1}"
+: "${FULLMAG_FEM_RUNTIME_CARGO_JOBS:=8}"
 : "${FULLMAG_CUDA_ARCHITECTURES:=80-real;89-real;90-real;90-virtual}"
 : "${FULLMAG_HYPRE_GPU_ARCHITECTURES:=60 70 80 89 90}"
 : "${FULLMAG_HYPRE_MEMORY_VARIANT:=baseline}"
@@ -176,13 +176,13 @@ clear_runtime_bundle_contents() {
   mkdir -p "$runtime_root/include"
   mkdir -p "$runtime_root/openmpi/bin"
 }
-echo "[export_fem_gpu_runtime] clearing workspace release artifacts from the task-specific target cache"
+echo "[export_fem_gpu_runtime] refreshing build identity while preserving the task-specific release cache"
 if [ "${FULLMAG_ENABLE_NVTX}" = "0" ] &&
    [[ "${RUSTFLAGS:-}" == *fullmag_enable_nvtx* ]]; then
   echo "[export_fem_gpu_runtime] inherited RUSTFLAGS contains fullmag_enable_nvtx while FULLMAG_ENABLE_NVTX=0" >&2
   exit 2
 fi
-cargo +nightly clean --workspace --release
+cargo +nightly clean -p fullmag-build-info
 mapfile -t stale_fem_native_artifacts < <(
   find target/release/build \
     -path "*fullmag-fem-sys*/out/native-build/backends/fem/libfullmag_fem.so.0" \
