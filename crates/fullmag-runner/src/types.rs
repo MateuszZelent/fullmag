@@ -2669,6 +2669,9 @@ pub struct ExecutionProvenance {
     /// MFEM major.minor version reported by the loaded native FEM runtime.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mfem_version: Option<String>,
+    /// HYPRE major.minor.patch version reported by the loaded native FEM runtime.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hypre_version: Option<String>,
     /// Canonical demag refresh cadence in seconds, if explicitly configured.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub demag_refresh_interval_s: Option<f64>,

@@ -129,6 +129,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
         llg_mode: None,
         mfem_device: None,
         mfem_version: None,
+        hypre_version: None,
         demag_refresh_interval_s: None,
         fem_assembly_mode: None,
         fem_execution_mode: None,

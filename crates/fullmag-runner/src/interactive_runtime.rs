@@ -243,8 +243,8 @@ mod tests {
     fn strict_interactive_fem_attaches_mfem_identity_before_recording_initial_fields() {
         let runtime_source = include_str!("interactive_runtime.rs");
         let version_attachment = runtime_source
-            .find("provenance.mfem_version = Some(crate::native_fem::strict_gpu_mfem_version()?);")
-            .expect("strict interactive FEM must attach the loaded MFEM version");
+            .find("provenance.hypre_version = Some(build_info.hypre_version);")
+            .expect("strict interactive FEM must attach the loaded HYPRE version");
         let native_recorder = runtime_source
             .rfind("ArtifactRecorder::streaming(self.provenance.clone(), writer)")
             .expect("native FEM interactive runtime must create an artifact recorder");
@@ -1195,7 +1195,9 @@ impl InteractiveFemPreviewRuntime {
             if execution_mode == fullmag_ir::ExecutionMode::Strict
                 && provenance.execution_engine == "fem_native_gpu"
             {
-                provenance.mfem_version = Some(crate::native_fem::strict_gpu_mfem_version()?);
+                let build_info = crate::native_fem::strict_gpu_runtime_build_info()?;
+                provenance.mfem_version = Some(build_info.mfem_version);
+                provenance.hypre_version = Some(build_info.hypre_version);
             }
             attach_resolved_fallback_to_provenance(&mut provenance, fallback);
             attach_fem_crossover_decision_to_provenance(&mut provenance, crossover_decision);
@@ -4831,6 +4833,7 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         llg_mode: None,
         mfem_device: None,
         mfem_version: None,
+        hypre_version: None,
         demag_refresh_interval_s: None,
         fem_assembly_mode: None,
         fem_execution_mode: None,
@@ -4935,6 +4938,7 @@ fn cuda_execution_provenance(
         ),
         mfem_device: None,
         mfem_version: None,
+        hypre_version: None,
         demag_refresh_interval_s: None,
         fem_assembly_mode: None,
         fem_execution_mode: None,
@@ -5038,6 +5042,7 @@ fn fem_gpu_execution_provenance(
         ),
         mfem_device: plan.mfem_device_string.clone(),
         mfem_version: None,
+        hypre_version: None,
         demag_refresh_interval_s: plan
             .field_refresh
             .as_ref()

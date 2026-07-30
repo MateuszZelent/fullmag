@@ -749,6 +749,7 @@ pub struct fullmag_fem_device_info {
 
 pub const FULLMAG_FEM_RUNTIME_BUILD_INFO_V1_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_RUNTIME_BUILD_INFO_MFEM_VERSION_CAPACITY: usize = 32;
+pub const FULLMAG_FEM_RUNTIME_BUILD_INFO_HYPRE_VERSION_CAPACITY: usize = 32;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -756,6 +757,17 @@ pub struct fullmag_fem_runtime_build_info {
     pub abi_version: u32,
     pub struct_size: u32,
     pub mfem_version: [c_char; FULLMAG_FEM_RUNTIME_BUILD_INFO_MFEM_VERSION_CAPACITY],
+}
+
+pub const FULLMAG_FEM_RUNTIME_BUILD_INFO_V2_ABI_VERSION: u32 = 2;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_runtime_build_info_v2 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub mfem_version: [c_char; FULLMAG_FEM_RUNTIME_BUILD_INFO_MFEM_VERSION_CAPACITY],
+    pub hypre_version: [c_char; FULLMAG_FEM_RUNTIME_BUILD_INFO_HYPRE_VERSION_CAPACITY],
 }
 
 #[repr(C)]
@@ -1638,6 +1650,9 @@ extern "C" {
 
     pub fn fullmag_fem_get_runtime_build_info(out_info: *mut fullmag_fem_runtime_build_info)
         -> i32;
+    pub fn fullmag_fem_get_runtime_build_info_v2(
+        out_info: *mut fullmag_fem_runtime_build_info_v2,
+    ) -> i32;
 
     pub fn fullmag_fem_backend_get_transfer_audit(
         handle: *mut fullmag_fem_backend,
@@ -2680,6 +2695,22 @@ mod tests {
         assert_eq!(std::mem::offset_of!(fullmag_fem_runtime_build_info, abi_version), 0);
         assert_eq!(std::mem::offset_of!(fullmag_fem_runtime_build_info, struct_size), 4);
         assert_eq!(std::mem::offset_of!(fullmag_fem_runtime_build_info, mfem_version), 8);
+    }
+
+    #[test]
+    fn runtime_build_info_v2_abi_keeps_v1_layout_and_adds_hypre_identity() {
+        let info = std::mem::MaybeUninit::<fullmag_fem_runtime_build_info_v2>::zeroed();
+        let info = unsafe { info.assume_init() };
+        assert_eq!(info.abi_version, 0);
+        assert_eq!(info.struct_size, 0);
+        assert_eq!(info.mfem_version, [0; 32]);
+        assert_eq!(info.hypre_version, [0; 32]);
+        assert_eq!(std::mem::size_of::<fullmag_fem_runtime_build_info>(), 40);
+        assert_eq!(std::mem::size_of::<fullmag_fem_runtime_build_info_v2>(), 72);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_runtime_build_info_v2, abi_version), 0);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_runtime_build_info_v2, struct_size), 4);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_runtime_build_info_v2, mfem_version), 8);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_runtime_build_info_v2, hypre_version), 40);
     }
 
     /// Verify native FEM demag timing totals are ABI-visible.

@@ -1376,6 +1376,10 @@ def _validate_gpu_execution(
     demag_runtime = _object(metadata.get("demag_runtime"), "GPU demag runtime")
     if demag_runtime.get("hypre_version") != native_build.get("hypre_version"):
         raise ContractError("GPU demag Hypre version does not match the managed runtime")
+    if demag_runtime.get("runtime_solver") != "HyprePCG":
+        raise ContractError("GPU demag runtime_solver must be HyprePCG")
+    if demag_runtime.get("runtime_preconditioner") != "HypreBoomerAMG":
+        raise ContractError("GPU demag runtime_preconditioner must be HypreBoomerAMG")
     if demag_runtime.get("mfem_device") != "cuda":
         raise ContractError("GPU demag runtime mfem_device must be exactly 'cuda'")
     relative_tolerance = _finite(

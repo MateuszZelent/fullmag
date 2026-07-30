@@ -3384,6 +3384,21 @@ int fullmag_fem_get_runtime_build_info(fullmag_fem_runtime_build_info *out_info)
     return FULLMAG_FEM_OK;
 }
 
+int fullmag_fem_get_runtime_build_info_v2(fullmag_fem_runtime_build_info_v2 *out_info)
+{
+    if (out_info == nullptr) {
+        fullmag_fem_set_global_error("fullmag_fem_get_runtime_build_info_v2 received null out_info");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (!fullmag::fem::runtime_build_info_v2(*out_info)) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem runtime build identity v2 is unavailable without the MFEM stack");
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    }
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+}
+
 int fullmag_fem_backend_get_transfer_audit(
     fullmag_fem_backend *handle,
     fullmag_fem_transfer_audit *out_audit

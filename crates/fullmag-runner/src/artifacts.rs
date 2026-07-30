@@ -28,11 +28,12 @@ fn execution_provenance_json(
 ) -> std::io::Result<serde_json::Value> {
     if plan.common.execution_mode == fullmag_ir::ExecutionMode::Strict
         && execution_provenance.execution_engine == "fem_native_gpu"
-        && execution_provenance.mfem_version.is_none()
+        && (execution_provenance.mfem_version.is_none()
+            || execution_provenance.hypre_version.is_none())
     {
         return Err(Error::new(
             ErrorKind::Other,
-            "strict native FEM GPU artifacts require an MFEM version from the loaded runtime",
+            "strict native FEM GPU artifacts require MFEM and HYPRE versions from the loaded runtime",
         ));
     }
     Ok(serde_json::to_value(execution_provenance).expect("ExecutionProvenance must serialize"))
@@ -404,6 +405,26 @@ fn demag_runtime_metadata(
             let max_iterations =
                 resolved_policy.map_or(policy.max_iterations, |entry| entry.max_iterations);
             let amg_profile = demag_amg_profile_metadata(&preconditioner, last);
+            let (runtime_solver, runtime_preconditioner) = if provenance
+                .fem_demag_operator_mode
+                .as_deref()
+                == Some("device_hypre_poisson")
+            {
+                let solver = match linear_solver.as_str() {
+                    "CG" => Some("HyprePCG"),
+                    "GMRES" => Some("HypreGMRES"),
+                    _ => None,
+                };
+                let preconditioner = match preconditioner.as_str() {
+                    "AMG" => Some("HypreBoomerAMG"),
+                    "JACOBI" => Some("HypreDiagScale"),
+                    "NONE" => Some("HypreIdentity"),
+                    _ => None,
+                };
+                (solver, preconditioner)
+            } else {
+                (None, None)
+            };
 
             serde_json::json!({
                 "model": resolved_demag.model_name(),
@@ -427,6 +448,8 @@ fn demag_runtime_metadata(
                 },
                 "linear_solver": linear_solver,
                 "preconditioner": preconditioner,
+                "runtime_solver": runtime_solver,
+                "runtime_preconditioner": runtime_preconditioner,
                 "amg_profile": amg_profile,
                 "relative_tolerance": relative_tolerance,
                 "absolute_tolerance": policy.atol,
@@ -444,6 +467,7 @@ fn demag_runtime_metadata(
                 "solver_setup_reused": last.map(|entry| entry.demag_solver_setup_reused),
                 "timings_ns": timings_ns,
                 "mfem_device": provenance.mfem_device,
+                "hypre_version": provenance.hypre_version,
                 "fem_assembly_mode": provenance.fem_assembly_mode,
                 "requested_fem_omp_threads": provenance.requested_fem_omp_threads,
                 "effective_fem_omp_threads": provenance.effective_fem_omp_threads,
@@ -3252,6 +3276,7 @@ mod tests {
         let mut provenance = ExecutionProvenance {
             execution_engine: "fem_native_gpu".to_string(),
             mfem_version: Some("4.9".to_string()),
+            hypre_version: Some("3.1.0".to_string()),
             ..ExecutionProvenance::default()
         };
 
@@ -3259,12 +3284,89 @@ mod tests {
             artifact_provenance_json(&context, &provenance)["mfem_version"],
             "4.9"
         );
+        assert!(artifact_provenance_json(&context, &provenance)
+            .as_object()
+            .expect("artifact provenance must be an object")
+            .contains_key("hypre_version"));
 
         provenance.mfem_version = None;
         assert!(!artifact_provenance_json(&context, &provenance)
             .as_object()
             .expect("artifact provenance must be an object")
             .contains_key("mfem_version"));
+    }
+
+    #[test]
+    fn gpu_demag_runtime_metadata_keeps_loaded_hypre_identity_and_provider_labels() {
+        let mut plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("test plan must be FEM");
+        };
+        fem.enable_demag = true;
+        fem.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+        let provenance = ExecutionProvenance {
+            execution_engine: "fem_native_gpu".to_string(),
+            hypre_version: Some("3.1.0".to_string()),
+            fem_demag_operator_mode: Some("device_hypre_poisson".to_string()),
+            ..ExecutionProvenance::default()
+        };
+
+        let metadata = demag_runtime_metadata(&plan, &provenance, &[]);
+        assert_eq!(metadata["hypre_version"], "3.1.0");
+        assert_eq!(metadata["linear_solver"], "CG");
+        assert_eq!(metadata["preconditioner"], "AMG");
+        assert_eq!(metadata["runtime_solver"], "HyprePCG");
+        assert_eq!(metadata["runtime_preconditioner"], "HypreBoomerAMG");
+    }
+
+    #[test]
+    fn gpu_demag_runtime_metadata_maps_resolved_nondefault_hypre_provider_labels() {
+        let mut plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("test plan must be FEM");
+        };
+        fem.enable_demag = true;
+        fem.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+        let provenance = ExecutionProvenance {
+            execution_engine: "fem_native_gpu".to_string(),
+            fem_demag_operator_mode: Some("device_hypre_poisson".to_string()),
+            fem_poisson_demag: Some(crate::types::FemPoissonDemagProvenance {
+                linear_solver: "GMRES".to_string(),
+                preconditioner: "JACOBI".to_string(),
+                ..Default::default()
+            }),
+            ..ExecutionProvenance::default()
+        };
+
+        let metadata = demag_runtime_metadata(&plan, &provenance, &[]);
+        assert_eq!(metadata["linear_solver"], "GMRES");
+        assert_eq!(metadata["preconditioner"], "JACOBI");
+        assert_eq!(metadata["runtime_solver"], "HypreGMRES");
+        assert_eq!(metadata["runtime_preconditioner"], "HypreDiagScale");
+    }
+
+    #[test]
+    fn gpu_demag_runtime_metadata_maps_no_preconditioner_to_hypre_identity() {
+        let mut plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("test plan must be FEM");
+        };
+        fem.enable_demag = true;
+        fem.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+        let provenance = ExecutionProvenance {
+            execution_engine: "fem_native_gpu".to_string(),
+            fem_demag_operator_mode: Some("device_hypre_poisson".to_string()),
+            fem_poisson_demag: Some(crate::types::FemPoissonDemagProvenance {
+                linear_solver: "CG".to_string(),
+                preconditioner: "NONE".to_string(),
+                ..Default::default()
+            }),
+            ..ExecutionProvenance::default()
+        };
+
+        let metadata = demag_runtime_metadata(&plan, &provenance, &[]);
+        assert_eq!(metadata["runtime_solver"], "HyprePCG");
+        assert_eq!(metadata["runtime_preconditioner"], "HypreIdentity");
     }
 
     #[test]
@@ -5481,6 +5583,7 @@ mod tests {
             llg_mode: None,
             mfem_device: None,
             mfem_version: None,
+            hypre_version: None,
             demag_refresh_interval_s: None,
             fem_assembly_mode: None,
             fem_execution_mode: None,
@@ -6355,6 +6458,7 @@ mod tests {
             llg_mode: None,
             mfem_device: None,
             mfem_version: None,
+            hypre_version: None,
             demag_refresh_interval_s: None,
             fem_assembly_mode: None,
             fem_execution_mode: None,

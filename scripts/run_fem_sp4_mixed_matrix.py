@@ -853,7 +853,7 @@ def _validate_gpu_execution(
         raise ExecutionError("GPU Hypre identity does not match pinned runtime")
     if demag.get("mfem_device") != "cuda":
         raise ExecutionError("GPU demag runtime mfem_device must be exactly 'cuda'")
-    if demag.get("solver") != "HyprePCG" or demag.get("preconditioner") != "HypreBoomerAMG":
+    if demag.get("runtime_solver") != "HyprePCG" or demag.get("runtime_preconditioner") != "HypreBoomerAMG":
         raise ExecutionError("GPU demag runtime must prove HyprePCG/HypreBoomerAMG")
     tolerance = _finite(demag.get("relative_tolerance"), "GPU demag tolerance")
     residual = _finite(demag.get("final_residual_norm"), "GPU demag residual")

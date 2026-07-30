@@ -5446,7 +5446,9 @@ fn execute_native_fem(
         Some(&gpu_rk_plan_info),
     );
     if execution_mode == ExecutionMode::Strict && execution_engine == "fem_native_gpu" {
-        provenance.mfem_version = Some(native_fem::strict_gpu_mfem_version()?);
+        let build_info = native_fem::strict_gpu_runtime_build_info()?;
+        provenance.mfem_version = Some(build_info.mfem_version);
+        provenance.hypre_version = Some(build_info.hypre_version);
     }
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)

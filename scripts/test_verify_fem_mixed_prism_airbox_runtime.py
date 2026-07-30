@@ -503,6 +503,8 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                 "final_residual_norm": 1.0e-13,
                 "relative_tolerance": 1.0e-12,
                 "hypre_version": "3.1.0",
+                "runtime_solver": "HyprePCG",
+                "runtime_preconditioner": "HypreBoomerAMG",
             }
             qualification["device_policy"] = {
                 "execution_mode": "all_in_gpu_legacy_sparse",

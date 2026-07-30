@@ -339,8 +339,8 @@ class MixedSP4MatrixExecutorTests(unittest.TestCase):
             }
             metadata["demag_runtime"] = {
                 "mfem_device": "cuda",
-                "solver": "HyprePCG",
-                "preconditioner": "HypreBoomerAMG",
+                "runtime_solver": "HyprePCG",
+                "runtime_preconditioner": "HypreBoomerAMG",
                 "relative_tolerance": 1.0e-12,
                 "final_residual_norm": 1.0e-13,
                 "hypre_version": "3.1.0",

@@ -96,12 +96,18 @@ void mfem_device_plan_import_is_owned_by_runtime_module() {
             fem_header.find("fullmag_fem_get_runtime_build_info") != std::string::npos,
         "native FEM must publish a versioned runtime-build identity ABI");
     check(
+        fem_header.find("FULLMAG_FEM_RUNTIME_BUILD_INFO_V2_ABI_VERSION") != std::string::npos &&
+            fem_header.find("fullmag_fem_runtime_build_info_v2") != std::string::npos &&
+            fem_header.find("fullmag_fem_get_runtime_build_info_v2") != std::string::npos,
+        "native FEM must publish a compatible V2 runtime-build identity ABI");
+    check(
         api.find("fullmag_fem_get_runtime_build_info") != std::string::npos,
         "C ABI API must serve runtime-build identity from the loaded native library");
     check(
         runtime_build_info.find("mfem::GetVersionMajor()") != std::string::npos &&
-            runtime_build_info.find("mfem::GetVersionMinor()") != std::string::npos,
-        "runtime build identity must use the linked MFEM version API");
+            runtime_build_info.find("mfem::GetVersionMinor()") != std::string::npos &&
+            runtime_build_info.find("HYPRE_VersionNumber(") != std::string::npos,
+        "runtime build identity must use linked MFEM and HYPRE version APIs");
     check(
         mfem_device_header.find("Initialize native FEM MFEM device plan fields") !=
             std::string::npos,
@@ -242,6 +248,31 @@ void runtime_build_info_is_versioned_and_fails_closed_without_mfem_stack() {
 #endif
 }
 
+void runtime_build_info_v2_is_versioned_and_fails_closed_without_mfem_stack() {
+    fullmag_fem_runtime_build_info_v2 info{};
+    const int rc = fullmag_fem_get_runtime_build_info_v2(&info);
+
+    check(
+        info.abi_version == FULLMAG_FEM_RUNTIME_BUILD_INFO_V2_ABI_VERSION,
+        "runtime build info V2 ABI version");
+    check(info.struct_size == sizeof(info), "runtime build info V2 struct size");
+#if FULLMAG_HAS_MFEM_STACK
+    check(rc == FULLMAG_FEM_OK, "MFEM-stack runtime build info V2 must be available");
+    check(
+        std::strcmp(info.mfem_version, "4.9") == 0,
+        "runtime build info V2 must expose loaded MFEM 4.9");
+    check(
+        std::strcmp(info.hypre_version, "3.1.0") == 0,
+        "runtime build info V2 must expose loaded HYPRE 3.1.0");
+#else
+    check(
+        rc == FULLMAG_FEM_ERR_UNAVAILABLE,
+        "non-MFEM runtime build info V2 must fail closed as unavailable");
+    check(info.mfem_version[0] == '\0', "non-MFEM runtime build info V2 must omit MFEM version");
+    check(info.hypre_version[0] == '\0', "non-MFEM runtime build info V2 must omit HYPRE version");
+#endif
+}
+
 } // namespace
 
 int main() {
@@ -250,5 +281,6 @@ int main() {
     device_info_population_sets_scaffold_metadata_without_mfem_stack();
     device_info_snapshot_returns_public_cache();
     runtime_build_info_is_versioned_and_fails_closed_without_mfem_stack();
+    runtime_build_info_v2_is_versioned_and_fails_closed_without_mfem_stack();
     return 0;
 }
