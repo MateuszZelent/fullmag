@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import csv
+import fcntl
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -35,6 +37,7 @@ OUTPUT_FILES = (
     "run-specs.v1.tsv",
 )
 PROBLEM_SOURCE = "tests/standard_problems/mumag/sp4/fem/problem.py"
+DISPATCH_SOURCE = "crates/fullmag-runner/src/dispatch.rs"
 EXPECTED_RELEVANT_SOURCES = (
     "justfile",
     "scripts/check_fem_sp4_relaxation.py",
@@ -81,6 +84,9 @@ class FemSp4MixedMatrixPlannerTest(unittest.TestCase):
             destination = root / relative_path
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(REPO_ROOT / relative_path, destination)
+        dispatch = root / DISPATCH_SOURCE
+        dispatch.parent.mkdir(parents=True, exist_ok=True)
+        dispatch.write_text("committed dispatch source\n", encoding="utf-8")
         self._git(root, "init", "--quiet")
         self._git(root, "config", "user.name", "Fullmag Test")
         self._git(root, "config", "user.email", "fullmag-test@example.invalid")
@@ -337,12 +343,15 @@ class FemSp4MixedMatrixPlannerTest(unittest.TestCase):
             dirty["relevant_source_files_sha256"][PROBLEM_SOURCE],
             clean["relevant_source_files_sha256"][PROBLEM_SOURCE],
         )
+        if "dirty_path_content" not in dirty:
+            self.fail("dirty snapshot must bind dirty_path_content")
         snapshot_payload = {
             key: dirty[key]
             for key in (
                 "head_commit_full",
                 "head_tree_sha256",
                 "git_status_porcelain_v1",
+                "dirty_path_content",
                 "relevant_source_files_sha256",
             )
         }
@@ -351,6 +360,34 @@ class FemSp4MixedMatrixPlannerTest(unittest.TestCase):
             hashlib.sha256(_canonical_json(snapshot_payload)).hexdigest(),
         )
         self.assertNotEqual(dirty["source_snapshot_sha256"], clean["source_snapshot_sha256"])
+
+    def test_dirty_source_outside_curated_set_changes_snapshot_with_its_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = self._source_repo(directory)
+            dispatch = source_root / DISPATCH_SOURCE
+            with mock.patch.object(planner, "REPO_ROOT", source_root):
+                dispatch.write_text("dirty variant A\n", encoding="utf-8")
+                first = planner.build_plan("stage1-layers")
+                dispatch.write_text("dirty variant B\n", encoding="utf-8")
+                second = planner.build_plan("stage1-layers")
+
+        self.assertEqual(
+            first["git_status_porcelain_v1"],
+            second["git_status_porcelain_v1"],
+        )
+        self.assertEqual(first["dirty_paths"], [DISPATCH_SOURCE])
+        self.assertEqual(second["dirty_paths"], [DISPATCH_SOURCE])
+        self.assertNotEqual(first.get("dirty_path_content"), second.get("dirty_path_content"))
+        self.assertNotEqual(first["source_snapshot_sha256"], second["source_snapshot_sha256"])
+
+    def test_deleted_dirty_source_outside_curated_set_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = self._source_repo(directory)
+            (source_root / DISPATCH_SOURCE).unlink()
+
+            with mock.patch.object(planner, "REPO_ROOT", source_root):
+                with self.assertRaisesRegex(planner.PlanError, "missing dirty path"):
+                    planner.build_plan("stage1-layers")
 
     def test_missing_execution_source_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -396,7 +433,45 @@ class FemSp4MixedMatrixPlannerTest(unittest.TestCase):
 
             self.assertFalse(output_dir.exists())
             self.assertEqual(list(output_dir.parent.glob(".plan.tmp-*")), [])
-            self.assertFalse((output_dir.parent / ".plan.lock").exists())
+            lock_path = output_dir.parent / ".plan.lock"
+            if not lock_path.exists():
+                self.fail("advisory lock file must remain available for process locking")
+            with lock_path.open("r+") as lock_stream:
+                fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(lock_stream.fileno(), fcntl.LOCK_UN)
+
+    def test_cleanup_failure_preserves_primary_error_and_releases_lock_for_retry(
+        self,
+    ) -> None:
+        original_open = Path.open
+
+        def fail_jsonl(path: Path, *args, **kwargs):
+            mode = args[0] if args else kwargs.get("mode", "r")
+            if path.name == OUTPUT_FILES[1] and any(
+                flag in mode for flag in ("w", "x")
+            ):
+                raise OSError("injected JSONL write failure")
+            return original_open(path, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory) / "plan"
+            with mock.patch.object(Path, "open", fail_jsonl), mock.patch.object(
+                shutil,
+                "rmtree",
+                side_effect=OSError("injected cleanup failure"),
+            ):
+                with self.assertRaises(planner.PlanError) as raised:
+                    planner.emit_plan("stage1-layers", output_dir)
+
+            message = str(raised.exception)
+            self.assertIn("injected JSONL write failure", message)
+            self.assertIn("injected cleanup failure", message)
+            self.assertFalse(output_dir.exists())
+            try:
+                retry = planner.emit_plan("stage1-layers", output_dir)
+            except planner.PlanError as error:
+                self.fail(f"released lock must permit retry: {error}")
+            self.assertEqual(retry["requested_stage"], "stage1-layers")
 
     def test_existing_complete_plan_is_idempotent_and_lock_blocks_concurrent_writer(
         self,
@@ -416,11 +491,58 @@ class FemSp4MixedMatrixPlannerTest(unittest.TestCase):
 
             concurrent_output = root / "concurrent"
             lock = root / ".concurrent.lock"
-            lock.write_text("occupied\n", encoding="utf-8")
-            with self.assertRaisesRegex(planner.PlanError, "emission is already in progress"):
-                planner.emit_plan("stage1-layers", concurrent_output)
+            lock_descriptor = os.open(lock, os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(lock_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                with self.assertRaisesRegex(
+                    planner.PlanError,
+                    "emission is already in progress",
+                ):
+                    planner.emit_plan("stage1-layers", concurrent_output)
+            finally:
+                fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+                os.close(lock_descriptor)
             self.assertFalse(concurrent_output.exists())
-            self.assertEqual(lock.read_text(encoding="utf-8"), "occupied\n")
+            try:
+                recovered = planner.emit_plan("stage1-layers", concurrent_output)
+            except planner.PlanError as error:
+                self.fail(f"stale lock file must be recoverable: {error}")
+            self.assertEqual(recovered["requested_stage"], "stage1-layers")
+
+    def test_in_repo_output_is_idempotent_and_only_its_owned_status_is_excluded(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = self._source_repo(directory)
+            output_dir = source_root / "matrix-output"
+            with mock.patch.object(planner, "REPO_ROOT", source_root):
+                first = planner.emit_plan("stage1-layers", output_dir)
+                original = {
+                    name: (output_dir / name).read_bytes() for name in OUTPUT_FILES
+                }
+                try:
+                    second = planner.emit_plan("stage1-layers", output_dir)
+                except planner.PlanError as error:
+                    self.fail(f"in-repo identical plan must be idempotent: {error}")
+
+                unrelated = output_dir / "unrelated-source.txt"
+                unrelated.write_text("must remain visible\n", encoding="utf-8")
+                try:
+                    visible = planner.build_plan(
+                        "stage1-layers",
+                        output_dir=output_dir,
+                    )
+                except TypeError as error:
+                    self.fail(f"planner must accept its output status scope: {error}")
+                self.assertEqual(second, first)
+                self.assertEqual(
+                    {name: (output_dir / name).read_bytes() for name in OUTPUT_FILES},
+                    original,
+                )
+                self.assertEqual(
+                    visible["dirty_paths"],
+                    ["matrix-output/unrelated-source.txt"],
+                )
 
     def test_unknown_stage_fails_closed_without_writing_a_plan(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -5,16 +5,18 @@ from __future__ import annotations
 
 import argparse
 import csv
+import fcntl
 import hashlib
 import io
 import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
-from typing import Sequence
+from typing import Callable, Sequence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -117,9 +119,31 @@ def _sha256_bytes(value: bytes) -> str:
 
 def _sha256_file(path: Path) -> str:
     try:
-        return _sha256_bytes(path.read_bytes())
+        before = path.stat(follow_symlinks=False)
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
+        after = path.stat(follow_symlinks=False)
     except OSError as error:
         raise PlanError(f"cannot hash required source file {path}: {error}") from error
+    identity_before = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    identity_after = (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
+    if identity_before != identity_after:
+        raise PlanError(f"required source file changed while hashing: {path}")
+    return digest.hexdigest()
 
 
 def _git_output(*arguments: str) -> bytes:
@@ -135,7 +159,9 @@ def _git_output(*arguments: str) -> bytes:
         ) from error
 
 
-def _git_status_records() -> list[dict[str, object]]:
+def _git_status_records(
+    path_is_planner_owned: Callable[[str], bool] | None = None,
+) -> list[dict[str, object]]:
     raw_status = _git_output(
         "status",
         "--porcelain=v1",
@@ -158,13 +184,91 @@ def _git_status_records() -> list[dict[str, object]]:
                     raise PlanError("cannot parse canonical git rename status")
                 paths.append(parts[index].decode("utf-8"))
                 index += 1
-            records.append({"status": status, "paths": paths})
+            if path_is_planner_owned is None or not all(
+                path_is_planner_owned(path) for path in paths
+            ):
+                records.append({"status": status, "paths": paths})
     except UnicodeDecodeError as error:
         raise PlanError("cannot decode canonical git status") from error
     return records
 
 
-def _source_identity() -> dict[str, object]:
+def _planner_owned_status_filter(
+    output_dir: Path | None,
+) -> Callable[[str], bool] | None:
+    if output_dir is None:
+        return None
+    try:
+        relative_output = output_dir.resolve(strict=False).relative_to(
+            REPO_ROOT.resolve()
+        )
+    except (OSError, ValueError):
+        return None
+    parent = relative_output.parent
+    canonical_paths = {
+        (relative_output / name).as_posix()
+        for name in (PLAN_FILENAME, JSONL_FILENAME, TSV_FILENAME)
+    }
+    lock_path = (parent / f".{relative_output.name}.lock").as_posix()
+    staging_prefix = (parent / f".{relative_output.name}.tmp-").as_posix()
+
+    def is_owned(path: str) -> bool:
+        return (
+            path in canonical_paths
+            or path == lock_path
+            or path.startswith(staging_prefix)
+        )
+
+    return is_owned
+
+
+def _dirty_path_content(
+    status_records: Sequence[dict[str, object]],
+) -> list[dict[str, str]]:
+    dirty_paths = sorted(
+        {path for record in status_records for path in record["paths"]}
+    )
+    identities: list[dict[str, str]] = []
+    for relative_path in dirty_paths:
+        candidate = Path(relative_path)
+        if candidate.is_absolute() or ".." in candidate.parts:
+            raise PlanError(f"unsafe dirty path in git status: {relative_path}")
+        path = REPO_ROOT / candidate
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError as error:
+            raise PlanError(f"missing dirty path cannot be snapshotted: {relative_path}") from error
+        except OSError as error:
+            raise PlanError(f"cannot inspect dirty path {relative_path}: {error}") from error
+        if stat.S_ISREG(metadata.st_mode):
+            identities.append(
+                {
+                    "path": relative_path,
+                    "kind": "regular_file",
+                    "sha256": _sha256_file(path),
+                }
+            )
+            continue
+        if stat.S_ISLNK(metadata.st_mode):
+            try:
+                target = os.readlink(path)
+            except OSError as error:
+                raise PlanError(
+                    f"cannot read dirty symlink {relative_path}: {error}"
+                ) from error
+            identities.append(
+                {
+                    "path": relative_path,
+                    "kind": "symlink_target",
+                    "sha256": _sha256_bytes(os.fsencode(target)),
+                }
+            )
+            continue
+        raise PlanError(f"unsupported dirty path type: {relative_path}")
+    return identities
+
+
+def _source_identity(output_dir: Path | None = None) -> dict[str, object]:
     source_hashes = {
         path.as_posix(): _sha256_file(REPO_ROOT / path)
         for path in RELEVANT_SOURCE_PATHS
@@ -174,13 +278,24 @@ def _source_identity() -> dict[str, object]:
     except UnicodeDecodeError as error:
         raise PlanError("cannot decode git HEAD identity") from error
     head_tree_sha256 = _sha256_bytes(
-        _git_output("ls-tree", "-r", "--full-tree", "HEAD")
+        _git_output("ls-tree", "-r", "--full-tree", head_commit)
     )
-    status_records = _git_status_records()
+    status_filter = _planner_owned_status_filter(output_dir)
+    status_records = _git_status_records(status_filter)
+    dirty_content = _dirty_path_content(status_records)
+    if _git_status_records(status_filter) != status_records:
+        raise PlanError("git source status changed while capturing the snapshot")
+    try:
+        head_after = _git_output("rev-parse", "--verify", "HEAD").decode("ascii").strip()
+    except UnicodeDecodeError as error:
+        raise PlanError("cannot decode git HEAD identity") from error
+    if head_after != head_commit:
+        raise PlanError("git HEAD changed while capturing the source snapshot")
     snapshot_payload = {
         "head_commit_full": head_commit,
         "head_tree_sha256": head_tree_sha256,
         "git_status_porcelain_v1": status_records,
+        "dirty_path_content": dirty_content,
         "relevant_source_files_sha256": source_hashes,
     }
     return {
@@ -226,7 +341,11 @@ def _run_spec_payload(
     }
 
 
-def build_plan(requested_stage: str) -> dict[str, object]:
+def build_plan(
+    requested_stage: str,
+    *,
+    output_dir: Path | None = None,
+) -> dict[str, object]:
     if requested_stage not in STAGES:
         raise PlanError(f"unsupported SP4 mixed matrix stage: {requested_stage}")
     run_specs = [
@@ -252,7 +371,7 @@ def build_plan(requested_stage: str) -> dict[str, object]:
         "qualification_claim": QUALIFICATION_CLAIM,
         "run_spec_count": len(run_specs),
         "run_specs": run_specs,
-        **_source_identity(),
+        **_source_identity(output_dir),
     }
     payload["plan_sha256"] = _sha256_bytes(_canonical_json_bytes(payload))
     return payload
@@ -349,38 +468,103 @@ def _acquire_output_lock(lock_path: Path) -> int:
     try:
         descriptor = os.open(
             lock_path,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+            os.O_RDWR | os.O_CREAT | os.O_CLOEXEC,
             0o600,
         )
-    except FileExistsError as error:
+    except OSError as error:
+        raise PlanError(f"cannot acquire plan output lock {lock_path}: {error}") from error
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as error:
+        os.close(descriptor)
         raise PlanError(
             f"plan emission is already in progress for {lock_path}"
         ) from error
     except OSError as error:
-        raise PlanError(f"cannot acquire plan output lock {lock_path}: {error}") from error
+        os.close(descriptor)
+        raise PlanError(f"cannot lock plan output {lock_path}: {error}") from error
     try:
+        os.ftruncate(descriptor, 0)
+        os.lseek(descriptor, 0, os.SEEK_SET)
         os.write(descriptor, f"pid={os.getpid()}\n".encode("ascii"))
         os.fsync(descriptor)
     except OSError as error:
-        os.close(descriptor)
         try:
-            lock_path.unlink()
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
         except OSError:
             pass
+        os.close(descriptor)
         raise PlanError(f"cannot initialize plan output lock {lock_path}: {error}") from error
     return descriptor
 
 
 def _release_output_lock(lock_path: Path, descriptor: int) -> None:
+    errors: list[str] = []
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+    except OSError as error:
+        errors.append(f"unlock failed: {error}")
     try:
         os.close(descriptor)
-        lock_path.unlink()
     except OSError as error:
-        raise PlanError(f"cannot release plan output lock {lock_path}: {error}") from error
+        errors.append(f"close failed: {error}")
+    if errors:
+        raise PlanError(
+            f"cannot release plan output lock {lock_path}: {'; '.join(errors)}"
+        )
+
+
+def _finish_output_transaction(
+    staging_dir: Path | None,
+    lock_path: Path,
+    lock_descriptor: int,
+) -> tuple[PlanError | None, PlanError | None]:
+    cleanup_error: PlanError | None = None
+    release_error: PlanError | None = None
+    try:
+        if staging_dir is not None and staging_dir.exists():
+            try:
+                shutil.rmtree(staging_dir)
+            except OSError as error:
+                cleanup_error = PlanError(
+                    f"cannot clean staged plan directory {staging_dir}: {error}"
+                )
+    finally:
+        try:
+            _release_output_lock(lock_path, lock_descriptor)
+        except PlanError as error:
+            release_error = error
+    return cleanup_error, release_error
+
+
+def _raise_transaction_errors(
+    primary_error: BaseException | None,
+    cleanup_error: PlanError | None,
+    release_error: PlanError | None,
+) -> None:
+    if primary_error is None and cleanup_error is None and release_error is None:
+        return
+    if primary_error is not None and cleanup_error is None and release_error is None:
+        raise primary_error
+    if primary_error is None and cleanup_error is not None and release_error is None:
+        raise cleanup_error
+    if primary_error is None and cleanup_error is None and release_error is not None:
+        raise release_error
+    details: list[str] = []
+    if primary_error is not None:
+        details.append(f"primary failure: {primary_error}")
+    if cleanup_error is not None:
+        details.append(f"cleanup failure: {cleanup_error}")
+    if release_error is not None:
+        details.append(f"lock release failure: {release_error}")
+    combined = PlanError("; ".join(details))
+    if primary_error is not None:
+        raise combined from primary_error
+    raise combined
 
 
 def emit_plan(requested_stage: str, output_dir: Path) -> dict[str, object]:
-    plan = build_plan(requested_stage)
+    plan = build_plan(requested_stage, output_dir=output_dir)
     payloads = _output_payloads(plan)
     output_parent = output_dir.parent
     try:
@@ -395,41 +579,46 @@ def emit_plan(requested_stage: str, output_dir: Path) -> dict[str, object]:
     lock_path = output_parent / f".{output_dir.name}.lock"
     lock_descriptor = _acquire_output_lock(lock_path)
     staging_dir: Path | None = None
+    primary_error: BaseException | None = None
+    result: dict[str, object] | None = None
     try:
         if _preflight_existing_output(output_dir, payloads):
-            return plan
-        try:
-            staging_dir = Path(
-                tempfile.mkdtemp(
-                    prefix=f".{output_dir.name}.tmp-",
-                    dir=output_parent,
-                )
-            )
-        except OSError as error:
-            raise PlanError(
-                f"cannot create staged plan directory beside {output_dir}: {error}"
-            ) from error
-        for name, payload in payloads.items():
-            _write_staged_output(staging_dir / name, payload)
-        _fsync_directory(staging_dir)
-        try:
-            os.rename(staging_dir, output_dir)
-        except OSError as error:
-            raise PlanError(
-                f"cannot atomically promote plan output {output_dir}: {error}"
-            ) from error
-        staging_dir = None
-        _fsync_directory(output_parent)
-        return plan
-    finally:
-        if staging_dir is not None and staging_dir.exists():
+            result = plan
+        else:
             try:
-                shutil.rmtree(staging_dir)
+                staging_dir = Path(
+                    tempfile.mkdtemp(
+                        prefix=f".{output_dir.name}.tmp-",
+                        dir=output_parent,
+                    )
+                )
             except OSError as error:
                 raise PlanError(
-                    f"cannot clean staged plan directory {staging_dir}: {error}"
+                    f"cannot create staged plan directory beside {output_dir}: {error}"
                 ) from error
-        _release_output_lock(lock_path, lock_descriptor)
+            for name, payload in payloads.items():
+                _write_staged_output(staging_dir / name, payload)
+            _fsync_directory(staging_dir)
+            try:
+                os.rename(staging_dir, output_dir)
+            except OSError as error:
+                raise PlanError(
+                    f"cannot atomically promote plan output {output_dir}: {error}"
+                ) from error
+            staging_dir = None
+            _fsync_directory(output_parent)
+            result = plan
+    except BaseException as error:
+        primary_error = error
+    cleanup_error, release_error = _finish_output_transaction(
+        staging_dir,
+        lock_path,
+        lock_descriptor,
+    )
+    _raise_transaction_errors(primary_error, cleanup_error, release_error)
+    if result is None:
+        raise PlanError("internal error: plan transaction produced no result")
+    return result
 
 
 def _parse_arguments(argv: Sequence[str] | None) -> argparse.Namespace:
