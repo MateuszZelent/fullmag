@@ -30,9 +30,37 @@ class ResponsivePublicDocumentationTableTests(unittest.TestCase):
         self.assertIn("overflow-wrap: anywhere", css)
         self.assertNotRegex(css, r"(?:html|body)[^\{]*\{[^}]*overflow-x:\s*hidden")
 
+    def test_cells_do_not_force_intrinsic_table_width(self) -> None:
+        css = CSS.read_text(encoding="utf-8")
+        cell_rules = []
+        for selector in (
+            "article main .table-wrapper th",
+            "article main .table-wrapper td",
+            "article main table th",
+            "article main table td",
+        ):
+            cell_rules.extend(self._rules_for_selector(css, selector))
+
+        self.assertTrue(
+            any(re.search(r"min-width:\s*0", declarations) for declarations in cell_rules)
+        )
+        self.assertNotIn("min-width: 8rem", css)
+
+    def test_clarity_nested_main_content_is_constrained(self) -> None:
+        css = CSS.read_text(encoding="utf-8")
+        rules = self._rules_for_selector(css, "article main")
+
+        self.assertTrue(
+            any(
+                re.search(r"min-width:\s*0", declarations)
+                and re.search(r"max-width:\s*100%", declarations)
+                for declarations in rules
+            )
+        )
+
     def test_unwrapped_direct_table_keeps_a_constrained_scrollport(self) -> None:
         css = CSS.read_text(encoding="utf-8")
-        direct_table_rules = self._rules_for_selector(css, "article > main table")
+        direct_table_rules = self._rules_for_selector(css, "article main table")
 
         self.assertTrue(
             any(

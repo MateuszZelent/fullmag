@@ -1,9 +1,12 @@
 article,
-article > main {
+article > main,
+article main,
+article main > section {
   min-width: 0;
+  max-width: 100%;
 }
 
-article > main .table-wrapper {
+article main .table-wrapper {
   display: block;
   max-width: 100%;
   overflow-x: auto;
@@ -11,39 +14,43 @@ article > main .table-wrapper {
   -webkit-overflow-scrolling: touch;
 }
 
-article > main .table-wrapper table {
+article main .table-wrapper table {
   width: max-content;
   min-width: 100%;
   max-width: none;
 }
 
-article > main table {
+article main table {
+  box-sizing: border-box;
   display: block;
   width: 100%;
+  min-width: 0;
   max-width: 100%;
   overflow-x: auto;
   overscroll-behavior-inline: contain;
   -webkit-overflow-scrolling: touch;
 }
 
-article > main .table-wrapper th,
-article > main .table-wrapper td,
-article > main table th,
-article > main table td {
-  min-width: 8rem;
-  max-width: 24rem;
+article main .table-wrapper th,
+article main .table-wrapper td,
+article main table th,
+article main table td {
+  min-width: 0;
+  max-width: none;
   white-space: normal;
   overflow-wrap: anywhere;
-  word-break: normal;
+  word-break: break-word;
   vertical-align: top;
 }
 
-article > main .table-wrapper code,
-article > main .table-wrapper .math,
-article > main table code,
-article > main table .math {
+article main .table-wrapper code,
+article main .table-wrapper .math,
+article main table code,
+article main table .math,
+article main table mjx-container {
   white-space: normal;
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 article > main div.math,
@@ -62,8 +69,8 @@ article > main span.math {
 }
 
 @media (max-width: 48rem) {
-  article > main .table-wrapper,
-  article > main table {
+  article main .table-wrapper,
+  article main table {
     scrollbar-width: thin;
     background: linear-gradient(
       to right,
