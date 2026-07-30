@@ -603,9 +603,19 @@ def _read_runtime_identity(path: Path) -> dict[str, object]:
     library_identity: dict[str, dict[str, object]] = {}
     for name in REQUIRED_NATIVE_LIBRARIES:
         entry = _object(libraries.get(name), f"runtime native library {name}")
-        for field in ("path", "soname", "loaded_soname"):
-            if not isinstance(entry.get(field), str) or not entry[field]:
-                raise ExecutionError(f"managed runtime native library {name}.{field} is invalid")
+        path_value = entry.get("path")
+        if not isinstance(path_value, str) or not path_value:
+            raise ExecutionError(f"managed runtime native library {name}.path is invalid")
+        soname_value = entry.get("soname")
+        if soname_value is not None and (
+            not isinstance(soname_value, str) or not soname_value
+        ):
+            raise ExecutionError(f"managed runtime native library {name}.soname is invalid")
+        loaded_soname_value = entry.get("loaded_soname")
+        if not isinstance(loaded_soname_value, str) or not loaded_soname_value:
+            raise ExecutionError(
+                f"managed runtime native library {name}.loaded_soname is invalid"
+            )
         digest = entry.get("sha256")
         if not isinstance(digest, str) or SHA256.fullmatch(digest) is None:
             raise ExecutionError(f"managed runtime native library {name}.sha256 is invalid")

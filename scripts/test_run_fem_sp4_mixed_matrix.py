@@ -775,6 +775,22 @@ class MixedSP4MatrixExecutorTests(unittest.TestCase):
             with self.assertRaisesRegex(executor.ExecutionError, "schema 3"):
                 executor._read_runtime_identity(manifest)
 
+    def test_schema3_runtime_accepts_unversioned_libceed_without_elf_soname(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "manifest.json"
+            payload = self._runtime_manifest_payload()
+            payload["native_libraries"]["libceed"]["soname"] = None
+            payload["native_libraries"]["libceed"]["loaded_soname"] = "libceed.so"
+            manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+            identity = executor._read_runtime_identity(manifest)
+
+            self.assertIsNone(identity["native_library_identity"]["libceed"]["soname"])
+            self.assertEqual(
+                identity["native_library_identity"]["libceed"]["loaded_soname"],
+                "libceed.so",
+            )
+
     def test_schema3_runtime_identity_requires_native_build_and_device_subset(self) -> None:
         mutations = (
             ("integrity", lambda payload: payload["integrity"].pop("worker_sha256")),
