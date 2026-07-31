@@ -43,9 +43,16 @@ def assert_json_subset(
 class PublicExchangeDocumentationTests(unittest.TestCase):
     def test_copyable_example_lowers_to_current_problem_ir(self) -> None:
         page = EXCHANGE_PAGE.read_text(encoding="utf-8")
-        match = PYTHON_BLOCK.search(page)
-        self.assertIsNotNone(match, "Exchange page must contain a Python example")
-        source = match.group(1)
+        blocks = PYTHON_BLOCK.findall(page)
+        self.assertTrue(blocks, "Exchange page must contain a Python example")
+        source = next(
+            (block for block in blocks if "problem_ir =" in block),
+            None,
+        )
+        self.assertIsNotNone(
+            source,
+            "Exchange page must contain a low-level ProblemIR inspection example",
+        )
         self.assertIn("# %%", source)
 
         namespace: dict[str, object] = {}

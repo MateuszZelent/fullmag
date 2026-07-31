@@ -214,6 +214,7 @@ import json
 import fullmag as fm
 
 nm = 1.0e-9
+ps = 1.0e-12
 geometry = fm.Box(size=(40 * nm, 20 * nm, 5 * nm), name="film")
 material = fm.Material(
     name="Permalloy",
@@ -227,13 +228,25 @@ magnet = fm.Ferromagnet(
     material=material,
     m0=fm.texture.uniform((1.0, 0.0, 0.0)),
 )
+snapshot_study = fm.TimeEvolution(
+    dynamics=fm.LLG(),
+    outputs=[
+        fm.SaveField("H_ex", every=1 * ps),
+        fm.SaveScalar("E_ex", every=1 * ps),
+    ],
+)
 snapshot = fm.Problem(
     name="exchange_only_snapshot",
     magnets=[magnet],
     energy=[fm.Exchange()],
-    study=fm.TimeEvolution(dynamics=fm.LLG(), outputs=[]),
+    study=snapshot_study,
+    discretization=fm.DiscretizationHints(
+        fdm=fm.FDM(cell=(2 * nm, 2 * nm, 1 * nm)),
+        fem=fm.FEM(order=1, maximum_element_size=2 * nm),
+    ),
 )
-print(json.dumps(snapshot.to_ir(include_geometry_assets=False), indent=2))
+problem_ir = snapshot.to_ir(include_geometry_assets=False)
+print(json.dumps(problem_ir, indent=2))
 ```
 
 `snapshot.to_ir(...)` validates and lowers one physical snapshot; it does not execute a stage or
