@@ -1,0 +1,45 @@
+{
+  "document": {"path": "public_docs/site/numerical-methods/relaxation/projected-gradient.md"},
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
+    {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "Native CUDA step source exists; runtime qualification is separate."},
+    {"solver": "FDM", "device": "CPU", "status": "source-backed"},
+    {"solver": "FDM", "device": "GPU", "status": "source-backed", "reason": "CUDA/reference direct-minimizer path exists; executed-device evidence is separate."}
+  ],
+  "equations": [
+    {"id": "eq-pgbb-tangent-gradient", "symbols": ["g", "H_eff", "m", "tau"], "sources": ["physics-pgbb", "fdm-pgbb"]},
+    {"id": "eq-pgbb-retraction", "symbols": ["R", "m", "lambda", "p"], "sources": ["physics-pgbb", "fdm-pgbb"]},
+    {"id": "eq-pgbb-step-selection", "symbols": ["lambda", "s", "y"], "sources": ["physics-pgbb", "fdm-policy"]},
+    {"id": "eq-pgbb-armijo", "symbols": ["E", "lambda", "c1", "D"], "sources": ["physics-pgbb", "fem-cpu-pgbb"]}
+  ],
+  "symbols": [
+    {"id": "m", "latex": "\\mathbf m_i", "meaning": "reduced magnetization at active cell/node $i$", "si_unit": "1"},
+    {"id": "H_eff", "latex": "\\mathbf H_{\\mathrm{eff},i}", "meaning": "effective magnetic field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "g", "latex": "\\mathbf g_i", "meaning": "tangent-space energy gradient", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "tau", "latex": "\\boldsymbol\\tau_i", "meaning": "torque residual", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "R", "latex": "\\mathcal R_{\\mathbf m_i}", "meaning": "sphere retraction", "si_unit": "1"},
+    {"id": "lambda", "latex": "\\lambda_k", "meaning": "minimizer step size", "si_unit": "\\mathrm{m\\,A^{-1}}"},
+    {"id": "p", "latex": "\\mathbf p_i", "meaning": "tangent search direction", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "s", "latex": "\\mathbf s_k", "meaning": "magnetization difference", "si_unit": "1"},
+    {"id": "y", "latex": "\\mathbf y_k", "meaning": "gradient difference", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "E", "latex": "E", "meaning": "total micromagnetic energy", "si_unit": "\\mathrm{J}"},
+    {"id": "c1", "latex": "c_1", "meaning": "Armijo sufficient-decrease constant", "si_unit": "1"},
+    {"id": "D", "latex": "D_k", "meaning": "energy directional derivative", "si_unit": "\\mathrm{J}"}
+  ],
+  "sources": [
+    {"id": "physics-pgbb", "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs", "symbol": "projected_gradient_armijo_accepts", "responsibility": "Shared projected-gradient Armijo acceptance contract."},
+    {"id": "fdm-pgbb", "path": "crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs", "symbol": "execute_projected_gradient_bb", "responsibility": "FDM reference direct-minimizer loop."},
+    {"id": "fdm-policy", "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs", "symbol": "projected_gradient_step_size_update", "responsibility": "Shared FDM/CUDA BB step and line-search policy."},
+    {"id": "fem-cpu-pgbb", "path": "backends/fem/cpu/mfem/relaxation/projected_gradient_bb.cpp", "symbol": "run_projected_gradient_bb_step", "responsibility": "Native FEM CPU projected-gradient step."},
+    {"id": "fem-gpu-pgbb", "path": "backends/fem/gpu/cuda/relaxation/pgbb.cpp", "symbol": "gpu_relax_projected_gradient_bb_step", "responsibility": "Native FEM GPU projected-gradient step."},
+    {"id": "python-relaxation", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class Relaxation", "responsibility": "Public algorithm validation and IR destination."},
+    {"id": "python-stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "relax_stage", "responsibility": "Stage-first lowering."}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "StudyStagesBuilder.add_relax(algorithm=\"projected_gradient_bb\")", "type": "str", "default": "required for this page", "si_unit": "$1$", "validation": "supported algorithm identifier", "meaning": "selects BB projected minimizer", "backend_support": "FDM reference; FEM CPU/GPU native lanes", "problem_ir": "study.algorithm"},
+      {"python": "StudyStagesBuilder.add_relax(tolT=...)", "type": "float", "default": "$10^{-6}$", "si_unit": "$\\mathrm{T}$", "validation": "finite and positive; exclusive with `tolA`", "meaning": "requested torque threshold", "backend_support": "FDM/FEM lanes", "problem_ir": "study.stop.torque_tolerance_apm"},
+      {"python": "StudyStagesBuilder.add_relax(max_steps=...)", "type": "int", "default": "$50,000$", "si_unit": "$1$", "validation": "positive integer", "meaning": "iteration budget", "backend_support": "FDM/FEM lanes", "problem_ir": "study.stop.max_steps"}
+    ]
+  }
+}

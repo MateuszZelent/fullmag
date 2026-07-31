@@ -1,0 +1,39 @@
+{
+  "document": {"path": "public_docs/site/numerical-methods/relaxation/stopping-criteria.md"},
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
+    {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "Native reductions exist; executed-device qualification is separate."},
+    {"solver": "FDM", "device": "CPU", "status": "source-backed"},
+    {"solver": "FDM", "device": "GPU", "status": "source-backed", "reason": "Native completion path exists; device evidence is separate."}
+  ],
+  "equations": [
+    {"id": "eq-relax-stop-torque", "symbols": ["tau_max", "m", "H_eff"], "sources": ["runner-completion"]},
+    {"id": "eq-relax-stop-energy", "symbols": ["DeltaE", "E", "WE", "epsilonE"], "sources": ["runner-completion"]},
+    {"id": "eq-relax-stop-completion", "symbols": ["converged", "tau_max", "epsilon_tau", "epsilonE", "DeltaE"], "sources": ["runner-completion", "python-stop"]}
+  ],
+  "symbols": [
+    {"id": "m", "latex": "\\mathbf m_i^{(k)}", "meaning": "accepted reduced magnetization", "si_unit": "1"},
+    {"id": "H_eff", "latex": "\\mathbf H_{\\mathrm{eff},i}^{(k)}", "meaning": "effective field at point $i$ and iteration $k$", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "tau_max", "latex": "\\tau_{\\max}^{(k)}", "meaning": "maximum accepted-state torque", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "epsilon_tau", "latex": "\\varepsilon_\\tau", "meaning": "torque threshold", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "E", "latex": "E^{(k)}", "meaning": "accepted total energy", "si_unit": "\\mathrm{J}"},
+    {"id": "DeltaE", "latex": "\\Delta E_{W_E}^{(k)}", "meaning": "energy range in the completion window", "si_unit": "\\mathrm{J}"},
+    {"id": "WE", "latex": "W_E", "meaning": "accepted-energy window", "si_unit": "1"},
+    {"id": "epsilonE", "latex": "\\varepsilon_E", "meaning": "energy threshold", "si_unit": "\\mathrm{J}"},
+    {"id": "converged", "latex": "\\mathrm{converged}", "meaning": "completion predicate", "si_unit": "1"},
+    {"id": "k", "latex": "k", "meaning": "accepted iteration index", "si_unit": "1"},
+    {"id": "Trelax", "latex": "T_{\\mathrm{relax}}", "meaning": "relaxation-coordinate ceiling", "si_unit": "\\mathrm{s}"}
+  ],
+  "sources": [
+    {"id": "runner-completion", "path": "crates/fullmag-runner/src/relaxation/convergence.rs", "symbol": "relaxation_converged", "responsibility": "Accepted-state torque/energy completion and budget semantics."},
+    {"id": "python-stop", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class RelaxStop", "responsibility": "Public stop contract and ProblemIR normalization."},
+    {"id": "python-flat-stop", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "_resolve_flat_relax_stop", "responsibility": "tolT/tolA conversion and alias validation."}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "fm.RelaxStop.torque_tolerance_apm", "type": "float | None", "default": "$0.7957747154594767$", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "positive when set", "meaning": "primary torque threshold", "backend_support": "FDM/FEM lanes", "problem_ir": "study.stop.torque_tolerance_apm"},
+      {"python": "fm.RelaxStop.energy_tolerance_j", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{J}$", "validation": "positive when set", "meaning": "optional accepted-energy range threshold", "backend_support": "FDM/FEM lanes", "problem_ir": "study.stop.energy_tolerance_j"},
+      {"python": "fm.RelaxStop.max_steps", "type": "int | None", "default": "$50,000$", "si_unit": "$1$", "validation": "positive integer when set", "meaning": "work budget", "backend_support": "FDM/FEM lanes", "problem_ir": "study.stop.max_steps"}
+    ]
+  }
+}

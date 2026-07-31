@@ -94,6 +94,7 @@ NUMERICAL_METHODS_REFERENCE_PAGES = frozenset(
             f"numerical-methods/{section}/{page}.md"
             for section, pages in {
                 "time-integration": ("index", "explicit-runge-kutta", "adaptive-stepping", "tangent-plane-methods"),
+                "relaxation": ("index", "llg-relaxation", "projected-gradient", "stopping-criteria"),
             }.items()
             for page in pages
         ),
