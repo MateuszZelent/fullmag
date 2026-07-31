@@ -1027,6 +1027,14 @@ Każdy pakiet fizyczny ma kontrakt: problem, równania, symbole i SI, założeni
 backendy CPU/GPU, ProblemIR/API, observables, implementację, testy, przykład, ograniczenia i
 literaturę. Brak implementacji lub dowodu oznacza status planned albo experimental.
 
+Przykłady symulacji publicznej dokumentacji muszą używać kanonicznego wzorca scenariusza
+`fm.study(...)`: jawny engine/device/mode, universe, geometria, materiał i magnetyzacja,
+rejestracja oddziaływań, uporządkowane `study.stages.add_*` oraz output/autosave. Wzorem stylu jest
+`tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py`. Konstruktor
+`fm.Problem(...)` nie może występować w żadnym bloku kodu `public_docs/site`. Gdy builder etapów
+nie obsługuje jeszcze danego oddziaływania, pokazujemy wyłącznie fragmenty `to_ir()` pojedynczych
+obiektów i jawnie zapisujemy granicę API.
+
 ## P0 — standard fizyczny i konwencje
 
 **Zakres:** SI, m, H, B, H_eff, M_s, energia, znaki, osie, normalizacja magnetyzacji, czas,

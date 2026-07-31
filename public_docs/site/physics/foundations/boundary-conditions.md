@@ -82,16 +82,29 @@ to full nodes after the solve.
 ### Python API
 
 ```python
+# %% Periodic boundary request through the stage-first study API
 import fullmag as fm
 
-problem = fm.Problem(
-    ...,
-    boundary_conditions=[
-        fm.PeriodicBoundaryCondition(axis="x"),
-        fm.PeriodicBoundaryCondition(axis="y"),
-    ],
-)
+nm = 1.0e-9
+study = fm.study("periodic-boundary-example")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.pbc(x=True, y=True, demag="open")
+study.exchange()
+study.cell(2 * nm, 2 * nm, 2 * nm)
+body = study.geometry(fm.Box(40 * nm, 40 * nm, 2 * nm), name="film")
+body.Ms = 800.0e3
+body.Aex = 13.0e-12
+body.alpha = 0.01
+body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.stages.add_relax(stage_id="relax", dt=1.0e-15, max_steps=10, tolT=1.0e-6)
+study.stages.add_run(stage_id="run", until=1.0e-12)
 ```
+
+`study.pbc(...)` is the public stage-first declaration of periodicity. It records the requested
+axis pairs and demagnetization policy; it does not construct a second `Problem` object in the
+user script.
 
 ## Airbox boundary conditions (demagnetization)
 

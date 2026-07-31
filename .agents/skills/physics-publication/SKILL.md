@@ -35,6 +35,14 @@ terminal publication gate.
 9. Validation strategy, reference oracle, tolerances, artifacts, and regression tests.
 10. Completeness checklist and deferred work.
 
+Public simulation examples must follow the repository-owned stage-scenario pattern: `fm.study(...)`,
+explicit engine/device/mode, universe/geometry/material/magnetization, interaction registration,
+ordered `study.stages.add_*`, and relevant outputs/autosave. Use
+`tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py` as the style
+reference. Do not put `fm.Problem(...)` in any `public_docs/site` code block. Use individual
+object-level `to_ir()` fragments when stage registration is not yet exposed; never replace the
+stage workflow with a top-level constructor.
+
 For FEM/MFEM solver changes, also state the operator/subsystem boundary:
 exchange, demag strategy, local interaction, direct torque, stepper,
 runtime/residency, or observable. Production FEM means MFEM/hypre/libCEED for

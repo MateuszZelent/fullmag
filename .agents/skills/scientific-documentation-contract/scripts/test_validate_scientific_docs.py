@@ -160,6 +160,17 @@ Requested intent is preserved; planner-resolved execution is recorded. Validatio
         broken["public_api"]["parameters"][0].pop("problem_ir")
         self.assertTrue(any("ProblemIR mapping" in error for error in self.errors(broken)))
 
+    def test_direct_problem_is_forbidden_in_public_documentation(self) -> None:
+        self.page_path.write_text(
+            self.page_path.read_text(encoding="utf-8").replace(
+                "from fullmag import Exchange\n# %% Model",
+                "from fullmag import Exchange\n# %% Model\n",
+            )
+            + "\n```python\nproblem = fm.Problem(name='run')\n```\n",
+            encoding="utf-8",
+        )
+        self.assertTrue(any("uses fm.Problem" in error for error in self.errors()))
+
     def test_rendered_html_requires_mathjax_and_copy_controls(self) -> None:
         rendered = self.repo / "exchange.html"
         rendered.write_text("<html><code>exchange = Exchange()</code></html>", encoding="utf-8")

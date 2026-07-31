@@ -996,6 +996,17 @@ documentation:
 - Treat every documented code block as an executable contract: run it, verify its
   output or expected rejection, and state the exact status when the current builder
   cannot express the complete interaction graph.
+- The canonical simulation-script pattern is the repository-owned stage scenario: start with
+  `import fullmag as fm`, configure `fm.study(...)` with engine/device/mode, define the universe,
+  geometry, material and magnetization, register interactions, append ordered
+  `study.stages.add_*` stages, and configure autosave/outputs when relevant. Use
+  `tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py` as the
+  style reference and cite the exact scenario used.
+- Never put `fm.Problem(...)` in `public_docs/site` documentation, tutorials, examples, or
+  standard-problem snippets. Public scripts must use the stage-first `fm.study(...).stages`
+  workflow. If a stage builder cannot express an interaction, document that boundary explicitly
+  and show individual object-level `to_ir()` fragments or a repository scenario reference; do not
+  fabricate a top-level snapshot or stage API.
 - These manuals guide structure only. Never copy their code or infer Fullmag behavior
   from them; current Fullmag source, Python API, `ProblemIR`, planner, runtime, tests,
   and device evidence remain authoritative.

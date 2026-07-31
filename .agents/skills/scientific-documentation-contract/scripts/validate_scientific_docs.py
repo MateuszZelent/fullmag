@@ -22,6 +22,7 @@ RAW_INLINE_RE = re.compile(r"\\\(|\\\)")
 PYTHON_BLOCK_RE = re.compile(r"```python\s*\n(.*?)```", re.DOTALL)
 MATH_LABEL_RE = re.compile(r"```\{math\}\s*\n(?::[^\n]+\n)*:label:\s*([^\s]+)", re.MULTILINE)
 PLACEHOLDER_RE = re.compile(r"\b(?:TODO|TBD)\b|to be documented", re.IGNORECASE)
+DIRECT_PROBLEM_RE = re.compile(r"\bfm\.Problem\s*\(")
 
 
 def _strings(value: Any):
@@ -192,6 +193,11 @@ def validate_page(repo_root: Path, manifest: object, rendered_html: Path | None 
             ast.parse(block)
         except SyntaxError as exc:
             errors.append(f"python block {index + 1} does not parse: {exc.msg} at line {exc.lineno}")
+        if DIRECT_PROBLEM_RE.search(block):
+            errors.append(
+                f"python block {index + 1} uses fm.Problem(); public documentation must use "
+                "the stage-first study API or inspect individual objects"
+            )
 
     public_api = manifest.get("public_api")
     if not isinstance(public_api, dict):

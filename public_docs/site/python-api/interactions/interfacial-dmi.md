@@ -118,36 +118,20 @@ print(material.to_ir())
 author `InterfacialDMI(D=...)`; the current FDM planner does not resolve `Material.Dind` or
 `Dind_field` into its scalar DMI slot.
 
-### Complete problem example
+### Object-level `ProblemIR` fragments
+
+The stage builder does not currently expose a DMI registration method. This block is therefore a
+fragment inspection only; it is not the public simulation workflow and does not launch a solver.
+Use the stage boundary and capability statement on the physics owner page for the current
+executable surface.
 
 ```python
-# %% Copyable Python/Jupyter example
+# %% Interfacial-DMI object fragment; no solver is launched here.
 import json
 import fullmag as fm
 
-nm = 1.0e-9
-material = fm.Material(
-    name="permalloy-with-idmi",
-    Ms=800.0e3,
-    A=13.0e-12,
-    alpha=0.01,
-)
-magnet = fm.Ferromagnet(
-    name="film",
-    geometry=fm.Box(size=(40 * nm, 20 * nm, 4 * nm), name="film-geometry"),
-    material=material,
-    m0=fm.texture.uniform((1.0, 0.0, 0.0)),
-)
-problem = fm.Problem(
-    name="interfacial-dmi-example",
-    magnets=[magnet],
-    energy=[fm.Exchange(), fm.InterfacialDMI(D=2.5e-3)],
-    study=fm.TimeEvolution(
-        dynamics=fm.LLG(),
-        outputs=[],
-    ),
-)
-print(json.dumps(problem.to_ir(include_geometry_assets=False), indent=2))
+term = fm.InterfacialDMI(D=2.5e-3, interface_normal=(0.0, 0.0, 1.0))
+print(json.dumps(term.to_ir(), indent=2))
 ```
 
 (interfacial-dmi-api-problem-ir)=

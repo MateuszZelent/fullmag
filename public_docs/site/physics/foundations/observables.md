@@ -56,16 +56,37 @@ Scalar observables are integrated (global) quantities, typically energies.
 Observables are requested through the `outputs` parameter of a study:
 
 ```python
+# %% Observable requests in a stage-first study
 import fullmag as fm
 
-study = fm.TimeEvolution(
-    dynamics=fm.LLG(),
-    outputs=[
-        fm.SaveField("m", every=10e-12),         # magnetization every 10 ps
-        fm.SaveField("H_eff", every=10e-12),     # effective field every 10 ps
-        fm.SaveScalar("E_ex", every=1e-12),      # exchange energy every 1 ps
-        fm.SaveScalar("E_total", every=1e-12),   # total energy every 1 ps
-    ],
+nm = 1.0e-9
+study = fm.study("observable-example")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.exchange()
+study.cell(2 * nm, 2 * nm, 1 * nm)
+body = study.geometry(fm.Box(40 * nm, 20 * nm, 5 * nm), name="film")
+body.Ms = 800.0e3
+body.Aex = 13.0e-12
+body.alpha = 0.01
+body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="nonlinear_cg",
+    max_steps=100,
+    tolT=1.0e-6,
+).autosave(
+    fm.StageAutosave(
+        table=fm.TableAutosave(
+            every_steps=1,
+            quantities=["step", "e_ex", "e_total", "max_torque_T"],
+        ),
+        fields=[
+            fm.FieldAutosave("m", every_steps=10),
+            fm.FieldAutosave("H_eff", every_steps=10),
+        ],
+    )
 )
 ```
 

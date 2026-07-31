@@ -24,6 +24,10 @@ class SkillIntegrationTests(unittest.TestCase):
             "resolved execution",
             "source-code index",
             "MathJax",
+            "fm.study(...)",
+            "study.stages.add_*",
+            "relax_projected_gradient_bb.py",
+            "Never put `fm.Problem(...)` in `public_docs/site`",
         ):
             self.assertIn(requirement, text)
         self.assertNotIn("domain → solver → backend → interaction", text)

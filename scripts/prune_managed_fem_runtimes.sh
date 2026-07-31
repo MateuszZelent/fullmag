@@ -159,4 +159,9 @@ for stale_path in \
   fi
 done
 
-echo "Managed FEM runtime prune: removed ${removed_count} entries (${removed_bytes} bytes), ${failed_count} could not be removed; kept active/in-use runtimes, no legacy schema variants, and ${KEEP_PER_FAMILY} newest variant(s) per family."
+if [ "${KEEP_LEGACY}" = "1" ]; then
+  legacy_policy="retained"
+else
+  legacy_policy="removed"
+fi
+echo "Managed FEM runtime prune: removed ${removed_count} entries (${removed_bytes} bytes), ${failed_count} could not be removed; kept active/in-use runtimes, legacy schema policy=${legacy_policy}, and ${KEEP_PER_FAMILY} newest variant(s) per family."

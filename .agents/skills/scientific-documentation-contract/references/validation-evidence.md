@@ -6,6 +6,10 @@ The automated contract tests were created while the skill and validator were abs
 
 Earlier pressure scenarios also exposed recurring failures: flattening FEM/FDM and CPU/GPU, replacing stable symbols with line ranges, accepting incomplete equations, omitting API-to-IR mapping, and treating structural checks as scientific proof.
 
+The public-example guard adds a regression boundary for the authoring workflow: a normal
+simulation-shaped Python block must use `fm.study(...)` and `study.stages.add_*`; direct
+`fm.Problem(...)` is accepted only as a labelled non-running `ProblemIR`/schema inspection fixture.
+
 ## Regression scenarios
 
 Repeat after material changes:

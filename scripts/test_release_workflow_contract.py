@@ -39,6 +39,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertGreaterEqual(content.count("FULLMAG_CONTROL_ROOM_STATIC_EXPORT: 1"), 2)
         self.assertIn(".fullmag/local/web/index.html", content)
         self.assertIn("fullmag-api.exe", content)
+        self.assertIn("libdbus-1-dev", content)
 
     def test_workflow_rejects_unsafe_release_inputs(self) -> None:
         content = RELEASE_WORKFLOW.read_text(encoding="utf-8")

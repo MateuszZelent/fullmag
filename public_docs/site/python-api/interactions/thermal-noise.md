@@ -208,7 +208,7 @@ fail-closed planner results, not implicit CPU fallbacks.
 | `ThermalNoise(temperature=300, seed=123)` | Python constructor | accepted and serializes fixed seed |
 | `ThermalNoise(temperature=300)` | Python constructor | accepted and serializes system-entropy intent |
 | `ThermalNoise(temperature=0)` | Python constructor | rejected: interaction temperature must be positive |
-| `Problem(temperature=0)` | `Problem` | accepted as disabled thermal state |
+| `top-level temperature=0` | top-level compatibility field | accepted as disabled thermal state |
 | two thermal terms | `Problem`, FDM planner, FEM planner | rejected; they are not summed |
 | term `T` and `Problem.temperature` disagree by more than `1e-6 K` | Python and planners | rejected as a conflict |
 | `seed=0` or a negative seed | Python and planners | rejected; zero is not a fixed replay value |

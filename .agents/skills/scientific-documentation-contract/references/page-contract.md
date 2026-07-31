@@ -41,6 +41,15 @@ Document the equation implemented in code. If code intentionally approximates th
 
 Use ordinary MyST `python` blocks with copy controls enabled by Sphinx. A complete example must be directly copyable and parse as Python; divide it into notebook-compatible `# %%` cells without prompts or hidden state.
 
+The normal public simulation script is stage-first and must follow the repository-owned scenario
+shape: `import fullmag as fm`, `fm.study(...)`, explicit engine/device/mode, universe or mesh,
+geometry, material and magnetization, interaction registration, ordered `study.stages.add_*`, and
+outputs/autosave where relevant. The canonical style reference is
+`tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py`. A direct
+`fm.Problem(...)` block is forbidden in `public_docs/site`, including low-level inspection. Use
+individual object `to_ir()` fragments when a page needs to show normalization without a complete
+stage graph.
+
 For every public constructor/object/parameter used or exposed by the interaction, document:
 
 - public qualified name;
@@ -59,6 +68,17 @@ Show canonical serialized `ProblemIR` produced from the example, not a hand-shap
 Use repository-relative `path + symbol` or `path + DOC-ANCHOR` as stable identity. Resolve line links from a full commit SHA when publishing. A moving branch URL, bare file, or handwritten line range is not an anchor.
 
 Every equation and nontrivial API/IR claim maps to source and test evidence. Runtime claims require executed-runtime evidence; GPU claims require device identity. Automated structure checks do not prove mathematical equivalence, so publication also requires semantic scientific review and appropriate numerical validation.
+
+Before publication, run the repository-wide public-example guard in addition to page source-map
+validation:
+
+```bash
+python3 scripts/check_public_doc_examples.py --root public_docs/site
+```
+
+The guard parses every published Python block, rejects simulation-shaped examples without
+`fm.study(...)` and `study.stages.add_*`, and rejects unlabelled or solver-running
+`fm.Problem(...)` fixtures.
 
 ## Terminal sections
 

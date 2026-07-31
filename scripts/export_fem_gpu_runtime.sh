@@ -163,9 +163,13 @@ mkdir -p "${VARIANTS_ROOT}" "${FULLMAG_CONTAINER_TARGET_DIR}/tmp" \
   "${FULLMAG_CONTAINER_TARGET_DIR}/cargo-home"
 
 verify_source_snapshot_identity() {
+  # The container builds the immutable snapshot. The live worktree may drift
+  # while another agent edits docs; report that drift without invalidating the
+  # already captured build input.
   python3 "${SOURCE_ROOT}/scripts/capture_source_snapshot_identity.py" \
     --repo-root "${REPO_ROOT}" \
     --compare "${source_identity_file}" \
+    --allow-source-drift \
     --verify-materialized "${SOURCE_SNAPSHOT_ROOT}"
 }
 

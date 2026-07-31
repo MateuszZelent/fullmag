@@ -11,6 +11,8 @@ on:
       - "packages/fullmag-py/**"
       - "scripts/public_docs_information_architecture.py"
       - "scripts/test_public_docs_information_architecture.py"
+      - "scripts/check_public_doc_examples.py"
+      - "scripts/test_check_public_doc_examples.py"
       - ".agents/skills/scientific-documentation-contract/**"
       - ".github/workflows/documentation.yml"
   pull_request:
@@ -21,6 +23,8 @@ on:
       - "packages/fullmag-py/**"
       - "scripts/public_docs_information_architecture.py"
       - "scripts/test_public_docs_information_architecture.py"
+      - "scripts/check_public_doc_examples.py"
+      - "scripts/test_check_public_doc_examples.py"
       - ".agents/skills/scientific-documentation-contract/**"
       - ".github/workflows/documentation.yml"
   workflow_dispatch:
@@ -60,6 +64,11 @@ jobs:
         run: |
           python -m unittest scripts/test_public_docs_information_architecture.py -v
           python scripts/public_docs_information_architecture.py --check --root public_docs/site
+
+      - name: Enforce stage-first public Python examples
+        run: |
+          python -m unittest scripts/test_check_public_doc_examples.py -v
+          python scripts/check_public_doc_examples.py --root public_docs/site
 
       - name: Resolve scientific documentation diff base
         id: docs-diff

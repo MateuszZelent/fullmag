@@ -144,6 +144,49 @@ def test_compare_fails_when_dirty_content_changes_after_capture(tmp_path: Path) 
     assert "source identity changed during managed FEM runtime build" in compared.stderr
 
 
+def test_compare_can_warn_when_worktree_changes_during_build(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    identity_path = tmp_path / "identity.json"
+    snapshot = tmp_path / "snapshot"
+    captured = subprocess.run(
+        (
+            sys.executable,
+            str(CAPTURE),
+            "--repo-root",
+            str(repo),
+            "--output",
+            str(identity_path),
+            "--materialize",
+            str(snapshot),
+        ),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert captured.returncode == 0, captured.stderr
+    (repo / "tracked.txt").write_text("changed while build runs\n", encoding="utf-8")
+
+    compared = subprocess.run(
+        (
+            sys.executable,
+            str(CAPTURE),
+            "--repo-root",
+            str(repo),
+            "--compare",
+            str(identity_path),
+            "--allow-source-drift",
+            "--verify-materialized",
+            str(snapshot),
+        ),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert compared.returncode == 0, compared.stderr
+    assert "SOURCE_IDENTITY_WARNING=source identity changed during managed FEM runtime build" in compared.stderr
+
+
 def test_successful_compare_is_silent(tmp_path: Path) -> None:
     repo = _repository(tmp_path)
     identity_path = tmp_path / "identity.json"

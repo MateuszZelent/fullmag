@@ -468,6 +468,12 @@ def test_managed_runtime_staleness_uses_exact_source_snapshot_identity() -> None
     assert '--require-source-snapshot-sha256 "$source_snapshot"' in ensure_recipe
     assert '! -path \\"*/tests/*\\"' not in ensure_recipe
     assert '! -name \\"tests.rs\\"' not in ensure_recipe
+    assert '--allow-source-drift' in ensure_recipe
+    assert 'bash scripts/prune_managed_fem_runtimes.sh' in ensure_recipe
+    assert 'FULLMAG_RUNTIME_PRUNE:-1' in ensure_recipe
+    assert 'runtime_rebuilt=0' in ensure_recipe
+    assert 'runtime_rebuilt=1' in ensure_recipe
+    assert 'if [ "$runtime_rebuilt" = "1" ]; then' in ensure_recipe
 
 
 def test_export_script_restores_runtime_bundle_to_host_owner() -> None:
@@ -822,7 +828,7 @@ def test_managed_runtime_validator_binds_manifest_to_cli_and_api_startup_stamps(
     assert "API startup build identity mismatch" in invalid.stderr
 
 
-def test_export_passes_and_requires_exact_host_source_identity() -> None:
+def test_export_uses_immutable_source_snapshot_when_host_worktree_drifts() -> None:
     exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
 
     resolve_index = exporter.index("python3 scripts/capture_source_snapshot_identity.py")
@@ -848,6 +854,7 @@ def test_export_passes_and_requires_exact_host_source_identity() -> None:
     assert '--source-snapshot-sha256 "${FULLMAG_SOURCE_SNAPSHOT_SHA256}"' in exporter
     assert '--require-source-snapshot-sha256 "${FULLMAG_SOURCE_SNAPSHOT_SHA256}"' in exporter
     assert '--verify-materialized "${SOURCE_SNAPSHOT_ROOT}"' in exporter
+    assert '--allow-source-drift' in exporter
     assert "capture_source_snapshot_identity.py" in exporter
     source_capture = (
         REPO_ROOT / "scripts/capture_source_snapshot_identity.py"
@@ -1675,10 +1682,9 @@ def test_ensure_managed_runtime_rebuilds_an_invalid_bundle() -> None:
 
     assert "Managed FEM runtime bundle is invalid; restoring the persistent build first." in ensure_recipe
     assert "bash scripts/restore_persistent_fem_runtime.sh" in ensure_recipe
-    assert (
-        "validate_current >/dev/null 2>&1 || "
-        "FULLMAG_FEM_RUNTIME_REUSE_BUILD=1 just rebuild-fem-runtime"
-    ) in ensure_recipe
+    assert "if ! validate_current >/dev/null 2>&1; then" in ensure_recipe
+    assert "FULLMAG_FEM_RUNTIME_REUSE_BUILD=1 just rebuild-fem-runtime" in ensure_recipe
+    assert "runtime_rebuilt=1" in ensure_recipe
     assert "capture_source_snapshot_identity.py" in ensure_recipe
     assert '--compare "$identity_file"' in ensure_recipe
     assert "--require-source-snapshot-sha256" in ensure_recipe

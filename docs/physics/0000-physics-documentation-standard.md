@@ -62,3 +62,13 @@ A note is complete only when it lets a reviewer answer:
 - Are we implementing it consistently across the stack?
 - Do we know how to validate it?
 - Do we understand what is intentionally out of scope?
+
+## Public executable examples
+
+Public simulation examples follow the repository-owned stage-scenario convention used by
+`tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py`: configure
+`fm.study(...)`, engine/device/mode, universe, geometry, material and magnetization, interactions,
+ordered `study.stages.add_*` stages, and outputs/autosave where relevant. Do not present
+`fm.Problem(...)` must not appear in any `public_docs/site` code block. If a stage registration is
+not available, show individual object-level `to_ir()` fragments and state the limitation instead
+of constructing a top-level snapshot.

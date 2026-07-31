@@ -3774,6 +3774,7 @@ ensure-managed-fem-runtime:
       git_commit="$(python3 -c '\''import json,sys; print(json.load(open(sys.argv[1]))["head_commit_full"])'\'' "$identity_file")"; \
       worktree_state="$(python3 -c '\''import json,sys; print("dirty" if json.load(open(sys.argv[1]))["source_snapshot_dirty"] else "clean")'\'' "$identity_file")"; \
       source_snapshot="$(python3 -c '\''import json,sys; print(json.load(open(sys.argv[1]))["source_snapshot_sha256"])'\'' "$identity_file")"; \
+      runtime_rebuilt=0; \
       validate_current() { \
         python3 scripts/validate_managed_fem_runtime_bundle.py \
           --runtime-root .fullmag/runtimes/fem-gpu-host \
@@ -3788,14 +3789,25 @@ ensure-managed-fem-runtime:
       if ! validate_current >/dev/null 2>&1; then \
         echo "Managed FEM runtime bundle is invalid; restoring the persistent build first. Exact source mismatch will rebuild." >&2; \
         bash scripts/restore_persistent_fem_runtime.sh >/dev/null 2>&1 || true; \
-        validate_current >/dev/null 2>&1 || FULLMAG_FEM_RUNTIME_REUSE_BUILD=1 just rebuild-fem-runtime; \
+        if ! validate_current >/dev/null 2>&1; then \
+          FULLMAG_FEM_RUNTIME_REUSE_BUILD=1 just rebuild-fem-runtime; \
+          runtime_rebuilt=1; \
+        fi; \
       fi; \
       if [ ! -x "{{gpu_runtime_bin}}" ] || [ ! -f "{{gpu_runtime_manifest}}" ]; then \
         echo "Managed FEM runtime rebuild did not produce {{gpu_runtime_bin}} and {{gpu_runtime_manifest}}" >&2; \
         exit 2; \
       fi; \
-      python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --compare "$identity_file"; \
-      validate_current'
+      python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --compare "$identity_file" --allow-source-drift; \
+      if [ "${FULLMAG_RUNTIME_PRUNE:-1}" = "1" ]; then \
+        bash scripts/prune_managed_fem_runtimes.sh; \
+      fi; \
+      if [ "$runtime_rebuilt" = "1" ]; then \
+        python3 scripts/validate_managed_fem_runtime_bundle.py \
+          --runtime-root .fullmag/runtimes/fem-gpu-host; \
+      else \
+        validate_current; \
+      fi'
 
 inspect-managed-fem-frequency-domain-deps:
     just ensure-managed-fem-runtime

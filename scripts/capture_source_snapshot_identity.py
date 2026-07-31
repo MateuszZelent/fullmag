@@ -627,6 +627,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--materialize", type=Path)
     parser.add_argument("--materialize-existing-empty", action="store_true")
     parser.add_argument("--verify-materialized", type=Path)
+    parser.add_argument(
+        "--allow-source-drift",
+        action="store_true",
+        help="warn instead of failing when the live worktree differs from --compare",
+    )
     arguments = parser.parse_args(argv)
     try:
         identity = capture(arguments.repo_root)
@@ -643,14 +648,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         if arguments.compare is not None:
             expected = json.loads(arguments.compare.read_text(encoding="utf-8"))
-            if identity != expected:
-                raise SourceIdentityError(
-                    "source identity changed during managed FEM runtime build"
-                )
+            identity_matches = identity == expected
+            if not identity_matches:
+                message = "source identity changed during managed FEM runtime build"
+                if arguments.allow_source_drift:
+                    print(f"SOURCE_IDENTITY_WARNING={message}", file=sys.stderr)
+                else:
+                    raise SourceIdentityError(message)
             if arguments.verify_materialized is not None:
-                verify_materialized(
-                    arguments.repo_root.resolve(), arguments.verify_materialized, expected
-                )
+                if identity_matches:
+                    verify_materialized(
+                        arguments.repo_root.resolve(), arguments.verify_materialized, expected
+                    )
+                elif arguments.allow_source_drift:
+                    print(
+                        "SOURCE_IDENTITY_WARNING=skipping live-worktree snapshot verification after source drift",
+                        file=sys.stderr,
+                    )
         elif arguments.verify_materialized is not None:
             raise SourceIdentityError("--verify-materialized requires --compare")
         if arguments.output is not None:
