@@ -1,0 +1,46 @@
+{
+  "document": {"path": "public_docs/site/numerical-methods/demag-solvers/fdm-convolution.md"},
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "not-applicable", "reason": "FDM tensor convolution is not the FEM scalar-potential realization."},
+    {"solver": "FEM", "device": "GPU", "status": "not-applicable", "reason": "FDM tensor convolution is not the FEM scalar-potential realization."},
+    {"solver": "FDM", "device": "CPU", "status": "reference"},
+    {"solver": "FDM", "device": "GPU", "status": "source-backed", "reason": "CUDA kernels are source-visible; executed-device qualification is separate."}
+  ],
+  "equations": [
+    {"id": "eq-numerical-demag-fdm-field", "symbols": ["Hdi", "N", "Mqj", "pq", "ij"], "sources": ["multiply", "cpu-field"]},
+    {"id": "eq-numerical-demag-fdm-energy", "symbols": ["Ed", "mu0", "Vp", "M", "Hd"], "sources": ["cpu-field"]},
+    {"id": "eq-numerical-demag-fdm-fft", "symbols": ["Hhat", "Nhat", "Mhat", "F"], "sources": ["multiply", "cpu-spectrum"]}
+  ],
+  "symbols": [
+    {"id": "Hdi", "latex": "$H_{\\mathrm d,p,i}$", "meaning": "field component $i$ in destination cell $p$", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "N", "latex": "$N^{\\mathrm{cell}}_{pq,ij}$", "meaning": "cell-averaged demagnetization tensor", "si_unit": "$1$"},
+    {"id": "Mqj", "latex": "$M_{q,j}$", "meaning": "source-cell magnetization component", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Ed", "latex": "$E_{\\mathrm d}$", "meaning": "demagnetization energy", "si_unit": "$\\mathrm{J}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "Vp", "latex": "$V_p$", "meaning": "destination-cell volume", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "M", "latex": "$\\mathbf M_p$", "meaning": "magnetization in destination cell", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Hd", "latex": "$\\mathbf H_{\\mathrm d,p}$", "meaning": "demagnetizing field in destination cell", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Hhat", "latex": "$\\widehat{\\mathbf H}_{\\mathrm d}$", "meaning": "FFT-domain demagnetizing field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Nhat", "latex": "$\\widehat{\\mathbf N}^{\\mathrm{cell}}$", "meaning": "FFT of the tensor kernel", "si_unit": "$1$"},
+    {"id": "Mhat", "latex": "$\\widehat{\\mathbf M}$", "meaning": "FFT of packed magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "F", "latex": "$\\mathcal F$", "meaning": "discrete Fourier transform", "si_unit": "$1$"},
+    {"id": "pq", "latex": "$p,q$", "meaning": "destination and source cell indices", "si_unit": "$1$"},
+    {"id": "ij", "latex": "$i,j$", "meaning": "Cartesian component indices", "si_unit": "$1$"}
+  ],
+  "sources": [
+    {"id": "fdm-policy", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDMDemag", "responsibility": "FDM demagnetization strategy and common-grid policy."},
+    {"id": "newell", "path": "crates/fullmag-fdm-demag/src/newell.rs", "symbol": "compute_newell_kernels", "responsibility": "Newell cell-averaged tensor construction."},
+    {"id": "multiply", "path": "crates/fullmag-fdm-demag/src/multiply.rs", "symbol": "accumulate_tensor_convolution", "responsibility": "Tensor-vector convolution and sign convention."},
+    {"id": "cpu-spectrum", "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs", "symbol": "compute_newell_kernel_spectra", "responsibility": "CPU FFT kernel spectra."},
+    {"id": "cpu-field", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "demag_field_from_vectors", "responsibility": "CPU demagnetizing field and energy path."},
+    {"id": "cuda64", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "launch_demag_field_fp64", "responsibility": "CUDA FP64 field dispatch."},
+    {"id": "python-stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "relax_stage", "responsibility": "Stage-first example lowering."}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "FDMDemag.strategy", "type": "str", "default": "auto", "si_unit": "$1$", "validation": "`auto`, `single_grid`, `multilayer_convolution`", "meaning": "common-grid or multilayer topology", "backend_support": "FDM CPU/GPU", "problem_ir": "`discretization.demag.strategy`"},
+      {"python": "FDMDemag.mode", "type": "str", "default": "auto", "si_unit": "$1$", "validation": "`auto`, `two_d_stack`, `three_d`", "meaning": "thin-film or full-3D mode", "backend_support": "FDM CPU/GPU", "problem_ir": "`discretization.demag.mode`"},
+      {"python": "FDM.default_cell", "type": "tuple[float,float,float] | None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "three finite positive values", "meaning": "default Cartesian cell", "backend_support": "FDM CPU/GPU", "problem_ir": "`discretization.fdm.default_cell`"}
+    ]
+  }
+}
