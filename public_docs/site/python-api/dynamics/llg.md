@@ -40,13 +40,6 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | `LLG.adaptive_timestep` | `AdaptiveTimestep \| None` | `None` | $1$ | Optional adaptive-step contract. | Optional adaptive-step contract. | FEM/FDM CPU/GPU; planner checks combinations | `study.dynamics.adaptive_timestep` |
 | `LLG.field_refresh` | `FieldRefreshPolicy \| None` | `None` | $1$ | Optional field-refresh policy. | Optional field-refresh policy. | FEM/FDM CPU/GPU; planner checks combinations | `study.dynamics.field_refresh` |
 
-```python
-# %%
-import inspect
-import fullmag as fm
-# %%
-print(inspect.signature(fm.LLG))
-```
 
 (python-api-dynamics-llg-problem-ir)=
 <!-- (problem-ir)= -->

@@ -59,13 +59,6 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | `Material.Dind_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-2}}$ | Optional spatial interfacial-DMI values. | Optional spatial interfacial-DMI values. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].dind_field` |
 | `Material.Dbulk_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Optional spatial bulk-DMI values. | Optional spatial bulk-DMI values. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].dbulk_field` |
 
-```python
-# %%
-import inspect
-import fullmag as fm
-# %%
-print(inspect.signature(fm.Material))
-```
 
 (python-api-materials-material-problem-ir)=
 <!-- (problem-ir)= -->

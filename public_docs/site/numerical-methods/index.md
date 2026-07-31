@@ -28,8 +28,8 @@ The method pages answer five different questions:
 5. which statements are source-backed and which remain unqualified.
 
 The first executable examples use `fm.study(...)` and ordered
-`study.stages.add_*` calls. They are user workflows, not internal construction of a
-flat `fm.Problem(...)` object.
+`study.stages.add_*` calls. They are user workflows, not internal object-construction
+or serialization snippets.
 
 ```{toctree}
 :maxdepth: 1

@@ -155,27 +155,6 @@ closed; FEM carries it through the weak residual.
 (bulk-dmi-python-api)=
 ## 5. Python API
 
-```python
-# %% Explicit bulk-DMI term
-import fullmag as fm
-
-bulk_term = fm.BulkDMI(D=3.0e-3)
-print(bulk_term.to_ir())
-
-# %% FEM material-owned scalar coefficient
-material = fm.Material(
-    name="Permalloy",
-    Ms=8.0e5,
-    A=1.3e-11,
-    alpha=0.01,
-    Dbulk=3.0e-3,
-)
-print(material.to_ir()["bulk_dmi"])
-
-# %% FDM periodicity required by the current planner
-pbc = fm.FdmPbc(axes=(True, True, True))
-print(pbc.to_ir())
-```
 
 | Python parameter | Type | Default | SI unit | Validation domain | Meaning | Backend support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|

@@ -44,13 +44,6 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | `Ferromagnet.allocated_region_ids` | `tuple of strings` | `()` | $1$ | Reserved region identities used by builder and round-trip ownership. | Reserved region identities used by builder and round-trip ownership. | FEM/FDM CPU/GPU; planner checks combinations | `magnets[].allocated_region_ids` |
 | `Ferromagnet.material_parameter_fields` | `tuple` | `()` | $1$ | Object-owned spatial material assignments lowered into `material_parameter_fields`. | Object-owned spatial material assignments lowered into `material_parameter_fields`. | FEM/FDM CPU/GPU; planner checks combinations | `magnets[].material_parameter_fields` |
 
-```python
-# %%
-import inspect
-import fullmag as fm
-# %%
-print(inspect.signature(fm.Ferromagnet))
-```
 
 (python-api-magnets-and-textures-ferromagnet-problem-ir)=
 <!-- (problem-ir)= -->

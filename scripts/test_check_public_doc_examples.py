@@ -36,14 +36,15 @@ class PublicDocumentationExampleContractTests(unittest.TestCase):
         errors = check_public_examples(self.root)
         self.assertTrue(any("must not contain fm.Problem" in error for error in errors))
 
-    def test_object_fragment_without_problem_passes(self) -> None:
+    def test_object_fragment_without_stage_fails(self) -> None:
         self.write(
             "import fullmag as fm\n"
             "# %% Object-level IR fragment; no solver is launched here\n"
             "term = fm.Exchange()\n"
             "print(term.to_ir())"
         )
-        self.assertEqual([], check_public_examples(self.root))
+        errors = check_public_examples(self.root)
+        self.assertTrue(any("complete stage-first scenario" in error for error in errors))
 
     def test_problem_run_fails_with_the_same_public_boundary(self) -> None:
         self.write(

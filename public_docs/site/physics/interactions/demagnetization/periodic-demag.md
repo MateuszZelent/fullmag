@@ -63,17 +63,6 @@ FDM `periodic_airbox_k0` are not interchangeable.
 (demag-periodic-python-api)=
 ## Python API
 
-```python
-# %% Declare periodic axes and finite FDM image policy
-import fullmag as fm
-
-pbc = fm.FdmPbc(
-    axes=(True, True, False),
-    demag="truncated_images",
-    image_counts=(10, 10, 0),
-)
-print(pbc.to_ir())
-```
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|

@@ -38,13 +38,6 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | `TimeEvolution.outputs` | `sequence` | `required` | $1$ | Sampling requests. An empty sequence is valid. | Sampling requests. An empty sequence is valid. | FEM/FDM CPU/GPU; planner checks combinations | `study.outputs` |
 | `TimeEvolution.table_autosave` | `TableAutosave \| None` | `None` | $1$ | Optional tabular autosave policy. | Optional tabular autosave policy. | FEM/FDM CPU/GPU; planner checks combinations | `study.table_autosave` |
 
-```python
-# %%
-import inspect
-import fullmag as fm
-# %%
-print(inspect.signature(fm.TimeEvolution))
-```
 
 (python-api-studies-time-evolution-problem-ir)=
 <!-- (problem-ir)= -->

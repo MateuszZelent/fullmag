@@ -261,75 +261,13 @@ This code proves only the stage sequencing contract. It does not attach magnetoe
 The missing registration/lowering path is an explicit API limitation, not a reason to fabricate
 a stage example with disconnected objects.
 
-### Complete Python object graph and object-level lowering
+### Resolved mechanics graph
 
-The following Jupyter-compatible block is the authoritative copyable example for the currently
-available magnetoelastic Python graph. It constructs a magnetic body, elastic body, cubic law,
-prescribed-strain load, and coupling, then inspects each object's canonical fragment. It does not
-construct a top-level simulation or claim that the current stage builder can execute the graph.
+The current public stage builder does not expose registration methods for the mechanics graph.
+The JSON representation below is therefore a schema/provenance view, not a copyable Python
+simulation example. A Python example will be published only after the graph can be attached to a
+complete study and ordered stage sequence.
 
-```python
-# %% Imports and geometry
-import json
-import fullmag as fm
-
-nm = 1.0e-9
-strip = fm.Box(size=(40 * nm, 40 * nm, 2 * nm), name="strip")
-
-# %% Magnetic and elastic materials
-magnetic_material = fm.Material(
-    name="CoFeB",
-    Ms=1.0e6,
-    A=15.0e-12,
-    alpha=0.02,
-)
-elastic_material = fm.ElasticMaterial(
-    name="CoFeB-elastic",
-    C11=2.41e11,
-    C12=1.46e11,
-    C44=1.12e11,
-    rho=8900.0,
-)
-
-magnet = fm.Ferromagnet(
-    name="free_layer",
-    geometry=strip,
-    material=magnetic_material,
-    m0=fm.texture.uniform((1.0, 0.0, 0.0)),
-)
-elastic_body = fm.ElasticBody(
-    name="elastic_body",
-    geometry=strip,
-    elastic_material=elastic_material,
-)
-
-# %% Cubic law, prescribed strain, and coupling graph
-law = fm.MagnetostrictionLaw(
-    name="cubic-law",
-    kind="cubic",
-    B1=-6.95e6,
-    B2=-5.62e6,
-)
-load = fm.MechanicalLoad(
-    kind="prescribed_strain",
-    strain=(1.0e-4, 0.0, 0.0, 0.0, 0.0, 0.0),
-)
-coupling = fm.Magnetoelastic(
-    magnet="free_layer",
-    body="elastic_body",
-    law="cubic-law",
-)
-
-# %% Object-level canonical fragments; no solver is launched here
-print(json.dumps({
-    "magnetic_material": magnetic_material.to_ir(),
-    "elastic_material": elastic_material.to_ir(),
-    "elastic_body": elastic_body.to_ir(),
-    "magnetostriction_law": law.to_ir(),
-    "mechanical_load": load.to_ir(),
-    "energy_term": coupling.to_ir(),
-}, indent=2))
-```
 
 ### Exhaustive parameter reference
 
@@ -368,7 +306,7 @@ print(json.dumps({
 (mel-problem-ir)=
 ## Python-to-`ProblemIR` representation
 
-The low-level example lowers the coupling as a reference graph. The coupling term contains names,
+The resolved JSON representation lowers the coupling as a reference graph. The coupling term contains names,
 not duplicated material or strain data:
 
 ```json

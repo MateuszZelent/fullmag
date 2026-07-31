@@ -104,37 +104,11 @@ Current public limitations include:
 (thermal-noise-api-python-api)=
 ## 5. Python API and copyable examples
 
-```python
-# %% Explicit interaction term
-import fullmag as fm
 
-thermal = fm.ThermalNoise(temperature=300.0, seed=123)
-assert thermal.to_ir() == {
-    "kind": "thermal_noise",
-    "temperature": 300.0,
-    "seed": 123,
-}
-
-# %% System-entropy request
-entropy_term = fm.ThermalNoise(temperature=4.2)
-assert entropy_term.to_ir() == {
-    "kind": "thermal_noise",
-    "temperature": 4.2,
-}
-
-# %% Flat script authoring
-fm.engine("fdm")
-fm.device("cpu")
-fm.thermal_noise(temperature=300.0, seed=123)
-
-# %% Fluent script authoring
-study = fm.study("thermal-demo")
-study.thermal_noise(temperature=300.0, seed=123)
-```
-
-The explicit constructor is useful when building `Problem.energy`; the flat
-and fluent calls store the same canonical object in script-local state. None
-of these cells silently executes a simulation.
+The public executable form is the stage-first `study.thermal_noise(...)` call inside a complete
+scenario. The constructor remains an API/IR compatibility symbol; it is not a standalone
+simulation workflow. No Python cell is published here until every thermal example can include
+the full study and ordered stage graph.
 
 | Public name | Type | Default | SI unit | Validation domain / error | Physical meaning | Backend support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|

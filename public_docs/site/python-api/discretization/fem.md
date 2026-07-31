@@ -40,13 +40,6 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | `FEM.mesh` | `str \| None` | `None` | $1$ | Optional imported mesh reference. | Optional imported mesh reference. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fem.mesh` |
 | `FEM.demag_solver_policy` | `policy or None` | `None` | $1$ | Demagnetization linear-solver policy. | Demagnetization linear-solver policy. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fem.demag_solver_policy` |
 
-```python
-# %%
-import inspect
-import fullmag as fm
-# %%
-print(inspect.signature(fm.FEM))
-```
 
 (python-api-discretization-fem-problem-ir)=
 <!-- (problem-ir)= -->

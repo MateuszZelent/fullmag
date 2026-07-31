@@ -178,18 +178,6 @@ outcome remain separate provenance values.
 The canonical public object is `fullmag.ThermalNoise`. The flat scripting API
 and `StudyBuilder` convenience method configure the same canonical object.
 
-```python
-# %% Construct and inspect the canonical interaction
-import fullmag as fm
-
-thermal = fm.ThermalNoise(temperature=300.0, seed=123)
-print(thermal.to_ir())
-
-# %% Configure the flat authoring surface
-fm.engine("fdm")
-fm.device("cpu")
-fm.thermal_noise(temperature=300.0, seed=123)
-```
 
 The `# %%` markers make the example directly usable as notebook cells. It
 serializes authoring intent; it does not claim that a solver run or statistical

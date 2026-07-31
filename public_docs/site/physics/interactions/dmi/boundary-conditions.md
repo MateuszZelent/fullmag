@@ -128,22 +128,12 @@ centres.
 (dmi-boundary-python-api)=
 ## Python API and boundary request
 
-The stage builder currently has no dedicated DMI boundary registration method. The public
-object fragment below therefore inspects the exact coefficient and normal lowering; it does
-not launch a solver.
+The stage builder currently has no dedicated DMI boundary registration method. Consequently
+this page does not publish a standalone Python constructor cell: a cell without a complete
+stage graph would suggest an executable workflow that the current public API does not provide.
+Use the parameter table and the source-backed scenario references below until the stage hook is
+implemented.
 
-```python
-# %% DMI boundary object fragment; no solver is launched here.
-import json
-import fullmag as fm
-
-interfacial = fm.InterfacialDMI(
-    D=2.5e-3,
-    interface_normal=(0.0, 0.0, 1.0),
-)
-bulk = fm.BulkDMI(D=1.0e-3)
-print(json.dumps({"interfacial": interfacial.to_ir(), "bulk": bulk.to_ir()}, indent=2))
-```
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|

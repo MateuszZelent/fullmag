@@ -59,14 +59,6 @@ scales are insufficient for near-zero fields.
 (demag-validation-python-api)=
 ## Python API
 
-```python
-# %% Request validation observables
-import fullmag as fm
-
-term = fm.Demag(model="airbox")
-outputs = [fm.SaveField("H_demag", every=1), fm.SaveScalar("E_demag", every=1)]
-print(term.to_ir(), outputs)
-```
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|

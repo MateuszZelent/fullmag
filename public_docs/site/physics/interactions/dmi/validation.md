@@ -63,18 +63,9 @@ without executed-device identity remain capability evidence, not GPU qualificati
 (dmi-validation-python-api)=
 ## Python API test request
 
-```python
-# %% Source-backed DMI request used by validation fixtures
-import fullmag as fm
-
-interfacial = fm.InterfacialDMI(D=2.5e-3, interface_normal=(0.0, 0.0, 1.0))
-bulk = fm.BulkDMI(D=1.0e-3)
-assert interfacial.to_ir()["kind"] == "interfacial_dmi"
-assert bulk.to_ir()["kind"] == "bulk_dmi"
-```
 
 The stage-first solver scenarios that execute these terms must use the repository-owned
-study/stages pattern. This object-level fixture verifies only lowering, not field output.
+study/stages pattern. The lowering fixture verifies only canonical normalization, not field output.
 
 (dmi-validation-problem-ir)=
 ## ProblemIR and provenance

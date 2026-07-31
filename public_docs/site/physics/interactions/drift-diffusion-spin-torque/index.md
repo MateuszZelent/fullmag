@@ -116,20 +116,6 @@ The current public object is DriftDiffusionSpinTorque. It is an object-level sem
 fragment because the stage builder does not expose an executable drift-diffusion torque
 registration method.
 
-```python
-# %% Drift-diffusion semantic request; no solver is launched.
-import json
-from fullmag.model.spin_torque import DriftDiffusionSpinTorque
-
-dd = DriftDiffusionSpinTorque(
-    current_density=(0.0, 0.0, 1.0e10),
-    spin_polarization=(0.0, 0.0, 1.0),
-    degree=0.4,
-    beta=0.01,
-    spin_diffusion_length_m=5.0e-9,
-)
-print(json.dumps(dd.to_ir_module(), indent=2))
-```
 
 To bind transport to an external current module, replace current_density with a non-empty
 current_source name. Supplying both is rejected.

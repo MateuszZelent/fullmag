@@ -101,83 +101,8 @@ current FEM planning refuses an unjustified conversion to B1 and B2.
 (magnetoelastic-api-python-api)=
 ## Python API and copyable examples
 
-```python
-# %% Inspect the magnetoelastic object family
-import fullmag as fm
 
-elastic = fm.ElasticMaterial(
-    name="CoFeB_elastic", C11=2.41e11, C12=1.46e11, C44=1.12e11,
-    rho=8900.0, eta_mech=0.02,
-)
-body = fm.ElasticBody(
-    name="elastic_body",
-    geometry=fm.Box(size=(40e-9, 40e-9, 2e-9), name="elastic_geometry"),
-    elastic_material=elastic,
-)
-law = fm.MagnetostrictionLaw(
-    name="cubic_law", kind="cubic", B1=-6.95e6, B2=-5.62e6,
-)
-coupling = fm.Magnetoelastic(
-    magnet="free_layer", body="elastic_body", law="cubic_law",
-)
-load = fm.MechanicalLoad(
-    kind="prescribed_strain",
-    strain=(1e-4, 0.0, 0.0, 0.0, 0.0, 0.0),
-)
-assert elastic.to_ir()["c11"] == 2.41e11
-assert body.to_ir()["elastic_material"] == "CoFeB_elastic"
-assert law.to_ir()["kind"] == "cubic"
-assert coupling.to_ir()["kind"] == "magnetoelastic"
-assert load.to_ir()["strain"][0] == 1e-4
-```
 
-```python
-# %% Object-level magnetoelastic fragments; no solver is launched here.
-import fullmag as fm
-
-nm = 1e-9
-elastic = fm.ElasticMaterial(
-    name="substrate", C11=2.41e11, C12=1.46e11, C44=1.12e11, rho=8900.0,
-)
-body = fm.ElasticBody(
-    name="substrate_body",
-    geometry=fm.Box(size=(40 * nm, 40 * nm, 2 * nm), name="substrate_geometry"),
-    elastic_material=elastic,
-)
-law = fm.MagnetostrictionLaw(
-    name="cubic_ms", kind="cubic", B1=-6.95e6, B2=-5.62e6,
-)
-coupling = fm.Magnetoelastic(
-    magnet="free_layer", body="substrate_body", law="cubic_ms", )
-load = fm.MechanicalLoad(
-    kind="prescribed_strain", strain=(1e-4, 0.0, 0.0, 0.0, 0.0, 0.0),
-)
-print({
-    "elastic_material": elastic.to_ir(),
-    "elastic_body": body.to_ir(),
-    "law": law.to_ir(),
-    "coupling": coupling.to_ir(),
-    "load": load.to_ir(),
-})
-```
-
-```python
-# %% Mechanical modes and boundary data
-import fullmag as fm
-
-prescribed = fm.PrescribedStrain()
-quasistatic = fm.QuasistaticElasticity(max_picard_iterations=5, picard_tolerance=1e-8)
-dynamic = fm.Elastodynamics(mechanical_dt=1e-13)
-clamped = fm.MechanicalBoundaryCondition(kind="clamped", surface="bottom")
-traction = fm.MechanicalBoundaryCondition(
-    kind="prescribed_traction", surface="top", t=(0.0, 0.0, 1.0e6),
-)
-assert prescribed.to_ir() == {"kind": "prescribed_strain"}
-assert quasistatic.to_ir()["max_picard_iterations"] == 5
-assert dynamic.to_ir()["mechanical_dt"] == 1e-13
-assert clamped.to_ir()["kind"] == "clamped"
-assert traction.to_ir()["t"] == [0.0, 0.0, 1.0e6]
-```
 
 (magnetoelastic-api-parameter-reference)=
 ## Exhaustive parameter reference

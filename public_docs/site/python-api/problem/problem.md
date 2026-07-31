@@ -61,13 +61,6 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | `Problem.mechanical_loads` | `sequence` | `()` | $1$ | Mechanical loads; `mechanical_loads`. | Mechanical loads; `mechanical_loads`. | FEM/FDM CPU/GPU; planner checks combinations | `mechanical_loads` |
 | `Problem.pbc` | FdmPbc, three booleans, or None | `None` | $1$ | Requested periodic axes; canonical PBC section and backend capability checks. | Requested periodic axes; canonical PBC section and backend capability checks. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.pbc` |
 
-```python
-# %%
-import inspect
-import fullmag as fm
-# %%
-print(inspect.signature(fm.Problem))
-```
 
 (python-api-problem-problem-problem-ir)=
 <!-- (problem-ir)= -->

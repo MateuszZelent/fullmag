@@ -126,25 +126,8 @@ study.stages.add_run(until=1.0e-9)
 ```
 
 `study.solver(...)` is the canonical user-facing solver-policy call in the stage workflow. It
-lowers into the same `llg` dynamics fragment as the model object below. The object-level example
-is intentionally limited to an API/serialization assertion; it is not a second way to author or
-run a study:
-
-```python
-# %% LLG and adaptive-policy IR fragment
-import fullmag as fm
-
-dynamics = fm.LLG(
-    integrator="rk45",
-    adaptive_timestep=fm.AdaptiveTimestep(
-        atol=1.0e-6,
-        rtol=1.0e-3,
-        dt_min=1.0e-15,
-        dt_max=1.0e-12,
-    ),
-)
-assert dynamics.to_ir()["integrator"] == "rk45"
-```
+lowers the requested method and adaptive policy into the canonical `llg` dynamics node. There
+is no second object-constructor workflow in this page.
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
@@ -182,7 +165,7 @@ The `LLG.to_ir()` result for the object-level example is the canonical dynamics 
 }
 ```
 
-`study.solver(...)` and `LLG(...)` normalize to the same canonical dynamics node. `dp54` normalizes to `rk45` and `bs23` normalizes to `rk23` before lowering. `auto` remains
+`study.solver(...)` normalizes the requested method into the canonical dynamics node. `dp54` normalizes to `rk45` and `bs23` normalizes to `rk23` before lowering. `auto` remains
 requested intent until planner resolution; the resolved execution records the selected method,
 device, precision, and field-refresh policy as provenance.
 

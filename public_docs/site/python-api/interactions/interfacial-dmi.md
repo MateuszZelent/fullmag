@@ -77,16 +77,6 @@ The effective field used by the resolved backend is
 
 ### `InterfacialDMI`
 
-```python
-# %% Explicit iDMI term
-import fullmag as fm
-
-term = fm.InterfacialDMI(
-    D=2.5e-3,
-    interface_normal=(0.0, 0.0, 1.0),
-)
-print(term.to_ir())
-```
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
@@ -95,19 +85,6 @@ print(term.to_ir())
 
 ### `Material` interfacial fields
 
-```python
-# %% Material-owned FEM coefficient
-import fullmag as fm
-
-material = fm.Material(
-    name="dmi-film",
-    Ms=800.0e3,
-    A=13.0e-12,
-    alpha=0.01,
-    Dind=2.5e-3,
-)
-print(material.to_ir())
-```
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
@@ -125,14 +102,6 @@ fragment inspection only; it is not the public simulation workflow and does not 
 Use the stage boundary and capability statement on the physics owner page for the current
 executable surface.
 
-```python
-# %% Interfacial-DMI object fragment; no solver is launched here.
-import json
-import fullmag as fm
-
-term = fm.InterfacialDMI(D=2.5e-3, interface_normal=(0.0, 0.0, 1.0))
-print(json.dumps(term.to_ir(), indent=2))
-```
 
 (interfacial-dmi-api-problem-ir)=
 ## ProblemIR lowering

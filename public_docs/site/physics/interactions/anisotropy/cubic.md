@@ -160,31 +160,6 @@ not require a demagnetization solve or an interaction boundary condition.
 | `Material.Kc2_field` | `list[float] \\| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite; cardinality downstream | spatial Kc2 override | FEM and supported allocating FDM reference paths | `materials[].kc2_field` |
 | `Material.Kc3_field` | `list[float] \\| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite; cardinality downstream | spatial Kc3 override | FEM and supported allocating FDM reference paths | `materials[].kc3_field` |
 
-```python
-# %% Copyable cubic authoring
-import json
-import fullmag as fm
-
-term = fm.CubicAnisotropy(
-    kc1=2.0e5,
-    kc2=0.0,
-    kc3=0.0,
-    axis1=(1.0, 0.0, 0.0),
-    axis2=(0.0, 1.0, 0.0),
-)
-print(json.dumps(term.to_ir(), indent=2))
-
-material = fm.Material(
-    name="cubic-crystal",
-    Ms=1.0e6,
-    A=10.0e-12,
-    alpha=0.02,
-    Kc1=2.0e5,
-    anisC1=(1.0, 0.0, 0.0),
-    anisC2=(0.0, 1.0, 0.0),
-)
-print(json.dumps(material.to_ir(), indent=2))
-```
 
 (cubic-problem-ir)=
 ## ProblemIR and planner contract

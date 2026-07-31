@@ -256,27 +256,6 @@ The stage pipeline above is the public simulation workflow. The following cells 
 canonical material fields and compatibility interaction independently; they do not assemble or
 launch a top-level simulation.
 
-```python
-# %% Canonical material-owned anisotropy
-import json
-import fullmag as fm
-
-material = fm.Material(
-    name="anisotropic-film",
-    Ms=800.0e3,
-    A=13.0e-12,
-    alpha=0.01,
-    Ku1=0.5e6,
-    Ku2=0.05e6,
-    anisU=(0.0, 0.0, 1.0),
-)
-legacy = fm.UniaxialAnisotropy(
-    ku1=0.5e6,
-    ku2=0.05e6,
-    axis=(0.0, 0.0, 1.0),
-)
-print(json.dumps({"material": material.to_ir(), "compatibility": legacy.to_ir()}, indent=2))
-```
 
 These fragments are lowering examples, not device qualification. They can be adapted to a cubic
 material by setting `Kc1`, `Kc2`, `Kc3`, `anisC1`, and `anisC2`, or by using `fm.CubicAnisotropy`

@@ -16,15 +16,11 @@ from pathlib import Path
 
 PYTHON_BLOCK_RE = re.compile(r"```python\s*\n(.*?)```", re.DOTALL)
 DIRECT_PROBLEM_RE = re.compile(r"\bfm\.Problem\s*\(")
-LOW_LEVEL_MARKER_RE = re.compile(
-    r"low[- ]level|structural|problem\s*ir|schema|round[- ]trip|inspection|"
-    r"object[- ]level|fragment|no solver|not a simulation workflow",
-    re.IGNORECASE,
-)
 SIMULATION_RE = re.compile(
     r"fm\.(?:Ferromagnet|TimeEvolution|Simulation)\s*\(|\bmagnets\s*=|\benergy\s*="
 )
-STAGE_RE = re.compile(r"fm\.study\s*\(|study\.stages\.add_")
+STUDY_RE = re.compile(r"fm\.study\s*\(")
+STAGE_RE = re.compile(r"study\.stages\.add_")
 
 
 def check_public_examples(root: Path) -> list[str]:
@@ -41,16 +37,17 @@ def check_public_examples(root: Path) -> list[str]:
                 errors.append(f"{label}: Python does not parse: {exc.msg}")
                 continue
 
-            low_level = bool(LOW_LEVEL_MARKER_RE.search(block))
             if DIRECT_PROBLEM_RE.search(block):
                 errors.append(
                     f"{label}: public documentation must not contain fm.Problem(...); "
-                    "use the stage-first study API or inspect individual objects"
+                    "use the complete stage-first study scenario"
                 )
-            elif SIMULATION_RE.search(block) and not low_level and not STAGE_RE.search(block):
+            elif ("import fullmag" in block or SIMULATION_RE.search(block)) and not (
+                STUDY_RE.search(block) and STAGE_RE.search(block)
+            ):
                 errors.append(
-                    f"{label}: simulation-oriented example must use fm.study(...) and "
-                    "study.stages.add_*"
+                    f"{label}: every public Fullmag Python example must be a complete "
+                    "stage-first scenario with fm.study(...) and study.stages.add_*"
                 )
     return errors
 

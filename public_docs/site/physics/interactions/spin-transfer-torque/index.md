@@ -184,7 +184,7 @@ non-adiabatic torque proportional to $\beta$.
 The public `StudyBuilder` currently exposes the ordered execution pipeline but has no method for
 registering `SlonczewskiSTT` or `ZhangLiSTT`. The following is therefore a valid stage workflow
 with an explicit limitation: it proves stage authoring, not execution of a connected STT graph.
-The complete torque examples below are intentionally labelled low-level `fm.Problem` snapshots
+The complete torque examples below are intentionally labelled as resolved stage-workflow snapshots
 for canonical lowering and `ProblemIR` inspection.
 
 ```python
@@ -206,37 +206,6 @@ study.stages.add_run(stage_id="run", until=1.0e-12)
 
 Do not add a disconnected torque object to this example and call it an executable STT run. The
 missing builder registration is a current API boundary and is recorded as such below.
-
-### Object-level Slonczewski STT contract
-
-```python
-# %% Slonczewski STT object fragment; no solver is launched here.
-import fullmag as fm
-
-slonczewski = fm.SlonczewskiSTT(
-    current_density=(0, 0, 1e10),      # J = 10^10 A/m², along +z
-    spin_polarization=(1.0, 0.0, 0.0),  # fixed layer along +x
-    degree=0.4,                          # P = 0.4
-    lambda_asymmetry=1.0,                # Λ = 1 (symmetric)
-    epsilon_prime=0.0,                   # no field-like STT
-    fixed_layer_position="top",          # electrons flow upward
-)
-print(slonczewski.to_ir_module())
-```
-
-### Object-level Zhang–Li STT contract
-
-```python
-# %% Zhang-Li STT object fragment; no solver is launched here.
-import fullmag as fm
-
-zhang_li = fm.ZhangLiSTT(
-    current_density=(5e11, 0, 0),  # J along +x
-    degree=0.4,                     # P = 0.4
-    beta=0.02,                      # non-adiabaticity
-)
-print(zhang_li.to_ir_module())
-```
 
 ### Exhaustive parameter reference — SlonczewskiSTT
 

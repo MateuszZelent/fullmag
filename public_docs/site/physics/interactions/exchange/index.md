@@ -163,7 +163,7 @@ interaction, and each magnetic material supplies the coefficient used on its dom
 
 The normal user script declares one study and appends its execution stages. The physical model is
 captured by each stage; the sequence is not represented by manually constructing a flat
-`fm.Problem` object. This is the form used by the public script loader and by the stage tests.
+canonical stage workflow. This is the form used by the public script loader and by the stage tests.
 
 The following block is both a regular Python script and a Jupyter-compatible sequence of `# %%`
 cells. It builds an exchange-only study with relaxation followed by a physical-time run.
@@ -201,30 +201,12 @@ different stopping variables and provenance. The selected solver, device, precis
 resolved outputs are determined by the planner/runtime; the Python stage declarations preserve the
 requested intent.
 
-### Interaction and material lowering fragments
+### Interaction and material lowering
 
-The stage-first script above is the only public simulation workflow. When documentation needs to
-show the canonical interaction fragment, inspect the individual public objects instead of
-constructing a second top-level problem in the notebook.
-
-```python
-# %% Exchange and material IR fragments
-import json
-import fullmag as fm
-
-exchange = fm.Exchange()
-material = fm.Material(
-    name="Permalloy",
-    Ms=800.0e3,
-    A=13.0e-12,
-    alpha=0.01,
-)
-print(json.dumps({"energy_term": exchange.to_ir(), "material": material.to_ir()}, indent=2))
-```
-
-These fragments document object-level normalization only. The stage builder owns the complete
-physical request; the planner resolves its backend policy, installed capabilities, and execution
-context after the ordered stages are captured.
+The stage-first script above is the only public simulation workflow. The JSON below records the
+canonical interaction and material normalization without introducing a second Python authoring
+workflow. The stage builder owns the complete physical request; the planner resolves its backend
+policy, installed capabilities, and execution context after the ordered stages are captured.
 
 ### Exchange-facing parameter reference
 

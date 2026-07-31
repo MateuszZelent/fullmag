@@ -57,52 +57,6 @@ and the documented qualification state.
 (demag-api-python-api)=
 ## Constructors and complete parameters
 
-```python
-# %% Copyable Python/Jupyter example
-import json
-import fullmag as fm
-
-terms = [
-    fm.Demag(),
-    fm.Demag(model="airbox", variant="robin"),
-    fm.Demag(model="airbox", variant="dirichlet"),
-    fm.Demag(model="fredkin_koehler"),
-]
-for term in terms:
-    print(json.dumps(term.to_ir()))
-
-# %% FDM policy and periodic boundary policy
-fdm_policy = fm.FDMDemag(
-    strategy="multilayer_convolution",
-    mode="two_d_stack",
-    common_cells_xy=(512, 512),
-)
-pbc = fm.FdmPbc(
-    axes=(True, True, False),
-    demag="truncated_images",
-    image_counts=(10, 10, 0),
-)
-fdm = fm.FDM(
-    default_cell=(2e-9, 2e-9, 1e-9),
-    per_magnet={"reference": fm.FDMGrid(cell=(4e-9, 4e-9, 1e-9))},
-    demag=fdm_policy,
-    boundary_correction="volume",
-    boundary_phi_floor=0.05,
-    boundary_delta_min=1e-10,
-)
-fem = fm.FEM(
-    order=1,
-    maximum_element_size=2e-9,
-    demag_solver_policy=fm.FemLinearSolverPolicy(
-        solver="CG", preconditioner="AMG", rtol=1e-8,
-        atol=1e-12, max_iterations=500, print_level=0,
-    ),
-)
-print(fdm_policy.to_ir())
-print(pbc.to_ir())
-print(fdm.to_ir())
-print(fem.to_ir())
-```
 
 The physical interaction is selected by `Demag`; the remaining objects are numerical policies.
 `FDMGrid` and `FDM` control cell geometry and convolution realization. `FEM` controls the finite

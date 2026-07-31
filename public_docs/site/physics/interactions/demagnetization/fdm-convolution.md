@@ -150,27 +150,6 @@ grid, padding, precision, mask, and energy reduction policy.
 (demag-fdm-python-api)=
 ## 5. Python API and complete parameter reference
 
-```python
-# %% Copyable FDM demagnetization policy
-import json
-import fullmag as fm
-
-policy = fm.FDMDemag(
-    strategy="multilayer_convolution",
-    mode="two_d_stack",
-    common_cells_xy=(512, 512),
-    explain=True,
-)
-fdm = fm.FDM(
-    default_cell=(2.0e-9, 2.0e-9, 1.0e-9),
-    demag=policy,
-    boundary_correction="volume",
-    boundary_phi_floor=0.05,
-    boundary_delta_min=1.0e-10,
-)
-print(json.dumps(policy.to_ir(), indent=2))
-print(json.dumps(fdm.to_ir(), indent=2))
-```
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|

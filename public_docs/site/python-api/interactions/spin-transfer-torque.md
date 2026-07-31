@@ -166,96 +166,15 @@ future planner can reject or qualify the model instead of silently replacing it 
 
 ### SlonczewskiSTT
 
-```python
-# %% Slonczewski source-bound object fragments; no solver is launched here.
-import json
-import fullmag as fm
-
-nm = 1.0e-9
-drive = fm.CurrentTransport(
-    name="cpp_drive",
-    model="prescribed_density",
-    current_density=(0.0, 0.0, 1.0e10),
-    solve_region="free_layer",
-)
-term = fm.SlonczewskiSTT(
-    current_source="cpp_drive",
-    spin_polarization=(1.0, 0.0, 0.0),
-    degree=0.4,
-    lambda_asymmetry=1.0,
-    epsilon_prime=0.0,
-    free_layer_thickness_m=2.0 * nm,
-    fixed_layer_position="top",
-)
-assert term.to_ir_module() == {
-    "kind": "slonczewski",
-    "current_source": "cpp_drive",
-    "spin_polarization": [1.0, 0.0, 0.0],
-    "degree": 0.4,
-    "lambda_asymmetry": 1.0,
-    "epsilon_prime": 0.0,
-    "free_layer_thickness_m": 2.0 * nm,
-    "fixed_layer_position": "top",
-}
-assert drive.to_ir()["model"] == "prescribed_density"
-assert drive.to_ir()["current_density"] == [0.0, 0.0, 1.0e10]
-print(json.dumps({"current_module": drive.to_ir(), "spin_torque": term.to_ir_module()}, indent=2))
-```
 
 ### ZhangLiSTT
 
-```python
-# %% Zhang-Li direct-density object
-import fullmag as fm
-
-term = fm.ZhangLiSTT(
-    current_density=(5.0e11, 0.0, 0.0),
-    degree=0.4,
-    beta=0.02,
-)
-assert term.to_ir_module() == {
-    "kind": "zhang_li",
-    "current_density": [5.0e11, 0.0, 0.0],
-    "degree": 0.4,
-    "beta": 0.02,
-}
-assert term.to_ir_fields() == {
-    "current_density": [5.0e11, 0.0, 0.0],
-    "stt_degree": 0.4,
-    "stt_beta": 0.02,
-}
-print(term.to_ir_module())
-```
 
 ### Semantic-only variants
 
 The following objects intentionally lower to canonical IR even though the current planner
 rejects them as semantic-only:
 
-```python
-# %% Semantic STT variants
-import fullmag as fm
-
-interface_term = fm.InterfaceCppSTT(
-    current_density=(0.0, 0.0, 1.0e10),
-    spin_polarization=(0.0, 0.0, 1.0),
-    interface_normal=(0.0, 0.0, 1.0),
-    degree=0.4,
-    lambda_asymmetry=1.0,
-    epsilon_prime=0.0,
-)
-drift_term = fm.DriftDiffusionSpinTorque(
-    current_source="cpp_drive",
-    spin_polarization=(0.0, 0.0, 1.0),
-    degree=0.4,
-    beta=0.02,
-    spin_diffusion_length_m=5.0e-9,
-)
-assert interface_term.to_ir_module()["kind"] == "interface_cpp"
-assert drift_term.to_ir_module()["kind"] == "drift_diffusion"
-print(interface_term.to_ir_module())
-print(drift_term.to_ir_module())
-```
 
 STT constructors do not accept a time-envelope parameter. TimeEvolution controls the
 integration timeline, while the executable source is resolved as a prescribed static density.

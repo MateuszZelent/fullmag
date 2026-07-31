@@ -74,13 +74,6 @@ it with separately documented discrete conditions.
 (demag-math-python-api)=
 ## Python API
 
-```python
-# %% Select the common demagnetization contract
-import fullmag as fm
-
-term = fm.Demag(model="airbox", variant="robin")
-print(term.to_ir())
-```
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|

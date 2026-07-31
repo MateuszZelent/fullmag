@@ -201,22 +201,6 @@ For a DMI-enabled request, the current stage API has no registration hook. Inspe
 periodicity objects independently and treat the missing stage integration as an explicit API
 boundary; do not fabricate a top-level simulation constructor:
 
-```python
-# %% DMI and periodicity object lowering; not a simulation workflow
-import json
-import fullmag as fm
-
-interfacial = fm.InterfacialDMI(
-    D=2.5e-3,
-    interface_normal=(0.0, 0.0, 1.0),
-)
-bulk = fm.BulkDMI(D=3.0e-3)
-pbc = fm.FdmPbc(axes=(True, True, True))
-print(json.dumps({
-    "energy_terms": [interfacial.to_ir(), bulk.to_ir()],
-    "pbc": pbc.to_ir(),
-}, indent=2))
-```
 
 ### Complete parameter reference
 
@@ -443,8 +427,9 @@ The interaction contract is validated at separate levels:
 - No general anisotropic DMI tensor, multiple independent interface normals, atomistic DMI, or
   independently authored DMI boundary operator is exposed.
 - GPU claims remain source-backed until an executed-device qualification artifact is attached.
-- The public stage builder currently has no dedicated DMI registration hook; the low-level example
-  is therefore the honest authoring boundary for a DMI-enabled `Problem`.
+- The public stage builder currently has no dedicated DMI registration hook; this page therefore
+  does not publish a standalone Python constructor cell. A DMI example becomes publishable only
+  when it can be expressed as a complete stage-first scenario.
 
 (dmi-scientific-bibliography)=
 ## Scientific bibliography

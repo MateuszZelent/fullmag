@@ -38,13 +38,6 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | `texture.uniform.y` | `float \| None` | `None` | $1$ | Second component for scalar-form authoring. | Second component for scalar-form authoring. | FEM/FDM CPU/GPU; planner checks combinations | `magnets[].initial_magnetization.params.direction` |
 | `texture.uniform.z` | `float \| None` | `None` | $1$ | Third component for scalar-form authoring. | Third component for scalar-form authoring. | FEM/FDM CPU/GPU; planner checks combinations | `magnets[].initial_magnetization.params.direction` |
 
-```python
-# %%
-import inspect
-import fullmag as fm
-# %%
-print(inspect.signature(fm.texture.uniform))
-```
 
 (python-api-magnets-and-textures-uniform-texture-problem-ir)=
 <!-- (problem-ir)= -->

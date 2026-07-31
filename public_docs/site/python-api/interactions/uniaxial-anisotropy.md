@@ -73,17 +73,6 @@ w_{\mathrm u}=-K_{u1}q^2-K_{u2}q^4.
 
 ### `UniaxialAnisotropy`
 
-```python
-# %% Compatibility constructor
-import fullmag as fm
-
-term = fm.UniaxialAnisotropy(
-    ku1=0.5e6,
-    ku2=0.05e6,
-    axis=(0.0, 0.0, 1.0),
-)
-print(term.to_ir())
-```
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
@@ -106,23 +95,6 @@ material path supports them. They do not create a new anisotropy order or alter 
 
 ### Copyable canonical material example
 
-```python
-# %% Canonical material-owned authoring
-import json
-import fullmag as fm
-
-material = fm.Material(
-    name="Fe-like",
-    Ms=1.0e6,
-    A=10.0e-12,
-    alpha=0.02,
-    Ku1=4.0e5,
-    Ku2=0.0,
-    anisU=(0.0, 0.0, 1.0),
-    Ku_field=[4.0e5, 4.0e5],
-)
-print(json.dumps(material.to_ir(), indent=2))
-```
 
 The spatial list is only a valid executable example when the selected mesh/material resolution
 has exactly the required cardinality. For general authoring, omit it and let the planner derive
@@ -130,25 +102,6 @@ resolved material fields from regions.
 
 ### Compatibility migration fragment
 
-```python
-# %% Compatibility object and material fragment; no solver is launched here.
-import json
-import fullmag as fm
-
-material = fm.Material(
-    name="Py",
-    Ms=800.0e3,
-    A=13.0e-12,
-    alpha=0.01,
-    Ku1=5.0e5,
-    anisU=(0.0, 0.0, 1.0),
-)
-legacy = fm.UniaxialAnisotropy(
-    ku1=5.0e5,
-    axis=(0.0, 0.0, 1.0),
-)
-print(json.dumps({"material": material.to_ir(), "legacy": legacy.to_ir()}, indent=2))
-```
 
 ### Outputs
 

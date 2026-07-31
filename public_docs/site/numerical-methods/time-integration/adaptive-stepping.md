@@ -93,20 +93,23 @@ body.alpha = 0.02
 body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 study.exchange()
 
-# %% The run stage keeps the adaptive policy in the dynamics request
+# %% Solver policy and ordered physical-time stage
+study.solver(
+    integrator="rk45",
+    adaptive_timestep=fm.AdaptiveTimestep(
+        atol=1.0e-7,
+        rtol=1.0e-3,
+        dt_min=1.0e-15,
+        dt_max=1.0e-12,
+    ),
+    gamma=2.211e5,
+)
 study.stages.add_run(until=2.0e-9)
 ```
 
-For a direct policy fragment:
-
-```python
-# %% Inspect validation and canonical normalization
-import fullmag as fm
-
-policy = fm.AdaptiveTimestep(atol=1e-7, rtol=1e-3, dt_min=1e-15, dt_max=1e-12)
-llg = fm.LLG(integrator="rk45", adaptive_timestep=policy)
-assert llg.to_ir()["adaptive_timestep"]["dt_min"] == 1e-15
-```
+The `study.solver(...)` call is the only user-facing solver configuration shown in this
+workflow. It lowers the adaptive policy into the canonical `llg` dynamics node; the resolved
+integrator, bounds, tolerances, and device remain part of execution provenance.
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|

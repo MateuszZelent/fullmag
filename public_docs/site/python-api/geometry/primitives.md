@@ -40,13 +40,6 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | `Box.size` | `three positive floats` | `required in keyword form` | $\mathrm{m}$ | Keyword size; when supplied, it takes precedence and positional size values are ignored. | Keyword size; when supplied, it takes precedence and positional size values are ignored. | FEM/FDM CPU/GPU; planner checks combinations | `geometry.entries[].shape.size` |
 | `Box.name` | `str` | `"box"` | $1$ | Non-empty geometry identity. | Non-empty geometry identity. | FEM/FDM CPU/GPU; planner checks combinations | `geometry.entries[].name` |
 
-```python
-# %%
-import inspect
-import fullmag as fm
-# %%
-print(inspect.signature(fm.Box))
-```
 
 (python-api-geometry-primitives-problem-ir)=
 <!-- (problem-ir)= -->

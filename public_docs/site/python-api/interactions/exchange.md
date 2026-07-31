@@ -101,14 +101,6 @@ resolved by the planner after lowering.
 
 ### `fullmag.Exchange`
 
-```python
-# %% Canonical exchange term
-import fullmag as fm
-
-term = fm.Exchange()
-assert term.to_ir() == {"kind": "exchange"}
-print(term.to_ir())
-```
 
 `Exchange()` accepts no positional or keyword parameters. Passing `A`, `Ms`, `enabled`, a mesh,
 or a backend argument raises Python's normal `TypeError`; those values belong to the objects
@@ -185,8 +177,8 @@ study.stages.add_relax(
 
 This script is the normal public authoring path. It declares the physical request and ordered
 stage; lowering to `ProblemIR`, planner resolution, and runtime qualification happen after the
-stage graph is captured. `Exchange()` remains the standalone constructor-level contract shown
-above, not the way a user launches a study.
+stage graph is captured. `Exchange()` is an internal/API compatibility symbol; it is not the way
+a user launches a study.
 
 (exchange-api-problem-ir)=
 ## 6. Canonical ProblemIR lowering

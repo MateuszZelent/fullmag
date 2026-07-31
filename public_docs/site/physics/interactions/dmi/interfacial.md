@@ -151,16 +151,6 @@ natural boundary physics. Adding a separate identical DMI boundary term would do
 The complete constructor and copyable notebook examples are in
 {doc}`../../../python-api/interactions/interfacial-dmi`. The public interaction matrix is:
 
-```python
-# %% Copyable Python/Jupyter example
-import fullmag as fm
-
-term = fm.InterfacialDMI(
-    D=2.5e-3,
-    interface_normal=(0.0, 0.0, 1.0),
-)
-print(term.to_ir())
-```
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|

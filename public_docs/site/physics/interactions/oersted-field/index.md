@@ -258,41 +258,10 @@ not prove that the selected solver/device can execute it.
 (oersted-problem-ir)=
 ## Canonical ProblemIR and normalization
 
-The following runtime-independent example inspects the source-bound and analytic-cylinder object
-fragments. The executable simulation workflow remains the stage-first study pattern described in
+The following runtime-independent JSON describes the source-bound and analytic-cylinder IR
+records. The executable simulation workflow remains the stage-first study pattern described in
 the Python API section.
 
-```python
-# %% Oersted object fragments; no solver is launched here.
-import json
-import fullmag as fm
-
-nm = 1.0e-9
-ps = 1.0e-12
-
-# %% Source current and source-bound interaction
-transport = fm.CurrentTransport(
-    name="drive",
-    model="prescribed_density",
-    current_density=(0.0, 0.0, 5.0e10),
-    solve_region="pillar",
-)
-
-# %% Oersted source-bound and analytic-cylinder terms
-term = fm.OerstedField(source="drive")
-cylinder_term = fm.OerstedCylinder(
-    current=5.0e-3,
-    radius=50 * nm,
-    center=(0.0, 0.0, 0.0),
-    axis=(0.0, 0.0, 1.0),
-    time_dependence=fm.Sinusoidal(frequency_hz=1.0e9, offset=0.25),
-)
-print(json.dumps({
-    "current_module": transport.to_ir(),
-    "source_bound_term": term.to_ir(),
-    "analytic_cylinder_term": cylinder_term.to_ir(),
-}, indent=2))
-```
 
 The relevant serialized records produced by this example are:
 

@@ -38,13 +38,6 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | `DiscretizationHints.fem` | `FEM \| None` | `None` | $1$ | FEM-specific hint; it does not force FEM when backend selection remains `auto`. | FEM-specific hint; it does not force FEM when backend selection remains `auto`. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fem` |
 | `DiscretizationHints.hybrid` | `Hybrid \| None` | `None` | $1$ | Optional hybrid hint. | Optional hybrid hint. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.hybrid` |
 
-```python
-# %%
-import inspect
-import fullmag as fm
-# %%
-print(inspect.signature(fm.DiscretizationHints))
-```
 
 (python-api-discretization-discretization-hints-problem-ir)=
 <!-- (problem-ir)= -->

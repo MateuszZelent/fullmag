@@ -88,27 +88,6 @@ study.stages.add_run(stage_id="run", until=1e-9)
 
 ### Authoring-only surface fragment
 
-```python
-# %% Surface terms are inspected without launching a solver.
-import json
-import fullmag as fm
-
-registry = fm.CouplingRegistry()
-registry.rkky(
-    fm.CouplingEndpoint.surface("layer_a", "top"),
-    fm.CouplingEndpoint.surface("layer_b", "bottom"),
-    J1=-0.30e-3,
-    capability_policy="authored_only",
-)
-registry.interlayer_exchange(
-    fm.CouplingEndpoint.surface("layer_a", "top"),
-    fm.CouplingEndpoint.surface("layer_b", "bottom"),
-    J1=1.00e-3,
-    J2=-0.01e-3,
-    capability_policy="authored_only",
-)
-print(json.dumps(registry.to_ir(), indent=2))
-```
 
 ### Parameter reference
 

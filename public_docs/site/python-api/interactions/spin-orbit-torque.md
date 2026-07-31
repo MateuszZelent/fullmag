@@ -109,82 +109,19 @@ prescribed current-density vector and uses its magnitude.
 (sot-api-python-api)=
 ## Python API
 
-### Direct prescribed current
+### Stage-first authoring status
 
-The following notebook cell is a complete object-level contract. The stage-first study workflow
-is the public simulation path; this cell only checks the exact SOT module fields.
+The current public stage builder has no SOT registration method. This page therefore publishes
+the parameter and IR contract but no standalone constructor cell. A SOT example will be added
+only when it can be expressed as a complete study with an ordered stage graph.
 
-```python
-# %% Direct SOT object fragment; no solver is launched here.
-import fullmag as fm
-
-nm = 1e-9
-torque = fm.SpinOrbitTorque(
-    charge_current_density_a_per_m2=1.0e11,
-    damping_like_efficiency=0.10,
-    field_like_efficiency=0.01,
-    spin_polarization=(0.0, 1.0, 0.0),
-    ferromagnet_thickness_m=1 * nm,
-)
-ir = torque.to_ir_module()
-assert ir["kind"] == "spin_orbit_torque"
-assert ir["charge_current_density_a_per_m2"] == 1.0e11
-assert ir["damping_like_efficiency"] == 0.10
-assert ir["field_like_efficiency"] == 0.01
-assert ir["spin_polarization"] == [0.0, 1.0, 0.0]
-```
 
 ### Named current source
 
 Use `current_source` when the source must be shared by several physics modules.
-The source is exclusive with the direct scalar current argument.
+The source is exclusive with the direct scalar current argument. The canonical module
+serialization is an inspection/tooling contract, not a simulation authoring workflow.
 
-```python
-# %% SOT source-binding fragments; no solver is launched here.
-import fullmag as fm
-
-nm = 1e-9
-transport = fm.CurrentTransport(
-    name="heavy_metal_drive",
-    model="prescribed_density",
-    current_density=(0.0, 1.5e11, 0.0),
-)
-torque = fm.SpinOrbitTorque(
-    current_source="heavy_metal_drive",
-    damping_like_efficiency=0.12,
-    spin_polarization=(0.0, 0.0, 1.0),
-    ferromagnet_thickness_m=1.2 * nm,
-)
-assert transport.to_ir()["name"] == "heavy_metal_drive"
-assert torque.to_ir_module()["current_source"] == "heavy_metal_drive"
-```
-
-### Inspecting the standalone object
-
-`to_ir_module()` is useful for tests and tooling that need the canonical module
-without constructing a complete simulation.
-
-```python
-# %% Standalone canonical module inspection
-import fullmag as fm
-
-torque = fm.SpinOrbitTorque(
-    charge_current_density_a_per_m2=2.0e11,
-    damping_like_efficiency=0.08,
-    field_like_efficiency=-0.02,
-    spin_polarization=(1.0, 0.0, 0.0),
-    ferromagnet_thickness_m=2.0e-9,
-)
-module_ir = torque.to_ir_module()
-assert module_ir == {
-    "kind": "spin_orbit_torque",
-    "charge_current_density_a_per_m2": 2.0e11,
-    "damping_like_efficiency": 0.08,
-    "field_like_efficiency": -0.02,
-    "spin_polarization": [1.0, 0.0, 0.0],
-    "ferromagnet_thickness_m": 2.0e-9,
-}
-```
 
 (sot-api-parameter-reference)=
 ## Complete parameter reference

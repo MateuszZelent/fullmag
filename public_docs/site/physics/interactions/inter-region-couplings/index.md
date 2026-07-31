@@ -193,27 +193,6 @@ an ObjectRegion, a named object, or a string object name. The endpoint kind is p
 This copyable fragment inspects the canonical lowering and does not launch a solver. It is
 the correct inspection path while surface terms remain outside the strict runtime matrix.
 
-```python
-# %% Surface-coupling fragments; no solver is launched here.
-import json
-import fullmag as fm
-
-registry = fm.CouplingRegistry()
-registry.rkky(
-    fm.CouplingEndpoint.surface("layer_a", "top"),
-    fm.CouplingEndpoint.surface("layer_b", "bottom"),
-    J1=-0.30e-3,
-    capability_policy="authored_only",
-)
-registry.interlayer_exchange(
-    fm.CouplingEndpoint.surface("layer_a", "top"),
-    fm.CouplingEndpoint.surface("layer_b", "bottom"),
-    J1=1.00e-3,
-    J2=-0.01e-3,
-    capability_policy="authored_only",
-)
-print(json.dumps(registry.to_ir(), indent=2))
-```
 
 (irc-problem-ir)=
 ## Canonical ProblemIR

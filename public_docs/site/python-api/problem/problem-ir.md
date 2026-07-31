@@ -34,13 +34,6 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 ## Python API
 No constructor parameters are owned by this conceptual page.
 
-```python
-# %%
-import inspect
-import fullmag as fm
-# %%
-print(inspect.signature(fm.Problem))
-```
 
 (python-api-problem-problem-ir-problem-ir)=
 <!-- (problem-ir)= -->

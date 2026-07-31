@@ -154,28 +154,6 @@ surface is not a lower-accuracy input; it changes or invalidates the mathematica
 (demag-bem-python-api)=
 ## 5. Python API and complete solver parameters
 
-```python
-# %% Copyable Fredkin–Koehler request
-import json
-import fullmag as fm
-
-demag = fm.Demag(model="fredkin_koehler")
-solver_policy = fm.FemLinearSolverPolicy(
-    solver="CG",
-    preconditioner="AMG",
-    rtol=1.0e-8,
-    atol=1.0e-12,
-    max_iterations=500,
-    print_level=0,
-)
-fem = fm.FEM(
-    order=1,
-    maximum_element_size=2.0e-9,
-    demag_solver_policy=solver_policy,
-)
-print(json.dumps(demag.to_ir(), indent=2))
-print(json.dumps(fem.to_ir(), indent=2))
-```
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|

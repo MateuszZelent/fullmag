@@ -196,37 +196,6 @@ separate objects and all three must be recorded.
 
 ### Copyable Python/Jupyter example
 
-```python
-# %% Imports and SI constants
-import json
-import fullmag as fm
-
-nm = 1.0e-9
-
-# %% Physical realization
-demag = fm.Demag(model="airbox", variant="robin")
-
-# %% Linear solver policy used by native FEM Poisson demagnetization
-solver_policy = fm.FemLinearSolverPolicy(
-    solver="CG",
-    preconditioner="AMG",
-    rtol=1.0e-8,
-    atol=1.0e-12,
-    max_iterations=500,
-    print_level=0,
-)
-
-# %% FEM mesh and solver hints
-fem = fm.FEM(
-    order=1,
-    maximum_element_size=2.0 * nm,
-    demag_solver_policy=solver_policy,
-)
-
-# %% Canonical independent lowerings
-print(json.dumps(demag.to_ir(), indent=2))
-print(json.dumps(fem.to_ir(), indent=2))
-```
 
 The example does not claim that a solver has executed. `Demag.to_ir()` and `FEM.to_ir()` perform
 authoring validation and produce requested intent. Planner resolution and runtime provenance must

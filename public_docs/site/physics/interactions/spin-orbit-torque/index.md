@@ -191,34 +191,12 @@ The implemented model has the following exact scope:
 (sot-python-api)=
 ## Python API
 
-### Object-level Python contract
+### Python contract and stage boundary
 
-The canonical simulation workflow is the stage-first boundary shown below. The cells here inspect
-the SOT object and its canonical module fragment without constructing a top-level problem or
-claiming that a solver has executed. SOT itself has no scalar energy output.
+The canonical simulation workflow is the stage-first boundary shown below. The current builder
+does not attach SOT to that stage graph, so the parameter table and IR contract are not presented
+as a standalone executable cell. SOT itself has no scalar energy output.
 
-```python
-# %% SOT object fragment; no solver is launched here.
-import fullmag as fm
-
-nm = 1e-9
-
-torque = fm.SpinOrbitTorque(
-    charge_current_density_a_per_m2=1.0e11,
-    damping_like_efficiency=0.10,
-    field_like_efficiency=0.0,
-    spin_polarization=(0.0, 1.0, 0.0),
-    ferromagnet_thickness_m=1 * nm,
-)
-assert torque.to_ir_module() == {
-    "kind": "spin_orbit_torque",
-    "charge_current_density_a_per_m2": 1.0e11,
-    "damping_like_efficiency": 0.10,
-    "field_like_efficiency": 0.0,
-    "spin_polarization": [0.0, 1.0, 0.0],
-    "ferromagnet_thickness_m": 1e-9,
-}
-```
 
 The module fragment is later placed in `ProblemIR.spin_torque_modules[]` by the stage capture and
 planner. `Exchange` and `Demag` are not silently added here; their parameters remain owned by
@@ -229,28 +207,6 @@ their respective documentation pages.
 `current_source` is useful when the same prescribed current vector is shared by
 several modules. It does not make `ohmic_poisson` executable for SOT.
 
-```python
-# %% Named CurrentTransport and SOT fragments; no solver is launched here.
-import fullmag as fm
-
-nm = 1e-9
-transport = fm.CurrentTransport(
-    name="heavy_metal_drive",
-    model="prescribed_density",
-    current_density=(0.0, 1.5e11, 0.0),
-)
-torque = fm.SpinOrbitTorque(
-    current_source="heavy_metal_drive",
-    damping_like_efficiency=0.12,
-    field_like_efficiency=0.01,
-    spin_polarization=(0.0, 0.0, 1.0),
-    ferromagnet_thickness_m=1.2 * nm,
-)
-print({
-    "current_module": transport.to_ir(),
-    "spin_torque_module": torque.to_ir_module(),
-})
-```
 
 ### Stage-first public boundary
 

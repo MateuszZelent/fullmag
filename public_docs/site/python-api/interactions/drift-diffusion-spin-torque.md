@@ -67,20 +67,6 @@ method; the copyable block below intentionally inspects the object only.
 (api-ddst-python-api)=
 ## Complete constructor
 
-```python
-# %% Semantic API inspection; no solver is launched.
-import json
-from fullmag.model.spin_torque import DriftDiffusionSpinTorque
-
-torque = DriftDiffusionSpinTorque(
-    current_source="charge_transport",
-    spin_polarization=(0.0, 0.0, 1.0),
-    degree=0.4,
-    beta=0.01,
-    spin_diffusion_length_m=5e-9,
-)
-print(json.dumps(torque.to_ir_module(), indent=2))
-```
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|

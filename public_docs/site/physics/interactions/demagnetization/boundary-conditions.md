@@ -202,31 +202,6 @@ the resolved shared-domain mesh and the FEM solver policy. The solver policy is 
 {doc}`../../../python-api/interactions/demagnetization`; the table below records the boundary-facing
 selection and its canonical lowering.
 
-```python
-# %% Select two different finite-airbox boundary problems
-import json
-import fullmag as fm
-
-robin = fm.Demag(model="airbox", variant="robin")
-dirichlet = fm.Demag(model="airbox", variant="dirichlet")
-
-fem = fm.FEM(
-    order=1,
-    maximum_element_size=2.0e-9,
-    demag_solver_policy=fm.FemLinearSolverPolicy(
-        solver="CG",
-        preconditioner="AMG",
-        rtol=1.0e-8,
-        atol=1.0e-12,
-        max_iterations=500,
-        print_level=0,
-    ),
-)
-
-print(json.dumps(robin.to_ir(), indent=2))
-print(json.dumps(dirichlet.to_ir(), indent=2))
-print(json.dumps(fem.to_ir(), indent=2))
-```
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|

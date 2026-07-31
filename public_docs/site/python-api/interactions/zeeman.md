@@ -64,14 +64,6 @@ E_Z=-\mu_0\int_{\Omega_m}M_s\,\mathbf m\cdot\mathbf H_{\mathrm{ext}}\,\mathrm dV
 
 ### `fullmag.Zeeman`
 
-```python
-# %% Minimal constructor
-import fullmag as fm
-
-zeeman = fm.Zeeman(B=(0.0, 0.0, 0.1))  # 0.1 T in +z
-print(zeeman.B)
-print(zeeman.to_ir())
-```
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
@@ -108,15 +100,6 @@ materialize.
 
 The exact object lowering is:
 
-```python
-# %% Exact public lowering
-import json
-import fullmag as fm
-
-term = fm.Zeeman(B=(0.0, 0.0, 0.1))
-assert term.to_ir() == {"kind": "zeeman", "B": [0.0, 0.0, 0.1]}
-print(json.dumps(term.to_ir(), indent=2))
-```
 
 The serialized key is uppercase `B` because the IR field is explicitly named `B`. The Python
 object does not serialize a backend-specific H-field and does not embed CPU/GPU selection.

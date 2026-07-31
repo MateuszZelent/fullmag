@@ -109,24 +109,6 @@ realized field values, and qualification evidence are resolved after lowering.
 
 OerstedCylinder is a frozen dataclass. Its constructor is:
 
-```python
-# %% Direct analytic-cylinder object
-import fullmag as fm
-
-term = fm.OerstedCylinder(
-    current=5.0e-3,
-    radius=50.0e-9,
-    center=(0.0, 0.0, 0.0),
-    axis=(0.0, 0.0, 1.0),
-    time_dependence=fm.Sinusoidal(
-        frequency_hz=1.0e9,
-        phase_rad=0.0,
-        offset=0.25,
-    ),
-)
-assert term.to_ir()["kind"] == "oersted_cylinder"
-print(term.to_ir())
-```
 
 The signed current controls field chirality. The Python constructor requires a positive radius,
 accepts exactly three values for center and axis, and stores the values as tuples. It does not
@@ -137,28 +119,6 @@ normalization boundary.
 
 OerstedField binds to a named CurrentTransport:
 
-```python
-# %% Source-bound object
-import fullmag as fm
-
-source = fm.CurrentTransport(
-    name="drive",
-    model="prescribed_density",
-    current_density=(0.0, 0.0, 5.0e10),
-    solve_region="pillar",
-)
-term = fm.OerstedField(
-    model="from_current_solution",
-    source=source.name,
-)
-assert term.to_ir() == {
-    "kind": "oersted_field",
-    "model": "from_current_solution",
-    "source": "drive",
-}
-print(source.to_ir())
-print(term.to_ir())
-```
 
 The Python object stores only the source name. It does not copy current density, geometry, mesh,
 or a computed field into the energy term. Problem validation checks that the source name refers to
@@ -214,25 +174,6 @@ The stage-first study workflow is the executable path. The following notebook bl
 object-level source binding and interaction fragment that the stage capture lowers; it does not
 construct a top-level problem or start a native solver.
 
-```python
-# %% Oersted object fragments; no solver is launched here.
-import json
-import fullmag as fm
-
-drive = fm.CurrentTransport(
-    name="drive",
-    model="prescribed_density",
-    current_density=(0.0, 0.0, 5.0e10),  # A/m^2
-    solve_region="pillar",
-)
-term = fm.OerstedField(source="drive")
-assert term.to_ir() == {
-    "kind": "oersted_field",
-    "model": "from_current_solution",
-    "source": "drive",
-}
-print(json.dumps({"current_module": drive.to_ir(), "energy_term": term.to_ir()}, indent=2))
-```
 
 For this example the interaction fragment is exactly:
 

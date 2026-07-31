@@ -67,20 +67,6 @@ w_{\mathrm c}=K_{c1}\Sigma+K_{c2}\alpha_1^2\alpha_2^2\alpha_3^2+K_{c3}\Sigma^2.
 
 ### `CubicAnisotropy`
 
-```python
-# %% Compatibility cubic term
-import json
-import fullmag as fm
-
-term = fm.CubicAnisotropy(
-    kc1=2.0e5,
-    kc2=1.0e4,
-    kc3=0.0,
-    axis1=(1.0, 0.0, 0.0),
-    axis2=(0.0, 1.0, 0.0),
-)
-print(json.dumps(term.to_ir(), indent=2))
-```
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
@@ -105,24 +91,6 @@ print(json.dumps(term.to_ir(), indent=2))
 
 ### Canonical material example
 
-```python
-# %% Canonical material-owned cubic anisotropy
-import json
-import fullmag as fm
-
-material = fm.Material(
-    name="cubic-material",
-    Ms=1.0e6,
-    A=10.0e-12,
-    alpha=0.02,
-    Kc1=2.0e5,
-    Kc2=1.0e4,
-    Kc3=0.0,
-    anisC1=(1.0, 0.0, 0.0),
-    anisC2=(0.0, 1.0, 0.0),
-)
-print(json.dumps(material.to_ir(), indent=2))
-```
 
 ### Outputs
 

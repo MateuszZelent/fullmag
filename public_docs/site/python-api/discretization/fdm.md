@@ -42,13 +42,6 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | `FDM.boundary_phi_floor` | `float \| None` | `None` | $1$ | Optional lower bound $\varphi_{\mathrm{floor}}$ with strict domain $0<\varphi_{\mathrm{floor}}<1$. | Optional lower bound $\varphi_{\mathrm{floor}}$ with strict domain $0<\varphi_{\mathrm{floor}}<1$. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.boundary_phi_floor` |
 | `FDM.boundary_delta_min` | `float \| None` | `None` | $\mathrm{m}$ | Optional T1 distance floor $\delta_{\min}\geq0$; zero is accepted. | Optional T1 distance floor $\delta_{\min}\geq0$; zero is accepted. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.boundary_delta_min` |
 
-```python
-# %%
-import inspect
-import fullmag as fm
-# %%
-print(inspect.signature(fm.FDM))
-```
 
 (python-api-discretization-fdm-problem-ir)=
 <!-- (problem-ir)= -->

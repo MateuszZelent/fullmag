@@ -176,13 +176,6 @@ examples are owned by {doc}`../../../python-api/interactions/zeeman`. The essent
 {"kind": "zeeman", "B": [0.0, 0.0, 0.1]}
 ```
 
-```python
-# %% Minimal copyable Zeeman declaration
-import fullmag as fm
-
-term = fm.Zeeman(B=(0.0, 0.0, 0.1))  # tesla
-print(term.to_ir())
-```
 
 ### Physical constructor parameter
 

@@ -60,33 +60,6 @@ units $\mathrm{J\,m^{-3}}$.
 (bulk-dmi-api-python-api)=
 ## 5. Python API
 
-```python
-# %% Explicit term
-import fullmag as fm
-
-term = fm.BulkDMI(D=3.0e-3)
-print(term.to_ir())
-
-# %% Material scalar route
-material = fm.Material(
-    name="Permalloy",
-    Ms=8.0e5,
-    A=1.3e-11,
-    alpha=0.01,
-    Dbulk=3.0e-3,
-)
-print(material.to_ir())
-
-# %% Material spatial route
-material_field = fm.Material(
-    name="Graded material",
-    Ms=8.0e5,
-    A=1.3e-11,
-    alpha=0.01,
-    Dbulk_field=[3.0e-3, 2.5e-3, 2.0e-3],
-)
-print(material_field.to_ir()["dbulk_field"])
-```
 
 | Python parameter | Type | Default | SI unit | Validation domain | Meaning | Backend support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
