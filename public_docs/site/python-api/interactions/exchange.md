@@ -149,63 +149,44 @@ Outputs are requests, not automatic side effects of declaring `Exchange()`:
 The generic scheduling parameters are owned by {doc}`../outputs/fields-and-scalars`; the rows
 above state the exchange-specific names and units so that an exchange example is reproducible.
 
-### Copyable Jupyter-style problem example
+### Copyable Jupyter-style stage scenario
 
 ```python
 # %% Imports and SI constants
-import json
 import fullmag as fm
 
 nm = 1.0e-9
-ps = 1.0e-12
-
-# %% Magnetic material and geometry
-material = fm.Material(
-    name="Permalloy",
-    Ms=800.0e3,       # A/m
-    A=13.0e-12,       # J/m
-    alpha=0.01,
-)
-magnet = fm.Ferromagnet(
-    name="film",
-    geometry=fm.Box(size=(40 * nm, 20 * nm, 5 * nm), name="film"),
-    material=material,
-    m0=fm.texture.uniform((1.0, 0.0, 0.0)),
-)
-
-# %% Exchange term, outputs, and FDM realization hint
-problem = fm.Problem(
-    name="exchange_api_example",
-    magnets=[magnet],
-    energy=[fm.Exchange()],
-    study=fm.TimeEvolution(
-        dynamics=fm.LLG(),
-        outputs=[
-            fm.SaveField("H_ex", every=1 * ps),
-            fm.SaveScalar("E_ex", every=1 * ps),
-        ],
-    ),
-    discretization=fm.DiscretizationHints(
-        fdm=fm.FDM(
-            cell=(2 * nm, 2 * nm, 1 * nm),
-            boundary_correction="none",
+study = fm.study("exchange_api_example")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.exchange()
+study.cell(2 * nm, 2 * nm, 1 * nm)
+film = study.geometry(fm.Box(40 * nm, 20 * nm, 5 * nm), name="film")
+film.Ms = 800.0e3       # A/m
+film.Aex = 13.0e-12     # J/m
+film.alpha = 0.01
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="nonlinear_cg",
+    max_steps=50_000,
+    tolT=1.0e-6,
+).autosave(
+    fm.StageAutosave(
+        table=fm.TableAutosave(
+            every_steps=10,
+            quantities=["step", "e_ex", "e_total", "max_torque_T"],
         ),
-    ),
+        fields=[fm.FieldAutosave("H_ex", every_steps=100)],
+    )
 )
-
-# %% Canonical lowering; this does not launch a solver
-problem_ir = problem.to_ir(include_geometry_assets=False)
-assert problem_ir["energy_terms"] == [{"kind": "exchange"}]
-assert problem_ir["materials"][0]["exchange_stiffness"] == 13.0e-12
-print(json.dumps(problem_ir, indent=2))
-
-# %% Optional flat authoring facade
-fm.exchange(enabled=True)
 ```
 
-The example is executable without a native solver and the final `problem_ir` is the authoritative
-payload produced by the current Python implementation. It does not claim that every backend has
-been qualified merely because the Python object lowers successfully.
+This script is the normal public authoring path. It declares the physical request and ordered
+stage; lowering to `ProblemIR`, planner resolution, and runtime qualification happen after the
+stage graph is captured. `Exchange()` remains the standalone constructor-level contract shown
+above, not the way a user launches a study.
 
 (exchange-api-problem-ir)=
 ## 6. Canonical ProblemIR lowering

@@ -201,57 +201,30 @@ different stopping variables and provenance. The selected solver, device, precis
 resolved outputs are determined by the planner/runtime; the Python stage declarations preserve the
 requested intent.
 
-### Low-level physical snapshot and `ProblemIR` inspection
+### Interaction and material lowering fragments
 
-`fm.Problem` remains a public structural object, but it is not the normal stage-oriented user
-workflow. It represents the physical model snapshot carried by a stage and is useful for testing,
-lowering inspection, and API documentation. The following block deliberately demonstrates that
-lowering boundary without claiming to replace `fm.study(...).stages`.
+The stage-first script above is the only public simulation workflow. When documentation needs to
+show the canonical interaction fragment, inspect the individual public objects instead of
+constructing a second top-level problem in the notebook.
 
 ```python
-# %% Low-level snapshot: Python objects -> canonical ProblemIR
+# %% Exchange and material IR fragments
 import json
 import fullmag as fm
 
-nm = 1.0e-9
-ps = 1.0e-12
-geometry = fm.Box(size=(40 * nm, 20 * nm, 5 * nm), name="film")
+exchange = fm.Exchange()
 material = fm.Material(
     name="Permalloy",
     Ms=800.0e3,
     A=13.0e-12,
     alpha=0.01,
 )
-magnet = fm.Ferromagnet(
-    name="film",
-    geometry=geometry,
-    material=material,
-    m0=fm.texture.uniform((1.0, 0.0, 0.0)),
-)
-snapshot_study = fm.TimeEvolution(
-    dynamics=fm.LLG(),
-    outputs=[
-        fm.SaveField("H_ex", every=1 * ps),
-        fm.SaveScalar("E_ex", every=1 * ps),
-    ],
-)
-snapshot = fm.Problem(
-    name="exchange_only_snapshot",
-    magnets=[magnet],
-    energy=[fm.Exchange()],
-    study=snapshot_study,
-    discretization=fm.DiscretizationHints(
-        fdm=fm.FDM(cell=(2 * nm, 2 * nm, 1 * nm)),
-        fem=fm.FEM(order=1, maximum_element_size=2 * nm),
-    ),
-)
-problem_ir = snapshot.to_ir(include_geometry_assets=False)
-print(json.dumps(problem_ir, indent=2))
+print(json.dumps({"energy_term": exchange.to_ir(), "material": material.to_ir()}, indent=2))
 ```
 
-`snapshot.to_ir(...)` validates and lowers one physical snapshot; it does not execute a stage or
-select a concrete CPU/GPU runtime. The planner resolves that later from the requested study,
-backend policy, installed capabilities, and execution context.
+These fragments document object-level normalization only. The stage builder owns the complete
+physical request; the planner resolves its backend policy, installed capabilities, and execution
+context after the ordered stages are captured.
 
 ### Exchange-facing parameter reference
 
