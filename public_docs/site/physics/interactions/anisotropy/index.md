@@ -250,18 +250,17 @@ study.stages.add_run(stage_id="run", until=1.0e-9)
 are later lowered and planned; the solver/device realization is resolved after the script has
 declared its intent.
 
-### Low-level physical snapshot and `ProblemIR` inspection
+### Interaction and material lowering fragments
 
-The following separate block is intentionally lower-level. `fm.Problem` is a public physical
-snapshot/container used to inspect Python-to-`ProblemIR` lowering; it is not a replacement for the
-stage pipeline shown above.
+The stage pipeline above is the public simulation workflow. The following cells inspect the
+canonical material fields and compatibility interaction independently; they do not assemble or
+launch a top-level simulation.
 
 ```python
-# %% Low-level snapshot: canonical material-owned anisotropy
+# %% Canonical material-owned anisotropy
 import json
 import fullmag as fm
 
-nm = 1.0e-9
 material = fm.Material(
     name="anisotropic-film",
     Ms=800.0e3,
@@ -271,31 +270,15 @@ material = fm.Material(
     Ku2=0.05e6,
     anisU=(0.0, 0.0, 1.0),
 )
-magnet = fm.Ferromagnet(
-    name="film",
-    geometry=fm.Box(size=(40 * nm, 20 * nm, 5 * nm), name="film-geometry"),
-    material=material,
-    m0=fm.texture.uniform((1.0, 0.0, 0.0)),
+legacy = fm.UniaxialAnisotropy(
+    ku1=0.5e6,
+    ku2=0.05e6,
+    axis=(0.0, 0.0, 1.0),
 )
-snapshot = fm.Problem(
-    name="uniaxial-example",
-    magnets=[magnet],
-    energy=[fm.Exchange()],
-    study=fm.TimeEvolution(dynamics=fm.LLG(), outputs=[]),
-)
-print(json.dumps(snapshot.to_ir(include_geometry_assets=False), indent=2))
-
-# %% Compatibility form: migrated to the same material-owned representation
-legacy_snapshot = fm.Problem(
-    name="legacy-anisotropy-example",
-    magnets=[magnet],
-    energy=[fm.UniaxialAnisotropy(ku1=0.5e6, ku2=0.05e6, axis=(0.0, 0.0, 1.0))],
-    study=fm.TimeEvolution(dynamics=fm.LLG(), outputs=[]),
-)
-print(json.dumps(legacy_snapshot.to_ir(include_geometry_assets=False), indent=2))
+print(json.dumps({"material": material.to_ir(), "compatibility": legacy.to_ir()}, indent=2))
 ```
 
-The low-level block is a lowering example, not device qualification. It can be adapted to a cubic
+These fragments are lowering examples, not device qualification. They can be adapted to a cubic
 material by setting `Kc1`, `Kc2`, `Kc3`, `anisC1`, and `anisC2`, or by using `fm.CubicAnisotropy`
 as the compatibility energy term.
 

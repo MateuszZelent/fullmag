@@ -128,33 +128,26 @@ The spatial list is only a valid executable example when the selected mesh/mater
 has exactly the required cardinality. For general authoring, omit it and let the planner derive
 resolved material fields from regions.
 
-### Compatibility migration example
+### Compatibility migration fragment
 
 ```python
-# %% Migration produces material-owned IR
+# %% Compatibility object and material fragment; no solver is launched here.
 import json
 import fullmag as fm
 
-nm = 1.0e-9
-magnet = fm.Ferromagnet(
-    name="film",
-    geometry=fm.Box(size=(20 * nm, 20 * nm, 4 * nm), name="film"),
-    material=fm.Material(
-        name="Py",
-        Ms=800.0e3,
-        A=13.0e-12,
-        alpha=0.01,
-    ),
-    m0=fm.texture.uniform((1.0, 0.0, 0.0)),
+material = fm.Material(
+    name="Py",
+    Ms=800.0e3,
+    A=13.0e-12,
+    alpha=0.01,
+    Ku1=5.0e5,
+    anisU=(0.0, 0.0, 1.0),
 )
-problem = fm.Problem(
-    name="legacy-uniaxial",
-    magnets=[magnet],
-    energy=[fm.UniaxialAnisotropy(ku1=5.0e5, axis=(0.0, 0.0, 1.0))],
+legacy = fm.UniaxialAnisotropy(
+    ku1=5.0e5,
+    axis=(0.0, 0.0, 1.0),
 )
-ir = problem.to_ir(include_geometry_assets=False)
-assert ir["materials"][0]["uniaxial_anisotropy"] == 5.0e5
-print(json.dumps(ir["materials"][0], indent=2))
+print(json.dumps({"material": material.to_ir(), "legacy": legacy.to_ir()}, indent=2))
 ```
 
 ### Outputs

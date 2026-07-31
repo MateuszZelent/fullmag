@@ -156,43 +156,35 @@ The interaction-facing parameter matrix is:
 | `Material.Ku2_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite; mesh cardinality validated downstream | spatial Ku2 override | FEM and allocating FDM reference paths where supported | `materials[].ku2_field` |
 
 ```python
-# %% Copyable Python/Jupyter example
-import json
+# %% Copyable Python/Jupyter stage workflow
 import fullmag as fm
 
 nm = 1.0e-9
-material = fm.Material(
-    name="uniaxial-film",
-    Ms=800.0e3,
-    A=13.0e-12,
-    alpha=0.01,
-    Ku1=0.5e6,
-    Ku2=0.05e6,
-    anisU=(0.0, 0.0, 1.0),
+study = fm.study("uniaxial-anisotropy")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.exchange()
+study.cell(2 * nm, 2 * nm, 1 * nm)
+body = study.geometry(fm.Box(40 * nm, 20 * nm, 5 * nm), name="film")
+body.Ms = 800.0e3
+body.Aex = 13.0e-12
+body.alpha = 0.01
+body.Ku1 = 0.5e6
+body.Ku2 = 0.05e6
+body.anisU = (0.0, 0.0, 1.0)
+body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="nonlinear_cg",
+    max_steps=50_000,
+    tolT=1.0e-6,
 )
-magnet = fm.Ferromagnet(
-    name="film",
-    geometry=fm.Box(size=(40 * nm, 20 * nm, 5 * nm), name="film-geometry"),
-    material=material,
-    m0=fm.texture.uniform((1.0, 0.0, 0.0)),
-)
-
-# %% Canonical material-owned form
-problem = fm.Problem(
-    name="uniaxial-example",
-    magnets=[magnet],
-    energy=[fm.Exchange()],
-)
-print(json.dumps(problem.to_ir(include_geometry_assets=False), indent=2))
-
-# %% Compatibility form: migrated to the same Material fields
-legacy = fm.Problem(
-    name="uniaxial-compatibility-example",
-    magnets=[magnet],
-    energy=[fm.UniaxialAnisotropy(ku1=0.5e6, ku2=0.05e6, axis=(0.0, 0.0, 1.0))],
-)
-print(json.dumps(legacy.to_ir(include_geometry_assets=False), indent=2))
 ```
+
+The anisotropy values belong to the material/geometry handle and the stage pipeline is the
+executable user workflow. The compatibility constructor is documented separately as a lowering
+inspection fixture, not as a way to launch a simulation.
 
 The compatibility object is requested intent. The resolved IR is material-owned. Supplying both
 conflicting legacy values and existing `Material` values raises a validation error rather than
