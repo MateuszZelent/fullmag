@@ -1,7 +1,7 @@
 ---
-title: FullMag user guide and reference
+title: FullMag public documentation
 status: partial
-doc_kind: user-guide
+doc_kind: reference
 audience: user
 owner: fullmag-public-docs
 source_of_truth: readme.md
@@ -144,8 +144,7 @@ limitations. For example, the canonical Exchange owner is
 The repository-owned standard-problem scenarios are the executable source of truth for complete
 simulation scripts. A page may link to or reproduce a relevant `tests/standard_problems/...` or
 `examples/...` stage script, but it must not replace that workflow with a direct top-level
-constructor
-simulation.
+constructor simulation.
 
 ## Scientific scope and maturity
 
