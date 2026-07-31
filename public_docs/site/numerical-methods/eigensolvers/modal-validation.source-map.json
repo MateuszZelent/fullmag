@@ -1,0 +1,37 @@
+{
+  "document": {"path": "public_docs/site/numerical-methods/eigensolvers/modal-validation.md"},
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
+    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "Validation requires independently proven GPU execution identity."},
+    {"solver": "FDM", "device": "CPU", "status": "unsupported", "reason": "No native FDM modal lane is claimed."},
+    {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "No native CUDA modal lane is claimed."}
+  ],
+  "equations": [
+    {"id": "eq-numerical-modal-validation-relative-error", "symbols": ["fnum", "fref", "eps", "epsmax"], "sources": ["dispersion", "native"]},
+    {"id": "eq-numerical-modal-validation-kittel", "symbols": ["fnum", "fkit", "H", "df"], "sources": ["kittel", "native"]}
+  ],
+  "symbols": [
+    {"id": "fnum", "latex": "$f_j^{\\mathrm{num}}$", "meaning": "computed frequency at sample $j$", "si_unit": "$\\mathrm{Hz}$"},
+    {"id": "fref", "latex": "$f_j^{\\mathrm{ref}}$", "meaning": "analytical/reference frequency", "si_unit": "$\\mathrm{Hz}$"},
+    {"id": "eps", "latex": "$\\varepsilon_j$", "meaning": "relative frequency error", "si_unit": "$1$"},
+    {"id": "epsmax", "latex": "$\\varepsilon_{\\max}$", "meaning": "permitted maximum relative error", "si_unit": "$1$"},
+    {"id": "fkit", "latex": "$f_{\\mathrm{Kittel}}$", "meaning": "Kittel reference frequency", "si_unit": "$\\mathrm{Hz}$"},
+    {"id": "H", "latex": "$\\mathbf H_j$", "meaning": "bias field at sample $j$", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "df", "latex": "$\\Delta f_j$", "meaning": "signed frequency difference", "si_unit": "$\\mathrm{Hz}$"}
+  ],
+  "sources": [
+    {"id": "dispersion", "path": "packages/fullmag-py/src/fullmag/model/eigen.py", "symbol": "class ThinFilmDEBVDispersionValidation", "responsibility": "Dispersion validation schema."},
+    {"id": "kittel", "path": "packages/fullmag-py/src/fullmag/model/eigen.py", "symbol": "class K0KittelFieldSweepValidation", "responsibility": "Kittel field-sweep validation schema."},
+    {"id": "native", "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp", "symbol": "solve_modal_eigen_contract", "responsibility": "Native modal diagnostics and status."}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "ThinFilmDEBVDispersionValidation.film_thickness_m", "type": "float", "default": "required", "si_unit": "$\\mathrm{m}$", "validation": "positive", "meaning": "film thickness", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.dispersion_validation.film_thickness_m`"},
+      {"python": "ThinFilmDEBVDispersionValidation.max_k_rad_per_m", "type": "float", "default": "3e6", "si_unit": "$\\mathrm{m^{-1}}$", "validation": "positive and at most $3e6$", "meaning": "wave-vector bound", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.dispersion_validation.max_k_rad_per_m`"},
+      {"python": "ThinFilmDEBVDispersionValidation.max_relative_error", "type": "float", "default": "0.10", "si_unit": "$1$", "validation": "positive and at most `0.25`", "meaning": "permitted dispersion error", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.dispersion_validation.max_relative_error`"},
+      {"python": "K0KittelFieldSweepValidation.samples", "type": "Sequence[K0KittelFieldSample]", "default": "required", "si_unit": "$1$", "validation": "at least three unique samples", "meaning": "bias-field sweep samples", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.k0_kittel_validation.samples`"},
+      {"python": "K0KittelFieldSweepValidation.model", "type": "str", "default": "macrospin_larmor", "si_unit": "$1$", "validation": "`macrospin_larmor` or `thin_film_in_plane`", "meaning": "Kittel model", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.k0_kittel_validation.model`"},
+      {"python": "K0KittelFieldSweepValidation.relative_tolerance", "type": "float", "default": "0.05", "si_unit": "$1$", "validation": "positive and at most `0.25`", "meaning": "permitted Kittel error", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.k0_kittel_validation.relative_tolerance`"}
+    ]
+  }
+}
