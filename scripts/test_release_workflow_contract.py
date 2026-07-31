@@ -58,7 +58,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn('"$WEB\\index.html"', content)
         self.assertIn("CreateFromDirectory", content)
         self.assertNotIn('Compress-Archive -Path "$DIST"', content)
-        self.assertIn("FullName.Replace('\\\\', '/')", content)
+        self.assertIn("FullName.Replace('\\', '/')", content)
         self.assertIn('(Resolve-Path $DIST).Path', content)
         self.assertIn("ZipFile", content)
 
