@@ -58,6 +58,10 @@ E_{\mathrm d}=\frac{\mu_0}{2}\int_{\mathbb R^3}|\mathbf H_{\mathrm d}|^2\,\mathr
 | $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
 | $E_{\mathrm d}$ | demagnetization energy | $\mathrm{J}$ |
 | $\Omega_m$ | magnetic domain | $\mathrm{m^3}$ |
+| $N_{pq}^{ij}$ | discrete demagnetization tensor from source cell $q$ to destination cell $p$ | $1$ |
+| $p,q$ | destination and source cell indices | $1$ |
+| $i,j$ | Cartesian component indices | $1$ |
+| $w_i$ | cell volume or FEM integration weight | $\mathrm{m^3}$ |
 
 (demag-math-assumptions-and-validity)=
 ## Assumptions and validity
@@ -82,6 +86,81 @@ print(term.to_ir())
 |---|---|---|---|---|---|---|---|
 | `Demag.model` | `optional str` | `None` | $1$ | Canonical model name. | Selects the physical realization family. | Planner-dependent. | `energy[].realization` |
 | `Demag.variant` | `optional str` | `None` | $1$ | Valid only for `airbox`. | Selects Robin or Dirichlet airbox closure. | FEM airbox. | `energy[].realization` |
+
+### Stage-first realization request
+
+The common equations are selected through a solver-specific stage request. This example
+uses the public stage API and records a FEM Poisson Robin realization; it does not imply
+that the same finite-domain operator is used by FDM.
+
+```python
+# %% FEM realization and physical state
+import fullmag as fm
+
+nm = 1e-9
+study = fm.study("demag_formulation_reference")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.demag(realization="poisson_robin")
+study.fem_demag_solver(
+    solver="CG",
+    preconditioner="AMG",
+    rtol=1e-12,
+    max_iterations=600,
+)
+body = study.geometry(fm.Box(100 * nm, 20 * nm, 5 * nm), name="film")
+body.Ms = 800e3
+body.Aex = 13e-12
+body.alpha = 0.02
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
+study.stages.add_relax(stage_id="relax", tolT=1e-6, max_steps=50_000)
+```
+
+The selected realization is a requested intent. The resolved plan must additionally
+record the magnetic domain, air domain, outer marker, boundary variant, linear solver,
+preconditioner, tolerances, mesh identity, field recovery, and energy reduction.
+
+(demag-math-realization-matrix)=
+## Realization hierarchy
+
+### FDM CPU and GPU: discrete Green operator
+
+FDM represents the magnetization by cell averages. The demagnetizing field is a discrete
+convolution with a translation-invariant tensor on a common grid:
+
+```{math}
+:label: eq-demag-formulation-fdm-discrete
+H_{d,p}^{i}=-sum_{q}sum_{j=1}^{3}N_{pq}^{ij}M_q^{j}.
+```
+
+The CPU reference constructs the tensor spectrum and applies the reduction in host memory.
+The CUDA lane uses device kernels and device reductions. The mathematical input is the
+same, but padding, FFT layout, precision, reduction order, and device residency are not.
+Neither lane solves a finite airbox Poisson equation.
+
+### FEM CPU and GPU: scalar potential
+
+FEM introduces a scalar potential over the magnetic body and, for the airbox variant, an
+exterior air region. The magnetic source enters through the divergence of $mathbf M$ and
+its boundary trace. The CPU path assembles and solves the operator using MFEM/Hypre
+components; the GPU path has a separate CSR/device-Hypre realization. The recovered field
+and energy must use the same sign convention as the common continuum equations.
+
+(demag-math-energy-reduction)=
+## Energy and observable ownership
+
+The field-derived energy is not an arbitrary post-processing scalar. For a resolved field,
+the implementation must reduce
+
+```{math}
+:label: eq-demag-formulation-discrete-energy
+E_{mathrm d}^{h}=-rac{mu_0}{2}sum_i w_i,mathbf M_icdotmathbf H_{mathrm d,i},
+```
+
+where $w_i$ is the cell volume or FEM quadrature/lumped weight selected by the backend.
+The weight, field location, masking of non-magnetic air nodes, and reduction precision
+are part of provenance. A reported energy without these facts is not reproducible.
 
 (demag-math-problem-ir)=
 ## ProblemIR

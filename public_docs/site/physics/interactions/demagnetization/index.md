@@ -107,31 +107,71 @@ reductions and FEM field-to-energy reductions.
 ## Python authoring and complete parameter reference
 
 ```python
-# %% Demagnetization-only authoring example
-import json
+# %% FEM demagnetization stage scenario
+from pathlib import Path
+
 import fullmag as fm
 
-nm = 1e-9
-geometry = fm.Box(size=(40 * nm, 20 * nm, 5 * nm), name="film")
-material = fm.Material(name="Permalloy", Ms=800e3, A=13e-12, alpha=0.01)
-magnet = fm.Ferromagnet(
-    name="film", geometry=geometry, material=material,
-    m0=fm.texture.uniform((1.0, 0.0, 0.0)),
+study = fm.study("demag_fem_poisson_robin")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.interactive(True)
+study.universe(
+    mode="manual",
+    size=(1200e-9, 600e-9, 550e-9),
+    center=(0.0, 0.0, 0.0),
+    padding=(0.0, 0.0, 0.0),
 )
-study = fm.TimeEvolution(dynamics=fm.LLG(), outputs=[])
-problem = fm.Problem(
-    name="demag_only",
-    magnets=[magnet],
-    energy=[fm.Demag(model="airbox", variant="robin")],
-    discretization=fm.DiscretizationHints(
-        fdm=fm.FDM(cell=(2 * nm, 2 * nm, 1 * nm),
-                   demag=fm.FDMDemag(strategy="single_grid")),
-        fem=fm.FEM(order=1, maximum_element_size=2 * nm),
-    ),
-    study=study,
+study.universe.mesh(
+    minimum_element_size=10e-9,
+    maximum_element_size=110e-9,
+    maximum_element_growth_rate=1.9,
+    grading="geometric",
 )
-print(json.dumps(problem.to_ir(include_geometry_assets=False), indent=2))
+film = study.geometry(fm.Box(size=(500e-9, 125e-9, 3e-9), name="film"), name="film")
+film.Ms = 8.0e5
+film.Aex = 1.3e-11
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.1, 0.0))
+film.mesh.thin_film(
+    minimum_element_size=3e-9,
+    maximum_element_size=3e-9,
+    layers=1,
+    topology="prismatic",
+    exact_layers=True,
+    transition="pyramid_to_tetrahedra",
+    order=1,
+)
+study.demag(realization="poisson_robin")
+study.fem_demag_solver(
+    solver="CG",
+    preconditioner="AMG",
+    rtol=1e-12,
+    max_iterations=600,
+)
+study.mesh.save_or_load(Path("demag_fem_poisson_robin.fullmag-mesh"))
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="nonlinear_cg",
+    max_steps=50_000,
+    tolT=0.5e-8,
+).autosave(
+    fm.StageAutosave(
+        table=fm.TableAutosave(
+            every_steps=10,
+            quantities=["step", "e_demag", "e_total", "max_torque_T"],
+        ),
+        fields=[fm.FieldAutosave("H_demag", every_steps=100)],
+    )
+)
 ```
+
+This is the public execution pattern. The selected airbox realization, FEM Poisson solver policy,
+mesh, stage, and autosaves are declared on `study`; the planner then lowers the stage snapshot and
+records the resolved runtime separately. The FDM equivalent uses `study.engine("fdm")`,
+`study.cell(...)`, and the documented `FDMDemag` policy rather than constructing a direct
+top-level problem object in the user script.
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|

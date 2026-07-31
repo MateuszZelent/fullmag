@@ -14,7 +14,10 @@ When Dzyaloshinskii–Moriya interaction is active, the natural boundary conditi
 magnetic surface $\partial\Omega_m$ is modified from the standard homogeneous Neumann
 exchange condition. This page documents the exact boundary terms for both DMI variants.
 
-## Interfacial DMI boundary condition
+(dmi-boundary-governing-equations)=
+## Governing equations
+
+### Interfacial DMI boundary condition
 
 The combined exchange-plus-interfacial-DMI variational problem produces the natural surface
 term
@@ -35,6 +38,14 @@ This boundary condition is physically significant: it modifies the equilibrium m
 at the sample edges and determines the boundary twist of chiral domain walls and skyrmions.
 For strong DMI ($|D|/(2A)$ comparable to the inverse sample width), the boundary condition
 lifts the edge magnetization toward the interface normal.
+
+(dmi-boundary-problem-statement)=
+## Physical domain and scope
+
+The boundary operator belongs to the combined exchange-DMI variational problem. It is not a
+free-standing boundary value that can be added after computing a DMI field. The surface normal,
+interface-symmetry normal, coefficient convention, and solver realization must be resolved
+together. The natural condition is homogeneous only when the DMI surface contribution vanishes.
 
 ### FEM implementation
 
@@ -87,6 +98,8 @@ centres.
 
 ## Symbols and SI units
 
+(dmi-boundary-symbols-and-si-units)=
+
 | Symbol | Definition | SI unit |
 |---|---|---:|
 | $A$ | exchange stiffness | $\mathrm{J\,m^{-1}}$ |
@@ -95,6 +108,108 @@ centres.
 | $\mathbf{n}_s$ | outward surface normal | $1$ |
 | $\partial_n$ | normal derivative | $\mathrm{m^{-1}}$ |
 | $\ell_{\mathrm{DMI}}$ | DMI boundary-twist length | $\mathrm{m}$ |
+| $\mathbf m$ | reduced magnetization | $1$ |
+
+(dmi-boundary-assumptions-and-validity)=
+## Assumptions and validity
+
+- $A$ is the bulk exchange stiffness and $D$ is the coefficient used by the selected DMI
+  convention; their units and sign are not converted by the Python object.
+- The interfacial symmetry normal is normalized by FEM when non-zero. Current FDM planning
+  accepts only the documented canonical orientation; a tilted FDM normal is rejected.
+- The boundary formula assumes a smooth enough surface for a trace normal. Corners and
+  non-conforming interfaces require a mesh-specific treatment and must not be described as
+  the smooth formula without qualification.
+- The characteristic length is a scale estimate, not a replacement for resolving the
+  boundary layer. Mesh or cell size must be reported relative to $\ell_{\mathrm{DMI}}$.
+- Python serialization, source contracts, and a skipped GPU test are not boundary-condition
+  qualification evidence.
+
+(dmi-boundary-python-api)=
+## Python API and boundary request
+
+The stage builder currently has no dedicated DMI boundary registration method. The public
+object fragment below therefore inspects the exact coefficient and normal lowering; it does
+not launch a solver.
+
+```python
+# %% DMI boundary object fragment; no solver is launched here.
+import json
+import fullmag as fm
+
+interfacial = fm.InterfacialDMI(
+    D=2.5e-3,
+    interface_normal=(0.0, 0.0, 1.0),
+)
+bulk = fm.BulkDMI(D=1.0e-3)
+print(json.dumps({"interfacial": interfacial.to_ir(), "bulk": bulk.to_ir()}, indent=2))
+```
+
+| Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `InterfacialDMI.D` | `float` | required | $\mathrm{J\,m^{-2}}$ | finite | interfacial DMI coefficient and sign | FDM/FEM subject to normal policy | `energy_terms[].D` |
+| `InterfacialDMI.interface_normal` | `Sequence[float] or None` | `None` | $1$ | three finite values; FEM non-zero; FDM canonical orientation | interface-symmetry normal | FEM arbitrary non-zero; FDM restricted | `energy_terms[].interface_normal` |
+| `BulkDMI.D` | `float` | required | $\mathrm{J\,m^{-2}}$ | finite | bulk DMI coefficient and sign | FDM/FEM lane-dependent | `energy_terms[].D` for `bulk_dmi` |
+
+(dmi-boundary-problem-ir)=
+## ProblemIR lowering
+
+The explicit terms lower independently and preserve their signed coefficients:
+
+```json
+{
+  "energy_terms": [
+    {"kind": "interfacial_dmi", "D": 0.0025, "interface_normal": [0.0, 0.0, 1.0]},
+    {"kind": "bulk_dmi", "D": 0.001}
+  ]
+}
+```
+
+The planner resolves the normal policy and boundary realization after lowering. It must
+not silently turn bulk DMI into interfacial DMI or rotate an FDM stencil to accommodate a
+normal that the FDM lane does not support.
+
+(dmi-boundary-round-trip-and-failure-semantics)=
+## Round-trip and failure semantics
+
+Requested intent is the term kind, signed coefficient, and authored normal. Resolved
+execution adds solver, device, normalized normal, boundary operator, precision, and field
+output policy. Validation errors include non-finite coefficients, malformed vectors, zero
+FEM normals, and unsupported FDM normal orientation. Unsupported combinations are planner
+errors; no CPU fallback or boundary omission is allowed.
+Resolved execution is recorded separately from requested intent. Unsupported combinations
+are rejected before a solver starts.
+
+(dmi-boundary-discrete-realization)=
+## Discrete realization
+
+FEM obtains the natural boundary term from the weak residual and integrates it on the
+resolved surface trace. FDM represents the boundary through one-sided/reflected stencil
+values and active-neighbour rules. These are separate realizations and require separate
+convergence evidence; the shared continuum equation does not prove discrete parity.
+
+(dmi-boundary-implementation-mapping)=
+## Implementation mapping
+
+The Python classes own coefficient and normal serialization. FEM interfacial and bulk DMI
+residuals are implemented in separate interaction modules; FDM planning owns the canonical
+normal legality rule. The source map below gives stable path-plus-symbol identities.
+
+(dmi-boundary-validation)=
+## Validation
+
+Validate uniform-state zero field, sign reversal under $D\to-D$, analytic linear gradients,
+boundary-layer convergence against $\ell_{\mathrm{DMI}}$, FEM energy finite differences,
+FDM boundary-stencil symmetry, tilted-normal rejection, and matched precision/device evidence.
+
+(dmi-boundary-limitations)=
+## Limitations
+
+The public contract does not yet expose a spatial normal field, curved-surface DMI operator,
+or an arbitrary FDM interface orientation. The boundary equations describe the current
+physical target; lane status must be read from the canonical DMI realization pages.
+
+(dmi-boundary-scientific-bibliography)=
 
 ## Scientific bibliography
 
@@ -105,3 +220,15 @@ centres.
    R. Wiesendanger, "The properties of isolated chiral skyrmions in thin magnetic films,"
    *New Journal of Physics* **18**, 065003 (2016).
    [doi:10.1088/1367-2630/18/6/065003](https://doi.org/10.1088/1367-2630/18/6/065003).
+
+(dmi-boundary-source-code-index)=
+## Source-code index
+
+| Claim | Repository path | Stable symbol | Responsibility | Lane |
+|---|---|---|---|---|
+| Interfacial DMI API | packages/fullmag-py/src/fullmag/model/energy.py | class InterfacialDMI | coefficient and normal validation | Python |
+| Bulk DMI API | packages/fullmag-py/src/fullmag/model/energy.py | class BulkDMI | coefficient validation and IR | Python |
+| Interfacial FEM residual | backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp | compute_interfacial_dmi_field | FEM field realization | FEM CPU |
+| Bulk FEM residual | backends/fem/cpu/mfem/interactions/dmi_bulk.cpp | compute_bulk_dmi_field | FEM field realization | FEM CPU |
+| GPU DMI projection and energy | backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu | fullmag_cuda_dmi_field_energy | CUDA field/energy path | FEM GPU |
+| FDM layered DMI launch | backends/fdm/gpu/cuda/interactions/multilayer_dmi.cu | launch_multilayer_dmi_field_fp64 | CUDA layered DMI path | FDM GPU |

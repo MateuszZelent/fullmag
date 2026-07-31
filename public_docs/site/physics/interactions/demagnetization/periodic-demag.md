@@ -18,6 +18,9 @@ and FEM periodic-airbox policies; neither is interchangeable with open-boundary 
 
 Periodic axes identify corresponding degrees of freedom or image cells. The treatment of the
 zero-wave-number mode and the remaining open axes determines whether a scalar potential is unique.
+The periodic request therefore has three independent parts: the periodic equivalence relation,
+the finite image or reduced-space realization, and the zero-mode/gauge policy. Changing one of
+these changes the discrete magnetostatic problem.
 
 (demag-periodic-governing-equations)=
 ## Governing equations
@@ -91,11 +94,41 @@ Requested intent is preserved even when unsupported. Resolved execution is recor
 Periodic axes with an incompatible open policy, fully periodic FEM, and invalid image counts are validation errors;
 unsupported combinations are never silently changed to open boundaries.
 
+For a fully periodic direction, the mean potential is not determined by the gradient field. The
+planner must either remove the constant null mode or apply an explicitly recorded gauge. A finite
+FDM image count is not a gauge choice: it controls truncation of the image sum. For FEM, periodic
+representative identification changes the matrix topology and the right-hand side before the
+linear solve.
+
 (demag-periodic-discrete-realization)=
 ## Discrete realization
 
 FDM sums a finite set of translated kernels. FEM identifies mesh classes, reduces the operator and
 right-hand side, solves the reduced problem, and lifts the potential to the full mesh.
+
+### FDM CPU and GPU
+
+The FDM implementation keeps a separate periodic spectrum from the open-boundary spectrum. The
+image count is an explicit approximation parameter: increasing it changes the numerical operator,
+memory footprint, and convergence error. CPU and CUDA lanes must use identical axis order and image
+semantics before a parity comparison; matching scalar energies with different image counts is not
+evidence of parity.
+
+### FEM CPU and GPU
+
+The FEM implementation identifies periodic mesh representatives and constructs the reduced system
+shown above. An open axis remains necessary for the currently documented Poisson family. The GPU
+lane, where available, is a separate device realization of the reduced operator; it is not licensed
+by the existence of the CPU reduction. Record representative maps, zero-mode handling, solver
+tolerances, and field lifting in provenance.
+
+(demag-periodic-zero-mode)=
+## Zero mode and convergence evidence
+
+For FDM, report the image truncation sequence and the observable convergence of both field and
+energy. For FEM, report the reduced-system residual, the gauge/null-space policy, open-axis
+solvability, and continuity of the lifted field. A periodic result without a zero-mode policy is
+not reproducible even when the final energy is finite.
 
 (demag-periodic-implementation-mapping)=
 ## Implementation mapping

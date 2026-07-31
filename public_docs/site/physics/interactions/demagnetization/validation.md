@@ -19,6 +19,9 @@ not proof of an executed GPU result.
 
 The observable pair is the demagnetizing field and self-energy. A valid test therefore checks field
 direction and magnitude, energy sign and magnitude, and the relation between them.
+The test record must also identify whether the field is cell-centred, nodal, element-recovered,
+or sampled after interpolation. Comparing fields at different locations can otherwise produce an
+apparently small error for the wrong reason.
 
 (demag-validation-governing-equations)=
 ## Governing equations
@@ -83,11 +86,48 @@ selected realization can materialize `H_demag` and `E_demag` before execution.
 The report records requested intent, resolved execution, validation errors, and unsupported combinations.
 A missing quantity is a fail-closed planner error rather than a zero-filled result.
 
+The validation artifact separates requested intent from resolved execution. Requested intent
+contains the chosen model, mesh/grid, output quantities, tolerance, precision, and device request.
+Resolved execution contains the selected backend realization, actual mesh identity, solver policy,
+iteration count, convergence flag, field recovery, energy reduction, and runtime/device identity.
+An artifact that omits any of these fields is not sufficient for a CPU/GPU qualification claim.
+
 (demag-validation-discrete-realization)=
 ## Discrete realization
 
 FDM compares cell fields and volume-weighted energy. FEM compares recovered nodal/element fields,
 integrated energy, and residuals. CPU/GPU parity requires the same precision and tolerance.
+
+For FDM, the reference comparison must fix cell dimensions, padding, kernel convention, FFT
+normalization, self-term, and periodic-image policy. For FEM, it must fix the magnetic/air domain,
+boundary marker, Robin or Dirichlet closure, mesh order, quadrature/recovery rule, linear solver,
+preconditioner, relative tolerance, absolute tolerance when present, and maximum iterations.
+
+(demag-validation-error-metrics)=
+## Error metrics and acceptance
+
+Use more than one metric:
+
+| Quantity | Definition | Why it is required |
+|---|---|---|
+| Field absolute error | $|\mathbf H-\mathbf H_{\mathrm{ref}}\|_2$ | Detects errors near zero without unstable relative division. |
+| Field relative error | $|\mathbf H-\mathbf H_{\mathrm{ref}}\|_2/(\|\mathbf H_{\mathrm{ref}}\|_2+H_*)$ | Compares scale after declaring positive reference floor $H_*$. |
+| Energy error | $|E-E_{\mathrm{ref}}|/(|E_{\mathrm{ref}}|+E_*)$ | Tests the global reduction independently of pointwise field error. |
+| Maxwell residual | Norm of $r$ and curl residual | Detects a plausible energy with an invalid field. |
+| Refinement slope | Observed error versus grid/mesh scale | Distinguishes convergence from accidental agreement. |
+
+The report must state $H_*$ and $E_*$ whenever relative metrics are used. No universal numerical
+threshold is implied by this page; the threshold belongs to the qualified test or standard problem.
+
+(demag-validation-lane-matrix)=
+## Lane-specific qualification
+
+| Lane | Minimum evidence before status can be implemented | Typical failure that must remain visible |
+|---|---|---|
+| FDM CPU | independent kernel/tensor checks, analytic geometry, refinement | wrong self-term, padding, or FFT normalization |
+| FDM GPU | matched CPU reference, executed CUDA device identity, precision record | skipped device test or silent CPU fallback |
+| FEM CPU | weak-form residual, airbox/boundary convergence, energy derivative | residual/energy mismatch or unconverged Hypre solve |
+| FEM GPU | executed device operator, matched tolerance/precision, phase telemetry | host-only assembly reported as GPU parity |
 
 (demag-validation-implementation-mapping)=
 ## Implementation mapping

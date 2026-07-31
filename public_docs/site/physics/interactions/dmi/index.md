@@ -197,44 +197,25 @@ body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 study.stages.add_run(stage_id="run", until=2e-12)
 ```
 
-For a DMI-enabled canonical request, use the low-level `Problem` construction until a stage
-level DMI hook is added. This is an explicit lowering example, not a replacement for the normal
-stage workflow:
+For a DMI-enabled request, the current stage API has no registration hook. Inspect the DMI and
+periodicity objects independently and treat the missing stage integration as an explicit API
+boundary; do not fabricate a top-level simulation constructor:
 
 ```python
-# %% DMI terms and a periodic FDM lowering
+# %% DMI and periodicity object lowering; not a simulation workflow
 import json
 import fullmag as fm
 
-nm = 1e-9
-material = fm.Material(name="Permalloy", Ms=8.0e5, A=13e-12, alpha=0.02)
-magnet = fm.Ferromagnet(
-    name="film",
-    geometry=fm.Box(size=(40 * nm, 40 * nm, 4 * nm)),
-    material=material,
-    m0=fm.texture.uniform((1.0, 0.0, 0.0)),
+interfacial = fm.InterfacialDMI(
+    D=2.5e-3,
+    interface_normal=(0.0, 0.0, 1.0),
 )
-problem = fm.Problem(
-    name="dmi_reference_problem",
-    magnets=[magnet],
-    energy=[
-        fm.InterfacialDMI(D=2.5e-3, interface_normal=(0.0, 0.0, 1.0)),
-        fm.BulkDMI(D=3.0e-3),
-    ],
-    study=fm.TimeEvolution(dynamics=fm.LLG(), outputs=[]),
-    pbc=fm.FdmPbc(axes=(True, True, True)),
-    discretization=fm.DiscretizationHints(
-        fdm=fm.FDM(cell=(2 * nm, 2 * nm, 2 * nm)),
-    ),
-)
-
-# %% Canonical lowering is inspectable without launching a solver
-problem_ir = problem.to_ir(include_geometry_assets=False)
-assert [term["kind"] for term in problem_ir["energy_terms"]] == [
-    "interfacial_dmi", "bulk_dmi"
-]
-assert problem_ir["pbc"]["axes"] == ["periodic", "periodic", "periodic"]
-print(json.dumps(problem_ir["energy_terms"], indent=2))
+bulk = fm.BulkDMI(D=3.0e-3)
+pbc = fm.FdmPbc(axes=(True, True, True))
+print(json.dumps({
+    "energy_terms": [interfacial.to_ir(), bulk.to_ir()],
+    "pbc": pbc.to_ir(),
+}, indent=2))
 ```
 
 ### Complete parameter reference

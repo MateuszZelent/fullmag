@@ -13,6 +13,104 @@ source_of_truth: docs/physics/0404-interfacial-dmi.md
 This page summarises the validation strategy and current evidence for the Dzyaloshinskii–
 Moriya interaction implementation across all solver/device lanes.
 
+(dmi-validation-problem-statement)=
+## Physical problem
+
+Validation must test the implemented energy, effective field, natural boundary behavior,
+and planner legality separately. A green constructor test is not a numerical qualification.
+
+(dmi-validation-governing-equations)=
+## Governing equations used by validation
+
+The interfacial and bulk energy densities are evaluated with the same sign conventions as
+their canonical owners:
+
+```{math}
+:label: eq-dmi-validation-interfacial-energy
+w_{\mathrm i}=D\left[m_n\nabla\cdot\mathbf m-\mathbf m\cdot\nabla m_n\right],
+\qquad
+m_n=\mathbf m\cdot\hat{\mathbf n}.
+```
+
+```{math}
+:label: eq-dmi-validation-bulk-energy
+w_{\mathrm b}=D\,\mathbf m\cdot(\nabla\times\mathbf m).
+```
+
+(dmi-validation-symbols-and-si-units)=
+## Symbols and SI units
+
+| Symbol | Definition | SI unit |
+|---|---|---:|
+| $D$ | DMI coefficient | $\mathrm{J\,m^{-2}}$ |
+| $w_{\mathrm i}$ | interfacial DMI energy density | $\mathrm{J\,m^{-3}}$ |
+| $w_{\mathrm b}$ | bulk DMI energy density | $\mathrm{J\,m^{-3}}$ |
+| $\mathbf m$ | reduced magnetization | $1$ |
+| $m_n$ | normal magnetization component | $1$ |
+| $\hat{\mathbf n}$ | interface-symmetry normal | $1$ |
+| $\nabla$ | spatial differential operator | $\mathrm{m^{-1}}$ |
+| $k$ | helical wave number | $\mathrm{m^{-1}}$ |
+| $\varepsilon$ | finite-difference perturbation amplitude | $1$ |
+
+(dmi-validation-assumptions-and-validity)=
+## Assumptions and validity
+
+Each test must state DMI variant, coefficient sign, normal convention, geometry, mesh/grid,
+boundary policy, precision, and solver tolerance. A uniform-state test cannot validate
+boundary twist; a sign test cannot validate the absolute energy scale. Device-capable tests
+without executed-device identity remain capability evidence, not GPU qualification.
+
+(dmi-validation-python-api)=
+## Python API test request
+
+```python
+# %% Source-backed DMI request used by validation fixtures
+import fullmag as fm
+
+interfacial = fm.InterfacialDMI(D=2.5e-3, interface_normal=(0.0, 0.0, 1.0))
+bulk = fm.BulkDMI(D=1.0e-3)
+assert interfacial.to_ir()["kind"] == "interfacial_dmi"
+assert bulk.to_ir()["kind"] == "bulk_dmi"
+```
+
+The stage-first solver scenarios that execute these terms must use the repository-owned
+study/stages pattern. This object-level fixture verifies only lowering, not field output.
+
+(dmi-validation-problem-ir)=
+## ProblemIR and provenance
+
+The validation record stores the authored term kind, signed coefficient, and optional normal
+before planning. The resolved record stores solver/device/precision, normalized normal,
+boundary realization, output quantity, mesh identity, and test artifact identity. The same
+test name is not evidence when these resolved values differ.
+
+(dmi-validation-round-trip-and-failure-semantics)=
+## Round-trip and failure semantics
+
+Round-trip must preserve interfacial versus bulk DMI and must not erase the sign of $D$.
+Validation errors include malformed normals, non-finite coefficients, unsupported FDM
+orientation, missing matching output terms, and invalid boundary policies. Unsupported
+combinations are rejected before execution; a fallback to another DMI variant invalidates
+the test.
+Requested intent is recorded before planning. Resolved execution is recorded after planning.
+Unsupported combinations are rejected before execution.
+
+(dmi-validation-discrete-realization)=
+## Discrete realization
+
+FDM validation compares cell-centered finite differences and boundary stencils. FEM
+validation compares weak residuals, surface traces, quadrature energy, and recovered fields.
+CPU/GPU comparisons must use equal precision, equal coefficient, equal normal, equal mesh/grid,
+and equivalent output location before a tolerance is interpreted.
+
+(dmi-validation-implementation-mapping)=
+## Implementation mapping
+
+Python term classes own input lowering. FDM and FEM variants have separate field paths;
+the planner owns output legality and normal restrictions. The source map records the stable
+implementation symbols and tests used by this page.
+
+(dmi-validation-validation)=
 ## Validation strategy
 
 DMI validation relies on analytic checks, cross-backend comparison, and sign/symmetry
@@ -69,13 +167,15 @@ $D\,\mathbf{m}\cdot(\nabla\times\mathbf{m})$:
    analytically known.
 3. **Sign reversal**: $D\to -D$ reverses chirality preference.
 
-## Known gaps
+(dmi-validation-limitations)=
+## Limitations and known gaps
 
 - No muMAG-style standard problem exists for DMI validation.
 - FDM GPU device identity is not captured in current test evidence.
 - FEM GPU mixed-P1 element qualification for DMI is incomplete.
 - Cross-solver (FDM vs FEM) quantitative convergence comparison has not been published.
 
+(dmi-validation-scientific-bibliography)=
 ## Scientific bibliography
 
 1. S. Rohart and A. Thiaville, "Skyrmion confinement in ultrathin film nanostructures in
@@ -83,3 +183,14 @@ $D\,\mathbf{m}\cdot(\nabla\times\mathbf{m})$:
    (2013). [doi:10.1103/PhysRevB.88.184422](https://doi.org/10.1103/PhysRevB.88.184422).
 2. FullMag internal notes: `docs/physics/0404-interfacial-dmi.md`,
    `docs/physics/0405-bulk-dmi.md`, `docs/physics/0812-fem-dmi-weak-residual-proof-fixture.md`.
+
+(dmi-validation-source-code-index)=
+## Source-code index
+
+| Claim | Repository path | Stable symbol | Responsibility | Lane |
+|---|---|---|---|---|
+| Interfacial API | packages/fullmag-py/src/fullmag/model/energy.py | class InterfacialDMI | coefficient and normal lowering | Python |
+| Bulk API | packages/fullmag-py/src/fullmag/model/energy.py | class BulkDMI | coefficient lowering | Python |
+| Interfacial FEM field | backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp | compute_interfacial_dmi_field | FEM residual/field | FEM CPU |
+| Bulk FEM field | backends/fem/cpu/mfem/interactions/dmi_bulk.cpp | compute_bulk_dmi_field | FEM residual/field | FEM CPU |
+| Device DMI field/energy | backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu | fullmag_cuda_dmi_field_energy | CUDA field and energy | FEM GPU |
