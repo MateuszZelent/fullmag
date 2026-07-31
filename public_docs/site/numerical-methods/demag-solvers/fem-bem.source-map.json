@@ -1,0 +1,48 @@
+{
+  "document": {"path": "public_docs/site/numerical-methods/demag-solvers/fem-bem.md"},
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
+    {"solver": "FEM", "device": "GPU", "status": "unsupported", "reason": "No production FEM/BEM GPU implementation is claimed."},
+    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "FEM/BEM is a body-only FEM realization."},
+    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "FEM/BEM is not an FDM CUDA operator."}
+  ],
+  "equations": [
+    {"id": "eq-numerical-demag-bem-decomposition", "symbols": ["u", "u1", "u2", "Omega", "v", "M"], "sources": ["rhs", "solve"]},
+    {"id": "eq-numerical-demag-bem-boundary-map", "symbols": ["g2", "Bop", "gamma", "u1", "u2", "Hd"], "sources": ["operator", "boundary-values", "recovery"]},
+    {"id": "eq-numerical-demag-bem-solid-angle", "symbols": ["Bop", "i", "omega", "T", "Ed", "mu0", "M", "Hd", "Omega"], "sources": ["operator", "energy"]}
+  ],
+  "symbols": [
+    {"id": "u", "latex": "$u$", "meaning": "total scalar potential", "si_unit": "$\\mathrm{A}$"},
+    {"id": "u1", "latex": "$u_1$", "meaning": "interior Poisson potential", "si_unit": "$\\mathrm{A}$"},
+    {"id": "u2", "latex": "$u_2$", "meaning": "harmonic boundary correction", "si_unit": "$\\mathrm{A}$"},
+    {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Hd", "latex": "$\\mathbf H_{\\mathrm d}$", "meaning": "demagnetizing field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "v", "latex": "$v$", "meaning": "FEM test function", "si_unit": "$1$"},
+    {"id": "Omega", "latex": "$\\Omega_m$", "meaning": "magnetic volume", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "gamma", "latex": "$\\gamma$", "meaning": "FEM trace operator", "si_unit": "$1$"},
+    {"id": "Bop", "latex": "$\\mathcal B$", "meaning": "dense boundary-integral map", "si_unit": "$1$"},
+    {"id": "g2", "latex": "$g_2$", "meaning": "boundary values for $u_2$", "si_unit": "$\\mathrm{A}$"},
+    {"id": "omega", "latex": "$\\omega_T$", "meaning": "oriented solid angle of triangle $T$", "si_unit": "$1$"},
+    {"id": "T", "latex": "$T$", "meaning": "oriented boundary triangle", "si_unit": "$\\mathrm{m^2}$"},
+    {"id": "i", "latex": "$i$", "meaning": "boundary-node index", "si_unit": "$1$"},
+    {"id": "Ed", "latex": "$E_{\\mathrm d}$", "meaning": "demagnetization energy", "si_unit": "$\\mathrm{J}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"}
+  ],
+  "sources": [
+    {"id": "api", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class Demag", "responsibility": "BEM model validation and IR normalization."},
+    {"id": "rhs", "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_rhs.cpp", "symbol": "prepare_demag_fem_bem_neumann_rhs", "responsibility": "Neumann RHS and gauge pin."},
+    {"id": "operator", "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.cpp", "symbol": "DenseDemagBemOperator::build", "responsibility": "Dense boundary operator and solid-angle terms."},
+    {"id": "linear", "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_linear_solve.cpp", "symbol": "solve_demag_fem_bem_sparse_system", "responsibility": "Policy-controlled sparse solves."},
+    {"id": "boundary-values", "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_boundary_values.cpp", "symbol": "prepare_demag_fem_bem_dirichlet_rhs", "responsibility": "Boundary-value injection."},
+    {"id": "solve", "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_solve.cpp", "symbol": "context_compute_demag_fem_bem", "responsibility": "Fredkin–Koehler orchestration."},
+    {"id": "recovery", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp", "symbol": "recover_demag_poisson_field", "responsibility": "Potential-gradient recovery."},
+    {"id": "energy", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp", "symbol": "demag_poisson_energy_from_field", "responsibility": "Field-based energy reduction."}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "Demag.model", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "`fredkin_koehler` selects body-only FEM/BEM", "meaning": "realization family", "backend_support": "FEM CPU; GPU unsupported", "problem_ir": "`energy[].realization`"},
+      {"python": "FemLinearSolverPolicy.rtol", "type": "float", "default": "1e-8", "si_unit": "$1$", "validation": "finite and positive", "meaning": "algebraic tolerance for each sparse solve", "backend_support": "FEM CPU", "problem_ir": "`demag_solver_policy.rtol`"},
+      {"python": "FemLinearSolverPolicy.max_iterations", "type": "int", "default": "500", "si_unit": "$1$", "validation": "integer greater than or equal to $1$", "meaning": "solve iteration ceiling", "backend_support": "FEM CPU", "problem_ir": "`demag_solver_policy.max_iterations`"}
+    ]
+  }
+}

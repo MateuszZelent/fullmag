@@ -95,7 +95,7 @@ NUMERICAL_METHODS_REFERENCE_PAGES = frozenset(
             for section, pages in {
                 "time-integration": ("index", "explicit-runge-kutta", "adaptive-stepping", "tangent-plane-methods"),
                 "relaxation": ("index", "llg-relaxation", "projected-gradient", "stopping-criteria"),
-                "demag-solvers": ("index", "fdm-convolution", "fem-poisson-airbox"),
+                "demag-solvers": ("index", "fdm-convolution", "fem-poisson-airbox", "fem-bem"),
             }.items()
             for page in pages
         ),
