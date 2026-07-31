@@ -24,10 +24,10 @@ implementation when the planner has not resolved it to Fredkin–Koehler.
 (demag-bem-problem-statement)=
 ## 1. Physical problem and domain
 
-Let $Omega_m$ be a closed tetrahedral magnetic body with boundary $Gamma_m$. The exterior is
+Let $\Omega_m$ be a closed tetrahedral magnetic body with boundary $\Gamma_m$. The exterior is
 magnetostatic free space. The magnetic source is the volume magnetization
 $\mathbf M=M_s\mathbf m$; the exterior contribution is represented through the trace of the
-potential on $Gamma_m$.
+potential on $\Gamma_m$.
 
 The body-only requirement is strict. A mesh with an airbox is a different FEM realization and must
 use the Poisson-airbox chapter. A non-closed surface cannot define the exterior boundary integral
