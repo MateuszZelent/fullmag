@@ -172,6 +172,7 @@ REFERENCE_PAGE_TITLES = {
     "python-api/interactions/exchange.md": "Exchange Python API",
     "python-api/interactions/oersted-field.md": "Oersted field Python API",
     "python-api/interactions/spin-transfer-torque.md": "Spin-Transfer Torque Python API",
+    "python-api/interactions/spin-orbit-torque.md": "Spin-Orbit Torque Python API",
     "physics/interactions/zeeman/index.md": "Zeeman interaction",
     "python-api/interactions/bulk-dmi.md": "Bulk DMI Python API",
     "python-api/interactions/zeeman.md": "Zeeman Python API",
@@ -274,6 +275,7 @@ PYTHON_API_REFERENCE_PAGES = {
     "python-api/interactions/exchange.md",
     "python-api/interactions/oersted-field.md",
     "python-api/interactions/spin-transfer-torque.md",
+    "python-api/interactions/spin-orbit-torque.md",
 }
 
 
