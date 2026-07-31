@@ -225,9 +225,15 @@ jobs:
             if (-not (Test-Path $path -PathType Leaf)) { throw "Missing required release file: $path" }
           }
 
-          Compress-Archive -Path "$DIST" -DestinationPath "$BUNDLE.zip"
           Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $archive = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path "$BUNDLE.zip"))
+          $archivePath = [System.IO.Path]::GetFullPath("$BUNDLE.zip")
+          [System.IO.Compression.ZipFile]::CreateFromDirectory(
+            (Resolve-Path "dist").Path,
+            $archivePath,
+            [System.IO.Compression.CompressionLevel]::Optimal,
+            $false
+          )
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($archivePath)
           try {
             foreach ($entry in @(
               "$BUNDLE/bin/fullmag.exe",
