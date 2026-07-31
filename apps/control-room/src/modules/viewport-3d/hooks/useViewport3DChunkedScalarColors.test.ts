@@ -745,6 +745,41 @@ describe("useViewport3DChunkedScalarColors", () => {
     });
   });
 
+  it("maps legacy scoped prism fields onto global surface nodes", () => {
+    const surfaceIndices = Uint32Array.from([3, 4, 5]);
+    const target = resolveViewport3DChunkedPartProjectionTarget(
+      {
+        nodeCount: 9,
+        positions: new Float32Array(9 * 3),
+      } as never,
+      {
+        part: {
+          id: "prism",
+          nodeCount: 6,
+          nodeStart: 3,
+        },
+        surfaceIndices,
+      } as never,
+      "surface_faces",
+      {
+        dtype: "float64",
+        grid: [6, 1, 1],
+        nComp: 3,
+        pointCount: 6,
+        quantityId: "m",
+        valueCount: 18,
+        values: new Float64Array(18),
+      },
+    );
+
+    expect(target).toMatchObject({
+      kind: "surface-faces",
+      surfaceIndices,
+      targetNodeIndices: new Uint32Array([3, 4, 5, 6, 7, 8]),
+      vertexCount: 9,
+    });
+  });
+
   it("routes large thickness-average-z projection builds through projection worker targets", () => {
     const positions = new Float32Array(75_001 * 3);
     const surfaceIndices = Uint32Array.from([0, 1, 2]);

@@ -31,6 +31,18 @@ def _repository(tmp_path: Path) -> Path:
     return repo
 
 
+def _submodule_repository(tmp_path: Path) -> Path:
+    submodule = tmp_path / "submodule"
+    submodule.mkdir()
+    _git(submodule, "init", "-q")
+    _git(submodule, "config", "user.name", "Source Identity Submodule")
+    _git(submodule, "config", "user.email", "source-identity-submodule@example.invalid")
+    (submodule / "tracked.txt").write_text("submodule\n", encoding="utf-8")
+    _git(submodule, "add", "tracked.txt")
+    _git(submodule, "commit", "-qm", "initial submodule")
+    return submodule
+
+
 def _materialize(repo: Path, snapshot: Path, identity_path: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         (
@@ -71,6 +83,26 @@ def test_capture_records_full_commit_and_exact_dirty_content(tmp_path: Path) -> 
         "tracked.txt",
         "untracked.txt",
     }
+
+
+def test_capture_ignores_dirty_gitlink_worktree(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    submodule = _submodule_repository(tmp_path)
+    _git(repo, "-c", "protocol.file.allow=always", "submodule", "add", str(submodule), "external_solvers/3")
+    _git(repo, "commit", "-qm", "add external solver submodule")
+    (repo / "external_solvers/3/tracked.txt").write_text("dirty submodule\n", encoding="utf-8")
+
+    result = subprocess.run(
+        (sys.executable, str(CAPTURE), "--repo-root", str(repo)),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    identity = json.loads(result.stdout)
+    assert identity["source_snapshot_dirty"] is False
+    assert identity["dirty_path_content"] == []
 
 
 def test_compare_fails_when_dirty_content_changes_after_capture(tmp_path: Path) -> None:

@@ -24,7 +24,7 @@ use crate::quantities::normalized_quantity_name;
 #[cfg(feature = "cuda")]
 use crate::relaxation::llg_overdamped_uses_pure_damping;
 #[cfg(feature = "cuda")]
-use crate::scalar_metrics::single_object_scalars;
+use crate::scalar_metrics::{apply_average_m_to_step_stats, single_object_scalars};
 #[cfg(any(feature = "cuda", test))]
 use crate::types::RunError;
 #[cfg(feature = "cuda")]
@@ -232,6 +232,7 @@ fn ffi_transfer_kind(kind: &str) -> Result<ffi::fullmag_fdm_transfer_kind, RunEr
 #[cfg(feature = "cuda")]
 pub(crate) struct NativeFdmBackend {
     handle: *mut ffi::fullmag_fdm_backend,
+    cell_count: usize,
     precision: fullmag_ir::ExecutionPrecision,
     damping: f64,
     precession_enabled: bool,
@@ -560,8 +561,14 @@ impl NativeFdmBackend {
         }
 
         let first_material = plan.layers.first().map(|layer| &layer.material);
+        let cell_count = plan
+            .layers
+            .iter()
+            .map(|layer| layer.initial_magnetization.len())
+            .sum();
         Ok(Self {
             handle,
+            cell_count,
             precision: plan.precision,
             damping: first_material.map_or(0.0, |material| material.damping),
             precession_enabled: !llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
@@ -1060,6 +1067,7 @@ impl NativeFdmBackend {
 
         Ok(Self {
             handle,
+            cell_count: m_flat.len() / 3,
             precision: plan.precision,
             damping: plan.material.damping,
             precession_enabled: !llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
@@ -1150,6 +1158,13 @@ impl NativeFdmBackend {
         };
         step_stats.per_object_scalars = single_object_scalars("free", &step_stats);
         Ok(Some(step_stats))
+    }
+
+    pub fn apply_average_m_to_step_stats(&self, stats: &mut StepStats) -> Result<(), RunError> {
+        let magnetization = self.copy_m(self.cell_count)?;
+        apply_average_m_to_step_stats(stats, &magnetization);
+        stats.per_object_scalars = single_object_scalars("free", stats);
+        Ok(())
     }
 
     /// Execute one time step.
@@ -3695,6 +3710,15 @@ mod exact_metric_contract_tests {
         assert!(
             dynamic_stats.contains("e_dmi: stats.dmi_energy_joules"),
             "dynamic native stats must map the native DMI energy"
+        );
+        let average_stats = source
+            .split("pub fn apply_average_m_to_step_stats(")
+            .nth(1)
+            .and_then(|source| source.split("    /// Execute one time step.").next())
+            .expect("native average-m helper");
+        assert!(
+            average_stats.contains("apply_average_m_to_step_stats(stats, &magnetization)"),
+            "native average-m helper must publish averaged magnetization components"
         );
     }
 }

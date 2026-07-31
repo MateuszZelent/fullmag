@@ -137,7 +137,7 @@ describe("viewport3dTopologyIndexScheduler", () => {
         key: "topology-index:session=current:topology=mesh-7",
         lane: "topology-index",
         mainAdoptMs: 0,
-        outputBytes: 208,
+        outputBytes: 368,
         queueWaitMs: expect.any(Number),
         revisionSummary: "topology=mesh-7",
         state: "ready",

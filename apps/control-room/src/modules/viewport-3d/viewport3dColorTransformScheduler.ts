@@ -234,24 +234,39 @@ function cloneFieldColorBuildTargetForWorker(
     }
     case "surface-faces": {
       const surfaceIndices = new Uint32Array(target.surfaceIndices);
+      const targetNodeIndices = target.targetNodeIndices
+        ? new Uint32Array(target.targetNodeIndices)
+        : undefined;
       return {
         target: {
           ...target,
           surfaceIndices,
+          ...(targetNodeIndices ? { targetNodeIndices } : {}),
         },
-        transferables: [surfaceIndices.buffer],
+        transferables: [
+          surfaceIndices.buffer,
+          ...(targetNodeIndices ? [targetNodeIndices.buffer] : []),
+        ],
       };
     }
     case "thickness-average-z": {
       const positions = new Float32Array(target.positions);
       const surfaceIndices = new Uint32Array(target.surfaceIndices);
+      const targetNodeIndices = target.targetNodeIndices
+        ? new Uint32Array(target.targetNodeIndices)
+        : undefined;
       return {
         target: {
           ...target,
           positions,
           surfaceIndices,
+          ...(targetNodeIndices ? { targetNodeIndices } : {}),
         },
-        transferables: [positions.buffer, surfaceIndices.buffer],
+        transferables: [
+          positions.buffer,
+          surfaceIndices.buffer,
+          ...(targetNodeIndices ? [targetNodeIndices.buffer] : []),
+        ],
       };
     }
     case "full-domain":

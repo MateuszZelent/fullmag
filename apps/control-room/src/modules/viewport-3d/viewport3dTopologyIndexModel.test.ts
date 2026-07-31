@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { DecodedTopology } from "@/kernel/api/codecs";
 
 import {
+  buildPartSurfaceIndices,
   buildViewport3DTopologyIndexBundle,
   transferablesForTopologyIndexBundle,
   type Viewport3DTopologyIndexPartInput,
@@ -173,6 +174,109 @@ describe("viewport3dTopologyIndexModel", () => {
       ),
     );
     expect(fallbackEdgeKeys.has("7:9")).toBe(false);
+  });
+
+  it("keeps prism surface faces when facet identity metadata is unavailable", () => {
+    const topology: DecodedTopology = {
+      boundaryFaceCount: 0,
+      boundaryFaces: new Uint32Array(),
+      boundaryMarkers: new Uint32Array(),
+      cellCount: 1,
+      cellMarkers: new Uint32Array([1]),
+      cellNodes: new Uint32Array([0, 1, 2, 3, 4, 5]),
+      cellOffsets: new Uint32Array([0, 6]),
+      cellTypes: new Uint32Array([2]),
+      elementCount: 1,
+      elementMarkers: new Uint32Array([1]),
+      facetCount: 0,
+      facetMarkers: new Uint32Array(),
+      facetNodes: new Uint32Array(),
+      facetOffsets: new Uint32Array([0]),
+      facetRoles: new Uint32Array(),
+      facetTypes: new Uint32Array(),
+      formatVersion: 2,
+      indices: new Uint32Array([0, 1, 2, 3, 4, 5]),
+      nodeCount: 6,
+      positions: new Float64Array(18),
+    };
+    const prismPart: Viewport3DTopologyIndexPartInput = {
+      boundary_face_count: 0,
+      boundary_face_start: 0,
+      element_count: 1,
+      element_start: 0,
+      id: "prism",
+      surface_faces: [
+        [0, 1, 2],
+        [3, 5, 4],
+        [0, 3, 4, 1],
+        [1, 4, 5, 2],
+        [2, 5, 3, 0],
+      ],
+    };
+
+    const prepared = buildViewport3DTopologyIndexBundle({
+      airboxParts: [],
+      magneticParts: [prismPart],
+      topology,
+    }).magneticPartsById.get("prism");
+
+    expect(prepared?.surfaceIndices).toHaveLength(24);
+    expect(prepared?.surfaceNodeIndices).toEqual(
+      Uint32Array.from([0, 1, 2, 3, 4, 5]),
+    );
+    expect(prepared?.surfaceTriangleFacetIndices).toBeNull();
+  });
+
+  it("derives exposed prism surface faces when the manifest omits surface metadata", () => {
+    const topology: DecodedTopology = {
+      boundaryFaceCount: 0,
+      boundaryFaces: new Uint32Array(),
+      boundaryMarkers: new Uint32Array(),
+      cellCount: 1,
+      cellMarkers: new Uint32Array([1]),
+      cellNodes: new Uint32Array([0, 1, 2, 3, 4, 5]),
+      cellOffsets: new Uint32Array([0, 6]),
+      cellTypes: new Uint32Array([2]),
+      elementCount: 1,
+      elementMarkers: new Uint32Array([1]),
+      facetCount: 0,
+      facetMarkers: new Uint32Array(),
+      facetNodes: new Uint32Array(),
+      facetOffsets: new Uint32Array([0]),
+      facetRoles: new Uint32Array(),
+      facetTypes: new Uint32Array(),
+      formatVersion: 2,
+      indices: new Uint32Array([0, 1, 2, 3, 4, 5]),
+      nodeCount: 6,
+      positions: new Float64Array(18),
+    };
+
+    const prepared = buildViewport3DTopologyIndexBundle({
+      airboxParts: [],
+      magneticParts: [{
+        boundary_face_count: 0,
+        boundary_face_start: 0,
+        element_count: 1,
+        element_start: 0,
+        id: "prism",
+        node_count: 6,
+        node_start: 0,
+      }],
+      topology,
+    }).magneticPartsById.get("prism");
+
+    expect(prepared?.surfaceIndices).toHaveLength(24);
+    expect(prepared?.surfaceNodeIndices).toEqual(
+      Uint32Array.from([0, 1, 2, 3, 4, 5]),
+    );
+    expect(buildPartSurfaceIndices({
+      boundary_face_count: 0,
+      boundary_face_start: 0,
+      element_count: 1,
+      element_start: 0,
+      node_count: 6,
+      node_start: 0,
+    }, topology)).toHaveLength(24);
   });
 
   it("keeps surface_faces and supplemental quad picking mapped to global facets", () => {

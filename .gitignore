@@ -106,3 +106,4 @@ apps/control-room/.next-audit/*
 # === Agent worktrees ===
 .worktrees/
 
+public_docs/_build/

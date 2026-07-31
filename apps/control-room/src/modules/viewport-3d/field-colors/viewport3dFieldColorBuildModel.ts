@@ -33,12 +33,14 @@ export type Viewport3DFieldColorBuildTarget =
   | {
       kind: "surface-faces";
       surfaceIndices: Uint32Array;
+      targetNodeIndices?: Uint32Array | null;
       vertexCount: number;
     }
   | {
       kind: "thickness-average-z";
       positions: Float32Array;
       surfaceIndices: Uint32Array;
+      targetNodeIndices?: Uint32Array | null;
       vertexCount: number;
     };
 
@@ -79,6 +81,7 @@ export async function buildViewport3DFieldColorBuffer({
         options.colorPalette,
         options.scalarRange,
         Number.POSITIVE_INFINITY,
+        target.targetNodeIndices,
       );
     case "thickness-average-z":
       return buildThicknessAverageZScalarColors(
@@ -90,6 +93,7 @@ export async function buildViewport3DFieldColorBuffer({
         options.colorPalette,
         options.scalarRange,
         Number.POSITIVE_INFINITY,
+        target.targetNodeIndices,
       );
   }
 }
@@ -109,12 +113,17 @@ export function estimateViewport3DFieldColorBuildInputBytes({
     case "sampled":
       return fieldVector.values.byteLength + target.pointIndices.byteLength;
     case "surface-faces":
-      return fieldVector.values.byteLength + target.surfaceIndices.byteLength;
+      return (
+        fieldVector.values.byteLength +
+        target.surfaceIndices.byteLength +
+        (target.targetNodeIndices?.byteLength ?? 0)
+      );
     case "thickness-average-z":
       return (
         fieldVector.values.byteLength +
         target.positions.byteLength +
-        target.surfaceIndices.byteLength
+        target.surfaceIndices.byteLength +
+        (target.targetNodeIndices?.byteLength ?? 0)
       );
   }
 }

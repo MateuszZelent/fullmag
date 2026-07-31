@@ -2,7 +2,7 @@
 
 - Status: canonical
 - Owners: Fullmag core
-- Last updated: 2026-07-28
+- Last updated: 2026-07-31
 - Related ADRs: `docs/adr/0011-resource-first-api.md`, `docs/adr/0013-frontend-v2-module-kernel.md`
 - Related specs: `docs/specs/resource-first-control-room-api-v2.md`, `docs/specs/frontend-v2/16-charts-analysis-module.md`
 
@@ -122,14 +122,18 @@ an absolute error or compare it directly with `atol`.
 FDM backends already compute scalar reductions for solver status and energy
 history. Table autosave reuses the same reduced quantities and stores selected
 columns in append-only row order. The CPU reference path remains the oracle for
-energy and magnetization reductions.
+energy and magnetization reductions. For every accepted state, including direct
+minimizer (`projected_gradient_bb` and `nonlinear_cg`) states, `mx/my/mz` are
+populated from the current magnetization before the row is stored; they must
+never be copied from an uninitialized step-stat snapshot.
 
 ### 3.2 FEM
 
 FEM backends expose the same public column identifiers. Backend-specific
-integration and weighting stay below the scalar observable boundary. The table
-contract does not expose MFEM, hypre, libCEED, mesh-part, or device-residency
-details.
+integration and weighting stay below the scalar observable boundary. The
+reduction is the magnetic-region volume/moment average (lumped FEM measure,
+including $M_s$ where it varies), not a node-count average. The table contract
+does not expose MFEM, hypre, libCEED, mesh-part, or device-residency details.
 
 ### 3.3 Hybrid
 
@@ -297,6 +301,8 @@ completed samples and record an incomplete marker and stop reason.
 - Adaptive-step overshoot emits coalesced samples without interpolation.
 - Relaxation with `every_steps=10` emits `0, 10, 20, ...` accepted states and
   one final state; rejected candidates do not alter that sequence.
+- A nonuniform accepted state publishes `mx/my/mz` equal to the spatial
+  component averages in both the global row and the per-object row.
 - Direct minimizer rows cannot be labelled or filtered as physical `t`.
 
 ### 6.2 Cross-Backend Checks
@@ -317,6 +323,8 @@ completed samples and record an incomplete marker and stop reason.
   duplicate numerical payload.
 - TXT continuous/separate tests and TXT/field rejection.
 - Bounded artifact-pipeline and solver-callback timing regression tests.
+- Direct-minimizer scalar-row regression with nonuniform magnetization,
+  including the per-object scalar map.
 - v2 route tests for cursor, columns, limit, unit metadata, and scalar
   compatibility.
 - frontend API facade and resource-hook tests proving bounded fetches and no

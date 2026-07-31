@@ -6,6 +6,8 @@ Run interactively on GPU with:
 Use cpu instead of gpu to exercise the strict FEM CPU lane.
 """
 
+from pathlib import Path
+
 import fullmag as fm
 
 
@@ -60,13 +62,15 @@ study.fem_demag_solver(
     rtol=1e-12,
     max_iterations=600,
 )
-study.build_domain_mesh()
+study.mesh.save_or_load(
+    Path(__file__).resolve().with_suffix(".fullmag-mesh")
+)
 
 study.stages.add_relax(
     stage_id="relax",
     algorithm="projected_gradient_bb",
     max_steps=50_000,
-    tolT=1e-6,
+    tolT=0.01e-6,
 ).autosave(
     fm.StageAutosave(
         table=fm.TableAutosave(
@@ -83,10 +87,9 @@ study.stages.add_relax(
             ],
         ),
         fields=[
-            fm.FieldAutosave("H_ex", every_steps=50_000),
-            fm.FieldAutosave("H_demag", every_steps=50_000),
-            fm.FieldAutosave("H_eff", every_steps=50_000),
+            fm.FieldAutosave("H_ex", every_steps=100),
+            fm.FieldAutosave("H_demag", every_steps=100),
+            fm.FieldAutosave("H_eff", every_steps=100),
         ],
     )
 )
-

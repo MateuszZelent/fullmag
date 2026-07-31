@@ -842,6 +842,15 @@ export function buildViewport3DFieldRenderModel(
         : null;
     const scopedPartFieldNodeIndices =
       isScopedPartFieldVector ? partFieldNodeIndices : null;
+    const partProjectionFieldNodeIndices =
+      partFieldVector && partFieldVector !== renderFieldVector
+        ? partFieldNodeIndices ??
+          resolveLegacyPartFieldNodeIndices(
+            partFieldVector,
+            partModel,
+            topology,
+          )
+        : null;
     const scopedPartFieldNodeSelection = scopedPartFieldNodeIndices
       ? nodeIndicesToSelection(scopedPartFieldNodeIndices)
       : null;
@@ -925,6 +934,7 @@ export function buildViewport3DFieldRenderModel(
                 colorMode,
                 partScalarColorPalette,
                 partScalarRangesByMode?.get(colorMode),
+                partProjectionFieldNodeIndices,
               )
             : targetRenderPlan?.shader.projectionMode === "thickness_average_z"
             ? buildCachedThicknessAverageZScalarColors(
@@ -934,6 +944,7 @@ export function buildViewport3DFieldRenderModel(
                 colorMode,
                 partScalarColorPalette,
                 partScalarRangesByMode?.get(colorMode),
+                partProjectionFieldNodeIndices,
               )
             : buildCachedPartVertexScalarColors(
                 partModel,
@@ -1607,6 +1618,7 @@ function buildCachedSurfaceFaceScalarColors(
   colorMode: string | undefined,
   colorPalette: string | undefined,
   scalarRange?: ScalarRange | null,
+  targetNodeIndices?: Uint32Array | null,
 ): ScalarColorBuffer | null {
   if (!fieldVector || !partModel.surfaceIndices) return null;
 
@@ -1621,6 +1633,7 @@ function buildCachedSurfaceFaceScalarColors(
       partModel.surfaceIndices[0] ?? "none",
       partModel.surfaceIndices[partModel.surfaceIndices.length - 1] ?? "none",
       topology.nodeCount,
+      nodeIndexMappingCacheKey(targetNodeIndices),
       colorMode ?? "magnitude",
       colorPalette ?? "viridis",
       scalarRangeCacheKey(scalarRange),
@@ -1633,6 +1646,8 @@ function buildCachedSurfaceFaceScalarColors(
         colorMode,
         colorPalette,
         scalarRange,
+        Number.POSITIVE_INFINITY,
+        targetNodeIndices,
       ),
     "viewport3d.render.surfaceFaceScalarColorCache",
   );
@@ -1645,6 +1660,7 @@ function buildCachedThicknessAverageZScalarColors(
   colorMode: string | undefined,
   colorPalette: string | undefined,
   scalarRange?: ScalarRange | null,
+  targetNodeIndices?: Uint32Array | null,
 ): ScalarColorBuffer | null {
   if (!fieldVector || !partModel.surfaceIndices) return null;
 
@@ -1660,6 +1676,7 @@ function buildCachedThicknessAverageZScalarColors(
       partModel.surfaceIndices[partModel.surfaceIndices.length - 1] ?? "none",
       topology.nodeCount,
       topology.positions.length,
+      nodeIndexMappingCacheKey(targetNodeIndices),
       colorMode ?? "magnitude",
       colorPalette ?? "viridis",
       scalarRangeCacheKey(scalarRange),
@@ -1673,6 +1690,8 @@ function buildCachedThicknessAverageZScalarColors(
         colorMode,
         colorPalette,
         scalarRange,
+        Number.POSITIVE_INFINITY,
+        targetNodeIndices,
       ),
     "viewport3d.render.thicknessAverageZScalarColorCache",
   );
@@ -1742,6 +1761,18 @@ function scalarRangeCacheKey(range: ScalarRange | null | undefined): string {
     return "auto";
   }
   return `range=${range.min}:${range.max}`;
+}
+
+function nodeIndexMappingCacheKey(
+  targetNodeIndices: ArrayLike<number> | null | undefined,
+): string {
+  if (!targetNodeIndices) return "identity";
+  let hash = 2166136261;
+  for (let index = 0; index < targetNodeIndices.length; index += 1) {
+    hash ^= targetNodeIndices[index] ?? 0;
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${targetNodeIndices.length}:${hash >>> 0}`;
 }
 
 function intersectNodeSelections(
@@ -1867,6 +1898,24 @@ function buildNodeSelectionIndices(
   }
 
   return indices.length > 0 ? Uint32Array.from(indices) : null;
+}
+
+function resolveLegacyPartFieldNodeIndices(
+  fieldVector: DecodedFieldVector,
+  partModel: Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
+  topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
+): Uint32Array | null {
+  if (
+    fieldVector.pointCount <= 0 ||
+    fieldVector.indexing === "explicit_node_indices" ||
+    fieldVector.indexing === "sampled_node_indices"
+  ) {
+    return null;
+  }
+  const nodeIndices = buildNodeSelectionIndices(partModel.fullNodeSelection, topology);
+  return nodeIndices && nodeIndices.length === fieldVector.pointCount
+    ? nodeIndices
+    : null;
 }
 
 function nodeIndicesToSelection(

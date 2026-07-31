@@ -368,6 +368,26 @@ describe("viewport3dFieldMapping", () => {
     expect(Array.from(result?.scalarValues ?? [])).toEqual([3, 3, 3]);
   });
 
+  it("maps legacy scoped payloads for surface-face projection", () => {
+    const result = buildSurfaceFaceScalarColors(
+      vectorField([
+        10, 0, 0,
+        20, 0, 0,
+        30, 0, 0,
+      ]),
+      Uint32Array.from([3, 4, 5]),
+      6,
+      "x",
+      "viridis",
+      undefined,
+      Number.POSITIVE_INFINITY,
+      Uint32Array.from([3, 4, 5]),
+    );
+
+    expect(result?.degradedFaceCount).toBe(0);
+    expect(Array.from(result?.scalarValues ?? [])).toEqual([20, 20, 20]);
+  });
+
   it("maps sampled node-index payloads for thickness-average-z projection", () => {
     const result = buildThicknessAverageZScalarColors(
       {
@@ -396,6 +416,37 @@ describe("viewport3dFieldMapping", () => {
     );
 
     expect(result?.projectionMode).toBe("thickness_average_z");
+    expect(result?.degradedFaceCount).toBe(0);
+    expect(result?.projectedSamplesPerBinMin).toBe(2);
+  });
+
+  it("maps legacy scoped payloads for thickness-average-z projection", () => {
+    const result = buildThicknessAverageZScalarColors(
+      vectorField([
+        0, 0, 1,
+        0, 0, 1,
+        0, 0, 1,
+        0, 0, -1,
+        0, 0, -1,
+        0, 0, -1,
+      ]),
+      Float32Array.from([
+        0, 0, 1,
+        1, 0, 1,
+        0, 1, 1,
+        0, 0, -1,
+        1, 0, -1,
+        0, 1, -1,
+      ]),
+      Uint32Array.from([3, 4, 5]),
+      6,
+      "orientation",
+      "viridis",
+      undefined,
+      Number.POSITIVE_INFINITY,
+      Uint32Array.from([3, 4, 5, 0, 1, 2]),
+    );
+
     expect(result?.degradedFaceCount).toBe(0);
     expect(result?.projectedSamplesPerBinMin).toBe(2);
   });
