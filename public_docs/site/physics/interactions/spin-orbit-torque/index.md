@@ -191,52 +191,26 @@ The implemented model has the following exact scope:
 (sot-python-api)=
 ## Python API
 
-### Complete low-level Problem example
+### Object-level Python contract
 
-The canonical executable Python surface currently represents SOT through a
-low-level `fm.Problem` snapshot. The example below is intentionally complete and
-copyable. It records the field output `m`; SOT itself has no scalar energy output.
+The canonical simulation workflow is the stage-first boundary shown below. The cells here inspect
+the SOT object and its canonical module fragment without constructing a top-level problem or
+claiming that a solver has executed. SOT itself has no scalar energy output.
 
 ```python
-# %% Imports and units
+# %% SOT object fragment; no solver is launched here.
 import fullmag as fm
 
 nm = 1e-9
 
-# %% FDM SOT problem
-problem = fm.Problem(
-    name="sot_switching",
-    magnets=[
-        fm.Ferromagnet(
-            name="free_layer",
-            geometry=fm.Box(size=(100 * nm, 100 * nm, 1 * nm)),
-            material=fm.Material(name="CoFeB", Ms=1.0e6, A=15e-12, alpha=0.1),
-            m0=fm.texture.uniform((0.0, 0.0, 1.0)),
-        ),
-    ],
-    energy=[fm.Exchange(), fm.Demag()],
-    spin_torques=[
-        fm.SpinOrbitTorque(
-            charge_current_density_a_per_m2=1.0e11,
-            damping_like_efficiency=0.10,
-            field_like_efficiency=0.0,
-            spin_polarization=(0.0, 1.0, 0.0),
-            ferromagnet_thickness_m=1 * nm,
-        ),
-    ],
-    study=fm.TimeEvolution(
-        dynamics=fm.LLG(),
-        outputs=[fm.SaveField("m", every=1e-12)],
-    ),
-    discretization=fm.DiscretizationHints(
-        fdm=fm.FDM(cell=(2 * nm, 2 * nm, 1 * nm)),
-    ),
+torque = fm.SpinOrbitTorque(
+    charge_current_density_a_per_m2=1.0e11,
+    damping_like_efficiency=0.10,
+    field_like_efficiency=0.0,
+    spin_polarization=(0.0, 1.0, 0.0),
+    ferromagnet_thickness_m=1 * nm,
 )
-
-# %% Canonical ProblemIR inspection
-problem_ir = problem.to_ir()
-sot_ir = problem_ir["spin_torque_modules"][0]
-assert sot_ir == {
+assert torque.to_ir_module() == {
     "kind": "spin_orbit_torque",
     "charge_current_density_a_per_m2": 1.0e11,
     "damping_like_efficiency": 0.10,
@@ -244,15 +218,11 @@ assert sot_ir == {
     "spin_polarization": [0.0, 1.0, 0.0],
     "ferromagnet_thickness_m": 1e-9,
 }
-assert problem_ir["study"]["sampling"]["outputs"] == [
-    {"kind": "field", "name": "m", "every_seconds": 1e-12},
-]
 ```
 
-This example lowers `SpinOrbitTorque` into
-`ProblemIR.spin_torque_modules[]`. The `Exchange` and `Demag` terms are included
-only to make the physical problem executable; their parameters are owned by
-their respective documentation pages and are not SOT parameters.
+The module fragment is later placed in `ProblemIR.spin_torque_modules[]` by the stage capture and
+planner. `Exchange` and `Demag` are not silently added here; their parameters remain owned by
+their respective documentation pages.
 
 ### Named prescribed-current source
 
@@ -260,7 +230,7 @@ their respective documentation pages and are not SOT parameters.
 several modules. It does not make `ohmic_poisson` executable for SOT.
 
 ```python
-# %% Named CurrentTransport source
+# %% Named CurrentTransport and SOT fragments; no solver is launched here.
 import fullmag as fm
 
 nm = 1e-9
@@ -276,26 +246,10 @@ torque = fm.SpinOrbitTorque(
     spin_polarization=(0.0, 0.0, 1.0),
     ferromagnet_thickness_m=1.2 * nm,
 )
-problem = fm.Problem(
-    name="sot_named_source",
-    magnets=[
-        fm.Ferromagnet(
-            name="free_layer",
-            geometry=fm.Box(size=(40 * nm, 40 * nm, 1.2 * nm)),
-            material=fm.Material(name="FM", Ms=8.0e5, A=12e-12, alpha=0.05),
-            m0=fm.texture.uniform((1.0, 0.0, 0.0)),
-        ),
-    ],
-    energy=[fm.Exchange()],
-    current_modules=[transport],
-    spin_torques=[torque],
-    study=fm.TimeEvolution(dynamics=fm.LLG(), outputs=[]),
-)
-
-# %% Source binding and magnitude are preserved in IR
-problem_ir = problem.to_ir()
-assert problem_ir["current_modules"][0]["name"] == "heavy_metal_drive"
-assert problem_ir["spin_torque_modules"][0]["current_source"] == "heavy_metal_drive"
+print({
+    "current_module": transport.to_ir(),
+    "spin_torque_module": torque.to_ir_module(),
+})
 ```
 
 ### Stage-first public boundary
@@ -303,8 +257,8 @@ assert problem_ir["spin_torque_modules"][0]["current_source"] == "heavy_metal_dr
 The stage-first `fm.study(...).stages` authoring surface is the normal way to
 express ordered relaxation and time-evolution stages. It currently has no SOT
 registration method. The following is therefore a valid stage boundary example,
-not a claim that it enables SOT; SOT remains available through the low-level
-`fm.Problem` route above until a stage-level interaction hook is implemented.
+not a claim that it enables SOT. SOT stage registration remains an explicit API limitation until
+a stage-level interaction hook is implemented.
 
 ```python
 # %% Stage-first boundary currently available to public scripts

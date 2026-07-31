@@ -111,47 +111,27 @@ prescribed current-density vector and uses its magnitude.
 
 ### Direct prescribed current
 
-The following notebook cell is complete and executable. It lowers the public
-problem to `ProblemIR` and checks the exact SOT module fields.
+The following notebook cell is a complete object-level contract. The stage-first study workflow
+is the public simulation path; this cell only checks the exact SOT module fields.
 
 ```python
-# %% Direct FDM SOT problem
+# %% Direct SOT object fragment; no solver is launched here.
 import fullmag as fm
 
 nm = 1e-9
-problem = fm.Problem(
-    name="sot_direct_current",
-    magnets=[
-        fm.Ferromagnet(
-            name="free_layer",
-            geometry=fm.Box(size=(100 * nm, 100 * nm, 1 * nm)),
-            material=fm.Material(name="CoFeB", Ms=1.0e6, A=15e-12, alpha=0.1),
-            m0=fm.texture.uniform((0.0, 0.0, 1.0)),
-        )
-    ],
-    energy=[fm.Exchange(), fm.Demag()],
-    spin_torques=[
-        fm.SpinOrbitTorque(
-            charge_current_density_a_per_m2=1.0e11,
-            damping_like_efficiency=0.10,
-            field_like_efficiency=0.01,
-            spin_polarization=(0.0, 1.0, 0.0),
-            ferromagnet_thickness_m=1 * nm,
-        )
-    ],
-    study=fm.TimeEvolution(dynamics=fm.LLG(), outputs=[]),
-    discretization=fm.DiscretizationHints(
-        fdm=fm.FDM(cell=(2 * nm, 2 * nm, 1 * nm))
-    ),
+torque = fm.SpinOrbitTorque(
+    charge_current_density_a_per_m2=1.0e11,
+    damping_like_efficiency=0.10,
+    field_like_efficiency=0.01,
+    spin_polarization=(0.0, 1.0, 0.0),
+    ferromagnet_thickness_m=1 * nm,
 )
-
-ir = problem.to_ir()
-sot_ir = ir["spin_torque_modules"][0]
-assert sot_ir["kind"] == "spin_orbit_torque"
-assert sot_ir["charge_current_density_a_per_m2"] == 1.0e11
-assert sot_ir["damping_like_efficiency"] == 0.10
-assert sot_ir["field_like_efficiency"] == 0.01
-assert sot_ir["spin_polarization"] == [0.0, 1.0, 0.0]
+ir = torque.to_ir_module()
+assert ir["kind"] == "spin_orbit_torque"
+assert ir["charge_current_density_a_per_m2"] == 1.0e11
+assert ir["damping_like_efficiency"] == 0.10
+assert ir["field_like_efficiency"] == 0.01
+assert ir["spin_polarization"] == [0.0, 1.0, 0.0]
 ```
 
 ### Named current source
@@ -160,7 +140,7 @@ Use `current_source` when the source must be shared by several physics modules.
 The source is exclusive with the direct scalar current argument.
 
 ```python
-# %% SOT bound to a prescribed current-transport module
+# %% SOT source-binding fragments; no solver is launched here.
 import fullmag as fm
 
 nm = 1e-9
@@ -175,25 +155,8 @@ torque = fm.SpinOrbitTorque(
     spin_polarization=(0.0, 0.0, 1.0),
     ferromagnet_thickness_m=1.2 * nm,
 )
-problem = fm.Problem(
-    name="sot_named_source",
-    magnets=[
-        fm.Ferromagnet(
-            name="free_layer",
-            geometry=fm.Box(size=(40 * nm, 40 * nm, 1.2 * nm)),
-            material=fm.Material(name="FM", Ms=8.0e5, A=12e-12, alpha=0.05),
-            m0=fm.texture.uniform((1.0, 0.0, 0.0)),
-        )
-    ],
-    energy=[fm.Exchange()],
-    current_modules=[transport],
-    spin_torques=[torque],
-    study=fm.TimeEvolution(dynamics=fm.LLG(), outputs=[]),
-)
-
-ir = problem.to_ir()
-assert ir["current_modules"][0]["name"] == "heavy_metal_drive"
-assert ir["spin_torque_modules"][0]["current_source"] == "heavy_metal_drive"
+assert transport.to_ir()["name"] == "heavy_metal_drive"
+assert torque.to_ir_module()["current_source"] == "heavy_metal_drive"
 ```
 
 ### Inspecting the standalone object
