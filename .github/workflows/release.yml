@@ -146,9 +146,9 @@ jobs:
 
           ARCHIVE="${BUNDLE}.tar.gz"
           tar -czf "$ARCHIVE" -C dist "$BUNDLE"
-          tar -tzf "$ARCHIVE" | grep -Fxq "${BUNDLE}/bin/fullmag-api"
-          tar -tzf "$ARCHIVE" | grep -Fxq "${BUNDLE}/.fullmag/local/web/index.html"
-          tar -tzf "$ARCHIVE" | grep -Fxq "${BUNDLE}/release-manifest.json"
+          tar -tzf "$ARCHIVE" | grep -Fx "${BUNDLE}/bin/fullmag-api" >/dev/null
+          tar -tzf "$ARCHIVE" | grep -Fx "${BUNDLE}/.fullmag/local/web/index.html" >/dev/null
+          tar -tzf "$ARCHIVE" | grep -Fx "${BUNDLE}/release-manifest.json" >/dev/null
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v7
