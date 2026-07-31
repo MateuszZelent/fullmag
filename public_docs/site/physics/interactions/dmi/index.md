@@ -143,6 +143,7 @@ containing a kernel does not by itself make an observable available on every lan
 | $\mathbf H_{\mathrm i}$ | interfacial DMI effective field | $\mathrm{A\,m^{-1}}$ |
 | $\mathbf H_{\mathrm b}$ | bulk DMI effective field | $\mathrm{A\,m^{-1}}$ |
 | $\mathbf H_{\mathrm{DMI}}$ | total DMI effective field | $\mathrm{A\,m^{-1}}$ |
+| $\nabla\times$ | continuum curl operator | $\mathrm{m^{-1}}$ |
 | $\nabla_h\times$ | centered FDM curl operator | $\mathrm{m^{-1}}$ |
 | $\delta_\alpha$ | centered derivative along coordinate $\alpha$ | $\mathrm{m^{-1}}$ |
 | $\Delta x,\Delta y,\Delta z$ | FDM cell dimensions | $\mathrm{m}$ |
@@ -240,16 +241,16 @@ print(json.dumps(problem_ir["energy_terms"], indent=2))
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| `InterfacialDMI.D` | `float` | required | $\mathrm{J\,m^{-2}}$ | finite | interfacial coefficient and chirality sign | FDM/FEM CPU/GPU subject to lane policy | `energy_terms[].D` for `interfacial_dmi` |
-| `InterfacialDMI.interface_normal` | `Sequence[float] or None` | `None` | $1$ | length three and finite; non-zero for FEM; FDM accepts +z only | FDM +z; FEM any non-zero normalized vector | `energy_terms[].interface_normal` when supplied |
-| `BulkDMI.D` | `float` | required | $\mathrm{J\,m^{-2}}$ | finite; either sign | isotropic bulk coefficient and chirality sign | FDM/FEM CPU/GPU subject to lane policy | `energy_terms[].D` for `bulk_dmi` |
+| `InterfacialDMI.D` | `float` | required | $\mathrm{J\,m^{-2}}$ | finite | interfacial coefficient and chirality sign | FDM/FEM CPU/GPU subject to lane policy | `energy_terms[].D` |
+| `InterfacialDMI.interface_normal` | `Sequence[float] or None` | `None` | $1$ | length three and finite; non-zero for FEM; FDM accepts +z only | interfacial symmetry normal | FDM +z; FEM any non-zero normalized vector | `energy_terms[].interface_normal` when supplied |
+| `BulkDMI.D` | `float` | required | $\mathrm{J\,m^{-2}}$ | finite; either sign | isotropic bulk coefficient and chirality sign | FDM/FEM CPU/GPU subject to lane policy | `energy_terms[].D` |
 | `Material.Dind` | `float or None` | `None` | $\mathrm{J\,m^{-2}}$ | finite when supplied | material-owned scalar interfacial coefficient | FEM CPU/GPU; not an independent FDM scalar route | `materials[].interfacial_dmi` |
 | `Material.Dbulk` | `float or None` | `None` | $\mathrm{J\,m^{-2}}$ | finite when supplied | material-owned scalar bulk coefficient | FEM CPU/GPU; FDM planner-dependent | `materials[].bulk_dmi` |
 | `Material.Dind_field` | `list[float] or None` | `None` | $\mathrm{J\,m^{-2}}$ | finite values and resolved FEM node cardinality | spatial interfacial coefficient field | FEM CPU/GPU | `materials[].dind_field` |
 | `Material.Dbulk_field` | `list[float] or None` | `None` | $\mathrm{J\,m^{-2}}$ | finite values and resolved FEM node cardinality | spatial bulk coefficient field | FEM CPU/GPU | `materials[].dbulk_field` |
 | `FdmPbc.axes` | `tuple[bool,bool,bool]` | required | $1$ | exactly three booleans | periodic/open policy per Cartesian axis | FDM CPU/GPU | `pbc.axes` |
-| `FdmPbc.demag` | `str` | `open` | $1$ | `open`, `truncated_images`, or `periodic_airbox_k0` | demagnetization policy carried with the FDM request | FDM | `pbc.demag` |
-| `FdmPbc.image_counts` | `tuple[int,int,int] or None` | `None` | $1$ | exactly three non-negative integers; only with `truncated_images` | finite image counts for the demag policy | FDM | `pbc.image_counts` |
+| `FdmPbc.demag` | `str` | `open` | $1$ | open, truncated_images, or periodic_airbox_k0 | demagnetization policy carried with the FDM request | FDM | `pbc.demag` |
+| `FdmPbc.image_counts` | `tuple[int,int,int] or None` | `None` | $1$ | exactly three non-negative integers; only with truncated_images | finite image counts for the demag policy | FDM | `pbc.image_counts` |
 
 The material parameters `name`, `Ms`, `A`, and `alpha` remain owned by the canonical Material
 API page. They are shown in the executable example because $M_s$ and $A$ enter the resolved
