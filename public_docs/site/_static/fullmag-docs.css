@@ -92,6 +92,98 @@ main article span.math {
   overflow-x: clip;
 }
 
+/* Public landing page: keep the identity block readable without coupling it
+   to the theme's private component class names. */
+.fm-home-hero {
+  display: grid;
+  grid-template-columns: minmax(8rem, 12rem) minmax(0, 1fr);
+  gap: 2rem;
+  align-items: center;
+  box-sizing: border-box;
+  max-width: 100%;
+  margin: 0 0 2rem;
+  padding: 2rem;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, currentColor 4%, transparent);
+}
+
+.fm-home-hero__brand,
+.fm-home-hero__content,
+.fm-home-card {
+  min-width: 0;
+}
+
+.fm-home-hero__brand img {
+  display: block;
+  width: 100%;
+  max-width: 10rem;
+  height: auto;
+  margin: 0 auto;
+}
+
+.fm-home-eyebrow,
+.fm-home-card__kicker {
+  margin: 0 0 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.72;
+}
+
+.fm-home-hero h2 {
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+}
+
+.fm-home-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+}
+
+.fm-home-action {
+  display: inline-block;
+  box-sizing: border-box;
+  max-width: 100%;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+  border-radius: 0.4rem;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.fm-home-action--primary {
+  color: inherit;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.fm-home-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  max-width: 100%;
+  margin: 1.5rem 0 2rem;
+}
+
+.fm-home-card {
+  box-sizing: border-box;
+  padding: 1.15rem;
+  border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+  border-radius: 0.55rem;
+  background: color-mix(in srgb, currentColor 2%, transparent);
+}
+
+.fm-home-card h3 {
+  margin-top: 0;
+}
+
+.fm-home-card > :last-child {
+  margin-bottom: 0;
+}
+
 @media (max-width: 48rem) {
   main article .table-wrapper {
     scrollbar-width: thin;
@@ -100,5 +192,20 @@ main article span.math {
       transparent 95%,
       color-mix(in srgb, currentColor 10%, transparent)
     );
+  }
+
+  .fm-home-hero {
+    grid-template-columns: 1fr;
+    gap: 1.25rem;
+    padding: 1.25rem;
+  }
+
+  .fm-home-hero__brand img {
+    max-width: 7rem;
+    margin-left: 0;
+  }
+
+  .fm-home-grid {
+    grid-template-columns: 1fr;
   }
 }
