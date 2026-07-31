@@ -12,8 +12,8 @@ source_of_truth: docs/physics/0401-zeeman-external-field.md
 
 The Zeeman interaction couples the magnetization to a prescribed external magnetic field. The
 public contract is deliberately precise: `fullmag.Zeeman(B)` accepts one uniform magnetic flux
-density vector $mathbf B_{mathrm{ext}}$ in tesla. The planner resolves it to
-$mathbf H_{mathrm{ext}}=mathbf B_{mathrm{ext}}/mu_0$ in $mathrm{A,m^{-1}}$ and every backend
+density vector $\mathbf B_{\mathrm{ext}}$ in tesla. The planner resolves it to
+$\mathbf H_{\mathrm{ext}}=\mathbf B_{\mathrm{ext}}/\mu_0$ in $\mathrm{A\,m^{-1}}$ and every backend
 lane consumes that resolved field. No implementation may silently treat the Python input as an
 H-field.
 
@@ -40,15 +40,15 @@ contribute to the effective field and energy, but they are not hidden parameters
 
 The statuses describe implementation evidence, not a blanket guarantee that every mesh,
 precision, runtime, or requested output is qualified. A resolved execution record must preserve
-the requested $mathbf B_{mathrm{ext}}$, resolved $mathbf H_{mathrm{ext}}$, solver, device,
+the requested $\mathbf B_{\mathrm{ext}}$, resolved $\mathbf H_{\mathrm{ext}}$, solver, device,
 precision, and output legality result.
 
 (zeeman-problem-statement)=
 ## Physical problem
 
-Let $Omega_m$ be the magnetic domain, $mathbf M$ the magnetization, and
-$mathbf m=mathbf M/M_s$ the reduced magnetization. A prescribed external flux density
-$mathbf B_{mathrm{ext}}$ produces the magnetic field
+Let $\Omega_m$ be the magnetic domain, $\mathbf M$ the magnetization, and
+$\mathbf m=\mathbf M/M_s$ the reduced magnetization. A prescribed external flux density
+$\mathbf B_{\mathrm{ext}}$ produces the magnetic field
 
 ```{math}
 :label: eq-zeeman-resolved-field
@@ -121,7 +121,7 @@ M_s\,\mathbf H_{\mathrm{ext}}\cdot\boldsymbol\eta\,\mathrm dV
 M_s\,\mathbf B_{\mathrm{ext}}\cdot\boldsymbol\eta\,\mathrm dV.
 ```
 
-Here $oldsymboleta$ is an admissible variation of the reduced magnetization. The Zeeman field
+Here $\boldsymbol\eta$ is an admissible variation of the reduced magnetization. The Zeeman field
 is added linearly to the effective field; the LLG equation, constraints on $|\mathbf m|$, and
 time integration are owned by the dynamics and integrator contracts, not by this interaction.
 
@@ -153,14 +153,14 @@ time integration are owned by the dynamics and integrator contracts, not by this
 
 - `B` is a finite length-three SI vector in tesla. The constructor does not normalize it and does
   not convert user-provided numbers from another unit system.
-- $mu_0$ is the FullMag SI vacuum permeability used by both FDM and FEM planners. The conversion
+- $\mu_0$ is the FullMag SI vacuum permeability used by both FDM and FEM planners. The conversion
   is performed exactly once during planning.
 - The public term is uniform and time independent. A spatial or time-dependent drive must use its
   own documented field-source contract.
 - $M_s>0$ is required by the surrounding material contract. Spatial $M_s$ affects energy
   quadrature/weights but does not alter the resolved external field.
 - A normalized reduced magnetization is expected by the dynamics contract. This page does not
-  renormalize $mathbf m$.
+  renormalize $\mathbf m$.
 - A zero vector is valid and produces a disabled physical contribution only if the Zeeman term is
   still present; planner output legality is determined by term presence, not vector magnitude.
 - The four backend lanes must agree on the physical units and sign. They may differ in storage,
@@ -327,7 +327,7 @@ changes; stable symbols are the citation identity.
 ### Algebraic checks
 
 For a uniformly magnetized body and uniform input, verify the sign and scale against
-$E_Z=-V M_s\mathbf m\cdot\mathbf B_{\mathrm{ext}}$. Reversing $mathbf B$ must reverse both
+$E_Z=-V M_s\mathbf m\cdot\mathbf B_{\mathrm{ext}}$. Reversing $\mathbf B$ must reverse both
 $\mathbf H_Z$ and the energy sign. A zero vector must produce zero field and zero energy while
 retaining the declared term semantics.
 
