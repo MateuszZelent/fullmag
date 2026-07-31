@@ -228,10 +228,10 @@ jobs:
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $archivePath = [System.IO.Path]::GetFullPath("$BUNDLE.zip")
           [System.IO.Compression.ZipFile]::CreateFromDirectory(
-            (Resolve-Path "dist").Path,
+            (Resolve-Path $DIST).Path,
             $archivePath,
             [System.IO.Compression.CompressionLevel]::Optimal,
-            $false
+            $true
           )
           $archive = [System.IO.Compression.ZipFile]::OpenRead($archivePath)
           try {
