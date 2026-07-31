@@ -931,6 +931,21 @@ class ProblemApiTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "endpoints must be surfaces"):
             registry.rkky("layer_a", "layer_b", J1=-0.3e-3)
 
+    def test_interlayer_exchange_lowers_to_ir(self) -> None:
+        registry = fm.CouplingRegistry()
+
+        coupling = registry.interlayer_exchange(
+            fm.couplings.surface("layer_a", "top"),
+            fm.couplings.surface("layer_b", "bottom"),
+            J1=1.0e-3,
+            J2=-1.0e-5,
+        )
+
+        self.assertEqual(
+            coupling.to_ir()["parameters"],
+            {"kind": "interlayer_exchange", "j1": 1.0e-3, "j2": -1.0e-5},
+        )
+
     def test_public_couplings_namespace_builds_surface_endpoint(self) -> None:
         self.assertEqual(
             fm.couplings.surface("layer", "top").to_ir(),

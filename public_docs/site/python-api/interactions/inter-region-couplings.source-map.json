@@ -1,0 +1,36 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/interactions/inter-region-couplings.md",
+    "title": "Inter-region couplings Python API",
+    "interaction": "inter-region couplings"
+  },
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "unsupported", "reason": "Enabled runtime couplings are rejected by planning."},
+    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "Region exchange is the only materialized coupling path."},
+    {"solver": "FEM", "device": "CPU", "status": "unsupported", "reason": "No strict FEM coupling realization exists."},
+    {"solver": "FEM", "device": "GPU", "status": "unsupported", "reason": "No strict FEM GPU coupling realization exists."}
+  ],
+  "sources": [
+    {"id": "endpoint", "path": "packages/fullmag-py/src/fullmag/model/couplings.py", "symbol": "class CouplingEndpoint", "responsibility": "endpoint validation and IR"},
+    {"id": "registry", "path": "packages/fullmag-py/src/fullmag/model/couplings.py", "symbol": "class CouplingRegistry", "responsibility": "public coupling API"},
+    {"id": "interlayer", "path": "packages/fullmag-py/src/fullmag/model/couplings.py", "symbol": "interlayer_exchange", "responsibility": "j1/j2 tagged payload"},
+    {"id": "study-couplings", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyCouplingsHandle", "responsibility": "stage-first entry point"},
+    {"id": "planner", "path": "crates/fullmag-plan/src/validate.rs", "symbol": "validate_region_owned_planning", "responsibility": "runtime capability check"},
+    {"id": "fdm", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "materialize_region_exchange_couplings", "responsibility": "FDM region realization"}
+  ],
+  "symbols": [
+    {"id": "ma", "latex": "$\\mathbf m_a,\\mathbf m_b$", "meaning": "reduced endpoint magnetizations", "si_unit": "$1$"},
+    {"id": "mb", "latex": "$\\mathbf m_a,\\mathbf m_b$", "meaning": "reduced endpoint magnetizations", "si_unit": "$1$"},
+    {"id": "J1", "latex": "$J_1$", "meaning": "bilinear surface coefficient", "si_unit": "$\\mathrm{J\\,m^{-2}}$"},
+    {"id": "J2", "latex": "$J_2$", "meaning": "biquadratic surface coefficient", "si_unit": "$\\mathrm{J\\,m^{-2}}$"},
+    {"id": "Aa", "latex": "$A_a,A_b$", "meaning": "adjacent exchange stiffnesses", "si_unit": "$\\mathrm{J\\,m^{-1}}$"},
+    {"id": "Ab", "latex": "$A_a,A_b$", "meaning": "adjacent exchange stiffnesses", "si_unit": "$\\mathrm{J\\,m^{-1}}$"},
+    {"id": "Aab", "latex": "$A_{ab}$", "meaning": "realized region-link stiffness", "si_unit": "$\\mathrm{J\\,m^{-1}}$"},
+    {"id": "scale", "latex": "$s$", "meaning": "harmonic-mean scale", "si_unit": "$1$"}
+  ],
+  "equations": [
+    {"id": "eq-irc-api-surface", "symbols": ["J1", "J2", "ma", "mb"], "sources": ["registry", "interlayer"]},
+    {"id": "eq-irc-api-link", "symbols": ["Aab", "scale", "Aa", "Ab"], "sources": ["registry", "fdm"]}
+  ],
+  "public_api": {"constructors": [], "parameters": []}
+}

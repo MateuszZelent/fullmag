@@ -172,6 +172,7 @@ class CouplingRegistry:
             "interlayer_exchange",
             source,
             target,
+            J1=J1,
             parameters=parameters,
             coupling_id=coupling_id,
             enabled=enabled,

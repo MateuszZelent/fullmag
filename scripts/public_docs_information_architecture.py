@@ -210,6 +210,8 @@ REFERENCE_PAGE_TITLES = {
     "python-api/interactions/cubic-anisotropy.md": "Cubic anisotropy Python API",
     "python-api/interactions/interfacial-dmi.md": "Interfacial DMI Python API",
     "python-api/interactions/thermal-noise.md": "Thermal Noise Python API",
+    "python-api/interactions/drift-diffusion-spin-torque.md": "Drift-diffusion spin torque Python API",
+    "python-api/interactions/inter-region-couplings.md": "Inter-region couplings Python API",
 }
 REFERENCE_PAGE_LABELS = {
     "physics/interactions/zeeman/index.md": "public-docs-physics-interactions-zeeman",
@@ -318,6 +320,8 @@ PYTHON_API_REFERENCE_PAGES = {
     "python-api/interactions/spin-transfer-torque.md",
     "python-api/interactions/spin-orbit-torque.md",
     "python-api/interactions/magnetoelastic.md",
+    "python-api/interactions/drift-diffusion-spin-torque.md",
+    "python-api/interactions/inter-region-couplings.md",
 }
 
 
