@@ -1595,12 +1595,18 @@ def _count_nodes_for_element_mask(mesh: MeshData, element_mask: np.ndarray) -> i
 
 
 def _node_indices_for_element_mask(mesh: MeshData, element_mask: np.ndarray) -> np.ndarray:
-    ordinals = np.flatnonzero(element_mask)
-    if mesh.n_elements == 0 or not len(ordinals):
+    normalized_mask = np.asarray(element_mask, dtype=np.bool_).reshape(-1)
+    if normalized_mask.size != mesh.n_elements:
+        raise ValueError(
+            "element mask length must match the mesh element count"
+        )
+    if mesh.n_elements == 0 or not np.any(normalized_mask):
         return np.asarray([], dtype=np.int64)
-    return np.unique(
-        np.concatenate([mesh.cell_node_ids(int(ordinal)) for ordinal in ordinals])
+    node_mask = np.repeat(
+        normalized_mask,
+        np.diff(np.asarray(mesh.cell_offsets, dtype=np.int64)),
     )
+    return np.unique(np.asarray(mesh.cell_nodes)[node_mask])
 
 
 def _format_length_m(value: float) -> str:

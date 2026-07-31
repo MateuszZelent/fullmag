@@ -38,6 +38,7 @@ from fullmag.meshing.asset_pipeline import (
     _drop_degenerate_tetrahedra,
     _element_metric_summary_for_mask,
     _mesh_options_from_runtime_metadata,
+    _node_indices_for_element_mask,
     _resolve_per_object_mesh_options,
     _resolve_effective_shared_domain_targets,
     _sanitize_surface_mesh_for_stl_export,
@@ -7054,6 +7055,49 @@ class MeshScaffoldTests(unittest.TestCase):
             output,
         )
         self.assertIn("1 tetrahedra, 4 nodes", output)
+
+    def test_node_indices_for_mixed_element_mask_uses_csr_connectivity(self) -> None:
+        mesh = MeshData(
+            nodes=np.zeros((9, 3), dtype=np.float64),
+            cell_types=np.asarray(["prism6", "pyramid5", "tet4"], dtype=np.str_),
+            cell_offsets=np.asarray([0, 6, 11, 15], dtype=np.int64),
+            cell_nodes=np.asarray(
+                [0, 1, 2, 3, 4, 5, 2, 3, 4, 6, 7, 0, 1, 2, 8],
+                dtype=np.int32,
+            ),
+            element_markers=np.asarray([1, 0, 0], dtype=np.int32),
+            facet_types=np.asarray([], dtype=np.str_),
+            facet_roles=np.asarray([], dtype=np.str_),
+            facet_offsets=np.asarray([0], dtype=np.int64),
+            facet_nodes=np.asarray([], dtype=np.int32),
+            boundary_markers=np.asarray([], dtype=np.int32),
+            cell_global_ordinals=np.arange(3, dtype=np.int64),
+            facet_global_ordinals=np.asarray([], dtype=np.int64),
+        )
+
+        np.testing.assert_array_equal(
+            _node_indices_for_element_mask(
+                mesh,
+                np.asarray([True, False, True], dtype=np.bool_),
+            ),
+            np.asarray([0, 1, 2, 3, 4, 5, 8], dtype=np.int64),
+        )
+
+        class _NoPerElementAccess:
+            n_elements = mesh.n_elements
+            cell_offsets = mesh.cell_offsets
+            cell_nodes = mesh.cell_nodes
+
+            def cell_node_ids(self, _index: int) -> None:
+                raise AssertionError("mixed CSR node lookup must not iterate per element")
+
+        np.testing.assert_array_equal(
+            _node_indices_for_element_mask(
+                _NoPerElementAccess(),
+                np.asarray([True, True, False], dtype=np.bool_),
+            ),
+            np.asarray([0, 1, 2, 3, 4, 5, 6, 7], dtype=np.int64),
+        )
 
     def test_mesh_build_failed_event_reports_latest_explicit_phase(self) -> None:
         geometry = fm.Box(size=(1.0, 1.0, 1.0), name="magnet")
