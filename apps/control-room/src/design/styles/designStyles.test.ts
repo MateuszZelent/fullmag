@@ -73,6 +73,21 @@ describe("control-room design styles", () => {
     expect(themeCss).toContain("--fm-info: #04a5e5;");
   });
 
+  it("keeps footer tab content inside the resizable dock height", () => {
+    const footerCss = readAppFile("src/design/styles/footer.css");
+    const footerModule = readAppFile("src/modules/footer/FooterModule.tsx");
+
+    expect(footerCss).toContain(
+      ".fm-footer__content {\n  display: flex;",
+    );
+    expect(footerCss).toContain(".fm-footer__log-content > .fm-footer-log");
+    expect(footerCss).toContain("flex: 1 1 auto;");
+    expect(footerModule).toContain(
+      "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
+    );
+    expect(footerModule).toContain("[&>*]:h-full");
+  });
+
   it("defines every shared CSS custom property used by design styles", () => {
     const defined = new Set<string>();
     const used = new Set<string>();

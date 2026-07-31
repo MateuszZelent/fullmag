@@ -1663,7 +1663,10 @@ def test_ensure_managed_runtime_rebuilds_an_invalid_bundle() -> None:
 
     assert "Managed FEM runtime bundle is invalid; restoring the persistent build first." in ensure_recipe
     assert "bash scripts/restore_persistent_fem_runtime.sh" in ensure_recipe
-    assert "validate_current >/dev/null 2>&1 || just rebuild-fem-runtime" in ensure_recipe
+    assert (
+        "validate_current >/dev/null 2>&1 || "
+        "FULLMAG_FEM_RUNTIME_REUSE_BUILD=1 just rebuild-fem-runtime"
+    ) in ensure_recipe
     assert "capture_source_snapshot_identity.py" in ensure_recipe
     assert '--compare "$identity_file"' in ensure_recipe
     assert "--require-source-snapshot-sha256" in ensure_recipe

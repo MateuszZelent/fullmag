@@ -14,6 +14,27 @@ Magnetoelastic coupling models the bidirectional interaction between magnetizati
 and mechanical deformation in ferromagnetic solids. It is essential for magnetostrictive
 actuators, spin-wave–strain coupling, and stress-induced anisotropy in thin films.
 
+This page is the canonical physical owner for the currently implemented
+prescribed-strain $B_1$/$B_2$ interaction. The public object graph also contains
+elastic materials, elastic bodies, mechanical loads, and boundary-condition metadata.
+Those objects are not evidence that a quasistatic or elastodynamic mechanical solve
+is executable. The planner must preserve that distinction.
+
+## Solver and backend realization matrix
+
+| Solver | Device | Status | Realized contract and qualification boundary |
+|---|---|---|---|
+| FDM | CPU | implemented | Uniform and per-cell prescribed Voigt strain, engineering-shear conversion, local field accumulation, active-mask handling, and energy reduction exist in the native engine. The current public planner boundary must still be reported separately. |
+| FDM | GPU | implemented | The FP64 and FP32 effective-field kernels contain the prescribed-strain $B_1$/$B_2$ path. Kernel presence is not end-to-end planner or executed-device qualification. |
+| FEM | CPU | implemented | Native prescribed-strain field and lumped-energy realization with per-node $M_s$ fallback, magnetic-node masking, and fail-closed planner checks. |
+| FEM | GPU | implemented | Device-resident prescribed-strain field and block-energy kernel with optional per-node strain; executed-device parity remains a separate qualification claim. |
+
+Quasistatic elasticity and elastodynamics are semantic API modes at the current revision.
+The native FEM planner rejects them and requires one prescribed-strain load. Isotropic
+magnetostriction is also rejected by the native FEM planner when no physically justified
+$B_1$/$B_2$ mapping is available. No backend may silently downgrade those requests to
+prescribed strain.
+
 (mel-problem-statement)=
 ## Physical problem
 

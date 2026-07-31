@@ -20,14 +20,14 @@ study.interactive(True)
 
 study.universe(
     mode="manual",
-    size=(1000e-9, 400e-9, 350e-9),
+    size=(1200e-9, 600e-9, 550e-9),
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )
 study.universe.mesh(
     minimum_element_size=10e-9,
-    maximum_element_size=100e-9,
-    maximum_element_growth_rate=1.8,
+    maximum_element_size=110e-9,
+    maximum_element_growth_rate=1.9,
     grading="geometric",
 )
 
@@ -68,9 +68,9 @@ study.mesh.save_or_load(
 
 study.stages.add_relax(
     stage_id="relax",
-    algorithm="projected_gradient_bb",
+    algorithm="nonlinear_cg",
     max_steps=50_000,
-    tolT=0.01e-6,
+    tolT=0.5e-8,
 ).autosave(
     fm.StageAutosave(
         table=fm.TableAutosave(

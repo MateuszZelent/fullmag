@@ -6857,6 +6857,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(loaded.entrypoint_kind, "flat_relax")
         self.assertIsNone(loaded.default_until_seconds)
         self.assertEqual(loaded.problem.study.to_ir()["kind"], "relaxation")
+        self.assertEqual(loaded.problem.study.torque_tolerance_unit, "A/m")
         dynamics = loaded.problem.study.to_ir()["dynamics"]
         self.assertEqual(dynamics["integrator"], "rk23")
         self.assertIsNone(dynamics["fixed_timestep"])
@@ -6871,6 +6872,9 @@ class ProblemApiTests(unittest.TestCase):
         self.assertAlmostEqual(default.stop.torque_tolerance_apm, expected_apm)
         self.assertAlmostEqual(tesla.stop.torque_tolerance_apm, expected_apm)
         self.assertAlmostEqual(ampere.stop.torque_tolerance_apm, expected_apm)
+        self.assertEqual(default.tol_unit, "T")
+        self.assertEqual(tesla.tol_unit, "T")
+        self.assertEqual(ampere.tol_unit, "A/m")
 
     def test_relax_stage_rejects_legacy_and_ambiguous_tolerance_keywords(self) -> None:
         with self.assertRaisesRegex(ValueError, "tolT or tolA"):

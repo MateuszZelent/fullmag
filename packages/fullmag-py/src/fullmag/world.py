@@ -2333,6 +2333,7 @@ class CapturedStage:
 @dataclass(frozen=True, slots=True)
 class RelaxStageSpec:
     tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM
+    tol_unit: str = "T"
     max_steps: int = DEFAULT_RELAXATION_MAX_STEPS
     algorithm: str = "llg_overdamped"
     energy_tolerance: float | None = None
@@ -2599,7 +2600,14 @@ def _resolve_flat_relax_stop(
     max_relaxation_time_s: object,
     max_pseudotime_s: object,
     max_physical_time_s: object,
-) -> tuple[RelaxStop | None, float | None, float | None, int | None, float | None]:
+) -> tuple[
+    RelaxStop | None,
+    float | None,
+    float | None,
+    int | None,
+    float | None,
+    str,
+]:
     if tol is not _RELAX_UNSET:
         raise ValueError("tol has been removed; use tolT or tolA")
     if tolA is not _RELAX_UNSET and tolT is not _RELAX_UNSET:
@@ -2614,11 +2622,13 @@ def _resolve_flat_relax_stop(
             raise ValueError("tolT must be finite and positive")
         resolved_tol = tol_tesla / _MU_0
         authored_tol = tolT
+        authored_tol_unit = "T"
     else:
         resolved_tol = float(tolA)
         if not math.isfinite(resolved_tol) or resolved_tol <= 0.0:
             raise ValueError("tolA must be finite and positive")
         authored_tol = tolA
+        authored_tol_unit = "A/m"
     resolved_energy = (
         None
         if energy_tolerance is _RELAX_UNSET or energy_tolerance is None
@@ -2672,6 +2682,7 @@ def _resolve_flat_relax_stop(
         resolved_stop.energy_tolerance_j,
         resolved_stop.max_steps,
         resolved_stop.max_relaxation_time_s,
+        authored_tol_unit,
     )
 
 
@@ -2704,6 +2715,7 @@ def relax_stage(
         energy_tolerance,
         max_steps,
         max_relaxation_time_s,
+        tol_unit,
     ) = _resolve_flat_relax_stop(
         stop=stop,
         tol=tol,
@@ -2761,6 +2773,7 @@ def relax_stage(
         adaptive_timestep=adaptive_timestep,
         field_refresh=field_refresh,
         stop=resolved_stop,
+        tol_unit=tol_unit,
     )
 
 
@@ -2930,6 +2943,7 @@ def _relax_problem_from_spec(spec: RelaxStageSpec) -> Problem:
         study_kind="relaxation",
         relax_algorithm=spec.algorithm,
         relax_torque_tolerance=spec.tol,
+        relax_torque_tolerance_unit=spec.tol_unit,
         relax_energy_tolerance=spec.energy_tolerance,
         relax_max_steps=spec.max_steps,
         relax_max_relaxation_time_s=spec.max_relaxation_time_s,
@@ -7669,6 +7683,7 @@ def _build_problem(
     study_kind: str = "time_evolution",
     relax_algorithm: str = "llg_overdamped",
     relax_torque_tolerance: float = DEFAULT_RELAXATION_TORQUE_TOLERANCE_APM,
+    relax_torque_tolerance_unit: str = "T",
     relax_energy_tolerance: float | None = None,
     relax_max_steps: int = DEFAULT_RELAXATION_MAX_STEPS,
     relax_max_relaxation_time_s: float | None = None,
@@ -7829,12 +7844,12 @@ def _build_problem(
     ]
 
     if study_kind == "relaxation":
-        relax_kwargs: dict[str, object] = {}
         if relax_stop is None:
             relax_kwargs = {
                 "torque_tolerance": relax_torque_tolerance,
                 "energy_tolerance": relax_energy_tolerance,
                 "max_steps": relax_max_steps,
+                "torque_tolerance_unit": relax_torque_tolerance_unit,
             }
             if relax_max_relaxation_time_s is not None:
                 relax_kwargs["max_relaxation_time_s"] = relax_max_relaxation_time_s
@@ -7842,6 +7857,8 @@ def _build_problem(
                 relax_kwargs["max_pseudotime_s"] = relax_max_pseudotime_s
             if relax_max_physical_time_s is not None:
                 relax_kwargs["max_physical_time_s"] = relax_max_physical_time_s
+        else:
+            relax_kwargs = {"torque_tolerance_unit": relax_torque_tolerance_unit}
         study = Relaxation(
             outputs=td_outputs,
             algorithm=relax_algorithm,
@@ -8177,6 +8194,7 @@ def relax(
         energy_tolerance,
         max_steps,
         max_relaxation_time_s,
+        tol_unit,
     ) = _resolve_flat_relax_stop(
         stop=stop,
         tol=tol,
@@ -8214,6 +8232,7 @@ def relax(
         study_kind="relaxation",
         relax_algorithm=algorithm,
         relax_torque_tolerance=tol,
+        relax_torque_tolerance_unit=tol_unit,
         relax_energy_tolerance=energy_tolerance,
         relax_max_steps=max_steps,
         relax_max_relaxation_time_s=max_relaxation_time_s,

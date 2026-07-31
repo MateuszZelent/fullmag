@@ -11,7 +11,7 @@ def _outputs():
 class RelaxationContractTests(unittest.TestCase):
     def test_canonical_defaults_are_shared(self):
         stop = fm.RelaxStop()
-        self.assertEqual(stop.torque_tolerance_apm, 1e-4)
+        self.assertEqual(stop.torque_tolerance_apm, 1e-6 / (4.0e-7 * math.pi))
         self.assertEqual(stop.max_steps, 50_000)
 
     def test_direct_minimizer_rejects_llg_dynamics(self):
@@ -42,7 +42,7 @@ class RelaxationContractTests(unittest.TestCase):
         cases = (
             (
                 fm.RelaxStop(torque_tolerance_apm=1e-4),
-                {"tol": 2e-4},
+                {"tolA": 2e-4},
                 "torque_tolerance",
             ),
             (

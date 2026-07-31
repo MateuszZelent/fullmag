@@ -3788,7 +3788,7 @@ ensure-managed-fem-runtime:
       if ! validate_current >/dev/null 2>&1; then \
         echo "Managed FEM runtime bundle is invalid; restoring the persistent build first. Exact source mismatch will rebuild." >&2; \
         bash scripts/restore_persistent_fem_runtime.sh >/dev/null 2>&1 || true; \
-        validate_current >/dev/null 2>&1 || just rebuild-fem-runtime; \
+        validate_current >/dev/null 2>&1 || FULLMAG_FEM_RUNTIME_REUSE_BUILD=1 just rebuild-fem-runtime; \
       fi; \
       if [ ! -x "{{gpu_runtime_bin}}" ] || [ ! -f "{{gpu_runtime_manifest}}" ]; then \
         echo "Managed FEM runtime rebuild did not produce {{gpu_runtime_bin}} and {{gpu_runtime_manifest}}" >&2; \

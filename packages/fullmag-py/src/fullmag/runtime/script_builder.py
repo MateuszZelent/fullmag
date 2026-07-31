@@ -3885,6 +3885,16 @@ def _render_stages(
                     study.stop.max_relaxation_time_s,
                 ),
             )
+            torque_tolerance_argument = (
+                "tolA" if study.torque_tolerance_unit == "A/m" else "tolT"
+            )
+            torque_tolerance_value = (
+                None
+                if torque_tolerance is None
+                else torque_tolerance
+                if study.torque_tolerance_unit == "A/m"
+                else torque_tolerance * 4.0e-7 * math.pi
+            )
             call_parts = [f"algorithm={_py_repr(algorithm)}"]
             if stage.stage_id is not None:
                 call_parts.insert(0, f"stage_id={_py_repr(stage.stage_id)}")
@@ -3896,8 +3906,8 @@ def _render_stages(
             if needs_stop_object:
                 if torque_tolerance is not None:
                     call_parts.append(
-                        "tolT="
-                        f"{_py_number(torque_tolerance * 4.0e-7 * math.pi)}"
+                        f"{torque_tolerance_argument}="
+                        f"{_py_number(torque_tolerance_value)}"
                     )
                 stop_parts: list[str] = []
                 stop_parts.append(
@@ -3920,8 +3930,8 @@ def _render_stages(
                 call_parts.append(f"stop=fm.RelaxStop({', '.join(stop_parts)})")
             else:
                 call_parts.append(
-                    "tolT="
-                    f"{_py_number(torque_tolerance * 4.0e-7 * math.pi)}"
+                    f"{torque_tolerance_argument}="
+                    f"{_py_number(torque_tolerance_value)}"
                 )  # type: ignore[operator]
                 call_parts.append(f"max_steps={max_steps}")
                 if energy_tolerance is not None:

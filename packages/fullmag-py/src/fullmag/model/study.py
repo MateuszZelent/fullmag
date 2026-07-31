@@ -744,6 +744,7 @@ class Relaxation:
     dynamics: LLG | None = None
     _table_autosave: TableAutosave | None = field(default=None, repr=False)
     torque_tolerance: float | None = field(init=False)
+    torque_tolerance_unit: str = field(init=False)
     energy_tolerance: float | None = field(init=False)
     max_steps: int | None = field(init=False)
 
@@ -760,6 +761,7 @@ class Relaxation:
         max_physical_time_s: object = _UNSET,
         dynamics: LLG | None = None,
         table_autosave: TableAutosave | None = None,
+        torque_tolerance_unit: str = "T",
     ) -> None:
         object.__setattr__(self, "outputs", outputs)
         object.__setattr__(self, "algorithm", algorithm)
@@ -779,6 +781,9 @@ class Relaxation:
         object.__setattr__(self, "dynamics", dynamics)
         object.__setattr__(self, "_table_autosave", table_autosave)
         object.__setattr__(self, "torque_tolerance", self.stop.torque_tolerance_apm)
+        if torque_tolerance_unit not in {"T", "A/m"}:
+            raise ValueError("torque_tolerance_unit must be 'T' or 'A/m'")
+        object.__setattr__(self, "torque_tolerance_unit", torque_tolerance_unit)
         object.__setattr__(self, "energy_tolerance", self.stop.energy_tolerance_j)
         object.__setattr__(self, "max_steps", self.stop.max_steps)
         self.__post_init__()
@@ -837,6 +842,7 @@ class Relaxation:
             dynamics=self.dynamics,
             outputs=self.outputs,
             stop=self.stop,
+            torque_tolerance_unit=self.torque_tolerance_unit,
             table_autosave=TableAutosave(
                 every_steps=every_steps,
                 quantities=quantities,

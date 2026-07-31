@@ -54,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -63,17 +63,17 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24.18.0
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 10.8.1
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -112,7 +112,7 @@ jobs:
           tar -czvf "fullmag-${TAG}-linux-x86_64.tar.gz" -C dist "fullmag-${TAG}-linux-x86_64"
 
       - name: Upload Linux artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fullmag-${{ needs.prepare-release.outputs.tag_name }}-linux-x86_64
           path: fullmag-*-linux-x86_64.tar.gz
@@ -122,7 +122,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -131,12 +131,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24.18.0
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 10.8.1
 
@@ -170,7 +170,7 @@ jobs:
           Compress-Archive -Path "$DIST" -DestinationPath "$BUNDLE.zip"
 
       - name: Upload Windows artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fullmag-${{ needs.prepare-release.outputs.tag_name }}-windows-x86_64
           path: fullmag-*-windows-x86_64.zip
@@ -180,7 +180,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: release-artifacts
           merge-multiple: true
@@ -189,7 +189,7 @@ jobs:
         run: ls -la release-artifacts/
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.prepare-release.outputs.tag_name }}
           name: Fullmag Release ${{ needs.prepare-release.outputs.tag_name }}

@@ -28,6 +28,15 @@ class BootstrapWorkflowContractTests(unittest.TestCase):
 
         self.assertIn('"manifold3d>=3,<4"', pyproject)
 
+    def test_viewport_audit_installs_playwright_from_control_room_workspace(self) -> None:
+        workflow = (ROOT / ".github/workflows/bootstrap.yml").read_text()
+
+        self.assertIn(
+            "pnpm --dir apps/control-room exec playwright install --with-deps chromium",
+            workflow,
+        )
+        self.assertNotIn("pnpm exec playwright install --with-deps chromium", workflow)
+
     def test_every_tracked_gitlink_has_submodule_metadata(self) -> None:
         gitmodules = (ROOT / ".gitmodules").read_text()
 

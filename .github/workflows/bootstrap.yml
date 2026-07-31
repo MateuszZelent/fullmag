@@ -98,7 +98,7 @@ jobs:
         run: pnpm --dir apps/control-room test
 
       - name: Install Chromium for viewport lifecycle audit
-        run: pnpm exec playwright install --with-deps chromium
+        run: pnpm --dir apps/control-room exec playwright install --with-deps chromium
 
       - name: Audit production viewport lifecycle and memory
         run: pnpm --dir apps/control-room audit:viewport-3d-memory-churn
