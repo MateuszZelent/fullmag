@@ -92,38 +92,35 @@ main article span.math {
   overflow-x: clip;
 }
 
-/* Public landing page: keep the identity block readable without coupling it
-   to the theme's private component class names. */
-.fm-home-hero {
+/* Public landing page: institutional identity first, concise content second. */
+.fm-home-masthead {
   display: grid;
-  grid-template-columns: minmax(8rem, 12rem) minmax(0, 1fr);
-  gap: 2rem;
-  align-items: center;
+  grid-template-columns: minmax(8rem, 0.75fr) minmax(12rem, 1fr) minmax(16rem, 1.25fr);
+  gap: 1.25rem;
+  align-items: start;
   box-sizing: border-box;
   max-width: 100%;
-  margin: 0 0 2rem;
-  padding: 2rem;
-  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
-  border-radius: 0.75rem;
-  background: color-mix(in srgb, currentColor 4%, transparent);
+  margin: 0 0 1.75rem;
+  padding: 0 0 1.25rem;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 18%, transparent);
 }
 
-.fm-home-hero__brand,
-.fm-home-hero__content,
-.fm-home-card {
+.fm-home-masthead__brand,
+.fm-home-masthead__authors,
+.fm-home-masthead__funding {
   min-width: 0;
 }
 
-.fm-home-hero__brand img {
+.fm-home-masthead__brand img {
   display: block;
   width: 100%;
-  max-width: 10rem;
+  max-width: 8rem;
   height: auto;
-  margin: 0 auto;
+  margin: 0 0 0.85rem;
 }
 
 .fm-home-eyebrow,
-.fm-home-card__kicker {
+.fm-home-label {
   margin: 0 0 0.5rem;
   font-size: 0.78rem;
   font-weight: 700;
@@ -132,9 +129,48 @@ main article span.math {
   opacity: 0.72;
 }
 
-.fm-home-hero h2 {
+.fm-home-label {
+  margin-bottom: 0.65rem;
+}
+
+.fm-home-masthead__authors p:not(.fm-home-label),
+.fm-home-masthead__funding p:not(.fm-home-label) {
+  margin: 0 0 0.6rem;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.fm-home-masthead__funding {
+  display: grid;
+  grid-template-columns: 3.5rem minmax(0, 1fr);
+  gap: 0.85rem;
+  align-items: start;
+  padding-left: 1.1rem;
+  border-left: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+}
+
+.fm-home-masthead__funding > img {
+  display: block;
+  width: 3.5rem;
+  height: auto;
+}
+
+.fm-home-funding-badge {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.fm-home-intro {
+  max-width: 48rem;
+  margin: 0 0 1.5rem;
+}
+
+.fm-home-intro h2 {
   margin-top: 0;
   margin-bottom: 0.75rem;
+  font-size: clamp(1.65rem, 3vw, 2.35rem);
+  line-height: 1.15;
 }
 
 .fm-home-actions {
@@ -160,28 +196,13 @@ main article span.math {
   background: color-mix(in srgb, currentColor 12%, transparent);
 }
 
-.fm-home-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
-  max-width: 100%;
-  margin: 1.5rem 0 2rem;
-}
-
-.fm-home-card {
-  box-sizing: border-box;
-  padding: 1.15rem;
-  border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
-  border-radius: 0.55rem;
-  background: color-mix(in srgb, currentColor 2%, transparent);
-}
-
-.fm-home-card h3 {
-  margin-top: 0;
-}
-
-.fm-home-card > :last-child {
-  margin-bottom: 0;
+.fm-home-status {
+  max-width: 48rem;
+  margin: 0 0 2rem;
+  padding: 0.7rem 0 0.7rem 0.9rem;
+  border-left: 3px solid currentColor;
+  font-size: 0.92rem;
+  line-height: 1.5;
 }
 
 @media (max-width: 48rem) {
@@ -194,18 +215,19 @@ main article span.math {
     );
   }
 
-  .fm-home-hero {
+  .fm-home-masthead {
     grid-template-columns: 1fr;
-    gap: 1.25rem;
-    padding: 1.25rem;
+    gap: 1rem;
   }
 
-  .fm-home-hero__brand img {
+  .fm-home-masthead__brand img {
     max-width: 7rem;
-    margin-left: 0;
   }
 
-  .fm-home-grid {
-    grid-template-columns: 1fr;
+  .fm-home-masthead__funding {
+    padding-top: 1rem;
+    padding-left: 0;
+    border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+    border-left: 0;
   }
 }
