@@ -977,6 +977,29 @@ Use them to study:
   - interactions are plugin-like units and experiments/workflows such as
     relaxation and eigen solve live above interactions
 
+### Public-manual authoring pattern
+
+Use the NeuralMag and TetraX manuals as presentation references for Fullmag's public
+documentation:
+
+- NeuralMag's `getting_started` progression is the model for executable onboarding:
+  setup, geometry/material, state, interaction, stage, observables, output, and a
+  complete script. Fullmag examples must be copyable `# %%` cells in execution order,
+  with the public `fm.study(...).stages` workflow first.
+- TetraX's interaction catalog is the model for discoverability: one canonical page or
+  subtree per physical interaction, with API parameters, energy, effective field,
+  observables, implementation lanes, qualification state, and references. Large
+  interactions such as demagnetization may own focused subpages.
+- Keep workflow guidance before exhaustive reference material, and link every
+  parameter table, equation, backend section, and source map from the interaction's
+  navigation path. Do not publish orphaned API tables or detached solver notes.
+- Treat every documented code block as an executable contract: run it, verify its
+  output or expected rejection, and state the exact status when the current builder
+  cannot express the complete interaction graph.
+- These manuals guide structure only. Never copy their code or infer Fullmag behavior
+  from them; current Fullmag source, Python API, `ProblemIR`, planner, runtime, tests,
+  and device evidence remain authoritative.
+
 ### Hard rule
 
 Never paste code from external solvers into Fullmag.
