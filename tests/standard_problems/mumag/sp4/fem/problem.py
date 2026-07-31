@@ -134,7 +134,7 @@ def build_study(request: SP4RunRequest):
     study.demag(realization="poisson_robin")
     study.fem_demag_solver(solver="CG", preconditioner="AMG", rtol=1e-12, max_iterations=500)
     study.build_domain_mesh()
-    study.tableautosave(CONTRACT.sample_period_s, quantities=["step", "t", "mx", "my", "mz", "e_total", "max_torque_T"])
+    table_quantities = ["step", "t", "mx", "my", "mz", "e_total", "max_torque_T"]
     if request.phase == "relax":
         algorithm = os.environ.get("FULLMAG_SP4_RELAX_ALGORITHM", DEFAULT_RELAXATION_ALGORITHM)
         maximum_steps = int(os.environ.get("FULLMAG_SP4_RELAX_MAX_STEPS", "50000"))
@@ -150,7 +150,7 @@ def build_study(request: SP4RunRequest):
             )
         )
         if algorithm == "llg_overdamped":
-            study.stages.add_relax(
+            relax_stage = study.stages.add_relax(
                 stage_id="relax",
                 algorithm=algorithm,
                 solver="rk23",
@@ -163,7 +163,7 @@ def build_study(request: SP4RunRequest):
                 tolA=torque_tolerance_apm,
             )
         elif algorithm in PRODUCTION_RELAXATION_ALGORITHMS:
-            study.stages.add_relax(
+            relax_stage = study.stages.add_relax(
                 stage_id="relax",
                 algorithm=algorithm,
                 max_steps=maximum_steps,
@@ -171,7 +171,9 @@ def build_study(request: SP4RunRequest):
             )
         else:
             raise ValueError(f"unsupported SP4 relaxation algorithm: {algorithm}")
+        relax_stage.tableautosave(every_steps=10, quantities=table_quantities)
     else:
+        study.tableautosave(CONTRACT.sample_period_s, quantities=table_quantities)
         study.solver(
             integrator="rk45",
             gamma=CONTRACT.gamma_mu0_m_per_as,

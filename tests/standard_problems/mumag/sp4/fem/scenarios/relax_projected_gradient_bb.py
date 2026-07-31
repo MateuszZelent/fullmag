@@ -65,8 +65,8 @@ study.build_domain_mesh()
 study.stages.add_relax(
     stage_id="relax",
     algorithm="projected_gradient_bb",
-    max_steps=2_000,
-    tolT=0.1e-6,
+    max_steps=50_000,
+    tolT=1e-6,
 ).autosave(
     fm.StageAutosave(
         table=fm.TableAutosave(
@@ -89,6 +89,4 @@ study.stages.add_relax(
         ],
     )
 )
-
-
 

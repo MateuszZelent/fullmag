@@ -278,6 +278,18 @@ def test_managed_problem_scopes_stricter_torque_threshold_to_mixed_p1(
     )
 
 
+def test_managed_relaxation_uses_accepted_step_table_cadence(monkeypatch):
+    ir = _managed_problem_ir(
+        monkeypatch,
+        phase="relax",
+        algorithm="projected_gradient_bb",
+    )
+
+    table = ir["study"]["sampling"]["table_autosave"]
+    assert table["every_steps"] == 10
+    assert "sample_period_s" not in table
+
+
 def test_managed_problem_defaults_to_all_tet_without_layer_controls(
     monkeypatch,
 ) -> None:
@@ -387,6 +399,9 @@ def test_managed_dynamics_restores_physical_alpha_and_separate_timestep(
     universe = ir["problem_meta"]["runtime_metadata"]["study_universe"]
     assert universe["airbox_growth_rate"] == pytest.approx(1.7)
     assert universe["airbox_grading"] == "geometric"
+    table = ir["study"]["sampling"]["table_autosave"]
+    assert table["sample_period_s"] == pytest.approx(CONTRACT.sample_period_s)
+    assert "every_steps" not in table
 
 
 def test_real_reference_parsers_and_crossings():
