@@ -19,6 +19,7 @@ bootstrapped_source_identity_file="${FULLMAG_BOOTSTRAPPED_SOURCE_IDENTITY_FILE:-
 bootstrapped_source_snapshot_root="${FULLMAG_BOOTSTRAPPED_SOURCE_SNAPSHOT_ROOT:-}"
 source_identity_file=""
 SOURCE_SNAPSHOT_ROOT=""
+source_snapshot_materialize_root=""
 source_identity_owned=0
 source_snapshot_owned=0
 mkdir -p "${RUNTIME_PARENT}"
@@ -35,6 +36,16 @@ is_canonical_source_snapshot_path() {
     [ -d "${path}" ] && [ ! -L "${path}" ] &&
     [ "$(dirname -- "${path}")" = "${parent}" ] &&
     [[ "$(basename -- "${path}")" = source-snapshot.* ]]
+}
+
+is_materialized_source_snapshot_path() {
+  local path="${1:-}"
+  local parent="${FULLMAG_CONTAINER_TARGET_DIR:-}"
+  [ -n "${path}" ] && [ -n "${parent}" ] &&
+    [ -d "${path}" ] && [ ! -L "${path}" ] &&
+    [ "$(dirname -- "${path}")" = "${parent}" ] &&
+    { [[ "$(basename -- "${path}")" = source-snapshot.* ]] ||
+      [[ "$(basename -- "${path}")" = source-cache.* ]]; }
 }
 
 is_canonical_source_identity_path() {
@@ -63,6 +74,11 @@ cleanup_failed_export() {
   fi
   if [ -n "${STAGING_ROOT}" ]; then
     rm -rf -- "${STAGING_ROOT}" || true
+  fi
+  if [ -n "${source_snapshot_materialize_root:-}" ] &&
+     is_canonical_source_snapshot_path "${source_snapshot_materialize_root}"; then
+    chmod -R u+w "${source_snapshot_materialize_root}" 2>/dev/null || true
+    rm -rf -- "${source_snapshot_materialize_root}" || true
   fi
   if [ "${source_identity_owned:-0}" = "1" ] &&
      is_canonical_source_identity_path "${source_identity_file:-}"; then
@@ -124,6 +140,11 @@ readonly VARIANTS_ROOT STAGING_ROOT
 : "${FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY:=8.9}"
 : "${FULLMAG_ENABLE_NVTX:=0}"
 : "${FULLMAG_FEM_RUNTIME_REUSE_BUILD:=0}"
+: "${FULLMAG_RUNTIME_PRUNE:=1}"
+case "${FULLMAG_RUNTIME_PRUNE}" in
+  0|1) ;;
+  *) echo "[export_fem_gpu_runtime] FULLMAG_RUNTIME_PRUNE must be 0 or 1" >&2; exit 2 ;;
+esac
 case "${FULLMAG_ENABLE_NVTX}" in
   0|1) ;;
   *) echo "[export_fem_gpu_runtime] FULLMAG_ENABLE_NVTX must be 0 or 1" >&2; exit 2 ;;
@@ -149,7 +170,7 @@ verify_source_snapshot_identity() {
 }
 
 validate_bootstrapped_source_snapshot() {
-  if ! is_canonical_source_snapshot_path "${bootstrapped_source_snapshot_root}" ||
+  if ! is_materialized_source_snapshot_path "${bootstrapped_source_snapshot_root}" ||
      ! is_canonical_source_identity_path "${bootstrapped_source_identity_file}"; then
     return 1
   fi
@@ -169,11 +190,38 @@ validate_bootstrapped_source_snapshot() {
 bootstrap_new_source_snapshot() {
   source_identity_file="$(mktemp "${FULLMAG_CONTAINER_TARGET_DIR}/source-identity.XXXXXXXXXX.json")"
   source_identity_owned=1
-  SOURCE_SNAPSHOT_ROOT="$(mktemp -d "${FULLMAG_CONTAINER_TARGET_DIR}/source-snapshot.XXXXXXXXXX")"
-  source_snapshot_owned=1
   python3 scripts/capture_source_snapshot_identity.py \
-    --repo-root "${REPO_ROOT}" --output "${source_identity_file}" \
-    --materialize "${SOURCE_SNAPSHOT_ROOT}" --materialize-existing-empty
+    --repo-root "${REPO_ROOT}" --output "${source_identity_file}"
+  source_snapshot_sha256="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_snapshot_sha256"])' "${source_identity_file}")"
+  SOURCE_SNAPSHOT_ROOT="${FULLMAG_CONTAINER_TARGET_DIR}/source-cache.${source_snapshot_sha256}"
+  if [ -e "${SOURCE_SNAPSHOT_ROOT}" ]; then
+    if ! is_materialized_source_snapshot_path "${SOURCE_SNAPSHOT_ROOT}" ||
+       ! python3 scripts/capture_source_snapshot_identity.py \
+         --repo-root "${REPO_ROOT}" \
+         --compare "${source_identity_file}" \
+         --verify-materialized "${SOURCE_SNAPSHOT_ROOT}"; then
+      echo "[export_fem_gpu_runtime] source snapshot cache is stale; rebuilding the cache" >&2
+      chmod -R u+w "${SOURCE_SNAPSHOT_ROOT}" 2>/dev/null || true
+      rm -rf -- "${SOURCE_SNAPSHOT_ROOT}"
+    else
+      echo "[export_fem_gpu_runtime] reusing source snapshot cache: ${SOURCE_SNAPSHOT_ROOT}"
+    fi
+  fi
+  if [ ! -e "${SOURCE_SNAPSHOT_ROOT}" ]; then
+    materialize_root="$(mktemp -d "${FULLMAG_CONTAINER_TARGET_DIR}/source-snapshot.XXXXXXXXXX")"
+    source_snapshot_materialize_root="${materialize_root}"
+    python3 scripts/capture_source_snapshot_identity.py \
+      --repo-root "${REPO_ROOT}" \
+      --compare "${source_identity_file}" \
+      --materialize "${materialize_root}" \
+      --materialize-existing-empty
+    mv "${materialize_root}" "${SOURCE_SNAPSHOT_ROOT}"
+    source_snapshot_materialize_root=""
+  fi
+  python3 scripts/capture_source_snapshot_identity.py \
+    --repo-root "${REPO_ROOT}" \
+    --compare "${source_identity_file}" \
+    --verify-materialized "${SOURCE_SNAPSHOT_ROOT}"
   export FULLMAG_RUNTIME_PUBLICATION_REPO_ROOT="${REPO_ROOT}"
   export FULLMAG_BOOTSTRAPPED_SOURCE_IDENTITY_FILE="${source_identity_file}"
   export FULLMAG_BOOTSTRAPPED_SOURCE_SNAPSHOT_ROOT="${SOURCE_SNAPSHOT_ROOT}"
@@ -1064,12 +1112,18 @@ publish_runtime_bundle() {
 finalize_verified_source_publication() {
   verify_source_snapshot_identity
   publish_runtime_bundle
-  if ! is_canonical_source_snapshot_path "${SOURCE_SNAPSHOT_ROOT}"; then
-    echo "[export_fem_gpu_runtime] refusing to clean non-canonical source snapshot" >&2
+  if [ "${FULLMAG_RUNTIME_PRUNE:-1}" = "1" ]; then
+    FULLMAG_RUNTIME_PARENT="${RUNTIME_PARENT}" \
+      FULLMAG_RUNTIME_KEEP_PER_FAMILY="${FULLMAG_RUNTIME_KEEP_PER_FAMILY:-2}" \
+      bash "${SOURCE_SNAPSHOT_ROOT}/scripts/prune_managed_fem_runtimes.sh"
+  fi
+  if is_canonical_source_snapshot_path "${SOURCE_SNAPSHOT_ROOT}"; then
+    chmod -R u+w "${SOURCE_SNAPSHOT_ROOT}" 2>/dev/null || true
+    rm -rf -- "${SOURCE_SNAPSHOT_ROOT}"
+  elif ! is_materialized_source_snapshot_path "${SOURCE_SNAPSHOT_ROOT}"; then
+    echo "[export_fem_gpu_runtime] refusing to clean unknown source snapshot: ${SOURCE_SNAPSHOT_ROOT}" >&2
     return 2
   fi
-  chmod -R u+w "${SOURCE_SNAPSHOT_ROOT}" 2>/dev/null || true
-  rm -rf -- "${SOURCE_SNAPSHOT_ROOT}"
   SOURCE_SNAPSHOT_ROOT=""
   source_snapshot_owned=0
   if is_canonical_source_identity_path "${source_identity_file}"; then

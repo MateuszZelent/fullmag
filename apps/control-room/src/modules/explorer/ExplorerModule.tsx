@@ -81,6 +81,7 @@ import {
   activateTextureLoadNode,
   collapseExplorerNodes,
   expandExplorerNodes,
+  ensureExplorerModelObjectDefaults,
   revealExplorerNode,
   setExplorerActiveTab,
   setExplorerFilterText,
@@ -428,6 +429,15 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     frequencyDomainSpectrum.data,
     pinnedQuickChart,
   ]);
+
+  useEffect(() => {
+    if (activeTab !== "model") return;
+    ensureExplorerModelObjectDefaults(
+      nodes
+        .filter((node) => node.kind === "object.root")
+        .map((node) => node.id),
+    );
+  }, [activeTab, nodes]);
 
   useEffect(() => {
     if (!selectedNodeId?.startsWith("model:") || activeTab === "model") return;

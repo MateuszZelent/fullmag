@@ -228,13 +228,27 @@ fn control_room_launch_signature(dev_mode: bool, api_base_url: &str) -> String {
     format!("{mode}\n{}", api_base_url.trim_end_matches('/'))
 }
 
+fn packaged_install_root(self_exe: &Path) -> Option<PathBuf> {
+    let bin_dir = self_exe.parent()?;
+    if !bin_dir
+        .file_name()?
+        .to_string_lossy()
+        .eq_ignore_ascii_case("bin")
+    {
+        return None;
+    }
+    let install_root = bin_dir.parent()?.to_path_buf();
+    (install_root.join(".fullmag").is_dir() || install_root.join("web").is_dir())
+        .then_some(install_root)
+}
+
 #[cfg(test)]
 mod control_room_guard_tests {
     use std::sync::{Arc, Mutex};
 
     use super::{
         api_openapi_response_is_compatible, control_room_launch_signature, BootstrapProcessGuard,
-        ControlRoomGuard, GuardedProcess,
+        packaged_install_root, ControlRoomGuard, GuardedProcess,
     };
 
     struct RecordingProcess {
@@ -357,6 +371,26 @@ mod control_room_guard_tests {
             "[\"add_field_drive\",\"remove_field_drive\",\"table_autosave\",\"autosave\",\"fft_response\"]}",
         );
         assert!(api_openapi_response_is_compatible(current));
+    }
+
+    #[test]
+    fn packaged_install_root_is_derived_from_bin_executable() {
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-packaged-root-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::fs::create_dir_all(root.join(".fullmag")).unwrap();
+
+        assert_eq!(
+            packaged_install_root(&root.join("bin").join("fullmag")),
+            Some(root.clone())
+        );
+        assert_eq!(packaged_install_root(&root.join("target").join("fullmag")), None);
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
 
@@ -1190,17 +1224,35 @@ pub(crate) fn spawn_fullmag_api(
     disable_static_control_room: bool,
     stream_logs_to_terminal: bool,
 ) -> Result<std::process::Child> {
+    let packaged_root = packaged_install_root(self_exe);
+    let runtime_root = packaged_root
+        .clone()
+        .unwrap_or_else(|| root.to_path_buf());
     let sibling_api = self_exe.with_file_name(format!("fullmag-api{EXE_SUFFIX}"));
     let web_static_dir = {
-        let repo_local = root.join(".fullmag").join("local").join("web");
-        if repo_local.join("index.html").is_file() {
-            repo_local
-        } else {
-            root.join("apps").join("web").join("out")
-        }
+        let candidates = [
+            runtime_root.join(".fullmag").join("local").join("web"),
+            runtime_root.join("web"),
+            runtime_root.join("share").join("control-room"),
+            root.join(".fullmag").join("local").join("web"),
+            root.join("apps").join("control-room").join("out"),
+            root.join("apps").join("web").join("out"),
+        ];
+        candidates
+            .into_iter()
+            .find(|candidate| candidate.join("index.html").is_file())
+            .unwrap_or_else(|| runtime_root.join(".fullmag").join("local").join("web"))
     };
     let candidates = [
         sibling_api,
+        runtime_root
+            .join("bin")
+            .join(format!("fullmag-api{EXE_SUFFIX}")),
+        runtime_root
+            .join(".fullmag")
+            .join("local")
+            .join("bin")
+            .join(format!("fullmag-api{EXE_SUFFIX}")),
         root.join(".fullmag")
             .join("local")
             .join("bin")
@@ -1241,8 +1293,9 @@ pub(crate) fn spawn_fullmag_api(
             None
         };
         command
-            .current_dir(root)
+            .current_dir(&runtime_root)
             .env("FULLMAG_API_PORT", api_port().to_string())
+            .env("FULLMAG_REPO_ROOT", &runtime_root)
             .env("FULLMAG_WEB_STATIC_DIR", &web_static_dir)
             .stdin(Stdio::null());
         if stream_logs_to_terminal {
@@ -1251,7 +1304,7 @@ pub(crate) fn spawn_fullmag_api(
             command.stdout(stdout).stderr(stderr);
         }
         configure_child_process(&mut command);
-        configure_repo_local_library_env(&mut command, root, Some(path));
+        configure_repo_local_library_env(&mut command, &runtime_root, Some(path));
         if disable_static_control_room {
             command.env("FULLMAG_DISABLE_STATIC_CONTROL_ROOM", "1");
         }
@@ -1262,6 +1315,13 @@ pub(crate) fn spawn_fullmag_api(
             terminal_logger().attach_child(&mut child, TerminalLogSource::Api, log_file)?;
         }
         return Ok(child);
+    }
+
+    if packaged_root.is_some() {
+        bail!(
+            "fullmag-api binary missing from packaged install rooted at {}",
+            runtime_root.display()
+        );
     }
 
     let mut command = ProcessCommand::new("cargo");
@@ -1278,6 +1338,7 @@ pub(crate) fn spawn_fullmag_api(
         .args(["run", "-p", "fullmag-api"])
         .current_dir(root)
         .env("FULLMAG_API_PORT", api_port().to_string())
+        .env("FULLMAG_REPO_ROOT", root)
         .env("FULLMAG_WEB_STATIC_DIR", &web_static_dir)
         .stdin(Stdio::null());
     if stream_logs_to_terminal {

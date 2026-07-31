@@ -831,7 +831,8 @@ def test_export_passes_and_requires_exact_host_source_identity() -> None:
     publish_index = exporter.index("publish_runtime_bundle() {")
 
     assert resolve_index < compose_index < manifest_index < publish_index
-    assert '--materialize "${SOURCE_SNAPSHOT_ROOT}"' in exporter
+    assert '--materialize "${materialize_root}"' in exporter
+    assert 'source-cache.${source_snapshot_sha256}' in exporter
     assert 'FULLMAG_RUNTIME_PUBLICATION_REPO_ROOT="${REPO_ROOT}"' in exporter
     assert 'exec bash "${SOURCE_SNAPSHOT_ROOT}/scripts/export_fem_gpu_runtime.sh"' in exporter
     assert 'cd "${SOURCE_SNAPSHOT_ROOT}"' in exporter
@@ -865,7 +866,7 @@ def test_export_does_not_trust_public_bootstrap_environment_or_cleanup_foreign_p
     assert 'FULLMAG_CONTAINER_TARGET_DIR' in exporter
     assert 'source-snapshot.*' in exporter
     assert '[ ! -L "${path}" ]' in exporter
-    assert 'SOURCE_SNAPSHOT_ROOT="$(mktemp -d "${FULLMAG_CONTAINER_TARGET_DIR}/source-snapshot.XXXXXXXXXX")"' in exporter
+    assert 'materialize_root="$(mktemp -d "${FULLMAG_CONTAINER_TARGET_DIR}/source-snapshot.' in exporter
     assert '--materialize-existing-empty' in exporter
 
     function_start = exporter.index("cleanup_failed_export() {")
@@ -936,6 +937,7 @@ def test_export_keeps_identity_through_final_verify_and_publication(
                 'REPO_ROOT=/original/repo\n'
                 'source_snapshot_owned=1\n'
                 'source_identity_owned=1\n'
+                'FULLMAG_RUNTIME_PRUNE=0\n'
                 'is_canonical_source_snapshot_path() {\n'
                 '  [ "$1" = "$SOURCE_SNAPSHOT_ROOT" ] && [ -d "$1" ] && [ ! -L "$1" ]\n'
                 '}\n'
@@ -998,6 +1000,7 @@ def test_failed_nested_bootstrap_verify_cleans_owned_snapshot_without_relaunch(
         bash_function(name)
         for name in (
             "is_canonical_source_snapshot_path",
+            "is_materialized_source_snapshot_path",
             "is_canonical_source_identity_path",
             "cleanup_failed_export",
             "verify_source_snapshot_identity",
@@ -1457,6 +1460,15 @@ def test_export_can_resume_safely_without_cleaning_completed_target() -> None:
     assert "cargo +nightly clean --workspace --release" in exporter
     assert "cargo +nightly build -j \"$cargo_jobs\"" in exporter
     assert "reusing the task-specific target through Cargo freshness checks" in exporter
+
+
+def test_export_reuses_a_stable_source_snapshot_path_for_cargo_freshness() -> None:
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'source-cache.${source_snapshot_sha256}' in exporter
+    assert "source snapshot cache" in exporter
+    assert "mv \"${materialize_root}\" \"${SOURCE_SNAPSHOT_ROOT}\"" in exporter
+    assert 'materialize_root="$(mktemp -d "${FULLMAG_CONTAINER_TARGET_DIR}/source-snapshot.' in exporter
 
 
 def test_export_defaults_to_exact_persistent_build_root() -> None:
