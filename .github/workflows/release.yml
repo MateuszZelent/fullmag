@@ -235,6 +235,9 @@ jobs:
           )
           $archive = [System.IO.Compression.ZipFile]::OpenRead($archivePath)
           try {
+            $archiveEntries = @(
+              $archive.Entries | ForEach-Object { $_.FullName.Replace('\\', '/') }
+            )
             foreach ($entry in @(
               "$BUNDLE/bin/fullmag.exe",
               "$BUNDLE/bin/fullmag-api.exe",
@@ -242,7 +245,7 @@ jobs:
               "$BUNDLE/.fullmag/local/web/index.html",
               "$BUNDLE/release-manifest.json"
             )) {
-              if (-not ($archive.Entries.FullName -contains $entry)) {
+              if (-not ($archiveEntries -contains $entry)) {
                 throw "Windows release archive is missing $entry"
               }
             }

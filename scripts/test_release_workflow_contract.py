@@ -58,6 +58,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn('"$WEB\\index.html"', content)
         self.assertIn("CreateFromDirectory", content)
         self.assertNotIn('Compress-Archive -Path "$DIST"', content)
+        self.assertIn("FullName.Replace('\\\\', '/')", content)
         self.assertIn("ZipFile", content)
 
     def test_runtime_resolvers_support_packaged_install_root(self) -> None:
