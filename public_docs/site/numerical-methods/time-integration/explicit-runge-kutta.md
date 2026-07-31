@@ -111,12 +111,24 @@ body.alpha = 0.02
 body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 study.exchange()
 
-# %% Ordered physical-time stage
+# %% Solver policy and ordered physical-time stage
+study.solver(
+    integrator="rk45",
+    adaptive_timestep=fm.AdaptiveTimestep(
+        atol=1.0e-6,
+        rtol=1.0e-3,
+        dt_min=1.0e-15,
+        dt_max=1.0e-12,
+    ),
+    gamma=2.211e5,
+)
 study.stages.add_run(until=1.0e-9)
 ```
 
-For the object-level dynamics contract, use the public model object and inspect its canonical
-fragment without inventing a second simulation constructor:
+`study.solver(...)` is the canonical user-facing solver-policy call in the stage workflow. It
+lowers into the same `llg` dynamics fragment as the model object below. The object-level example
+is intentionally limited to an API/serialization assertion; it is not a second way to author or
+run a study:
 
 ```python
 # %% LLG and adaptive-policy IR fragment
@@ -143,6 +155,8 @@ assert dynamics.to_ir()["integrator"] == "rk45"
 | `AdaptiveTimestep.rtol` | `float` | `1e-3` | $1$ | non-negative; not both tolerances zero | relative error tolerance | RK23/RK45 lanes | `study.dynamics.adaptive_timestep.rtol` |
 | `AdaptiveTimestep.dt_min` | `float` | `1e-15` | $\mathrm{s}$ | positive; no larger than `dt_max` | lower step bound | RK23/RK45 lanes | `study.dynamics.adaptive_timestep.dt_min` |
 | `AdaptiveTimestep.dt_max` | `float \| None` | `None` | $\mathrm{s}$ | positive and >= `dt_min` | upper step bound | RK23/RK45 lanes | `study.dynamics.adaptive_timestep.dt_max` |
+| `StudyBuilder.solver(integrator=...)` | `str \| None` | `None` | $1$ | validated integrator name; aliases normalize | stage-workflow solver method request | FEM/FDM lanes according to planner | `study.dynamics.integrator` |
+| `StudyBuilder.solver(adaptive_timestep=...)` | `AdaptiveTimestep \| None` | `None` | $1$ | mutually exclusive with fixed/convenience controls | stage-workflow adaptive policy | RK23/RK45 lanes | `study.dynamics.adaptive_timestep` |
 
 (time-integration-explicit-runge-kutta-problem-ir)=
 ## ProblemIR and normalization
@@ -168,7 +182,7 @@ The `LLG.to_ir()` result for the object-level example is the canonical dynamics 
 }
 ```
 
-`dp54` normalizes to `rk45` and `bs23` normalizes to `rk23` before lowering. `auto` remains
+`study.solver(...)` and `LLG(...)` normalize to the same canonical dynamics node. `dp54` normalizes to `rk45` and `bs23` normalizes to `rk23` before lowering. `auto` remains
 requested intent until planner resolution; the resolved execution records the selected method,
 device, precision, and field-refresh policy as provenance.
 
@@ -235,6 +249,7 @@ separately and must not be inferred from the explicit RK page.
 |---|---|---|---|---|---|
 | Public LLG and integrator normalization | `packages/fullmag-py/src/fullmag/model/dynamics.py` | `class LLG` | validates and serializes dynamics | all public lanes | Python API tests |
 | Adaptive controller parameters | `packages/fullmag-py/src/fullmag/model/dynamics.py` | `class AdaptiveTimestep` | validates and serializes adaptive policy | RK23/RK45 | Python API tests |
+| Canonical stage-workflow solver call | `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` | exposes `study.solver(...)` and forwards to canonical world state | all public lanes | stage/API tests |
 | FEM RK stage RHS | `backends/fem/cpu/mfem/integrators/rk_stage_rhs.cpp` | `evaluate_rk_stage_rhs` | evaluates one FEM stage RHS | FEM CPU | `rk_explicit_contract.cpp` |
 | FEM explicit step | `backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp` | `context_step_explicit_rk_mfem` | advances one explicit RK step | FEM CPU | `rk_explicit_contract.cpp` |
 | FEM RK workspace implementation | `backends/fem/cpu/mfem/integrators/rk_explicit.cpp` | `stepper_workspace_allocate` | allocates reusable explicit-RK workspace | FEM CPU | native contract test |
