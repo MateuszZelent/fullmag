@@ -144,7 +144,7 @@ is no second object-constructor workflow in this page.
 (time-integration-explicit-runge-kutta-problem-ir)=
 ## ProblemIR and normalization
 
-The `LLG.to_ir()` result for the object-level example is the canonical dynamics fragment:
+The stage request above lowers to the following canonical dynamics fragment:
 
 ```json
 {

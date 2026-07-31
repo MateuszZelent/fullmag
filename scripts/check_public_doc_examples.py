@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import ast
 import re
+import sys
 from pathlib import Path
 
 
@@ -52,11 +53,45 @@ def check_public_examples(root: Path) -> list[str]:
     return errors
 
 
+def execute_public_examples(root: Path) -> list[str]:
+    """Execute every public Python block against the repository Python DSL.
+
+    This validates authoring/capture semantics only. It does not launch native
+    solver binaries or claim CPU/GPU runtime qualification.
+    """
+
+    package_src = Path(__file__).resolve().parents[1] / "packages" / "fullmag-py" / "src"
+    if str(package_src) not in sys.path:
+        sys.path.insert(0, str(package_src))
+    import fullmag as fm
+
+    errors: list[str] = []
+    for page in sorted(root.rglob("*.md")):
+        text = page.read_text(encoding="utf-8")
+        for block_index, block in enumerate(PYTHON_BLOCK_RE.findall(text), 1):
+            line = text.find(block)
+            line_number = text[:line].count("\n") + 1
+            label = f"{page}:{line_number} (python block {block_index})"
+            try:
+                fm.reset()
+                exec(compile(block, str(page), "exec"), {"__name__": "__fullmag_doc_example__"})
+            except Exception as exc:  # pragma: no cover - exercised by CLI integration
+                errors.append(f"{label}: example execution failed: {type(exc).__name__}: {exc}")
+    return errors
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path("public_docs/site"))
+    parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="also execute each Python block through the repository Python DSL",
+    )
     args = parser.parse_args()
     errors = check_public_examples(args.root.resolve())
+    if args.execute:
+        errors.extend(execute_public_examples(args.root.resolve()))
     for error in errors:
         print(f"ERROR: {error}")
     if errors:

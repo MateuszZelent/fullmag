@@ -148,8 +148,9 @@ natural boundary physics. Adding a separate identical DMI boundary term would do
 (interfacial-dmi-python-api)=
 ## Python API
 
-The complete constructor and copyable notebook examples are in
-{doc}`../../../python-api/interactions/interfacial-dmi`. The public interaction matrix is:
+The constructor and IR contract are in
+{doc}`../../../python-api/interactions/interfacial-dmi`; that page does not publish a standalone
+Python cell because the stage builder has no DMI registration method. The public interaction matrix is:
 
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |

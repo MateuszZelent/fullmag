@@ -170,9 +170,9 @@ The half-open pulse convention is fixed: the source is active at t_on and inacti
 (oersted-api-problem-ir)=
 ## Canonical ProblemIR lowering
 
-The stage-first study workflow is the executable path. The following notebook block shows the
-object-level source binding and interaction fragment that the stage capture lowers; it does not
-construct a top-level problem or start a native solver.
+The stage-first study workflow is the executable path. This page publishes the source-binding
+and interaction contract as parameter tables and IR; it does not show a disconnected constructor
+cell or claim that a native solver has started.
 
 
 For this example the interaction fragment is exactly:

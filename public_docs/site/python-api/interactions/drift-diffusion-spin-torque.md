@@ -62,7 +62,7 @@ The intended transport and torque forms are owned by the physics page:
 The current object exposes no transport coefficients, interface conditions, or solver
 policy. Only constructor validation and IR serialization are implemented. A stage-first
 simulation example is therefore not possible without inventing an unsupported registration
-method; the copyable block below intentionally inspects the object only.
+method; this page publishes no executable Python cell until that stage hook exists.
 
 (api-ddst-python-api)=
 ## Complete constructor

@@ -99,7 +99,12 @@ provide B1 and B2 directly. Isotropic lambda_s is preserved semantically, but
 current FEM planning refuses an unjustified conversion to B1 and B2.
 
 (magnetoelastic-api-python-api)=
-## Python API and copyable examples
+## Python API and stage-first availability
+
+The mechanics graph is currently documented as an API/IR contract only. The public stage builder
+does not yet register magnetoelastic bodies, loads, or couplings, so this page does not publish a
+disconnected Python constructor example. A copyable example belongs here only after a complete
+study and ordered stage workflow can execute it.
 
 
 

@@ -194,12 +194,12 @@ The interaction term selects the physical realization. The FEM hint selects the 
 solver policy. The study-universe mesh settings select the airbox geometry and grading. These are
 separate objects and all three must be recorded.
 
-### Copyable Python/Jupyter example
+### Executable stage workflow
 
-
-The example does not claim that a solver has executed. `Demag.to_ir()` and `FEM.to_ir()` perform
-authoring validation and produce requested intent. Planner resolution and runtime provenance must
-be inspected separately.
+The complete copyable FEM stage workflow is maintained on the demagnetization owner page
+{doc}`../index`. This implementation page intentionally does not duplicate a second Python
+workflow or show isolated `Demag`/`FEM` constructors. The owner-page scenario records the
+realization, mesh policy, linear solver, solver timestep policy, and ordered stage.
 
 ### `Demag` parameters
 

@@ -199,10 +199,11 @@ executable planning.
 Surface selectors are normalized to lower case. Endpoint resolution accepts a CouplingEndpoint,
 an ObjectRegion, a named object, or a string object name. The endpoint kind is preserved.
 
-### Surface coupling authoring fragment
+### Surface coupling authoring status
 
-This copyable fragment inspects the canonical lowering and does not launch a solver. It is
-the correct inspection path while surface terms remain outside the strict runtime matrix.
+Surface terms remain outside the strict runtime matrix. The JSON representation below records the
+canonical lowering; no disconnected Python constructor cell is published. Executable region
+coupling examples use the complete stage workflow above.
 
 
 (irc-problem-ir)=

@@ -95,12 +95,11 @@ The effective field used by the resolved backend is
 author `InterfacialDMI(D=...)`; the current FDM planner does not resolve `Material.Dind` or
 `Dind_field` into its scalar DMI slot.
 
-### Object-level `ProblemIR` fragments
+### Stage-first authoring status
 
-The stage builder does not currently expose a DMI registration method. This block is therefore a
-fragment inspection only; it is not the public simulation workflow and does not launch a solver.
-Use the stage boundary and capability statement on the physics owner page for the current
-executable surface.
+The stage builder does not currently expose a DMI registration method. This page therefore
+documents the constructor/IR contract and publishes no standalone Python cell. Use the stage
+boundary and capability statement on the physics owner page for the current executable surface.
 
 
 (interfacial-dmi-api-problem-ir)=
