@@ -10,7 +10,7 @@ from typing import Iterable
 
 
 PUBLIC_DOCS_ROOT = Path(__file__).resolve().parents[1] / "public_docs" / "site"
-VALID_STATUSES = frozenset({"implemented", "partial", "unsupported", "planned"})
+VALID_STATUSES = frozenset({"implemented", "partial", "semantic-only", "unsupported", "planned"})
 VALID_DOC_KINDS = frozenset({"scaffold", "reference"})
 LEGACY_NAVIGATION_PATHS = frozenset(
     {
@@ -67,15 +67,28 @@ DEMAGNETIZATION_REFERENCE_PAGES = frozenset(
 PHYSICS_REFERENCE_PAGES = frozenset(
     {
         *DEMAGNETIZATION_REFERENCE_PAGES,
+        "physics/foundations/index.md",
+        *(f"physics/foundations/{page}.md" for page in ("conventions-and-units", "micromagnetic-energy", "effective-field", "llg-equation", "boundary-conditions", "observables")),
         "physics/interactions/anisotropy/uniaxial.md",
         "physics/interactions/anisotropy/cubic.md",
+        "physics/interactions/dmi/index.md",
+        "physics/interactions/dmi/boundary-conditions.md",
         "physics/interactions/dmi/bulk.md",
         "physics/interactions/dmi/interfacial.md",
+        "physics/interactions/dmi/validation.md",
         "physics/interactions/thermal-noise/index.md",
         "physics/interactions/zeeman/index.md",
         "physics/interactions/oersted-field/index.md",
+        "physics/interactions/magnetoelastic/index.md",
+        "physics/interactions/spin-transfer-torque/index.md",
+        "physics/interactions/spin-orbit-torque/index.md",
+        "physics/interactions/drift-diffusion-spin-torque/index.md",
+        "physics/interactions/inter-region-couplings/index.md",
     }
 )
+PHYSICS_REFERENCE_STATUSES = {
+    "physics/interactions/drift-diffusion-spin-torque/index.md": "semantic-only",
+}
 DMI_SUBPAGES = (
     "interfacial",
     "bulk",
@@ -163,6 +176,21 @@ _INTERACTION_TITLES = {
     "inter-region-couplings": "Inter-Region Couplings",
 }
 REFERENCE_PAGE_TITLES = {
+    "physics/foundations/index.md": "Physics foundations",
+    "physics/foundations/conventions-and-units.md": "Conventions and units",
+    "physics/foundations/micromagnetic-energy.md": "Micromagnetic energy",
+    "physics/foundations/effective-field.md": "Effective field",
+    "physics/foundations/llg-equation.md": "Landau–Lifshitz–Gilbert equation",
+    "physics/foundations/boundary-conditions.md": "Boundary conditions",
+    "physics/foundations/observables.md": "Observables",
+    "physics/interactions/dmi/index.md": "Dzyaloshinskii–Moriya interaction",
+    "physics/interactions/dmi/boundary-conditions.md": "DMI boundary conditions",
+    "physics/interactions/dmi/validation.md": "DMI validation",
+    "physics/interactions/magnetoelastic/index.md": "Magnetoelastic interaction",
+    "physics/interactions/spin-transfer-torque/index.md": "Spin-transfer torque",
+    "physics/interactions/spin-orbit-torque/index.md": "Spin-orbit torque",
+    "physics/interactions/drift-diffusion-spin-torque/index.md": "Drift-diffusion spin torque",
+    "physics/interactions/inter-region-couplings/index.md": "Inter-region couplings",
     "physics/interactions/anisotropy/uniaxial.md": "Uniaxial anisotropy",
     "physics/interactions/anisotropy/cubic.md": "Cubic anisotropy",
     "physics/interactions/dmi/bulk.md": "Bulk Dzyaloshinskii–Moriya interaction",
@@ -184,6 +212,15 @@ REFERENCE_PAGE_TITLES = {
 }
 REFERENCE_PAGE_LABELS = {
     "physics/interactions/zeeman/index.md": "public-docs-physics-interactions-zeeman",
+    "physics/interactions/magnetoelastic/index.md": "public-docs-physics-interactions-magnetoelastic",
+    "physics/interactions/spin-transfer-torque/index.md": "public-docs-physics-interactions-stt",
+    "physics/interactions/spin-orbit-torque/index.md": "public-docs-physics-interactions-sot",
+    "physics/interactions/drift-diffusion-spin-torque/index.md": "public-docs-physics-interactions-drift-diffusion-stt",
+    "physics/interactions/inter-region-couplings/index.md": "public-docs-physics-interactions-inter-region-couplings",
+    "python-api/interactions/oersted-field.md": "oersted-api-problem-statement",
+    "python-api/interactions/spin-transfer-torque.md": "stt-api-problem-statement",
+    "python-api/interactions/spin-orbit-torque.md": "sot-api-problem-statement",
+    "python-api/interactions/magnetoelastic.md": "magnetoelastic-api-problem-statement",
 }
 
 
@@ -220,12 +257,13 @@ def _scaffold(
     scope: str,
     children: tuple[str, ...] = (),
     navigation_maxdepth: int = 1,
+    status: str = "planned",
 ) -> PageSpec:
     return PageSpec(
         path,
         title,
         _label(path),
-        "planned",
+        status,
         "scaffold",
         scope,
         children,
@@ -239,12 +277,13 @@ def _reference(
     scope: str,
     children: tuple[str, ...] = (),
     navigation_maxdepth: int = 1,
+    status: str = "partial",
 ) -> PageSpec:
     return PageSpec(
         path,
         title,
         _label(path),
-        "partial",
+        status,
         "reference",
         scope,
         children,
@@ -288,12 +327,25 @@ def _section(
     scope: str,
 ) -> tuple[PageSpec, ...]:
     children = tuple(f"{directory}/{page}.md" for page in pages)
+    index_path = f"{directory}/index.md"
+    index_title = _page_title(index_path, title)
+    index_reference = index_path in PHYSICS_REFERENCE_PAGES or index_path in PYTHON_API_REFERENCE_PAGES
     return (
-        _scaffold(f"{directory}/index.md", title, scope, children),
+        (
+            _reference(
+                index_path,
+                index_title,
+                scope,
+                children,
+                status=PHYSICS_REFERENCE_STATUSES.get(index_path, "partial"),
+            )
+            if index_reference
+            else _scaffold(index_path, index_title, scope, children)
+        ),
         *(
-            (_reference if f"{directory}/{page}.md" in PYTHON_API_REFERENCE_PAGES else _scaffold)(
+            (_reference if f"{directory}/{page}.md" in PHYSICS_REFERENCE_PAGES or f"{directory}/{page}.md" in PYTHON_API_REFERENCE_PAGES else _scaffold)(
                 f"{directory}/{page}.md",
-                _title(page),
+                _page_title(f"{directory}/{page}.md", _title(page)),
                 f"the {title.lower()} reference for {_title(page)}",
             )
             for page in pages
@@ -311,9 +363,14 @@ def _interaction_subtree(
     return (
         (_reference if f"{directory}/index.md" in PHYSICS_REFERENCE_PAGES else _scaffold)(
             f"{directory}/index.md",
-            title,
+            _page_title(f"{directory}/index.md", title),
             f"the canonical {title} interaction reference",
             children,
+            status=(
+                PHYSICS_REFERENCE_STATUSES.get(f"{directory}/index.md", "partial")
+                if f"{directory}/index.md" in PHYSICS_REFERENCE_PAGES
+                else "planned"
+            ),
         ),
         *(
             (_reference if f"{directory}/{subpage}.md" in PHYSICS_REFERENCE_PAGES else _scaffold)(
@@ -414,7 +471,7 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
             "physics/geometry-and-materials.md",
         ),
     ),
-    *_section("physics/foundations", "Physics Foundations", ("conventions-and-units", "micromagnetic-energy", "effective-field", "llg-equation", "boundary-conditions", "observables"), "the physics foundations reference"),
+    *_section("physics/foundations", "Physics foundations", ("conventions-and-units", "micromagnetic-energy", "effective-field", "llg-equation", "boundary-conditions", "observables"), "the physics foundations reference"),
     _scaffold(
         "physics/interactions/index.md",
         "Physical Interactions",
@@ -435,10 +492,15 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     *_interaction_subtree("anisotropy", "Anisotropy", ANISOTROPY_SUBPAGES),
     *_interaction_subtree("dmi", "DMI", DMI_SUBPAGES),
     *(
-        (_reference if f"physics/interactions/{slug}/index.md" in PHYSICS_REFERENCE_PAGES else _scaffold)(
+            (_reference if f"physics/interactions/{slug}/index.md" in PHYSICS_REFERENCE_PAGES else _scaffold)(
             f"physics/interactions/{slug}/index.md",
             _page_title(f"physics/interactions/{slug}/index.md", _INTERACTION_TITLES[slug]),
             f"the canonical {_INTERACTION_TITLES[slug]} interaction reference",
+            status=(
+                PHYSICS_REFERENCE_STATUSES.get(f"physics/interactions/{slug}/index.md", "partial")
+                if f"physics/interactions/{slug}/index.md" in PHYSICS_REFERENCE_PAGES
+                else "planned"
+            ),
         )
         for slug in INTERACTION_SLUGS
         if slug not in {"exchange", "demagnetization", "anisotropy", "dmi"}
