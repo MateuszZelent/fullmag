@@ -207,80 +207,35 @@ study.stages.add_run(stage_id="run", until=1.0e-12)
 Do not add a disconnected torque object to this example and call it an executable STT run. The
 missing builder registration is a current API boundary and is recorded as such below.
 
-### Low-level snapshot: Slonczewski STT
+### Object-level Slonczewski STT contract
 
 ```python
-# %% Imports
+# %% Slonczewski STT object fragment; no solver is launched here.
 import fullmag as fm
 
-nm = 1e-9
-
-# %% Slonczewski STT for MTJ nanopillar
-problem = fm.Problem(
-    name="mtj_switching",
-    magnets=[
-        fm.Ferromagnet(
-            name="free_layer",
-            geometry=fm.Box(size=(100 * nm, 100 * nm, 2 * nm)),
-            material=fm.Material(name="CoFeB", Ms=1.2e6, A=15e-12, alpha=0.01),
-            m0=fm.texture.uniform((1.0, 0.0, 0.0)),
-        ),
-    ],
-    energy=[fm.Exchange(), fm.Demag()],
-    spin_torques=[
-        fm.SlonczewskiSTT(
-            current_density=(0, 0, 1e10),      # J = 10^10 A/m², along +z
-            spin_polarization=(1.0, 0.0, 0.0), # fixed layer along +x
-            degree=0.4,                         # P = 0.4
-            lambda_asymmetry=1.0,               # Λ = 1 (symmetric)
-            epsilon_prime=0.0,                   # no field-like STT
-            fixed_layer_position="top",          # electrons flow upward
-        ),
-    ],
-    study=fm.TimeEvolution(
-        dynamics=fm.LLG(),
-        outputs=[fm.SaveField("m", every=1.0e-12)],
-    ),
-    discretization=fm.DiscretizationHints(
-        fdm=fm.FDM(cell=(2 * nm, 2 * nm, 2 * nm)),
-    ),
+slonczewski = fm.SlonczewskiSTT(
+    current_density=(0, 0, 1e10),      # J = 10^10 A/m², along +z
+    spin_polarization=(1.0, 0.0, 0.0),  # fixed layer along +x
+    degree=0.4,                          # P = 0.4
+    lambda_asymmetry=1.0,                # Λ = 1 (symmetric)
+    epsilon_prime=0.0,                   # no field-like STT
+    fixed_layer_position="top",          # electrons flow upward
 )
+print(slonczewski.to_ir_module())
 ```
 
-### Low-level snapshot: Zhang–Li STT
+### Object-level Zhang–Li STT contract
 
 ```python
-# %% Zhang-Li STT for domain-wall track
+# %% Zhang-Li STT object fragment; no solver is launched here.
 import fullmag as fm
 
-nm = 1.0e-9
-
-problem = fm.Problem(
-    name="dw_track",
-    magnets=[
-        fm.Ferromagnet(
-            name="wire",
-            geometry=fm.Box(size=(1000 * nm, 60 * nm, 5 * nm)),
-            material=fm.Material(name="Permalloy", Ms=800e3, A=13e-12, alpha=0.01),
-            m0=fm.texture.uniform((1.0, 0.0, 0.0)),
-        ),
-    ],
-    energy=[fm.Exchange(), fm.Demag()],
-    spin_torques=[
-        fm.ZhangLiSTT(
-            current_density=(5e11, 0, 0),   # J along +x
-            degree=0.4,                     # P = 0.4
-            beta=0.02,                      # non-adiabaticity
-        ),
-    ],
-    study=fm.TimeEvolution(
-        dynamics=fm.LLG(),
-        outputs=[fm.SaveField("m", every=1.0e-12)],
-    ),
-    discretization=fm.DiscretizationHints(
-        fdm=fm.FDM(cell=(2 * nm, 2 * nm, 1 * nm)),
-    ),
+zhang_li = fm.ZhangLiSTT(
+    current_density=(5e11, 0, 0),  # J along +x
+    degree=0.4,                     # P = 0.4
+    beta=0.02,                      # non-adiabaticity
 )
+print(zhang_li.to_ir_module())
 ```
 
 ### Exhaustive parameter reference — SlonczewskiSTT

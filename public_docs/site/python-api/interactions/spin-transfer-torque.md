@@ -167,49 +167,27 @@ future planner can reject or qualify the model instead of silently replacing it 
 ### SlonczewskiSTT
 
 ```python
-# %% Slonczewski source-bound problem
+# %% Slonczewski source-bound object fragments; no solver is launched here.
 import json
 import fullmag as fm
 
 nm = 1.0e-9
-material = fm.Material(
-    name="CoFeB",
-    Ms=1.2e6,
-    A=15.0e-12,
-    alpha=0.01,
-)
-magnet = fm.Ferromagnet(
-    name="free_layer",
-    geometry=fm.Box(size=(100 * nm, 100 * nm, 2 * nm), name="free_layer"),
-    material=material,
-    m0=fm.texture.uniform((1.0, 0.0, 0.0)),
-)
 drive = fm.CurrentTransport(
     name="cpp_drive",
     model="prescribed_density",
     current_density=(0.0, 0.0, 1.0e10),
     solve_region="free_layer",
 )
-problem = fm.Problem(
-    name="stt_api_slonczewski",
-    magnets=[magnet],
-    energy=[fm.Exchange(), fm.Demag()],
-    spin_torques=[
-        fm.SlonczewskiSTT(
-            current_source="cpp_drive",
-            spin_polarization=(1.0, 0.0, 0.0),
-            degree=0.4,
-            lambda_asymmetry=1.0,
-            epsilon_prime=0.0,
-            free_layer_thickness_m=2.0 * nm,
-            fixed_layer_position="top",
-        ),
-    ],
-    current_modules=[drive],
-    study=fm.TimeEvolution(dynamics=fm.LLG(), outputs=[]),
+term = fm.SlonczewskiSTT(
+    current_source="cpp_drive",
+    spin_polarization=(1.0, 0.0, 0.0),
+    degree=0.4,
+    lambda_asymmetry=1.0,
+    epsilon_prime=0.0,
+    free_layer_thickness_m=2.0 * nm,
+    fixed_layer_position="top",
 )
-problem_ir = problem.to_ir(include_geometry_assets=False)
-assert problem_ir["spin_torque_modules"] == [{
+assert term.to_ir_module() == {
     "kind": "slonczewski",
     "current_source": "cpp_drive",
     "spin_polarization": [1.0, 0.0, 0.0],
@@ -218,10 +196,10 @@ assert problem_ir["spin_torque_modules"] == [{
     "epsilon_prime": 0.0,
     "free_layer_thickness_m": 2.0 * nm,
     "fixed_layer_position": "top",
-}]
-assert problem_ir["current_modules"][0]["model"] == "prescribed_density"
-assert problem_ir["current_modules"][0]["current_density"] == [0.0, 0.0, 1.0e10]
-print(json.dumps(problem_ir, indent=2))
+}
+assert drive.to_ir()["model"] == "prescribed_density"
+assert drive.to_ir()["current_density"] == [0.0, 0.0, 1.0e10]
+print(json.dumps({"current_module": drive.to_ir(), "spin_torque": term.to_ir_module()}, indent=2))
 ```
 
 ### ZhangLiSTT
