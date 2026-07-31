@@ -10,6 +10,29 @@ source_of_truth: docs/physics/0600-periodic-boundary-conditions.md
 (public-docs-physics-foundations-boundary-conditions)=
 # Boundary conditions
 
+(boundary-conditions-problem-statement)=
+## Problem statement
+
+Boundary conditions close the variational or finite-difference problem at every physical and
+auxiliary-field boundary. FullMag keeps the physical boundary law, discretisation realization,
+selected backend, and resolved boundary markers distinct. A periodic magnetization seam, a natural
+exchange boundary, a DMI surface law, and an FEM airbox closure are different contracts.
+
+(boundary-conditions-governing-equations)=
+## Governing equations
+
+The free exchange surface law, periodic identification, and airbox closure are represented by
+
+```{math}
+:label: eq-boundary-conditions-contract
+A\,\partial_n\mathbf m + D\,\mathbf n\times\mathbf m=\mathbf 0,
+\qquad \mathbf m(\mathbf r+L_d\hat{\mathbf e}_d)=\mathbf m(\mathbf r),
+\qquad \partial_n u+\beta u=0\;\text{on }\partial\Omega_{\mathrm{air}}.
+```
+
+The DMI term is present only for the corresponding interfacial realization and $\beta$ is the
+resolved Robin coefficient. A Dirichlet airbox closure $u=0$ is a different discrete problem.
+
 Boundary conditions define how the magnetization and auxiliary fields (scalar potential,
 displacement) behave at the edges of the computational domain. FullMag implements
 several boundary-condition types, each owned by the relevant interaction or solver module.
@@ -131,6 +154,7 @@ boundary conditions:
 
 See {doc}`../interactions/magnetoelastic/index` for details.
 
+(boundary-conditions-symbols-and-si-units)=
 ## Symbols and SI units
 
 | Symbol | Definition | SI unit |
@@ -144,7 +168,10 @@ See {doc}`../interactions/magnetoelastic/index` for details.
 | $r$ | distance from magnetic body centre | $\mathrm{m}$ |
 | $\mathbf{u}$ | elastic displacement | $\mathrm{m}$ |
 | $\boldsymbol{\sigma}$ | stress tensor | $\mathrm{Pa}$ |
+| $\mathbf{m}$ | reduced magnetization | $1$ |
+| $\beta$ | Robin boundary coefficient | $\mathrm{m^{-1}}$ |
 
+(boundary-conditions-scientific-bibliography)=
 ## Scientific bibliography
 
 1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers, New York, 1963.
@@ -153,3 +180,107 @@ See {doc}`../interactions/magnetoelastic/index` for details.
    (2013). [doi:10.1103/PhysRevB.88.184422](https://doi.org/10.1103/PhysRevB.88.184422).
 3. D. R. Fredkin and T. R. Koehler, "Hybrid method for computing demagnetizing fields,"
    *IEEE Trans. Magn.* **26**(2), 415 (1990).
+
+(boundary-conditions-assumptions-and-validity)=
+## Assumptions and validity
+
+- Normals are outward normals of the resolved physical boundary marker, not of an arbitrary mesh
+  face selected after meshing.
+- PBC pairs must be complete, orientation-consistent, and compatible with the selected mesh.
+- Natural FEM conditions arise from the weak form; they are not interchangeable with strong nodal
+  clamps.
+- Dirichlet and Robin demagnetization closures require separate convergence studies.
+
+(boundary-conditions-python-api)=
+## Python API
+
+The stage-first declaration records periodic axes and the demagnetization boundary policy. The
+interaction-specific pages own the detailed parameter contracts.
+
+| Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `PeriodicBC.axes` | `tuple[bool, bool, bool]` | required | $1$ | exactly three boolean axes | periodic directions | FDM and FEM planners subject to mesh support | `pbc.axes` |
+| `PeriodicBC.demag` | `str` | `open` | $1$ | supported demagnetization policy | closure for periodic demag | FDM/FEM lane-dependent | `pbc.demag` |
+| `study.pbc(...)` | callable | — | $1$ | rejects incomplete or incompatible pairs | stage-first periodicity request | public authoring surface | `pbc` |
+
+(boundary-conditions-problem-ir)=
+## Canonical ProblemIR
+
+```json
+{
+  "pbc": {
+    "axes": ["periodic", "periodic", "open"],
+    "demag": "open"
+  }
+}
+```
+
+The request is distinct from resolved periodic node pairs, boundary markers, gauge constraints,
+and the backend-specific operator. Those are recorded in the resolved plan and provenance.
+
+(boundary-conditions-round-trip-and-failure-semantics)=
+## Round-trip and failure semantics
+
+Requested intent includes axis policy, demag closure, and mechanical boundary choice. Resolved execution
+includes paired nodes/faces, operator reduction, boundary marker, solver, device, and
+precision. Validation errors cover malformed axes, incomplete pairs, incompatible periodic mesh
+topology, and conflicting strong/natural conditions. Unsupported combinations fail closed; no
+periodicity or boundary law is silently dropped.
+
+(boundary-conditions-discrete-realization)=
+## Discrete realization
+
+### FDM CPU
+
+Periodic neighbors are wrapped by the canonical neighbor-index policy; open faces use the selected
+finite-difference closure.
+
+### FDM GPU
+
+The CUDA lane must use the same resolved boundary policy and pair ordering as the CPU reference;
+device parity is not established by source inspection alone.
+
+### FEM CPU
+
+Periodic constraints reduce the finite-element system through explicit node/face pairing. Natural
+exchange/DMI terms enter the weak residual, while essential constraints are applied to the reduced
+space.
+
+### FEM GPU
+
+The GPU realization must preserve reduced-space ordering, boundary markers, gauge treatment, and
+device transfer provenance. Host assembly is not itself GPU qualification.
+
+(boundary-conditions-implementation-mapping)=
+## Implementation mapping
+
+Python owns the requested policy, the planner resolves legality and pairs, FDM owns wrapped
+neighbors, and FEM owns weak-form/constraint realization. Demagnetization-specific closures remain
+under the demagnetization subtree.
+
+(boundary-conditions-validation)=
+## Validation
+
+Validate pair completeness and residuals, zero exchange flux on free surfaces, DMI boundary
+variation, periodic seam equality, gauge/airbox convergence, FEM reduced-system consistency, FDM
+CPU/GPU parity, and CPU/GPU device identity. Compare Dirichlet and Robin demag only as separate
+qualification cases.
+
+(boundary-conditions-limitations)=
+## Limitations
+
+Not every combination of periodicity, FEM airbox, DMI, and mechanical constraints is executable.
+The planner status is authoritative for a concrete request; this shared page does not promote a
+planned combination to implemented status.
+
+(boundary-conditions-source-code-index)=
+## Source-code index
+
+| Responsibility | Repository path | Stable symbol |
+|---|---|---|
+| Periodic Python contract | `packages/fullmag-py/src/fullmag/model/study.py` | `PeriodicBC` |
+| Stage-first declaration | `packages/fullmag-py/src/fullmag/world.py` | `study` |
+| FDM neighbor policy | `crates/fullmag-engine/src/fdm/shared/types.rs` | `neighbor_index` |
+| FEM periodic reduction | `backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp` | `apply_periodic_consistent_mass_component` |
+| FEM interfacial DMI boundary field | `backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp` | `compute_interfacial_dmi_field` |
+| FEM demag closure | `backends/fem/cpu/mfem/interactions/demag.hpp` | `compute_demag_field_for_magnetization` |

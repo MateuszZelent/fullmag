@@ -1,0 +1,42 @@
+{
+  "document": {
+    "path": "public_docs/site/physics/foundations/observables.md",
+    "title": "Observable contracts",
+    "scope": "field and scalar observables, sampling, materialisation, and reductions"
+  },
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Host cell-field and scalar reduction reference lane."},
+    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "CUDA field/reduction paths exist; executed-device qualification is separate evidence."},
+    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "Native nodal field extraction and scalar reduction paths exist."},
+    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "Device field and reduction paths exist; transfer and device identity remain qualification evidence."}
+  ],
+  "sources": [
+    {"id": "observables-python-study", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "study", "responsibility": "Stage-first study capture and output ownership."},
+    {"id": "observables-python-table", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class TableAutosave", "responsibility": "Scalar table cadence and quantity validation."},
+    {"id": "observables-python-field", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class FieldAutosave", "responsibility": "Field output cadence and field-name validation."},
+    {"id": "observables-planner", "path": "crates/fullmag-plan/src/validate.rs", "symbol": "validate_executable_outputs", "responsibility": "Fail-closed output legality and interaction prerequisites."},
+    {"id": "observables-quantity-registry", "path": "crates/fullmag-quantities/src/registry.rs", "symbol": "evaluate_by_name", "responsibility": "Named quantity lookup and evaluation dispatch."},
+    {"id": "observables-fem-state", "path": "backends/fem/cpu/mfem/runtime/state_io.cpp", "symbol": "context_copy_field_f64", "responsibility": "FEM observable field extraction and transfer accounting."}
+  ],
+  "symbols": [
+    {"id": "Qn", "latex": "$Q_n$", "meaning": "sampled observable at accepted state $n$", "si_unit": "$1$"},
+    {"id": "Etotal", "latex": "$E_{\\mathrm{total}}$", "meaning": "total magnetic energy", "si_unit": "$\\mathrm{J}$"},
+    {"id": "Ek", "latex": "$E_k$", "meaning": "energy contribution of interaction $k$", "si_unit": "$\\mathrm{J}$"},
+    {"id": "wi", "latex": "$w_i$", "meaning": "discrete integration/reduction weight", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "qi", "latex": "$q_i$", "meaning": "local scalar density or contribution", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
+    {"id": "N", "latex": "$N$", "meaning": "number of active discrete locations", "si_unit": "$1$"},
+    {"id": "tn", "latex": "$t_n$", "meaning": "accepted physical time", "si_unit": "$\\mathrm{s}$"}
+  ],
+  "equations": [
+    {"id": "eq-observables-total-energy", "symbols": ["Etotal", "Ek", "Qn"], "sources": ["observables-quantity-registry", "observables-planner"]},
+    {"id": "eq-observables-volume-reduction", "symbols": ["Qn", "wi", "qi", "N"], "sources": ["observables-quantity-registry", "observables-fem-state"]}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "TableAutosave.every_steps", "type": "int | None", "default": "None", "si_unit": "$1$", "validation": "positive integer; exclusive with `t_sampl`", "meaning": "accepted-step cadence for scalar rows", "backend_support": "FDM/FEM CPU/GPU where table autosave is materialised", "problem_ir": "study.sampling.outputs[].every_steps"},
+      {"python": "TableAutosave.quantities", "type": "Sequence[str] | None", "default": "default registry", "si_unit": "$1$", "validation": "every name must be a supported scalar quantity", "meaning": "scalar columns to evaluate", "backend_support": "FDM/FEM CPU/GPU subject to quantity availability", "problem_ir": "study.sampling.outputs[].quantities"},
+      {"python": "FieldAutosave.quantity", "type": "str", "default": "required", "si_unit": "$1$", "validation": "known field identifier", "meaning": "spatial field to write", "backend_support": "lane-dependent; planner rejects unavailable fields", "problem_ir": "study.sampling.outputs[].name"},
+      {"python": "FieldAutosave.every_steps", "type": "int | None", "default": "None", "si_unit": "$1$", "validation": "positive integer; exclusive with `every`", "meaning": "accepted-step field cadence", "backend_support": "FDM/FEM CPU/GPU where the field is materialised", "problem_ir": "study.sampling.outputs[].every_steps"}
+    ]
+  }
+}

@@ -14,6 +14,10 @@ from validate_scientific_docs import validate_page
 
 SCIENTIFIC_ROOTS = ("docs/physics", "public_docs/site/physics")
 EXEMPT_NAMES = {"README.md", "index.md"}
+EXEMPT_PATHS = {
+    # Governance for authoring physics notes, not a physical/numerical model note.
+    "docs/physics/0000-physics-documentation-standard.md",
+}
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
@@ -164,6 +168,8 @@ def validate_changed(repo: Path, base: str, head: str) -> list[str]:
     errors: list[str] = []
 
     for path in changed:
+        if path in EXEMPT_PATHS:
+            continue
         if _is_scientific_page(path):
             manifest = _manifest_for(path)
             if _exists(repo, head, path):
