@@ -12,7 +12,7 @@ source_of_truth: docs/physics/0870-oersted-field.md
 
 This page is the complete Python authoring reference for Oersted field sources. The physical
 equations, assumptions, and FDM/FEM realization comparison are owned by
-{doc}\`../../physics/interactions/oersted-field\`. This page owns constructor signatures,
+{doc}`../../physics/interactions/oersted-field/index`. This page owns constructor signatures,
 parameter validation, Python-to-ProblemIR normalization, output requests, and failure semantics.
 
 The API has two distinct requested intents:
@@ -28,27 +28,41 @@ The API has two distinct requested intents:
 The Python objects do not implement a second physical law. They lower to the canonical equations
 on the physics page. The API-facing field contribution is
 
-\`\`\`{math}
+```{math}
 :label: eq-oersted-api-field
 \mathbf H_{\mathrm{eff}}(\mathbf x,t)
 =\mathbf H_{\mathrm{det}}(\mathbf x,t)+\mathbf H_{\mathrm{oe}}(\mathbf x,t).
-\`\`\`
+```
 
 The direct cylinder request is represented by
 
-\`\`\`{math}
+```{math}
 :label: eq-oersted-api-ir-cylinder
 \mathrm{IR}_{\mathrm{oe,cyl}}
-=\{\texttt{kind}:\texttt{"oersted_cylinder"},\n+\texttt{current}:I_0,\n+\texttt{radius}:R,\n+\texttt{center}:\mathbf c,\n+\texttt{axis}:\hat{\mathbf a}\}.
-\`\`\`
+=\left\{
+\begin{aligned}
+&\texttt{kind}:\texttt{"oersted_cylinder"},\\
+&\texttt{current}:I_0,\\
+&\texttt{radius}:R,\\
+&\texttt{center}:\mathbf c,\\
+&\texttt{axis}:\hat{\mathbf a}
+\end{aligned}
+\right\}.
+```
 
 The source-bound request is represented by
 
-\`\`\`{math}
+```{math}
 :label: eq-oersted-api-ir-source
 \mathrm{IR}_{\mathrm{oe,src}}
-=\{\texttt{kind}:\texttt{"oersted_field"},\n+\texttt{model}:\texttt{"from_current_solution"},\n+\texttt{source}:s\}.
-\`\`\`
+=\left\{
+\begin{aligned}
+&\texttt{kind}:\texttt{"oersted_field"},\\
+&\texttt{model}:\texttt{"from_current_solution"},\\
+&\texttt{source}:s
+\end{aligned}
+\right\}.
+```
 
 These records contain requested semantics only. CPU/GPU, precision, source discretization,
 realized field values, and qualification evidence are resolved after lowering.
@@ -63,11 +77,14 @@ realized field values, and qualification evidence are resolved after lowering.
 | $\mathbf H_{\mathrm{oe}}$ | Oersted field contribution | $\mathrm{A\,m^{-1}}$ |
 | $\mathrm{IR}_{\mathrm{oe,cyl}}$ | canonical ProblemIR cylinder fragment | $1$ |
 | $\mathrm{IR}_{\mathrm{oe,src}}$ | canonical ProblemIR source-bound fragment | $1$ |
+| $\mathrm{IR}_{\mathrm{cyl}}$ | direct OerstedCylinder ProblemIR record | $1$ |
+| $\mathrm{IR}_{\mathrm{src}}$ | source-bound OerstedField ProblemIR record | $1$ |
 | $I_0$ | analytic-cylinder current amplitude | $\mathrm{A}$ |
 | $R$ | analytic-cylinder radius | $\mathrm{m}$ |
 | $\mathbf c$ | cylinder centre | $\mathrm{m}$ |
 | $\hat{\mathbf a}$ | cylinder current-flow axis | $1$ |
 | $s$ | name of the current source module | $1$ |
+| $s_{\mathrm{name}}$ | serialized current-source name in the IR reference | $1$ |
 | $\mathbf J$ | prescribed current density in CurrentTransport | $\mathrm{A\,m^{-2}}$ |
 
 (oersted-api-assumptions-and-validity)=
@@ -92,7 +109,7 @@ realized field values, and qualification evidence are resolved after lowering.
 
 OerstedCylinder is a frozen dataclass. Its constructor is:
 
-\`\`\`python
+```python
 # %% Direct analytic-cylinder object
 import fullmag as fm
 
@@ -109,7 +126,7 @@ term = fm.OerstedCylinder(
 )
 assert term.to_ir()["kind"] == "oersted_cylinder"
 print(term.to_ir())
-\`\`\`
+```
 
 The signed current controls field chirality. The Python constructor requires a positive radius,
 accepts exactly three values for center and axis, and stores the values as tuples. It does not
@@ -120,7 +137,7 @@ normalization boundary.
 
 OerstedField binds to a named CurrentTransport:
 
-\`\`\`python
+```python
 # %% Source-bound object
 import fullmag as fm
 
@@ -141,7 +158,7 @@ assert term.to_ir() == {
 }
 print(source.to_ir())
 print(term.to_ir())
-\`\`\`
+```
 
 The Python object stores only the source name. It does not copy current density, geometry, mesh,
 or a computed field into the energy term. Problem validation checks that the source name refers to
@@ -189,3 +206,269 @@ The half-open pulse convention is fixed: the source is active at t_on and inacti
 | CurrentTransport.solve_region | str or None | None | $1$ | non-empty when supplied; required by from_current_solution | geometry or region used as current source | FDM/FEM source-bound path | current_modules[].solve_region |
 | CurrentTransport.conductivity_s_per_m | float or None | None | $\mathrm{S\,m^{-1}}$ | finite and positive when supplied | conductivity metadata for transport | not used by prescribed-density Oersted lowering | current_modules[].conductivity_s_per_m |
 | SaveField("H_oe", every=...) | field request | — | $\mathrm{A\,m^{-1}}$ | requires one Oersted term and a lane that materializes H_oe | sampled realized Oersted field | planner/lane-dependent | study.sampling.outputs[] |
+
+(oersted-api-problem-ir)=
+## Canonical ProblemIR lowering
+
+The following complete example is intentionally executable as a notebook-style Python block. It
+creates a magnetic object, a prescribed current module, a source-bound Oersted term, and an
+`H_oe` output request. `Problem.to_ir()` lowers the authored request; it does not start a native
+solver or claim that a selected backend has passed qualification.
+
+```python
+# %% Imports and SI constants
+import json
+import fullmag as fm
+
+nm = 1.0e-9
+ps = 1.0e-12
+
+# %% Geometry, material, and initial state
+material = fm.Material(
+    name="Permalloy",
+    Ms=800.0e3,       # A/m
+    A=13.0e-12,       # J/m
+    alpha=0.01,
+)
+magnet = fm.Ferromagnet(
+    name="pillar",
+    geometry=fm.Box(size=(100 * nm, 100 * nm, 20 * nm), name="pillar"),
+    material=material,
+    m0=fm.texture.uniform((1.0, 0.0, 0.0)),
+)
+
+# %% Current source and Oersted interaction
+drive = fm.CurrentTransport(
+    name="drive",
+    model="prescribed_density",
+    current_density=(0.0, 0.0, 5.0e10),  # A/m^2
+    solve_region="pillar",
+)
+problem = fm.Problem(
+    name="oersted_api_example",
+    magnets=[magnet],
+    energy=[fm.OerstedField(source="drive")],
+    current_modules=[drive],
+    study=fm.TimeEvolution(
+        dynamics=fm.LLG(),
+        outputs=[fm.SaveField("H_oe", every=1 * ps)],
+    ),
+)
+
+# %% Canonical lowering and contract assertions
+problem_ir = problem.to_ir(include_geometry_assets=False)
+assert problem_ir["energy_terms"] == [{
+    "kind": "oersted_field",
+    "model": "from_current_solution",
+    "source": "drive",
+}]
+assert problem_ir["current_modules"][0]["name"] == "drive"
+assert problem_ir["current_modules"][0]["model"] == "prescribed_density"
+assert problem_ir["current_modules"][0]["current_density"] == [0.0, 0.0, 5.0e10]
+assert any(
+    output.get("name") == "H_oe"
+    for output in problem_ir["study"]["sampling"]["outputs"]
+)
+print(json.dumps(problem_ir, indent=2))
+```
+
+For this example the interaction fragment is exactly:
+
+```json
+{
+  "kind": "oersted_field",
+  "model": "from_current_solution",
+  "source": "drive"
+}
+```
+
+The source module is a separate IR object and remains separate deliberately:
+
+```json
+{
+  "kind": "current_transport",
+  "name": "drive",
+  "model": "prescribed_density",
+  "current_density": [0.0, 0.0, 5.0e10],
+  "solve_region": "pillar"
+}
+```
+
+| Python authoring value | Canonical IR destination | Normalization and consequence |
+|---|---|---|
+| `OerstedField(source="drive")` | `energy_terms[].kind`, `.model`, `.source` | preserves the named source binding; it does not embed a computed field |
+| `CurrentTransport.name` | `current_modules[].name` | provides the reference key used by the Oersted term |
+| `CurrentTransport.model` | `current_modules[].model` | preserves `prescribed_density` or `ohmic_poisson` |
+| `CurrentTransport.current_density` | `current_modules[].current_density` | serializes a three-component SI vector in A/m² |
+| `CurrentTransport.solve_region` | `current_modules[].solve_region` | identifies the source region needed by planning |
+| `CurrentTransport.conductivity_s_per_m` | `current_modules[].conductivity_s_per_m` | optional SI conductivity metadata; it is not invented for prescribed density |
+| `OerstedCylinder(...)` | `energy_terms[].kind`, `.current`, `.radius`, `.center`, `.axis` | keeps the analytic request backend-neutral; native discretization is resolved later |
+| `time_dependence` | `energy_terms[].time_dependence` | serializes the envelope kind and its resolved parameters |
+| `SaveField("H_oe", every=...)` | `study.sampling.outputs[]` | requests materialization of the realized Oersted field, not merely the source current |
+
+(oersted-api-round-trip-and-failure-semantics)=
+## Round-trip, planning, and failure semantics
+
+Requested intent consists of the Python class, SI values, source name, current-transport model,
+time envelope, output request, and any authored geometry/region identifiers. Resolved execution is
+separate: it contains the selected FDM or FEM lane, CPU or GPU device, precision, mesh, analytic or
+midpoint realization, source-cell count, output materialization, and qualification evidence. A
+canonical export must preserve requested intent even when the planner rejects the requested lane;
+it must not rewrite `OerstedField` into `OerstedCylinder` or silently select a CPU fallback.
+
+Validation errors happen before native execution. The relevant classes are:
+
+| Stage | Failure | Required behavior |
+|---|---|---|
+| Python constructor | empty source, unsupported model, non-positive radius, malformed vector, or invalid envelope | raise a deterministic `TypeError` or `ValueError`; do not create a plausible partial object |
+| Problem construction | duplicate current-module names or a term referring to an absent source | reject the inconsistent object graph |
+| ProblemIR validation | non-finite current/vector, zero axis, more than one Oersted term, or an absent source record | fail closed in `validate_oersted_energy_terms` |
+| Planner | missing source `solve_region`, non-cylindrical exact-cylinder geometry, transverse current component, unsupported envelope, or FDM active-source limit | return an explicit unsupported/error decision with the reason |
+| Runtime | missing native field materialization or failed device transfer | fail the run and preserve provenance; never report a CPU result as GPU execution |
+
+The Python constructor can represent values whose selected lane cannot execute. These unsupported
+combinations are reported by planning rather than silently rewritten. The planner reports
+unsupported combinations explicitly. In particular,
+`ohmic_poisson` is a valid current-transport model at the Python/IR boundary but is not currently
+an executable Oersted source in the planner. `PiecewiseLinear` and `SincPulse` follow the same
+representable-but-not-currently-plannable distinction. This is intentional: serialization preserves
+the user's model, while planning reports the exact capability gap.
+
+(oersted-api-discrete-realization)=
+## Discrete realization and backend matrix
+
+The analytic cylinder and source-bound field are one physical contract with four distinct numerical
+realizations. The Python API does not duplicate the equations for each device.
+
+### FDM CPU
+
+The FDM CPU lane adds the analytic cylinder field at cell centres through the implementation
+identified by `oersted_field_add_into`. For a source-bound request, the planner may either reduce a
+uniform cylindrical current to the analytic closed form or construct a regularized midpoint
+Biot–Savart field over source cells. The cell-centre geometry, active-source selection, and source
+volume therefore affect the discrete values. This lane is the scalar/reference realization, not a
+promise that every generalized source has a continuum-exact solution.
+
+### FDM GPU
+
+The CUDA lane precomputes a unit-current basis through `context_precompute_oersted_field` and then
+scales or uploads that basis during execution. The native CUDA analytic-cylinder gate currently
+requires the axis `[0, 0, 1]`, and the CUDA cylinder path accepts only `None` or `Constant()` time
+dependence. A generalized midpoint path is subject to its active-source-cell limit and to
+executed-device parity evidence. A compiled CUDA kernel is not itself proof of GPU qualification.
+
+### FEM CPU
+
+The FEM CPU lane can build an analytic-cylinder nodal basis through
+`initialize_oersted_cylinder_field`, dispatch it through `add_oersted_field`, or add an already
+resolved generalized field through `add_explicit_oersted_field`. The latter must not rescale a
+generalized field as though it were an analytic cylinder. Source-element centroids and equivalent
+volumes define the regularized midpoint approximation for the generalized path.
+
+### FEM GPU
+
+The FEM CUDA lane accumulates the realized field at Runge–Kutta stage time through
+`gpu_rk_accumulate_oersted_field`. Host-side planning and field construction remain distinct from
+device execution; field values, snapshots, transfer identity, and parity must be recorded before
+the lane is called qualified. The common Python/IR representation is the same as FEM CPU, but the
+native accumulation and evidence boundary are not.
+
+| Solver | CPU | GPU |
+|---|---|---|
+| FDM | analytic cylinder and regularized midpoint cell-centre reference paths; generalized convergence remains partial | CUDA unit-current basis and generalized upload paths; axis/envelope gates and executed-device parity remain explicit |
+| FEM | MFEM nodal analytic basis plus explicit generalized field path; midpoint quadrature uses element volume regularization | CUDA stage accumulation of the resolved field; native device evidence is required |
+
+(oersted-api-implementation-mapping)=
+## Implementation mapping
+
+The source identity is a repository path plus a stable declaration symbol. This is deliberately
+dynamic: documentation remains valid when code is inserted and line numbers move. The source-code
+index at the end of this page repeats every claim used above.
+
+| API or claim | Repository path | Stable symbol | Responsibility |
+|---|---|---|---|
+| analytic-cylinder constructor and IR | `packages/fullmag-py/src/fullmag/model/energy.py` | `class OerstedCylinder` | validates constructor data and serializes the analytic request |
+| source-bound constructor and IR | `packages/fullmag-py/src/fullmag/model/energy.py` | `class OerstedField` | validates model/source and serializes the source binding |
+| current envelope | `packages/fullmag-py/src/fullmag/model/energy.py` | `class Sinusoidal` | validates and serializes sinusoidal time dependence |
+| current source | `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class CurrentTransport` | validates source model, density, region, and conductivity |
+| ProblemIR gate | `crates/fullmag-ir/src/validation.rs` | `validate_oersted_energy_terms` | validates finite values, axis, source identity, and term count |
+| common planner | `crates/fullmag-plan/src/oersted.rs` | `resolve_oersted_term` | dispatches analytic and source-bound requests |
+| FEM planner | `crates/fullmag-plan/src/oersted.rs` | `resolve_fem_oersted_term` | selects FEM analytic or generalized realization |
+| FDM planner | `crates/fullmag-plan/src/oersted.rs` | `resolve_fdm_oersted_term` | selects FDM analytic or generalized realization |
+| FEM midpoint quadrature | `crates/fullmag-plan/src/oersted.rs` | `midpoint_biot_savart_field` | tet4 centroid quadrature and equivalent-volume regularization |
+| FDM midpoint quadrature | `crates/fullmag-plan/src/oersted.rs` | `midpoint_biot_savart_grid_field` | cell-centre quadrature and active-source limit |
+| FDM CPU execution | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `oersted_field_add_into` | adds the analytic/reference FDM field |
+| FDM CUDA execution | `backends/fdm/gpu/cuda/runtime/context.cu` | `context_precompute_oersted_field` | builds and uploads the CUDA unit-current basis |
+| FEM CPU cylinder | `backends/fem/cpu/mfem/interactions/oersted_cylinder.cpp` | `initialize_oersted_cylinder_field` | constructs the nodal analytic basis |
+| FEM CPU dispatch | `backends/fem/cpu/mfem/interactions/oersted.cpp` | `add_oersted_field` | dispatches the realized field in the FEM CPU path |
+| FEM CPU explicit field | `backends/fem/cpu/mfem/interactions/oersted_explicit.cpp` | `add_explicit_oersted_field` | adds a generalized resolved field without cylinder rescaling |
+| FEM CUDA execution | `backends/fem/gpu/cuda/integrators/rk/rk_oersted_field.cu` | `gpu_rk_accumulate_oersted_field` | accumulates the stage-time field on device |
+| conservative relaxation gate | `crates/fullmag-plan/src/validate.rs` | `validate_conservative_relaxation` | rejects unqualified Oersted field-energy use |
+
+(oersted-api-validation)=
+## Validation evidence and required checks
+
+The API contract is checked at four different levels:
+
+1. Every copyable Python block is parsed and executed with the repository Python package. The
+   assertions verify the exact Oersted term, current module, and `H_oe` output record.
+2. The adjacent source map verifies required sections, labelled equations, SI symbol rows,
+   exhaustive parameter rows, unique source declarations, and path-plus-symbol mappings.
+3. Planner and IR tests verify invalid source references, finite-value rules, axis legality,
+   exact-cylinder reduction preconditions, unsupported envelopes, and active-source limits.
+4. Native FDM/FEM tests and managed runtime checks determine field, energy, derivative, transfer,
+   and CPU/GPU qualification. Constructor lowering, source inspection, or a compiled CUDA kernel
+   alone is not field-parity evidence.
+
+The current page status is `partial` because source implementations exist in all four lanes, while
+executed-device parity and generalized-source convergence evidence are tracked separately. The
+status is not upgraded by documentation alone.
+
+(oersted-api-limitations)=
+## Limitations
+
+- The current Python/IR contract exposes Oersted field sources; it does not expose a separate
+  electric-field or Joule-heating interaction through these classes.
+- `CurrentTransport(model="ohmic_poisson")` is representable but not currently executable as an
+  Oersted source-bound plan.
+- Exact analytic-cylinder reduction requires the geometry and current-density conditions enforced
+  by the planner; otherwise the result is a regularized discrete approximation or an explicit
+  unsupported decision.
+- CUDA axis and envelope restrictions are lane-specific and must not be inferred from CPU support.
+- Conservative relaxation remains fail-closed until field-energy parity is qualified.
+- A Python-to-IR round trip does not prove mesh convergence, native runtime completion, or
+  executed-device identity.
+
+(oersted-api-scientific-bibliography)=
+## Scientific bibliography
+
+1. J. D. Jackson, *Classical Electrodynamics*, 3rd ed., Wiley, 1999, chapters 5 and 6.
+2. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers, New York, 1963.
+3. M. J. Donahue and D. G. Porter, *OOMMF User's Guide, Version 1.0*, NISTIR 6376,
+   [doi:10.6028/NIST.IR.6376](https://doi.org/10.6028/NIST.IR.6376).
+4. C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *European Physical
+   Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
+5. Fullmag canonical physical owner: {doc}`../../physics/interactions/oersted-field/index`.
+
+(oersted-api-source-code-index)=
+## Source-code index
+
+| Claim | Repository path | Stable symbol | Lane | Evidence status |
+|---|---|---|---|---|
+| analytic-cylinder constructor and IR | `packages/fullmag-py/src/fullmag/model/energy.py` | `class OerstedCylinder` | Python/IR | source mapped |
+| source-bound constructor and IR | `packages/fullmag-py/src/fullmag/model/energy.py` | `class OerstedField` | Python/IR | source mapped |
+| sinusoidal envelope | `packages/fullmag-py/src/fullmag/model/energy.py` | `class Sinusoidal` | Python/IR | source mapped |
+| current transport | `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class CurrentTransport` | Python/IR | source mapped |
+| IR validation | `crates/fullmag-ir/src/validation.rs` | `validate_oersted_energy_terms` | IR | source mapped |
+| common planner | `crates/fullmag-plan/src/oersted.rs` | `resolve_oersted_term` | planner | source mapped |
+| FEM planner | `crates/fullmag-plan/src/oersted.rs` | `resolve_fem_oersted_term` | FEM | source mapped |
+| FDM planner | `crates/fullmag-plan/src/oersted.rs` | `resolve_fdm_oersted_term` | FDM | source mapped |
+| FEM midpoint quadrature | `crates/fullmag-plan/src/oersted.rs` | `midpoint_biot_savart_field` | FEM | source mapped |
+| FDM midpoint quadrature | `crates/fullmag-plan/src/oersted.rs` | `midpoint_biot_savart_grid_field` | FDM | source mapped |
+| FDM CPU field addition | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `oersted_field_add_into` | FDM CPU | source mapped |
+| FDM CUDA basis | `backends/fdm/gpu/cuda/runtime/context.cu` | `context_precompute_oersted_field` | FDM GPU | source mapped |
+| FEM CPU cylinder basis | `backends/fem/cpu/mfem/interactions/oersted_cylinder.cpp` | `initialize_oersted_cylinder_field` | FEM CPU | source mapped |
+| FEM CPU dispatch | `backends/fem/cpu/mfem/interactions/oersted.cpp` | `add_oersted_field` | FEM CPU | source mapped |
+| FEM CPU explicit field | `backends/fem/cpu/mfem/interactions/oersted_explicit.cpp` | `add_explicit_oersted_field` | FEM CPU | source mapped |
+| FEM CUDA accumulation | `backends/fem/gpu/cuda/integrators/rk/rk_oersted_field.cu` | `gpu_rk_accumulate_oersted_field` | FEM GPU | source mapped |
+| relaxation gate | `crates/fullmag-plan/src/validate.rs` | `validate_conservative_relaxation` | planner | source mapped |

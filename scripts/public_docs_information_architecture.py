@@ -73,6 +73,7 @@ PHYSICS_REFERENCE_PAGES = frozenset(
         "physics/interactions/dmi/interfacial.md",
         "physics/interactions/thermal-noise/index.md",
         "physics/interactions/zeeman/index.md",
+        "physics/interactions/oersted-field/index.md",
     }
 )
 DMI_SUBPAGES = (
@@ -167,7 +168,9 @@ REFERENCE_PAGE_TITLES = {
     "physics/interactions/dmi/bulk.md": "Bulk Dzyaloshinskii–Moriya interaction",
     "physics/interactions/dmi/interfacial.md": "Interfacial Dzyaloshinskii–Moriya interaction",
     "physics/interactions/thermal-noise/index.md": "Thermal Brown noise",
+    "physics/interactions/oersted-field/index.md": "Oersted field",
     "python-api/interactions/exchange.md": "Exchange Python API",
+    "python-api/interactions/oersted-field.md": "Oersted field Python API",
     "physics/interactions/zeeman/index.md": "Zeeman interaction",
     "python-api/interactions/bulk-dmi.md": "Bulk DMI Python API",
     "python-api/interactions/zeeman.md": "Zeeman Python API",
@@ -268,6 +271,7 @@ PYTHON_API_REFERENCE_PAGES = {
     "python-api/interactions/interfacial-dmi.md",
     "python-api/interactions/thermal-noise.md",
     "python-api/interactions/exchange.md",
+    "python-api/interactions/oersted-field.md",
 }
 
 
