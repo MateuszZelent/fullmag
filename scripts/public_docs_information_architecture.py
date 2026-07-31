@@ -97,6 +97,7 @@ NUMERICAL_METHODS_REFERENCE_PAGES = frozenset(
                 "relaxation": ("index", "llg-relaxation", "projected-gradient", "stopping-criteria"),
                 "demag-solvers": ("index", "fdm-convolution", "fem-poisson-airbox", "fem-bem", "periodic-demag"),
                 "eigensolvers": ("index", "linearized-llg", "modal-validation"),
+                "frequency-domain": ("index", "response-solver", "floquet-response"),
             }.items()
             for page in pages
         ),

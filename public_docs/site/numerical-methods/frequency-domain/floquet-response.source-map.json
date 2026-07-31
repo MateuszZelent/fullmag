@@ -1,0 +1,37 @@
+{
+  "document": {"path": "public_docs/site/numerical-methods/frequency-domain/floquet-response.md"},
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "partial", "reason": "Projected Floquet response is source-visible; dynamic demag is gated."},
+    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "Separate projected response qualification is required."},
+    {"solver": "FDM", "device": "CPU", "status": "unsupported", "reason": "No native FDM Floquet response lane."},
+    {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "No public FDM CUDA Floquet response lane."}
+  ],
+  "equations": [
+    {"id": "eq-numerical-floquet-phase", "symbols": ["mhat", "r", "dr", "k"], "sources": ["bc"]},
+    {"id": "eq-numerical-floquet-response", "symbols": ["K", "k", "omega", "G", "qhat", "bhat"], "sources": ["response"]}
+  ],
+  "symbols": [
+    {"id": "mhat", "latex": "$\\widehat{\\mathbf m}$", "meaning": "complex dynamic magnetization amplitude", "si_unit": "$1$"},
+    {"id": "r", "latex": "$\\mathbf r$", "meaning": "position", "si_unit": "$\\mathrm{m}$"},
+    {"id": "dr", "latex": "$\\Delta\\mathbf r$", "meaning": "periodic face translation", "si_unit": "$\\mathrm{m}$"},
+    {"id": "k", "latex": "$\\mathbf k$", "meaning": "Bloch wave vector", "si_unit": "$\\mathrm{m^{-1}}$"},
+    {"id": "K", "latex": "$\\mathsf K(\\mathbf k)$", "meaning": "k-dependent tangent operator", "si_unit": "problem-dependent"},
+    {"id": "G", "latex": "$\\mathsf G(\\mathbf k)$", "meaning": "k-dependent gyrotropic/damping operator", "si_unit": "problem-dependent"},
+    {"id": "omega", "latex": "$\\omega$", "meaning": "angular drive frequency", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"},
+    {"id": "qhat", "latex": "$\\widehat{\\mathbf q}$", "meaning": "tangent response amplitude", "si_unit": "$1$"},
+    {"id": "bhat", "latex": "$\\widehat{\\mathbf b}$", "meaning": "harmonic right-hand side", "si_unit": "problem-dependent"}
+  ],
+  "sources": [
+    {"id": "bc", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class FloquetBC", "responsibility": "Floquet pair and phase schema."},
+    {"id": "validate", "path": "backends/fem/src/frequency_domain/operator_contract.cpp", "symbol": "validate_driven_frequency_response_request", "responsibility": "Floquet legality and dynamic-demag gate."},
+    {"id": "response", "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp", "symbol": "solve_driven_response_contract", "responsibility": "Projected response contract and diagnostics."}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "FloquetBC.pair_ids", "type": "Sequence[str]", "default": "required", "si_unit": "$1$", "validation": "at least one nonempty pair ID", "meaning": "periodic face pair identities", "backend_support": "FEM mesh/planner", "problem_ir": "`study.spin_wave_bc.pair_ids`"},
+      {"python": "FloquetBC.phase_convention", "type": "str", "default": "exp_minus_i_k_dot_delta_r", "si_unit": "$1$", "validation": "nonempty supported convention", "meaning": "sign convention for phase", "backend_support": "FEM Floquet", "problem_ir": "`study.spin_wave_bc.phase_convention`"},
+      {"python": "FrequencyResponseStageSpec.k_vector", "type": "tuple[float,float,float] | None", "default": "None", "si_unit": "$\\mathrm{m^{-1}}$", "validation": "finite three-vector", "meaning": "legacy Bloch vector", "backend_support": "FEM Floquet", "problem_ir": "`study.k_vector`"},
+      {"python": "FrequencyResponseStageSpec.include_demag", "type": "bool", "default": "True", "si_unit": "$1$", "validation": "Boolean", "meaning": "include dynamic demag", "backend_support": "narrow gated slice", "problem_ir": "`study.operator.include_demag`"}
+    ]
+  }
+}
