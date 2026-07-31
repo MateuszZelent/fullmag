@@ -71,6 +71,7 @@ PHYSICS_REFERENCE_PAGES = frozenset(
         *(f"physics/foundations/{page}.md" for page in ("conventions-and-units", "micromagnetic-energy", "effective-field", "llg-equation", "boundary-conditions", "observables")),
         "physics/interactions/anisotropy/uniaxial.md",
         "physics/interactions/anisotropy/cubic.md",
+        "physics/interactions/anisotropy/index.md",
         "physics/interactions/dmi/index.md",
         "physics/interactions/dmi/boundary-conditions.md",
         "physics/interactions/dmi/bulk.md",
