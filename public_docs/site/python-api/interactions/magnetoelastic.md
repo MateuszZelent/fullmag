@@ -132,16 +132,10 @@ assert load.to_ir()["strain"][0] == 1e-4
 ```
 
 ```python
-# %% Prescribed-strain ProblemIR
+# %% Object-level magnetoelastic fragments; no solver is launched here.
 import fullmag as fm
 
 nm = 1e-9
-magnet = fm.Ferromagnet(
-    name="free_layer",
-    geometry=fm.Box(size=(40 * nm, 40 * nm, 2 * nm), name="free_geometry"),
-    material=fm.Material(name="CoFeB", Ms=1.0e6, A=15e-12, alpha=0.02),
-    m0=fm.texture.uniform((1.0, 0.0, 0.0)),
-)
 elastic = fm.ElasticMaterial(
     name="substrate", C11=2.41e11, C12=1.46e11, C44=1.12e11, rho=8900.0,
 )
@@ -153,28 +147,18 @@ body = fm.ElasticBody(
 law = fm.MagnetostrictionLaw(
     name="cubic_ms", kind="cubic", B1=-6.95e6, B2=-5.62e6,
 )
-problem = fm.Problem(
-    name="prescribed_strain_magnetoelastic",
-    magnets=[magnet],
-    energy=[
-        fm.Exchange(),
-        fm.Magnetoelastic(magnet="free_layer", body="substrate_body", law="cubic_ms"),
-    ],
-    elastic_materials=[elastic],
-    elastic_bodies=[body],
-    magnetostriction_laws=[law],
-    mechanical_loads=[
-        fm.MechanicalLoad(
-            kind="prescribed_strain",
-            strain=(1e-4, 0.0, 0.0, 0.0, 0.0, 0.0),
-        )
-    ],
-    study=fm.TimeEvolution(dynamics=fm.LLG(), outputs=[]),
+coupling = fm.Magnetoelastic(
+    magnet="free_layer", body="substrate_body", law="cubic_ms", )
+load = fm.MechanicalLoad(
+    kind="prescribed_strain", strain=(1e-4, 0.0, 0.0, 0.0, 0.0, 0.0),
 )
-ir = problem.to_ir(include_geometry_assets=False)
-assert ir["energy_terms"][1]["kind"] == "magnetoelastic"
-assert ir["elastic_materials"][0]["name"] == "substrate"
-assert ir["mechanical_loads"][0]["kind"] == "prescribed_strain"
+print({
+    "elastic_material": elastic.to_ir(),
+    "elastic_body": body.to_ir(),
+    "law": law.to_ir(),
+    "coupling": coupling.to_ir(),
+    "load": load.to_ir(),
+})
 ```
 
 ```python

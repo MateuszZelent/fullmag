@@ -261,12 +261,12 @@ This code proves only the stage sequencing contract. It does not attach magnetoe
 The missing registration/lowering path is an explicit API limitation, not a reason to fabricate
 a stage example with disconnected objects.
 
-### Complete Python object graph and lowering inspection
+### Complete Python object graph and object-level lowering
 
 The following Jupyter-compatible block is the authoritative copyable example for the currently
 available magnetoelastic Python graph. It constructs a magnetic body, elastic body, cubic law,
-prescribed-strain load, and coupling, then inspects the resulting `ProblemIR`. It is a lowering
-example; it is not evidence that the current stage builder can execute the graph.
+prescribed-strain load, and coupling, then inspects each object's canonical fragment. It does not
+construct a top-level simulation or claim that the current stage builder can execute the graph.
 
 ```python
 # %% Imports and geometry
@@ -320,29 +320,15 @@ coupling = fm.Magnetoelastic(
     law="cubic-law",
 )
 
-# %% Low-level physical snapshot -> ProblemIR
-snapshot = fm.Problem(
-    name="magnetoelastic-prescribed-strain",
-    magnets=[magnet],
-    energy=[fm.Exchange(), coupling],
-    elastic_materials=[elastic_material],
-    elastic_bodies=[elastic_body],
-    magnetostriction_laws=[law],
-    mechanical_loads=[load],
-    study=fm.TimeEvolution(
-        dynamics=fm.LLG(fixed_timestep=1.0e-13),
-        outputs=[
-            fm.SaveField("H_mel", every=1.0e-12),
-            # E_mel is a native interaction quantity; the public scalar selector
-            # currently exposes the aggregate energy under E_total.
-            fm.SaveScalar("E_total", every=1.0e-12),
-        ],
-    ),
-)
-problem_ir = snapshot.to_ir(include_geometry_assets=False)
-assert problem_ir["energy_terms"][1]["kind"] == "magnetoelastic"
-assert problem_ir["mechanical_loads"][0]["kind"] == "prescribed_strain"
-print(json.dumps(problem_ir, indent=2))
+# %% Object-level canonical fragments; no solver is launched here
+print(json.dumps({
+    "magnetic_material": magnetic_material.to_ir(),
+    "elastic_material": elastic_material.to_ir(),
+    "elastic_body": elastic_body.to_ir(),
+    "magnetostriction_law": law.to_ir(),
+    "mechanical_load": load.to_ir(),
+    "energy_term": coupling.to_ir(),
+}, indent=2))
 ```
 
 ### Exhaustive parameter reference
