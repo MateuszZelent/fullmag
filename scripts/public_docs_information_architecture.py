@@ -98,6 +98,7 @@ NUMERICAL_METHODS_REFERENCE_PAGES = frozenset(
                 "demag-solvers": ("index", "fdm-convolution", "fem-poisson-airbox", "fem-bem", "periodic-demag"),
                 "eigensolvers": ("index", "linearized-llg", "modal-validation"),
                 "frequency-domain": ("index", "response-solver", "floquet-response"),
+                "interpolation-and-state-transfer": ("index", "fem-to-fdm", "fdm-to-fem"),
             }.items()
             for page in pages
         ),

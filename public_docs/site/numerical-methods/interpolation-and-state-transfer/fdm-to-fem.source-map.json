@@ -1,0 +1,21 @@
+{
+  "document": {"path": "public_docs/site/numerical-methods/interpolation-and-state-transfer/fdm-to-fem.md"},
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "source-backed"},
+    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "Source artifact must pass continuation validation."},
+    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
+    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "Target execution is qualified independently from transfer."}
+  ],
+  "equations": [{"id": "eq-numerical-fdm-to-fem-trilinear", "symbols": ["x", "mcorner", "w", "mfem"], "sources": ["transfer"]}],
+  "symbols": [
+    {"id": "x", "latex": "$\\mathbf x$", "meaning": "target FEM point", "si_unit": "$\\mathrm{m}$"},
+    {"id": "mcorner", "latex": "$\\mathbf m_{abc}$", "meaning": "source FDM corner-cell magnetization", "si_unit": "$1$"},
+    {"id": "w", "latex": "$w_{abc}$", "meaning": "trilinear interpolation weight", "si_unit": "$1$"},
+    {"id": "mfem", "latex": "$\\mathbf m_{\\mathrm{FEM}}$", "meaning": "transferred FEM magnetization", "si_unit": "$1$"}
+  ],
+  "sources": [
+    {"id": "runtime", "path": "crates/fullmag-cli/src/step_utils.rs", "symbol": "resample_continuation_if_cross_backend", "responsibility": "Select and report cross-backend continuation."},
+    {"id": "transfer", "path": "crates/fullmag-engine/src/fem_solution_transfer.rs", "symbol": "transfer_vector_field", "responsibility": "Vector field interpolation primitive."}
+  ],
+  "public_api": {"parameters": [{"python": "FDM → FEM continuation", "type": "automatic runtime operation", "default": "automatic", "si_unit": "$1$", "validation": "source grid and target FEM topology required", "meaning": "evaluates FDM state on FEM target", "backend_support": "FDM source → FEM target", "problem_ir": "runtime continuation metadata"}]}
+}
