@@ -19,6 +19,7 @@ extensions = [
     "sphinx_copybutton",
     "legacy_redirects",
     "responsive_tables",
+    "status_navigation",
 ]
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "internal", "generated", "README.md"]
@@ -41,5 +42,6 @@ html_title = "FullMag public documentation"
 html_static_path = ["_static"]
 html_extra_path = ["CNAME"]
 html_css_files = ["fullmag-docs.css"]
+html_js_files = ["status-navigation.js"]
 
 nitpicky = True

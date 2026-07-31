@@ -1,0 +1,48 @@
+{
+  "document": {"path": "public_docs/site/numerical-methods/time-integration/explicit-runge-kutta.md"},
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "documented"},
+    {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "The source-facade lane is present, but universal executed-device qualification is not claimed."},
+    {"solver": "FDM", "device": "CPU", "status": "documented"},
+    {"solver": "FDM", "device": "GPU", "status": "source-backed", "reason": "CUDA integrator sources exist; parity remains precision- and runtime-evidence dependent."}
+  ],
+  "equations": [
+    {"id": "eq-time-llg-rhs", "symbols": ["m", "F", "gamma", "alpha", "H_eff"], "sources": ["python-llg"]},
+    {"id": "eq-rk-stage", "symbols": ["Y", "y", "dt", "a", "K", "t", "c"], "sources": ["fem-stage-rhs"]},
+    {"id": "eq-rk-update", "symbols": ["y", "dt", "b", "K"], "sources": ["fem-explicit-step"]},
+    {"id": "eq-rk-embedded-error", "symbols": ["y", "dt", "btilde", "K", "e"], "sources": ["adaptive-policy"]}
+  ],
+  "symbols": [
+    {"id": "m", "latex": "\\mathbf m", "meaning": "reduced magnetization", "si_unit": "1"},
+    {"id": "y", "latex": "y", "meaning": "assembled semi-discrete magnetization state", "si_unit": "1"},
+    {"id": "F", "latex": "F", "meaning": "semi-discrete LLG right-hand side", "si_unit": "\\mathrm{s^{-1}}"},
+    {"id": "H_eff", "latex": "\\mathbf H_{\\mathrm{eff}}", "meaning": "effective magnetic field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "gamma", "latex": "\\gamma", "meaning": "gyromagnetic ratio", "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}"},
+    {"id": "alpha", "latex": "\\alpha", "meaning": "Gilbert damping parameter", "si_unit": "1"},
+    {"id": "t", "latex": "t_n", "meaning": "beginning of the accepted step", "si_unit": "\\mathrm{s}"},
+    {"id": "dt", "latex": "\\Delta t", "meaning": "proposed time step", "si_unit": "\\mathrm{s}"},
+    {"id": "Y", "latex": "Y_j", "meaning": "state at RK stage j", "si_unit": "1"},
+    {"id": "K", "latex": "K_j", "meaning": "right-hand side at RK stage j", "si_unit": "\\mathrm{s^{-1}}"},
+    {"id": "a", "latex": "a_{j\\ell}", "meaning": "explicit RK stage coefficient", "si_unit": "1"},
+    {"id": "b", "latex": "b_j", "meaning": "accepted RK output coefficient", "si_unit": "1"},
+    {"id": "c", "latex": "c_j", "meaning": "RK stage time coefficient", "si_unit": "1"},
+    {"id": "btilde", "latex": "\\widetilde b_j", "meaning": "embedded RK output coefficient", "si_unit": "1"},
+    {"id": "e", "latex": "e_{n+1}", "meaning": "embedded local error estimate", "si_unit": "1"}
+  ],
+  "sources": [
+    {"id": "python-llg", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class LLG", "responsibility": "Public LLG integrator contract and ProblemIR serialization."},
+    {"id": "adaptive-policy", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class AdaptiveTimestep", "responsibility": "Adaptive tolerance and step-bound validation."},
+    {"id": "fem-stage-rhs", "path": "backends/fem/cpu/mfem/integrators/rk_stage_rhs.cpp", "symbol": "evaluate_rk_stage_rhs", "responsibility": "FEM stage right-hand-side evaluation."},
+    {"id": "fem-explicit-step", "path": "backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp", "symbol": "context_step_explicit_rk_mfem", "responsibility": "FEM explicit RK step execution."},
+    {"id": "fem-rk-contract", "path": "backends/fem/cpu/mfem/integrators/rk_explicit.cpp", "symbol": "stepper_workspace_allocate", "responsibility": "FEM reusable explicit-RK workspace implementation."}
+  ],
+  "public_api": {"parameters": [
+    {"python": "LLG.gamma", "type": "float", "default": "2.211e5", "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}", "validation": "finite and", "meaning": "gyromagnetic ratio", "backend_support": "FEM/FDM CPU/GPU", "problem_ir": "study.dynamics.gyromagnetic_ratio"},
+    {"python": "LLG.integrator", "type": "str", "default": "auto", "si_unit": "1", "validation": "heun", "meaning": "temporal method request", "backend_support": "lane-dependent", "problem_ir": "study.dynamics.integrator"},
+    {"python": "LLG.fixed_timestep", "type": "float | None", "default": "None", "si_unit": "\\mathrm{s}", "validation": "finite and", "meaning": "requested fixed step", "backend_support": "FEM/FDM CPU/GPU subject to lane support", "problem_ir": "study.dynamics.fixed_timestep"},
+    {"python": "AdaptiveTimestep.atol", "type": "float", "default": "1e-6", "si_unit": "1", "validation": "non-negative; not both tolerances zero", "meaning": "absolute error tolerance", "backend_support": "RK23/RK45 lanes", "problem_ir": "study.dynamics.adaptive_timestep.atol"},
+    {"python": "AdaptiveTimestep.rtol", "type": "float", "default": "1e-3", "si_unit": "1", "validation": "non-negative; not both tolerances zero", "meaning": "relative error tolerance", "backend_support": "RK23/RK45 lanes", "problem_ir": "study.dynamics.adaptive_timestep.rtol"},
+    {"python": "AdaptiveTimestep.dt_min", "type": "float", "default": "1e-15", "si_unit": "\\mathrm{s}", "validation": "positive", "meaning": "lower step bound", "backend_support": "RK23/RK45 lanes", "problem_ir": "study.dynamics.adaptive_timestep.dt_min"},
+    {"python": "AdaptiveTimestep.dt_max", "type": "float | None", "default": "None", "si_unit": "\\mathrm{s}", "validation": "positive and", "meaning": "upper step bound", "backend_support": "RK23/RK45 lanes", "problem_ir": "study.dynamics.adaptive_timestep.dt_max"}
+  ]}
+}

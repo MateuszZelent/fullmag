@@ -92,6 +92,33 @@ main article span.math {
   overflow-x: clip;
 }
 
+/* Sidebar status: reference pages stay neutral; scaffold pages are discoverably pending. */
+.toctree-l1 > a.fm-doc-status-active,
+.toctree-l2 > a.fm-doc-status-active,
+.toctree-l3 > a.fm-doc-status-active,
+.toctree-l4 > a.fm-doc-status-active {
+  color: color-mix(in srgb, currentColor 78%, #6b7280);
+}
+
+.toctree-l1 > a.fm-doc-status-planned,
+.toctree-l2 > a.fm-doc-status-planned,
+.toctree-l3 > a.fm-doc-status-planned,
+.toctree-l4 > a.fm-doc-status-planned {
+  color: color-mix(in srgb, #c46a22 72%, currentColor);
+  border-inline-start: 0.18rem solid color-mix(in srgb, #e28a35 68%, transparent);
+  padding-inline-start: 0.42rem;
+}
+
+.toctree-l1 > a.fm-doc-status-planned::after,
+.toctree-l2 > a.fm-doc-status-planned::after,
+.toctree-l3 > a.fm-doc-status-planned::after,
+.toctree-l4 > a.fm-doc-status-planned::after {
+  content: " · planned";
+  font-size: 0.72em;
+  letter-spacing: 0.02em;
+  opacity: 0.78;
+}
+
 /* Public landing page: institutional identity first, concise content second. */
 .fm-home-masthead {
   display: grid;

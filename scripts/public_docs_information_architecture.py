@@ -87,6 +87,18 @@ PHYSICS_REFERENCE_PAGES = frozenset(
         "physics/interactions/inter-region-couplings/index.md",
     }
 )
+NUMERICAL_METHODS_REFERENCE_PAGES = frozenset(
+    {
+        "numerical-methods/index.md",
+        *(
+            f"numerical-methods/{section}/{page}.md"
+            for section, pages in {
+                "time-integration": ("index", "explicit-runge-kutta", "adaptive-stepping", "tangent-plane-methods"),
+            }.items()
+            for page in pages
+        ),
+    }
+)
 PHYSICS_REFERENCE_STATUSES = {
     "physics/interactions/drift-diffusion-spin-torque/index.md": "semantic-only",
 }
@@ -334,7 +346,7 @@ def _section(
     children = tuple(f"{directory}/{page}.md" for page in pages)
     index_path = f"{directory}/index.md"
     index_title = _page_title(index_path, title)
-    index_reference = index_path in PHYSICS_REFERENCE_PAGES or index_path in PYTHON_API_REFERENCE_PAGES
+    index_reference = index_path in PHYSICS_REFERENCE_PAGES or index_path in PYTHON_API_REFERENCE_PAGES or index_path in NUMERICAL_METHODS_REFERENCE_PAGES
     return (
         (
             _reference(
@@ -348,7 +360,7 @@ def _section(
             else _scaffold(index_path, index_title, scope, children)
         ),
         *(
-            (_reference if f"{directory}/{page}.md" in PHYSICS_REFERENCE_PAGES or f"{directory}/{page}.md" in PYTHON_API_REFERENCE_PAGES else _scaffold)(
+            (_reference if f"{directory}/{page}.md" in PHYSICS_REFERENCE_PAGES or f"{directory}/{page}.md" in PYTHON_API_REFERENCE_PAGES or f"{directory}/{page}.md" in NUMERICAL_METHODS_REFERENCE_PAGES else _scaffold)(
                 f"{directory}/{page}.md",
                 _page_title(f"{directory}/{page}.md", _title(page)),
                 f"the {title.lower()} reference for {_title(page)}",
@@ -510,7 +522,7 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
         for slug in INTERACTION_SLUGS
         if slug not in {"exchange", "demagnetization", "anisotropy", "dmi"}
     ),
-    _scaffold(
+    _reference(
         "numerical-methods/index.md",
         "Numerical Methods",
         "the numerical-methods documentation family",
@@ -523,6 +535,7 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
             "numerical-methods/meshing/index.md",
             "numerical-methods/interpolation-and-state-transfer/index.md",
         ),
+        status="partial",
     ),
     *_section("numerical-methods/time-integration", "Time Integration", ("explicit-runge-kutta", "adaptive-stepping", "tangent-plane-methods"), "the time-integration methods reference"),
     *_section("numerical-methods/relaxation", "Relaxation", ("llg-relaxation", "projected-gradient", "stopping-criteria"), "the relaxation methods reference"),
