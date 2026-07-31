@@ -41,44 +41,67 @@ def assert_json_subset(
 
 
 class PublicExchangeDocumentationTests(unittest.TestCase):
-    def test_copyable_example_lowers_to_current_problem_ir(self) -> None:
+    def test_stage_workflow_and_exchange_fragment_are_current(self) -> None:
         page = EXCHANGE_PAGE.read_text(encoding="utf-8")
         blocks = PYTHON_BLOCK.findall(page)
         self.assertTrue(blocks, "Exchange page must contain a Python example")
+        self.assertNotIn("fm.Problem(", page)
+
+        stage_source = next(
+            (
+                block
+                for block in blocks
+                if "study = fm.study(" in block
+                and "study.stages.add_relax" in block
+                and "study.stages.add_run" in block
+            ),
+            None,
+        )
+        self.assertIsNotNone(
+            stage_source,
+            "Exchange page must contain a complete stage-first workflow",
+        )
+        self.assertIn("# %%", stage_source)
+
+        namespace: dict[str, object] = {}
+        with contextlib.redirect_stdout(io.StringIO()):
+            exec(compile(stage_source, str(EXCHANGE_PAGE), "exec"), namespace)
+        self.assertIn("study", namespace)
+
         source = next(
-            (block for block in blocks if "problem_ir =" in block),
+            (block for block in blocks if "exchange = fm.Exchange()" in block),
             None,
         )
         self.assertIsNotNone(
             source,
-            "Exchange page must contain a low-level ProblemIR inspection example",
+            "Exchange page must contain an object-level interaction fragment",
         )
-        self.assertIn("# %%", source)
-
-        namespace: dict[str, object] = {}
         with contextlib.redirect_stdout(io.StringIO()):
             exec(compile(source, str(EXCHANGE_PAGE), "exec"), namespace)
 
-        problem_ir = namespace["problem_ir"]
-        self.assertEqual(problem_ir["energy_terms"], [{"kind": "exchange"}])
-        material = problem_ir["materials"][0]
+        exchange = namespace["exchange"]
+        material_object = namespace["material"]
+        self.assertEqual(exchange.to_ir(), {"kind": "exchange"})
+        material = material_object.to_ir()
         self.assertEqual(material["exchange_stiffness"], 13.0e-12)
         self.assertEqual(material["saturation_magnetisation"], 800.0e3)
         self.assertEqual(material["damping"], 0.01)
-        self.assertEqual(
-            problem_ir["study"]["sampling"]["outputs"],
-            [
-                {"kind": "field", "name": "H_ex", "every_seconds": 1.0e-12},
-                {"kind": "scalar", "name": "E_ex", "every_seconds": 1.0e-12},
-            ],
-        )
-        hints = problem_ir["backend_policy"]["discretization_hints"]
-        self.assertEqual(hints["fdm"]["cell"], [2.0e-9, 2.0e-9, 1.0e-9])
-        self.assertEqual(hints["fem"]["order"], 1)
-        self.assertEqual(hints["fem"]["hmax"], 2.0e-9)
 
         documented_ir = json.loads(JSON_BLOCK.search(page).group(1))
-        assert_json_subset(self, documented_ir, problem_ir)
+        assert_json_subset(
+            self,
+            {
+                "materials": [
+                    {
+                        "exchange_stiffness": 13.0e-12,
+                        "saturation_magnetisation": 800.0e3,
+                        "damping": 0.01,
+                    }
+                ],
+                "energy_terms": [{"kind": "exchange"}],
+            },
+            documented_ir,
+        )
 
     def test_exchange_page_contains_only_exchange_facing_api(self) -> None:
         page = EXCHANGE_PAGE.read_text(encoding="utf-8")
