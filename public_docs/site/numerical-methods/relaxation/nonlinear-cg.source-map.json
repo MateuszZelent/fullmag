@@ -1,0 +1,63 @@
+{
+  "document": {"path": "public_docs/site/numerical-methods/relaxation/nonlinear-cg.md"},
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
+    {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "Native CUDA step source exists; executed-device qualification is separate."},
+    {"solver": "FDM", "device": "CPU", "status": "source-backed"},
+    {"solver": "FDM", "device": "GPU", "status": "source-backed", "reason": "CUDA/reference source exists; public planner support is separately bounded."}
+  ],
+  "equations": [
+    {"id": "eq-relax-ncg-tangent-gradient", "symbols": ["g", "H_eff", "m"], "sources": ["ncg-reference"]},
+    {"id": "eq-relax-ncg-retraction", "symbols": ["R", "m", "lambda", "p"], "sources": ["ncg-reference"]},
+    {"id": "eq-relax-ncg-pr-plus", "symbols": ["g", "m", "beta", "metric"], "sources": ["ncg-policy"]},
+    {"id": "eq-relax-ncg-direction", "symbols": ["p", "g", "beta", "m"], "sources": ["ncg-policy"]},
+    {"id": "eq-relax-ncg-armijo", "symbols": ["E", "lambda", "c1", "g", "p", "metric"], "sources": ["ncg-line-search"]}
+  ],
+  "symbols": [
+    {"id": "m", "latex": "\\mathbf m_i", "meaning": "reduced magnetization at active cell/node $i$", "si_unit": "1"},
+    {"id": "H_eff", "latex": "\\mathbf H_{\\mathrm{eff},i}", "meaning": "effective magnetic field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "g", "latex": "\\mathbf g_i", "meaning": "tangent energy gradient", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "p", "latex": "\\mathbf p_i", "meaning": "tangent search direction", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "R", "latex": "\\mathcal R_{\\mathbf m_i}", "meaning": "sphere retraction", "si_unit": "1"},
+    {"id": "beta", "latex": "\\beta_k^{\\mathrm{PR+}}", "meaning": "Polak–Ribière+ coefficient", "si_unit": "1"},
+    {"id": "metric", "latex": "\\langle\\cdot,\\cdot\\rangle_E", "meaning": "energy-metric inner product", "si_unit": "dimension-dependent metric"},
+    {"id": "lambda", "latex": "\\lambda", "meaning": "direct-minimizer line-search step", "si_unit": "\\mathrm{m\\,A^{-1}}"},
+    {"id": "E", "latex": "E", "meaning": "total micromagnetic energy", "si_unit": "\\mathrm{J}"},
+    {"id": "c1", "latex": "c_1", "meaning": "Armijo constant", "si_unit": "1"},
+    {"id": "N", "latex": "N", "meaning": "active cells or finite-element nodes", "si_unit": "1"},
+    {"id": "k", "latex": "k", "meaning": "accepted minimizer iteration", "si_unit": "1"},
+    {"id": "tau_max", "latex": "\\tau_{\\max}", "meaning": "maximum accepted-state torque", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "epsilon_tau", "latex": "\\varepsilon_\\tau", "meaning": "canonical torque threshold", "si_unit": "\\mathrm{A\\,m^{-1}}"}
+  ],
+  "sources": [
+    {"id": "python-relaxation", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class Relaxation", "responsibility": "Public algorithm validation and ProblemIR serialization."},
+    {"id": "python-stop", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class RelaxStop", "responsibility": "Public stopping criteria and validation."},
+    {"id": "python-stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "relax_stage", "responsibility": "Stage-first lowering and direct-minimizer control validation."},
+    {"id": "ncg-reference", "path": "crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs", "symbol": "execute_nonlinear_cg", "responsibility": "FDM/reference NCG loop."},
+    {"id": "ncg-policy", "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs", "symbol": "nonlinear_cg_next_direction", "responsibility": "Tangent transport, PR+ coefficient, restart and descent recovery."},
+    {"id": "ncg-line-search", "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs", "symbol": "nonlinear_cg_armijo_accepts", "responsibility": "Shared Armijo acceptance predicate."},
+    {"id": "fem-cpu-ncg", "path": "backends/fem/cpu/mfem/relaxation/nonlinear_cg.cpp", "symbol": "run_nonlinear_cg_step", "responsibility": "Native FEM CPU NCG state update and direct-energy decision."},
+    {"id": "fem-gpu-ncg", "path": "backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp", "symbol": "gpu_relax_nonlinear_cg_step", "responsibility": "Native FEM GPU device-resident NCG step."}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "StudyStagesBuilder.add_relax(algorithm=\"nonlinear_cg\")", "type": "str", "default": "\"llg_overdamped\"", "si_unit": "$1$", "validation": "supported identifier", "meaning": "selects NCG", "backend_support": "FDM reference; FEM CPU/GPU native lanes", "problem_ir": "study.algorithm"},
+      {"python": "StudyStagesBuilder.add_relax(tolT=...)", "type": "float", "default": "$10^{-6}$", "si_unit": "$\\mathrm{T}$", "validation": "finite, positive", "meaning": "public torque threshold converted to A/m", "backend_support": "FDM/FEM", "problem_ir": "study.stop.torque_tolerance_apm"},
+      {"python": "StudyStagesBuilder.add_relax(tolA=...)", "type": "float", "default": "equivalent", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "finite, positive", "meaning": "canonical torque threshold", "backend_support": "FDM/FEM", "problem_ir": "study.stop.torque_tolerance_apm"},
+      {"python": "StudyStagesBuilder.add_relax(max_steps=...)", "type": "int", "default": "$50{,}000$", "si_unit": "$1$", "validation": "positive integer", "meaning": "accepted-step budget", "backend_support": "FDM/FEM", "problem_ir": "study.stop.max_steps"},
+      {"python": "StudyStagesBuilder.add_relax(energy_tolerance=...)", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{J}$", "validation": "positive when set", "meaning": "accepted-energy plateau threshold", "backend_support": "FDM/FEM", "problem_ir": "study.stop.energy_tolerance_j"},
+      {"python": "StudyStagesBuilder.add_relax(max_relaxation_time_s=...)", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{s}$", "validation": "rejected for NCG", "meaning": "LLG-only time ceiling", "backend_support": "none for NCG", "problem_ir": "study.stop.max_relaxation_time_s"},
+      {"python": "StudyStagesBuilder.add_relax(solver=...)", "type": "str or None", "default": "None", "si_unit": "$1$", "validation": "rejected for NCG", "meaning": "LLG integrator selector", "backend_support": "none for NCG", "problem_ir": "study.dynamics.integrator"},
+      {"python": "StudyStagesBuilder.add_relax(dt=...)", "type": "float or auto or None", "default": "None", "si_unit": "$\\mathrm{s}$", "validation": "rejected for NCG", "meaning": "LLG timestep", "backend_support": "none for NCG", "problem_ir": "study.dynamics"},
+      {"python": "StudyStagesBuilder.add_relax(max_error=...)", "type": "float or None", "default": "None", "si_unit": "$1$", "validation": "rejected for NCG", "meaning": "LLG adaptive error control", "backend_support": "none for NCG", "problem_ir": "study.dynamics.adaptive_timestep.atol"},
+      {"python": "StudyStagesBuilder.add_relax(max_err=...)", "type": "float or None", "default": "None", "si_unit": "$1$", "validation": "rejected for NCG", "meaning": "LLG error alias", "backend_support": "none for NCG", "problem_ir": "study.dynamics.adaptive_timestep.atol"},
+      {"python": "StudyStagesBuilder.add_relax(dt_min=...)", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{s}$", "validation": "rejected for NCG", "meaning": "LLG lower timestep bound", "backend_support": "none for NCG", "problem_ir": "study.dynamics.adaptive_timestep.dt_min"},
+      {"python": "StudyStagesBuilder.add_relax(dt_max=...)", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{s}$", "validation": "rejected for NCG", "meaning": "LLG upper timestep bound", "backend_support": "none for NCG", "problem_ir": "study.dynamics.adaptive_timestep.dt_max"},
+      {"python": "StudyStagesBuilder.add_relax(dt_initial=...)", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{s}$", "validation": "rejected for NCG", "meaning": "LLG initial timestep", "backend_support": "none for NCG", "problem_ir": "study.dynamics.adaptive_timestep.dt_initial"},
+      {"python": "StudyStagesBuilder.add_relax(adaptive_timestep=...)", "type": "AdaptiveTimestep or None", "default": "None", "si_unit": "mixed", "validation": "rejected for NCG", "meaning": "LLG adaptive policy", "backend_support": "none for NCG", "problem_ir": "study.dynamics.adaptive_timestep"},
+      {"python": "StudyStagesBuilder.add_relax(field_refresh=...)", "type": "FieldRefreshPolicy or None", "default": "None", "si_unit": "$1$", "validation": "rejected for NCG", "meaning": "LLG field-refresh policy", "backend_support": "none for NCG", "problem_ir": "study.dynamics.field_refresh"},
+      {"python": "StudyStagesBuilder.add_relax(relax_alpha=...)", "type": "float or None", "default": "None", "si_unit": "$1$", "validation": "rejected for NCG", "meaning": "LLG damping override", "backend_support": "none for NCG", "problem_ir": "resolved LLG provenance"},
+      {"python": "legacy tol=...", "type": "float", "default": "unavailable", "si_unit": "legacy", "validation": "always rejected", "meaning": "use tolT or tolA", "backend_support": "none", "problem_ir": "none"}
+    ]
+  }
+}

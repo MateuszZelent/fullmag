@@ -94,7 +94,7 @@ NUMERICAL_METHODS_REFERENCE_PAGES = frozenset(
             f"numerical-methods/{section}/{page}.md"
             for section, pages in {
                 "time-integration": ("index", "explicit-runge-kutta", "adaptive-stepping", "tangent-plane-methods"),
-                "relaxation": ("index", "llg-relaxation", "projected-gradient", "stopping-criteria"),
+                "relaxation": ("index", "llg-relaxation", "projected-gradient", "nonlinear-cg", "stopping-criteria"),
                 "demag-solvers": ("index", "fdm-convolution", "fem-poisson-airbox", "fem-bem", "periodic-demag"),
                 "eigensolvers": ("index", "linearized-llg", "modal-validation"),
                 "frequency-domain": ("index", "response-solver", "floquet-response"),
@@ -202,6 +202,7 @@ REFERENCE_PAGE_TITLES = {
     "physics/foundations/llg-equation.md": "Landau–Lifshitz–Gilbert equation",
     "physics/foundations/boundary-conditions.md": "Boundary conditions",
     "physics/foundations/observables.md": "Observables",
+    "numerical-methods/relaxation/nonlinear-cg.md": "Nonlinear conjugate-gradient relaxation",
     "physics/interactions/dmi/index.md": "Dzyaloshinskii–Moriya interaction",
     "physics/interactions/dmi/boundary-conditions.md": "DMI boundary conditions",
     "physics/interactions/dmi/validation.md": "DMI validation",
@@ -544,7 +545,7 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
         status="partial",
     ),
     *_section("numerical-methods/time-integration", "Time Integration", ("explicit-runge-kutta", "adaptive-stepping", "tangent-plane-methods"), "the time-integration methods reference"),
-    *_section("numerical-methods/relaxation", "Relaxation", ("llg-relaxation", "projected-gradient", "stopping-criteria"), "the relaxation methods reference"),
+    *_section("numerical-methods/relaxation", "Relaxation", ("llg-relaxation", "projected-gradient", "nonlinear-cg", "stopping-criteria"), "the relaxation methods reference"),
     *_section("numerical-methods/demag-solvers", "Demag Solvers", ("fdm-convolution", "fem-poisson-airbox", "fem-bem", "periodic-demag"), "the demagnetization-solvers reference"),
     *_section("numerical-methods/eigensolvers", "Eigensolvers", ("linearized-llg", "modal-validation"), "the eigensolvers reference"),
     *_section("numerical-methods/frequency-domain", "Frequency Domain", ("response-solver", "floquet-response"), "the frequency-domain methods reference"),

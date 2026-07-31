@@ -20,8 +20,8 @@ normalized pointwise, and the accepted state is tested using the effective-field
 (numerical-methods-relaxation-llg-governing-equations)=
 ## Governing equations
 
-For reduced magnetization $mathbf m=mathbf M/M_s$ and effective field
-$mathbf H_{mathrm{eff}}$, the implemented pure-damping equation is
+For reduced magnetization $\mathbf m=\mathbf M/M_s$ and effective field
+$\mathbf H_{\mathrm{eff}}$, the implemented pure-damping equation is
 
 ```{math}
 :label: eq-relax-llg-damping
@@ -51,7 +51,7 @@ The stopping metric is the maximum accepted-state torque,
 
 The time integrator can be fixed-step or adaptive embedded RK23/RK45. The adaptive error policy
 is distinct from the physical torque criterion: the local vector error controls step acceptance,
-while $	au_{\max}$ controls relaxation completion.
+while $\tau_{\max}$ controls relaxation completion.
 
 (numerical-methods-relaxation-llg-symbols-and-si-units)=
 ## Symbols and SI units
@@ -68,7 +68,7 @@ while $	au_{\max}$ controls relaxation completion.
 | $t$ | relaxation integration coordinate | $\mathrm{s}$ |
 | $\tau_{\max}$ | maximum accepted-state torque | $\mathrm{A\,m^{-1}}$ |
 | $\boldsymbol\tau_i$ | local effective-field torque residual | $\mathrm{A\,m^{-1}}$ |
-| $\varepsilon_\tau$ | torque stopping threshold | $\mathrm{A\,m^{-1}}$ or $\mathrm{T}$ before canonical conversion |
+| $\varepsilon_\tau$ | canonical torque stopping threshold | $\mathrm{A\,m^{-1}}$; a public `tolT` request is converted from tesla |
 | $\Delta t$ | attempted integration step | $\mathrm{s}$ |
 | $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
 
@@ -88,9 +88,9 @@ while $	au_{\max}$ controls relaxation completion.
 (numerical-methods-relaxation-llg-python-api)=
 ## Python API
 
-This is the repository-owned stage pattern. `study.solver(...)` is the canonical solver-policy
-facade for a time-evolution stage; the relaxation stage exposes its own explicit LLG policy so
-that the relaxation request is serialized with the stage that consumes it.
+This is the repository-owned stage pattern. The `solver`, timestep and adaptive controls below
+belong only to `llg_overdamped`. The direct minimizers do not accept an LLG dynamics object or
+these timestep controls; they select their line-search policy internally.
 
 ```python
 # %% Configure a FEM relaxation scenario
@@ -170,6 +170,8 @@ serializer:
 ```
 
 `tolT` is retained as requested intent and normalized to `torque_tolerance_apm` for execution.
+The canonical `RelaxStop` payload also carries `energy_tolerance_j`, `max_steps`, and, only for
+this algorithm, `max_relaxation_time_s`.
 The resolved execution record additionally identifies FEM/FDM, CPU/GPU, precision, selected
 integrator, adaptive policy, and actual device. The serialized request alone is not runtime proof.
 
