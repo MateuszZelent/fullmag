@@ -99,6 +99,7 @@ NUMERICAL_METHODS_REFERENCE_PAGES = frozenset(
                 "eigensolvers": ("index", "linearized-llg", "modal-validation"),
                 "frequency-domain": ("index", "response-solver", "floquet-response"),
                 "interpolation-and-state-transfer": ("index", "fem-to-fdm", "fdm-to-fem"),
+                "meshing": ("index", "fdm-grids"),
             }.items()
             for page in pages
         ),
