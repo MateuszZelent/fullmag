@@ -297,6 +297,30 @@ def _status_records(repo_root: Path) -> list[dict[str, object]]:
     return records
 
 
+def _gitlink_paths(repo_root: Path) -> set[str]:
+    paths: set[str] = set()
+    for raw_entry in _git(repo_root, "ls-files", "--stage", "-z").split(b"\0"):
+        if not raw_entry:
+            continue
+        identity, separator, raw_path = raw_entry.partition(b"\t")
+        fields = identity.split(b" ")
+        if not separator or len(fields) != 3:
+            raise SourceIdentityError("cannot parse Git index entry while resolving gitlinks")
+        if fields[0] == b"160000":
+            try:
+                paths.add(raw_path.decode("utf-8"))
+            except UnicodeDecodeError as error:
+                raise SourceIdentityError("cannot decode Git gitlink path") from error
+    return paths
+
+
+def _is_gitlink_path(relative: str, gitlink_paths: set[str]) -> bool:
+    return any(
+        relative == gitlink or relative.startswith(f"{gitlink}/")
+        for gitlink in gitlink_paths
+    )
+
+
 def _index_entries(repo_root: Path, dirty_paths: set[str]) -> dict[str, list[dict[str, object]]]:
     result = {path: [] for path in dirty_paths}
     raw_to_path = {os.fsencode(path): path for path in dirty_paths}
@@ -373,7 +397,12 @@ def _capture_once(repo_root: Path) -> dict[str, object]:
     if len(commit) != 40 or any(character not in "0123456789abcdef" for character in commit):
         raise SourceIdentityError("Git HEAD is not a full lowercase 40-hex commit identity")
     head_tree_sha256 = _sha256(_git(repo_root, "ls-tree", "-r", "--full-tree", commit))
-    status_records = _status_records(repo_root)
+    gitlink_paths = _gitlink_paths(repo_root)
+    status_records = [
+        record
+        for record in _status_records(repo_root)
+        if not any(_is_gitlink_path(path, gitlink_paths) for path in record["paths"])
+    ]
     dirty_content = _dirty_content(repo_root, status_records)
     payload = {
         "schema": SCHEMA,

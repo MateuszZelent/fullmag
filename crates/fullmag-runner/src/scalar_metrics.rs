@@ -216,7 +216,8 @@ pub(crate) fn scalar_outputs_request_average_m(schedules: &[OutputSchedule]) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_weighted_average_m_to_step_stats, weighted_average_magnetization_components,
+        apply_average_m_to_step_stats, apply_weighted_average_m_to_step_stats,
+        weighted_average_magnetization_components,
     };
     use crate::types::StepStats;
 
@@ -252,5 +253,19 @@ mod tests {
         );
 
         assert_eq!([stats.mx, stats.my, stats.mz], [0.5, 0.5, 0.0]);
+    }
+
+    #[test]
+    fn average_step_stats_reduces_nonuniform_magnetization_components() {
+        let mut stats = StepStats {
+            mx: 1.0,
+            my: 1.0,
+            mz: 1.0,
+            ..StepStats::default()
+        };
+
+        apply_average_m_to_step_stats(&mut stats, &[[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]);
+
+        assert_eq!([stats.mx, stats.my, stats.mz], [0.5, 0.0, 0.5]);
     }
 }

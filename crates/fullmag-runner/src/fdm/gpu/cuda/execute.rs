@@ -17,8 +17,7 @@ use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::preview::flatten_vectors;
 #[cfg(feature = "cuda")]
 use crate::relaxation::{
-    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow,
-    RelaxationTorqueConfirmation,
+    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
 };
 #[cfg(feature = "cuda")]
 use crate::relaxation_direct_minimizer::{
@@ -32,10 +31,7 @@ use crate::relaxation_direct_minimizer::{
 #[cfg(feature = "cuda")]
 use crate::relaxation_vector_math::{max_torque_from_field, tangent_gradient_from_field};
 #[cfg(feature = "cuda")]
-use crate::scalar_metrics::{
-    apply_average_m_to_step_stats, scalar_outputs_request_average_m, scalar_row_due,
-    single_object_scalars,
-};
+use crate::scalar_metrics::{apply_average_m_to_step_stats, scalar_row_due, single_object_scalars};
 #[cfg(feature = "cuda")]
 use crate::schedules::{collect_field_schedules, collect_scalar_schedules};
 use crate::types::{ExecutedRun, LiveStepConsumer, RunError};
@@ -348,10 +344,9 @@ pub(crate) fn execute_cuda_fdm(
             latest_stats = Some(stats.clone());
             current_stats = stats.clone();
             let due_scalar_row = scalar_row_due(&scalar_schedules, stats.time);
-            let average_requested = scalar_outputs_request_average_m(&scalar_schedules);
             let mut sampled_stats = stats.clone();
             let mut magnetization_cache: Option<Vec<[f64; 3]>> = None;
-            if due_scalar_row && average_requested {
+            if due_scalar_row {
                 if magnetization_cache.is_none() {
                     magnetization_cache = Some(backend.copy_m(cell_count)?);
                 }
@@ -364,6 +359,18 @@ pub(crate) fn execute_cuda_fdm(
             }
             if let Some(live) = live.as_mut() {
                 let heavy_payload_every = live.field_every_n.max(1);
+                let heavy_payload_due = stats.step % heavy_payload_every == 0;
+                if heavy_payload_due && !due_scalar_row {
+                    if magnetization_cache.is_none() {
+                        magnetization_cache = Some(backend.copy_m(cell_count)?);
+                    }
+                    apply_average_m_to_step_stats(
+                        &mut sampled_stats,
+                        magnetization_cache
+                            .as_deref()
+                            .expect("magnetization cache initialized"),
+                    );
+                }
                 let display_selection = live.display_selection.map(|get| get());
                 let preview_due = display_selection
                     .as_ref()
@@ -374,7 +381,7 @@ pub(crate) fn execute_cuda_fdm(
                 let preview_targets_global_scalar = display_selection
                     .as_ref()
                     .is_some_and(display_is_global_scalar);
-                let magnetization = if stats.step % heavy_payload_every == 0 {
+                let magnetization = if heavy_payload_due {
                     if magnetization_cache.is_none() {
                         magnetization_cache = Some(backend.copy_m(cell_count)?);
                     }
@@ -427,6 +434,7 @@ pub(crate) fn execute_cuda_fdm(
                 &backend,
                 cell_count,
                 &sampled_stats,
+                magnetization_cache.as_deref(),
                 &mut scalar_schedules,
                 &mut field_schedules,
                 &mut steps,

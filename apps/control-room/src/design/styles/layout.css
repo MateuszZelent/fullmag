@@ -39,6 +39,13 @@
   min-width: 0;
 }
 
+/* Bottom panel: slot is a direct block child of the flex item; must propagate height explicitly */
+.fm-resizable-panel > .fm-slot {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .fm-dock-column {
   display: grid;
   grid-template-rows: var(--fm-panel-header-height) minmax(0, 1fr);

@@ -13,6 +13,7 @@ use crate::relaxation::vector_math::{
     add_vec3, global_dot_vec3, max_torque_from_field, normalized_vec3, project_tangent, scale_vec3,
     sub_vec3, tangent_gradient_from_field,
 };
+use crate::scalar_metrics::apply_average_m_to_step_stats;
 use crate::types::StepStats;
 use crate::MU0;
 
@@ -440,6 +441,12 @@ pub(crate) fn apply_direct_minimizer_step_metrics(
     magnetization: &[[f64; 3]],
     h_eff: &[[f64; 3]],
 ) -> f64 {
+    apply_average_m_to_step_stats(stats, magnetization);
+    if let Some(values) = stats.per_object_scalars.get_mut("free") {
+        values.insert("mx".to_string(), stats.mx);
+        values.insert("my".to_string(), stats.my);
+        values.insert("mz".to_string(), stats.mz);
+    }
     let torque_apm = max_torque_from_field(magnetization, h_eff);
     stats.step = accepted_step;
     stats.time = 0.0;
@@ -475,6 +482,35 @@ mod tests {
                 max_relaxation_time_s: None,
             },
         }
+    }
+
+    #[test]
+    fn accepted_step_metrics_publish_average_magnetization_components() {
+        let mut stats = StepStats {
+            per_object_scalars: std::collections::HashMap::from([(
+                "free".to_string(),
+                std::collections::HashMap::from([
+                    ("mx".to_string(), 9.0),
+                    ("my".to_string(), 9.0),
+                    ("mz".to_string(), 9.0),
+                ]),
+            )]),
+            ..StepStats::default()
+        };
+        let magnetization = [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
+        let h_eff = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]];
+
+        apply_direct_minimizer_step_metrics(&mut stats, 1, 0.25, &magnetization, &h_eff);
+
+        assert_eq!([stats.mx, stats.my, stats.mz], [0.5, 0.0, 0.5]);
+        assert_eq!(
+            [
+                stats.per_object_scalars["free"]["mx"],
+                stats.per_object_scalars["free"]["my"],
+                stats.per_object_scalars["free"]["mz"],
+            ],
+            [0.5, 0.0, 0.5]
+        );
     }
 
     #[test]

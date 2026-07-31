@@ -618,6 +618,7 @@ export function useViewport3DChunkedScalarColors({
               topology,
               partModel,
               targetProjectionMode,
+              partFieldVector,
             );
       if (!target) continue;
       specs.push({
@@ -1195,11 +1196,12 @@ export function resolveViewport3DChunkedPartFieldColorTarget(
     return null;
   }
 
-  const count = resolveNodeSelectionCount(partModel.part, topology);
+  const selection = partModel.fullNodeSelection ?? partModel.part;
+  const count = resolveNodeSelectionCount(selection, topology);
   if (count !== fieldVector.pointCount) return null;
   const targetNodeIndices = new Uint32Array(count);
   for (let offset = 0; offset < count; offset += 1) {
-    const nodeIndex = resolveNodeSelectionIndex(partModel.part, offset);
+    const nodeIndex = resolveNodeSelectionIndex(selection, offset);
     if (
       nodeIndex === null ||
       !Number.isInteger(nodeIndex) ||
@@ -1221,15 +1223,24 @@ export function resolveViewport3DChunkedPartProjectionTarget(
   topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
   partModel: Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
   projectionMode: Viewport3DChunkedProjectionMode,
+  fieldVector?: DecodedFieldVector | null,
 ): Viewport3DFieldColorBuildTarget | null {
   if (projectionMode === "raw_nodal") return null;
   const surfaceIndices = partModel.surfaceIndices;
   if (!surfaceIndices || surfaceIndices.length === 0) return null;
+  const targetNodeIndices = fieldVector
+    ? resolveChunkedProjectionFieldVectorNodeIndices(
+        fieldVector,
+        partModel,
+        topology,
+      )
+    : null;
 
   if (projectionMode === "surface_faces") {
     return {
       kind: "surface-faces",
       surfaceIndices,
+      ...(targetNodeIndices ? { targetNodeIndices } : {}),
       vertexCount: topology.nodeCount,
     };
   }
@@ -1242,11 +1253,63 @@ export function resolveViewport3DChunkedPartProjectionTarget(
       kind: "thickness-average-z",
       positions: topology.positions,
       surfaceIndices,
+      ...(targetNodeIndices ? { targetNodeIndices } : {}),
       vertexCount: topology.nodeCount,
     };
   }
 
   return null;
+}
+
+function resolveChunkedProjectionFieldVectorNodeIndices(
+  fieldVector: DecodedFieldVector,
+  partModel: Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
+  topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
+): Uint32Array | null {
+  if (fieldVector.pointCount <= 0) return null;
+
+  const explicitNodeIndices = fieldVector.nodeIndices;
+  if (explicitNodeIndices) {
+    if (explicitNodeIndices.length !== fieldVector.pointCount) return null;
+    const resolved = new Uint32Array(explicitNodeIndices.length);
+    for (let index = 0; index < explicitNodeIndices.length; index += 1) {
+      const nodeIndex = explicitNodeIndices[index];
+      if (
+        nodeIndex === undefined ||
+        !Number.isInteger(nodeIndex) ||
+        nodeIndex < 0 ||
+        nodeIndex >= topology.nodeCount
+      ) {
+        return null;
+      }
+      resolved[index] = nodeIndex;
+    }
+    return resolved;
+  }
+
+  if (
+    fieldVector.indexing === "explicit_node_indices" ||
+    fieldVector.indexing === "sampled_node_indices"
+  ) {
+    return null;
+  }
+
+  const count = resolveNodeSelectionCount(partModel.part, topology);
+  if (count !== fieldVector.pointCount) return null;
+  const targetNodeIndices = new Uint32Array(count);
+  for (let offset = 0; offset < count; offset += 1) {
+    const nodeIndex = resolveNodeSelectionIndex(partModel.part, offset);
+    if (
+      nodeIndex === null ||
+      !Number.isInteger(nodeIndex) ||
+      nodeIndex < 0 ||
+      nodeIndex >= topology.nodeCount
+    ) {
+      return null;
+    }
+    targetNodeIndices[offset] = nodeIndex;
+  }
+  return targetNodeIndices;
 }
 
 function chunkedFieldVectorMatchesTopology(

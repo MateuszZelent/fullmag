@@ -161,6 +161,8 @@ impl CudaInteractiveFdmPreviewRuntime {
         let mut current_local_stats = self.backend.snapshot_step_stats(grid)?;
         current_local_stats.step -= base_step;
         current_local_stats.time -= base_time;
+        self.backend
+            .apply_average_m_to_step_stats(&mut current_local_stats)?;
         let initial_display_state = (checkpoint.display_selection)();
         let mut pending_cached_preview_snapshots =
             self.begin_cached_preview_prefetch(&initial_display_state)?;
@@ -289,6 +291,15 @@ impl CudaInteractiveFdmPreviewRuntime {
             let scalar_row_due = local_stats.step <= 1
                 || local_stats.step % field_every_n.max(1) == 0
                 || (preview_due && display_is_global_scalar(&display_state));
+            let scalar_output_due = scalar_schedules
+                .iter()
+                .any(|schedule| is_due(local_stats.time, schedule.next_time));
+            if scalar_row_due || scalar_output_due {
+                self.backend
+                    .apply_average_m_to_step_stats(&mut local_stats)?;
+                current_local_stats = local_stats.clone();
+                latest_local_stats = Some(local_stats.clone());
+            }
             let action = on_step(StepUpdate {
                 stats: local_stats.clone(),
                 grid,
@@ -450,6 +461,8 @@ impl CudaInteractiveFdmPreviewRuntime {
         let mut current_local_stats = self.backend.snapshot_step_stats(grid)?;
         current_local_stats.step -= base_step;
         current_local_stats.time -= base_time;
+        self.backend
+            .apply_average_m_to_step_stats(&mut current_local_stats)?;
         let initial_display_state = (checkpoint.display_selection)();
         let mut pending_cached_preview_snapshots =
             self.begin_cached_preview_prefetch(&initial_display_state)?;
@@ -579,6 +592,15 @@ impl CudaInteractiveFdmPreviewRuntime {
             let scalar_row_due = local_stats.step <= 1
                 || local_stats.step % field_every_n.max(1) == 0
                 || (preview_due && display_is_global_scalar(&display_state));
+            let scalar_output_due = scalar_schedules
+                .iter()
+                .any(|schedule| is_due(local_stats.time, schedule.next_time));
+            if scalar_row_due || scalar_output_due {
+                self.backend
+                    .apply_average_m_to_step_stats(&mut local_stats)?;
+                current_local_stats = local_stats.clone();
+                latest_local_stats = Some(local_stats.clone());
+            }
             let action = on_step(StepUpdate {
                 stats: local_stats.clone(),
                 grid,

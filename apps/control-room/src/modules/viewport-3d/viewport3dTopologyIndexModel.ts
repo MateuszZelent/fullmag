@@ -235,6 +235,7 @@ function buildPartSurfaceTrianglesWithSupplemental(
   const cellTypes: number[] = [];
   const facets: number[] = [];
   const globalCellOrdinals: bigint[] = [];
+  let hasFacetMapping = true;
   const indices: number[] = [];
   const seenFaces = new Set<string>();
   const primaryClaim = canonicalFaceIncidence
@@ -265,7 +266,8 @@ function buildPartSurfaceTrianglesWithSupplemental(
           continue;
         }
         indices.push(a, b, c);
-        facets.push(facet);
+        facets.push(facet ?? 0);
+        hasFacetMapping = hasFacetMapping && facet !== null;
         if (canonicalFaceIncidence) {
           const globalCellOrdinal = owner?.globalCellOrdinal ?? null;
           globalCellOrdinals.push(globalCellOrdinal ?? BigInt(0));
@@ -278,7 +280,7 @@ function buildPartSurfaceTrianglesWithSupplemental(
     cellTypes: canonicalFaceIncidence && indices.length
       ? Uint32Array.from(cellTypes)
       : null,
-    facetIndices: facets.length ? Uint32Array.from(facets) : null,
+    facetIndices: facets.length && hasFacetMapping ? Uint32Array.from(facets) : null,
     globalCellOrdinals: canonicalFaceIncidence && indices.length
       ? BigUint64Array.from(globalCellOrdinals)
       : null,
@@ -357,13 +359,14 @@ export function buildPartSurfaceEdgeIndicesWithSupplemental(
 function semanticPartFaces(
   part: Viewport3DTopologySurfacePartInput,
   topology: Viewport3DTopologyFacets,
-): Array<{ facet: number; nodes: readonly number[] }> {
+): Array<{ facet: number | null; nodes: readonly number[] }> {
   if (part.surface_faces?.length) {
     const exactFacetIndices = part.boundary_face_indices;
-    if (exactFacetIndices?.length !== part.surface_faces.length) return [];
     return part.surface_faces.flatMap((nodes, index) => {
-      const facet = exactFacetIndices[index];
-      if (facet === undefined) return [];
+      const facet = exactFacetIndices?.[index] ??
+        (index < Math.max(0, Math.floor(part.boundary_face_count))
+          ? Math.max(0, Math.floor(part.boundary_face_start)) + index
+          : null);
       return nodes.length >= 3 ? [{ facet, nodes }] : [];
     });
   }
@@ -374,10 +377,36 @@ function semanticPartFaces(
         (_unused, index) =>
           Math.max(0, Math.floor(part.boundary_face_start)) + index,
       );
-  return facets.flatMap((facet) => {
+  const metadataFaces = facets.flatMap((facet) => {
     const nodes = topologyFacetNodes(topology, facet);
     return nodes && nodes.length >= 3 ? [{ facet, nodes }] : [];
   });
+  if (metadataFaces.length > 0 || facets.length > 0) {
+    return metadataFaces;
+  }
+
+  return derivedPartBoundaryFaces(
+    part,
+    topology as Viewport3DTopologyInput,
+  ).map((nodes) => ({ facet: null, nodes }));
+}
+
+function derivedPartBoundaryFaces(
+  part: Viewport3DTopologySurfacePartInput,
+  topology: Viewport3DTopologyInput,
+): readonly (readonly number[])[] {
+  const claim = buildPartElementClaim(part, topology);
+  if (!claim) return [];
+
+  const selectedElements = new Set<number>();
+  forEachTopologyCell(topology, (element, _type, nodes) => {
+    if (isElementClaimed(element, nodes, [claim])) {
+      selectedElements.add(element);
+    }
+  });
+  if (selectedElements.size === 0) return [];
+
+  return collectTopologyBoundaryFaces(topology, selectedElements);
 }
 
 export function buildTetraSurfaceIndices(indices: Uint32Array): Uint32Array {
@@ -589,15 +618,15 @@ export function buildPartSurfaceIndices(
     );
   }
 
-  if (part.boundary_face_count <= 0) {
-    return null;
+  if (part.boundary_face_count > 0) {
+    return surfaceIndicesFromBoundaryFaceRange(
+      topology,
+      part.boundary_face_start,
+      part.boundary_face_count,
+    );
   }
 
-  return surfaceIndicesFromBoundaryFaceRange(
-    topology,
-    part.boundary_face_start,
-    part.boundary_face_count,
-  );
+  return buildPartSurfaceTrianglesWithSupplemental(part, topology, []).indices;
 }
 
 export function buildPartSurfaceIndicesWithSupplemental(

@@ -56,9 +56,7 @@ use crate::runtime_registry::RuntimeRegistry;
 #[cfg(feature = "cuda")]
 use crate::scalar_metrics::single_object_scalars;
 #[cfg(feature = "cuda")]
-use crate::scalar_metrics::{
-    apply_average_m_to_step_stats, scalar_outputs_request_average_m, scalar_row_due,
-};
+use crate::scalar_metrics::{apply_average_m_to_step_stats, scalar_row_due};
 #[cfg(feature = "cuda")]
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
@@ -4818,10 +4816,9 @@ fn execute_cuda_fdm(
             latest_stats = Some(stats.clone());
             current_stats = stats.clone();
             let due_scalar_row = scalar_row_due(&scalar_schedules, stats.time);
-            let average_requested = scalar_outputs_request_average_m(&scalar_schedules);
             let mut sampled_stats = stats.clone();
             let mut magnetization_cache: Option<Vec<[f64; 3]>> = None;
-            if due_scalar_row && average_requested {
+            if due_scalar_row {
                 if magnetization_cache.is_none() {
                     magnetization_cache = Some(backend.copy_m(cell_count)?);
                 }
@@ -4834,6 +4831,18 @@ fn execute_cuda_fdm(
             }
             if let Some(live) = live.as_mut() {
                 let heavy_payload_every = live.field_every_n.max(1);
+                let heavy_payload_due = stats.step % heavy_payload_every == 0;
+                if heavy_payload_due && !due_scalar_row {
+                    if magnetization_cache.is_none() {
+                        magnetization_cache = Some(backend.copy_m(cell_count)?);
+                    }
+                    apply_average_m_to_step_stats(
+                        &mut sampled_stats,
+                        magnetization_cache
+                            .as_deref()
+                            .expect("magnetization cache initialized"),
+                    );
+                }
                 let display_selection = live.display_selection.map(|get| get());
                 let preview_due = display_selection
                     .as_ref()
@@ -4844,7 +4853,18 @@ fn execute_cuda_fdm(
                 let preview_targets_global_scalar = display_selection
                     .as_ref()
                     .is_some_and(display_is_global_scalar);
-                let magnetization = if stats.step % heavy_payload_every == 0 {
+                if preview_due && preview_targets_global_scalar && !due_scalar_row {
+                    if magnetization_cache.is_none() {
+                        magnetization_cache = Some(backend.copy_m(cell_count)?);
+                    }
+                    apply_average_m_to_step_stats(
+                        &mut sampled_stats,
+                        magnetization_cache
+                            .as_deref()
+                            .expect("magnetization cache initialized"),
+                    );
+                }
+                let magnetization = if heavy_payload_due {
                     if magnetization_cache.is_none() {
                         magnetization_cache = Some(backend.copy_m(cell_count)?);
                     }
@@ -4902,6 +4922,7 @@ fn execute_cuda_fdm(
                 &backend,
                 cell_count,
                 &sampled_stats,
+                magnetization_cache.as_deref(),
                 &mut scalar_schedules,
                 &mut field_schedules,
                 &mut steps,
@@ -5668,6 +5689,7 @@ fn record_cuda_due_outputs(
     backend: &NativeFdmBackend,
     cell_count: usize,
     stats: &StepStats,
+    magnetization: Option<&[[f64; 3]]>,
     scalar_schedules: &mut [OutputSchedule],
     field_schedules: &mut [OutputSchedule],
     steps: &mut Vec<StepStats>,
@@ -5677,8 +5699,15 @@ fn record_cuda_due_outputs(
         .iter()
         .any(|schedule| is_due(stats.time, schedule.next_time));
     if scalar_due {
-        artifacts.record_scalar(stats)?;
-        steps.push(stats.clone());
+        let mut sampled_stats = stats.clone();
+        if let Some(magnetization) = magnetization {
+            apply_average_m_to_step_stats(&mut sampled_stats, magnetization);
+        } else {
+            let magnetization = backend.copy_m(cell_count)?;
+            apply_average_m_to_step_stats(&mut sampled_stats, &magnetization);
+        }
+        artifacts.record_scalar(&sampled_stats)?;
+        steps.push(sampled_stats);
         advance_due_schedules(scalar_schedules, stats.time);
     }
 
@@ -5733,13 +5762,12 @@ fn record_cuda_final_outputs(
                 .unwrap_or(true));
     if need_scalar {
         let mut final_stats = latest_stats.clone();
-        if scalar_outputs_request_average_m(scalar_schedules) {
-            let magnetization = backend.copy_m(cell_count)?;
-            apply_average_m_to_step_stats(&mut final_stats, &magnetization);
-        }
+        let magnetization = backend.copy_m(cell_count)?;
+        apply_average_m_to_step_stats(&mut final_stats, &magnetization);
         artifacts.record_scalar(&final_stats)?;
         steps.push(final_stats);
     }
+    let _ = scalar_schedules;
 
     let requested_field_names = field_schedules
         .iter()
@@ -5908,6 +5936,36 @@ mod tests {
                 "{function_name} should use the shared native CUDA field copy helper"
             );
         }
+    }
+
+    #[test]
+    fn native_cuda_scalar_output_boundary_reduces_m_before_recording() {
+        let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("dispatch.rs should be readable");
+        let body_start = source
+            .find("fn record_cuda_due_outputs(")
+            .expect("record_cuda_due_outputs should exist");
+        let body = &source[body_start..];
+        let body = body
+            .split("fn record_cuda_final_outputs(")
+            .next()
+            .expect("record_cuda_due_outputs body should be bounded");
+        assert!(
+            body.contains("apply_average_m_to_step_stats"),
+            "native CUDA scalar rows must publish averaged magnetization components"
+        );
+
+        let execution = source
+            .split("#[cfg(feature = \"cuda\")]\nfn execute_cuda_fdm(")
+            .nth(1)
+            .and_then(|body| body.split("#[cfg(feature = \"fem-gpu\")]\n").next())
+            .expect("active CUDA execution body should be present");
+        assert!(
+            execution.contains("let heavy_payload_due = stats.step % heavy_payload_every == 0;")
+                && execution.contains("if heavy_payload_due && !due_scalar_row")
+                && execution.contains("let magnetization = if heavy_payload_due"),
+            "native CUDA live rows carrying a full magnetization payload must use the averaged stats"
+        );
     }
 
     #[test]

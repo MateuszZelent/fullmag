@@ -495,6 +495,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
+    use crate::relaxation::direct_minimizer::apply_direct_minimizer_step_metrics;
 
     fn stats(step: u64, time: f64) -> StepStats {
         StepStats {
@@ -551,6 +552,26 @@ mod tests {
             window.rows[1].sample_policy.as_deref(),
             Some("coalesced_to_step")
         );
+    }
+
+    #[test]
+    fn table_store_persists_averaged_components_from_accepted_direct_step() {
+        let mut stats = StepStats::default();
+        apply_direct_minimizer_step_metrics(
+            &mut stats,
+            1,
+            0.25,
+            &[[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+            &[[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+        );
+        let mut store = TableStore::new(config(1e-12));
+
+        assert!(store.append_if_due(&stats).unwrap());
+        let values = &store
+            .last_row()
+            .expect("accepted step must be stored")
+            .values;
+        assert_eq!(&values[2..5], &[0.5, 0.0, 0.5]);
     }
 
     #[test]

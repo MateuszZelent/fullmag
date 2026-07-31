@@ -2807,6 +2807,15 @@ impl CudaInteractiveFdmPreviewRuntime {
             let scalar_row_due = local_stats.step <= 1
                 || local_stats.step % field_every_n.max(1) == 0
                 || (preview_due && display_is_global_scalar(&display_state));
+            let scalar_output_due = scalar_schedules
+                .iter()
+                .any(|schedule| is_due(local_stats.time, schedule.next_time));
+            if scalar_row_due || scalar_output_due {
+                self.backend
+                    .apply_average_m_to_step_stats(&mut local_stats)?;
+                current_local_stats = local_stats.clone();
+                latest_local_stats = Some(local_stats.clone());
+            }
             let action = on_step(StepUpdate {
                 stats: local_stats.clone(),
                 grid,
@@ -4660,8 +4669,10 @@ fn record_due_cuda_runtime_outputs(
         .iter()
         .any(|schedule| is_due(stats.time, schedule.next_time));
     if scalar_due {
-        artifacts.record_scalar(stats)?;
-        steps.push(stats.clone());
+        let mut sampled_stats = stats.clone();
+        backend.apply_average_m_to_step_stats(&mut sampled_stats)?;
+        artifacts.record_scalar(&sampled_stats)?;
+        steps.push(sampled_stats);
         advance_due_schedules(scalar_schedules, stats.time);
     }
 
@@ -4704,8 +4715,10 @@ fn record_final_cuda_runtime_outputs(
             .map(|stats| !same_time(stats.time, latest_stats.time))
             .unwrap_or(true);
     if need_scalar {
-        artifacts.record_scalar(&latest_stats)?;
-        steps.push(latest_stats.clone());
+        let mut final_stats = latest_stats.clone();
+        backend.apply_average_m_to_step_stats(&mut final_stats)?;
+        artifacts.record_scalar(&final_stats)?;
+        steps.push(final_stats);
     }
 
     let missing_field_names = field_schedules

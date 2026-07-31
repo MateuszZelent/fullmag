@@ -36,6 +36,7 @@ import {
 import {
   buildViewport3DTargetFieldBuffer as buildViewport3DTargetFieldBufferWithResourceKey,
 } from "./model/viewport3DTargetFieldBuffer";
+import { buildViewport3DTopologyIndexBundle } from "./viewport3dTopologyIndexModel";
 import { magnitudeColorRgb } from "./viewport3dVectorColoring";
 
 type TargetFieldBufferOptions = Parameters<
@@ -1943,6 +1944,202 @@ describe("viewport3dRenderModel", () => {
       expect(surface?.projectionMode).toBe(surfaceProjectionMode);
       expect(surface?.scalarColors?.projectionMode).toBe(surfaceProjectionMode);
       expect(surface?.scalarColors?.geometryRole).toBe("face_expanded_surface");
+      expect(surface?.degradation).toBeNull();
+    },
+  );
+
+  it.each(["surface_faces", "thickness_average_z"] as const)(
+    "renders %s when a prism manifest omits surface metadata",
+    (surfaceProjectionMode) => {
+      const topology: DecodedTopology = {
+        boundaryFaceCount: 0,
+        boundaryFaces: new Uint32Array(),
+        boundaryMarkers: new Uint32Array(),
+        cellCount: 1,
+        cellMarkers: new Uint32Array([1]),
+        cellNodes: new Uint32Array([0, 1, 2, 3, 4, 5]),
+        cellOffsets: new Uint32Array([0, 6]),
+        cellTypes: new Uint32Array([2]),
+        elementCount: 1,
+        elementMarkers: new Uint32Array([1]),
+        facetCount: 0,
+        facetMarkers: new Uint32Array(),
+        facetNodes: new Uint32Array(),
+        facetOffsets: new Uint32Array([0]),
+        facetRoles: new Uint32Array(),
+        facetTypes: new Uint32Array(),
+        formatVersion: 2,
+        indices: new Uint32Array([0, 1, 2, 3, 4, 5]),
+        nodeCount: 6,
+        positions: new Float64Array([
+          0, 0, -1,
+          1, 0, -1,
+          0, 1, -1,
+          0, 0, 1,
+          1, 0, 1,
+          0, 1, 1,
+        ]),
+      };
+      const prismPart = {
+        boundary_face_count: 0,
+        boundary_face_start: 0,
+        element_count: 1,
+        element_start: 0,
+        id: "prism",
+        label: "Prism",
+      };
+      const topologyIndexBundle = buildViewport3DTopologyIndexBundle({
+        airboxParts: [],
+        magneticParts: [prismPart],
+        topology,
+      });
+      const topologyModel = buildViewport3DTopologyRenderModel(
+        topology,
+        [prismPart],
+        [],
+        undefined,
+        { meshTopologyHash: "hash-1" },
+        { topologyIndexBundle, topologyIndexState: "ready" },
+      );
+      const fieldVector: DecodedFieldVector = {
+        ...fieldVectorFixture(),
+        grid: [6, 1, 1],
+        pointCount: 6,
+        valueCount: 18,
+        values: new Float64Array([
+          0, 0, 1,
+          0, 0, 1,
+          0, 0, 1,
+          0, 0, -1,
+          0, 0, -1,
+          0, 0, -1,
+        ]),
+        indexing: "sampled_node_indices",
+        meshTopologyHash: "hash-1",
+        nodeIndices: new Uint32Array([0, 1, 2, 3, 4, 5]),
+      };
+      const fieldBuffer = buildViewport3DTargetFieldBuffer({
+        fieldVector,
+        query: {
+          component: "full",
+          max_samples: 6,
+          scope_id: "prism",
+          scope_kind: "part",
+        },
+        targetIds: ["prism"],
+      });
+
+      const model = buildViewport3DFieldRenderModel(
+        topologyModel,
+        null,
+        0.5,
+        {
+          partTargetFieldBuffers: new Map([["prism", fieldBuffer]]),
+          scalarColorsVisible: true,
+          targetRenderPlans: new Map([
+            ["prism", targetRenderPlanFixture({ surfaceProjectionMode })],
+          ]),
+        },
+      );
+
+      const surface = model?.targetPasses.get("prism")?.surface;
+      expect(surface?.projectionMode).toBe(surfaceProjectionMode);
+      expect(surface?.scalarColors?.projectionMode).toBe(surfaceProjectionMode);
+      expect(surface?.scalarColors?.degradedFaceCount).toBe(0);
+      expect(surface?.degradation).toBeNull();
+    },
+  );
+
+  it.each(["surface_faces", "thickness_average_z"] as const)(
+    "maps legacy scoped prism fields for %s projection",
+    (surfaceProjectionMode) => {
+      const topology: DecodedTopology = {
+        boundaryFaceCount: 0,
+        boundaryFaces: new Uint32Array(),
+        boundaryMarkers: new Uint32Array(),
+        cellCount: 1,
+        cellMarkers: new Uint32Array([1]),
+        cellNodes: new Uint32Array([3, 4, 5, 6, 7, 8]),
+        cellOffsets: new Uint32Array([0, 6]),
+        cellTypes: new Uint32Array([2]),
+        elementCount: 1,
+        elementMarkers: new Uint32Array([1]),
+        facetCount: 0,
+        facetMarkers: new Uint32Array(),
+        facetNodes: new Uint32Array(),
+        facetOffsets: new Uint32Array([0]),
+        facetRoles: new Uint32Array(),
+        facetTypes: new Uint32Array(),
+        formatVersion: 2,
+        indices: new Uint32Array([3, 4, 5, 6, 7, 8]),
+        nodeCount: 9,
+        positions: new Float64Array([
+          -1, -1, 0,
+          -1, 2, 0,
+          2, -1, 0,
+          0, 0, -1,
+          1, 0, -1,
+          0, 1, -1,
+          0, 0, 1,
+          1, 0, 1,
+          0, 1, 1,
+        ]),
+      };
+      const prismPart = {
+        boundary_face_count: 0,
+        boundary_face_start: 0,
+        element_count: 1,
+        element_start: 0,
+        id: "prism",
+        label: "Prism",
+        node_count: 6,
+        node_start: 3,
+      };
+      const topologyIndexBundle = buildViewport3DTopologyIndexBundle({
+        airboxParts: [],
+        magneticParts: [prismPart],
+        topology,
+      });
+      const topologyModel = buildViewport3DTopologyRenderModel(
+        topology,
+        [prismPart],
+        [],
+        undefined,
+        { meshTopologyHash: "hash-1" },
+        { topologyIndexBundle, topologyIndexState: "ready" },
+      );
+      const fieldVector: DecodedFieldVector = {
+        ...fieldVectorFixture(),
+        grid: [6, 1, 1],
+        pointCount: 6,
+        valueCount: 18,
+        values: new Float64Array([
+          0, 0, 1,
+          0, 0, 1,
+          0, 0, 1,
+          0, 0, -1,
+          0, 0, -1,
+          0, 0, -1,
+        ]),
+      };
+
+      const model = buildViewport3DFieldRenderModel(
+        topologyModel,
+        null,
+        0.5,
+        {
+          partFieldVectors: new Map([["prism", fieldVector]]),
+          scalarColorsVisible: true,
+          targetRenderPlans: new Map([
+            ["prism", targetRenderPlanFixture({ surfaceProjectionMode })],
+          ]),
+        },
+      );
+
+      const surface = model?.targetPasses.get("prism")?.surface;
+      expect(surface?.projectionMode).toBe(surfaceProjectionMode);
+      expect(surface?.scalarColors?.projectionMode).toBe(surfaceProjectionMode);
+      expect(surface?.scalarColors?.degradedFaceCount).toBe(0);
       expect(surface?.degradation).toBeNull();
     },
   );
