@@ -107,7 +107,18 @@ body.Ms = 800e3
 body.Aex = 13e-12
 body.alpha = 0.02
 body.m = fm.texture.uniform(1.0, 0.0, 0.0)
-study.stages.add_relax(stage_id="relax", tolT=1e-6, max_steps=50_000)
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="llg_overdamped",
+    solver="rk23",
+    dt_initial=1e-15,
+    dt_min=1e-17,
+    dt_max=1e-14,
+    max_err=1e-7,
+    relax_alpha=1.0,
+    tolT=1e-6,
+    max_steps=50_000,
+)
 ```
 
 The selected realization is a requested intent. The resolved plan must additionally

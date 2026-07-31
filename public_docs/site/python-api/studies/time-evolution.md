@@ -39,6 +39,44 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | `TimeEvolution.table_autosave` | `TableAutosave \| None` | `None` | $1$ | Optional tabular autosave policy. | Optional tabular autosave policy. | FEM/FDM CPU/GPU; planner checks combinations | `study.table_autosave` |
 
 
+### Complete stage-first example
+
+Time evolution is authored as solver policy plus an ordered physical-time stage. It is not
+constructed as a standalone `TimeEvolution(...)` object in a user script.
+
+```python
+# %% Time-evolution study with adaptive RK45
+import fullmag as fm
+
+nm = 1.0e-9
+study = fm.study("time_evolution_api_example")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.exchange()
+study.cell(2 * nm, 2 * nm, 5 * nm)
+film = study.geometry(fm.Box(100 * nm, 20 * nm, 5 * nm), name="film")
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.solver(
+    integrator="rk45",
+    adaptive_timestep=fm.AdaptiveTimestep(
+        atol=1.0e-6,
+        rtol=1.0e-3,
+        dt_min=1.0e-15,
+        dt_max=1.0e-12,
+    ),
+    gamma=2.211e5,
+)
+study.tableautosave(
+    1.0e-12,
+    quantities=["step", "t", "dt", "e_ex", "e_total", "max_torque_T"],
+)
+study.stages.add_run(stage_id="run", until=1.0e-9)
+```
+
 (python-api-studies-time-evolution-problem-ir)=
 <!-- (problem-ir)= -->
 ## ProblemIR

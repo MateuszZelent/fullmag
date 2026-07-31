@@ -114,6 +114,32 @@ mix the flat and object forms for the same setting without checking the final ex
 | `boundary_correction(mode)` | `str` | not set | $1$ | `none`, `volume`, or `full`. | Sets the flat FDM partial-cell correction mode. | FDM boundary-correction lanes. | `discretization.fdm.boundary_correction` |
 | `demag_quality(profile)` | `str` | not set | $1$ | `exact`, `balanced`, or `fast`. | Sets demag refresh cadence: exact every RHS, balanced $5\times10^{-13}\,\mathrm{s}$, fast $2\times10^{-12}\,\mathrm{s}$. | Time-integration refresh policy. | `study.field_refresh.demag_interval_s` |
 
+### Complete FDM demagnetization scenario
+
+The user-facing request is declared on `study`; the backend-specific FDM demagnetization policy is
+resolved together with the grid and ordered physical stages.
+
+```python
+# %% FDM demagnetization in a complete stage-first study
+import fullmag as fm
+
+nm = 1.0e-9
+study = fm.study("demagnetization_api_example")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.cell(2 * nm, 2 * nm, 5 * nm)
+study.demag()
+study.exchange()
+film = study.geometry(fm.Box(100 * nm, 20 * nm, 5 * nm), name="film")
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.solver(integrator="rk45", fix_dt=1.0e-15, gamma=2.211e5)
+study.stages.add_run(stage_id="run", until=1.0e-9)
+```
+
 (demag-api-problem-ir)=
 ## ProblemIR lowering
 

@@ -93,11 +93,36 @@ w_{\mathrm u}=-K_{u1}q^2-K_{u2}q^4.
 `Ku_field` and `Ku2_field` override the corresponding scalar value where the resolved backend
 material path supports them. They do not create a new anisotropy order or alter the axis.
 
-### Copyable canonical material example
+### Copyable canonical stage scenario
 
+The canonical material-owned anisotropy is assigned to the study-owned magnetic body. The stage
+graph, rather than a standalone `Material(...)` constructor, is the executable public example.
 
-The spatial list is only a valid executable example when the selected mesh/material resolution
-has exactly the required cardinality. For general authoring, omit it and let the planner derive
+```python
+# %% Uniaxial anisotropy in a complete stage-first study
+import fullmag as fm
+
+nm = 1.0e-9
+study = fm.study("uniaxial_anisotropy_api_example")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.cell(2 * nm, 2 * nm, 5 * nm)
+study.exchange()
+film = study.geometry(fm.Box(100 * nm, 20 * nm, 5 * nm), name="film")
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.Ku1 = 5.0e5
+film.Ku2 = 0.05e6
+film.anisU = (0.0, 0.0, 1.0)
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.solver(integrator="rk45", fix_dt=1.0e-15, gamma=2.211e5)
+study.stages.add_run(stage_id="run", until=1.0e-9)
+```
+
+The spatial list is only a valid executable input when the selected mesh/material resolution has
+exactly the required cardinality. For general authoring, omit it and let the planner derive
 resolved material fields from regions.
 
 ### Compatibility migration fragment

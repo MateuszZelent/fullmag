@@ -107,8 +107,7 @@ Current public limitations include:
 
 The public executable form is the stage-first `study.thermal_noise(...)` call inside a complete
 scenario. The constructor remains an API/IR compatibility symbol; it is not a standalone
-simulation workflow. No Python cell is published here until every thermal example can include
-the full study and ordered stage graph.
+simulation workflow.
 
 | Public name | Type | Default | SI unit | Validation domain / error | Physical meaning | Backend support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
@@ -123,6 +122,31 @@ The interaction has no public `alpha`, `M_s`, `V`, `dt`, or `gamma` arguments.
 Those values belong to material, mesh, dynamics, and runtime planner contracts;
 adding them to `ThermalNoise` would create a second physical model instead of
 describing the current implementation.
+
+### Complete thermal-noise stage scenario
+
+The stochastic interaction is configured on the study before the solver and physical-time stage.
+
+```python
+# %% Thermal noise in a complete stage-first study
+import fullmag as fm
+
+nm = 1.0e-9
+study = fm.study("thermal_noise_api_example")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.cell(2 * nm, 2 * nm, 5 * nm)
+study.exchange()
+study.thermal_noise(temperature=300.0, seed=123)
+film = study.geometry(fm.Box(100 * nm, 20 * nm, 5 * nm), name="film")
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.solver(integrator="rk45", fix_dt=1.0e-15, gamma=2.211e5)
+study.stages.add_run(stage_id="run", until=1.0e-12)
+```
 
 (thermal-noise-api-problem-ir)=
 ## 6. Python-to-ProblemIR mapping

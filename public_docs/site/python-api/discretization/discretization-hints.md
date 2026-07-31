@@ -39,6 +39,31 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | `DiscretizationHints.hybrid` | `Hybrid \| None` | `None` | $1$ | Optional hybrid hint. | Optional hybrid hint. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.hybrid` |
 
 
+### Complete stage-first selection example
+
+Hints are consumed as part of a complete study request. The example below selects the FDM lane;
+the same stage structure is used when the request is changed to FEM.
+
+```python
+# %% Discretization choice plus executable stages
+import fullmag as fm
+
+nm = 1.0e-9
+study = fm.study("discretization_hints_example")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.cell(2 * nm, 2 * nm, 5 * nm)
+study.exchange()
+film = study.geometry(fm.Box(100 * nm, 20 * nm, 5 * nm), name="film")
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.solver(integrator="rk45", fix_dt=1.0e-15, gamma=2.211e5)
+study.stages.add_run(stage_id="run", until=1.0e-9)
+```
+
 (python-api-discretization-discretization-hints-problem-ir)=
 <!-- (problem-ir)= -->
 ## ProblemIR

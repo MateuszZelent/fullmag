@@ -45,6 +45,31 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | `Ferromagnet.material_parameter_fields` | `tuple` | `()` | $1$ | Object-owned spatial material assignments lowered into `material_parameter_fields`. | Object-owned spatial material assignments lowered into `material_parameter_fields`. | FEM/FDM CPU/GPU; planner checks combinations | `magnets[].material_parameter_fields` |
 
 
+### Complete ferromagnet stage scenario
+
+The stage builder owns the public workflow. Material values, geometry, and initial magnetization
+are assigned to the returned magnetic body before the solver and stages are declared.
+
+```python
+# %% Ferromagnet authoring in a complete stage-first study
+import fullmag as fm
+
+nm = 1.0e-9
+study = fm.study("ferromagnet_api_example")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.cell(2 * nm, 2 * nm, 5 * nm)
+study.exchange()
+film = study.geometry(fm.Box(100 * nm, 20 * nm, 5 * nm), name="film")
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.solver(integrator="rk45", fix_dt=1.0e-15, gamma=2.211e5)
+study.stages.add_run(stage_id="run", until=1.0e-9)
+```
+
 (python-api-magnets-and-textures-ferromagnet-problem-ir)=
 <!-- (problem-ir)= -->
 ## ProblemIR

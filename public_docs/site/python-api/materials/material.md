@@ -60,6 +60,33 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | `Material.Dbulk_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Optional spatial bulk-DMI values. | Optional spatial bulk-DMI values. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].dbulk_field` |
 
 
+### Complete material stage scenario
+
+Material parameters are assigned to the study-owned magnetic body. This is the public equivalent
+of the material record used by the solver; a standalone `Material(...)` cell is not a simulation.
+
+```python
+# %% Material values in a complete stage-first study
+import fullmag as fm
+
+nm = 1.0e-9
+study = fm.study("material_api_example")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.cell(2 * nm, 2 * nm, 5 * nm)
+study.exchange()
+film = study.geometry(fm.Box(100 * nm, 20 * nm, 5 * nm), name="film")
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.Ku1 = 5.0e5
+film.anisU = (0.0, 0.0, 1.0)
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.solver(integrator="rk45", fix_dt=1.0e-15, gamma=2.211e5)
+study.stages.add_run(stage_id="run", until=1.0e-9)
+```
+
 (python-api-materials-material-problem-ir)=
 <!-- (problem-ir)= -->
 ## ProblemIR

@@ -108,8 +108,6 @@ reductions and FEM field-to-energy reductions.
 
 ```python
 # %% FEM demagnetization stage scenario
-from pathlib import Path
-
 import fullmag as fm
 
 study = fm.study("demag_fem_poisson_robin")
@@ -150,7 +148,7 @@ study.fem_demag_solver(
     rtol=1e-12,
     max_iterations=600,
 )
-study.mesh.save_or_load(Path("demag_fem_poisson_robin.fullmag-mesh"))
+# The planner materializes the shared FEM domain mesh when the first stage is run.
 study.stages.add_relax(
     stage_id="relax",
     algorithm="nonlinear_cg",

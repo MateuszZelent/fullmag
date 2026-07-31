@@ -40,6 +40,39 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | `SaveScalar.every` | `positive float or "auto"` | `required` | $\mathrm{s}$ | Finite positive sampling period in seconds, or `"auto"`; step-count sampling is not accepted here. | Finite positive sampling period in seconds, or `"auto"`; step-count sampling is not accepted here. | FEM/FDM CPU/GPU; planner checks combinations | `study.sampling.outputs[].every` |
 
 
+### Complete output stage scenario
+
+Output requests are attached to the ordered stage, after the physical model and solver policy
+have been declared.
+
+```python
+# %% Field and scalar output from a complete study
+import fullmag as fm
+
+nm = 1.0e-9
+study = fm.study("output_api_example")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.cell(2 * nm, 2 * nm, 5 * nm)
+study.exchange()
+film = study.geometry(fm.Box(100 * nm, 20 * nm, 5 * nm), name="film")
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.solver(integrator="rk45", fix_dt=1.0e-15, gamma=2.211e5)
+study.stages.add_run(stage_id="run", until=1.0e-9).autosave(
+    fm.StageAutosave(
+        table=fm.TableAutosave(
+            t_sampl=1.0e-12,
+            quantities=["step", "e_ex", "e_total", "max_torque_T"],
+        ),
+        fields=[fm.FieldAutosave("H_ex", every=1.0e-12)],
+    )
+)
+```
+
 (python-api-outputs-fields-and-scalars-problem-ir)=
 <!-- (problem-ir)= -->
 ## ProblemIR

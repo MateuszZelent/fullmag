@@ -41,6 +41,35 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | `FEM.demag_solver_policy` | `policy or None` | `None` | $1$ | Demagnetization linear-solver policy. | Demagnetization linear-solver policy. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fem.demag_solver_policy` |
 
 
+### Complete FEM stage scenario
+
+FEM authoring includes the shared domain, object mesh, demagnetization realization, linear-solver
+policy, and the ordered stage graph.
+
+```python
+# %% FEM discretization in the public stage workflow
+import fullmag as fm
+
+nm = 1.0e-9
+study = fm.study("fem_api_example")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.universe(mode="manual", size=(800 * nm, 400 * nm, 300 * nm))
+study.universe.mesh(maximum_element_size=40 * nm, maximum_element_growth_rate=1.7)
+film = study.geometry(fm.Box(100 * nm, 20 * nm, 5 * nm), name="film")
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+film.mesh(maximum_element_size=5 * nm, order=1)
+study.demag(realization="poisson_robin")
+study.fem_demag_solver(solver="CG", preconditioner="AMG", rtol=1.0e-10, max_iterations=500)
+study.build_domain_mesh()
+study.solver(integrator="rk45", fix_dt=1.0e-15, gamma=2.211e5)
+study.stages.add_run(stage_id="run", until=1.0e-12)
+```
+
 (python-api-discretization-fem-problem-ir)=
 <!-- (problem-ir)= -->
 ## ProblemIR

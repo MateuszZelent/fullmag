@@ -82,7 +82,18 @@ right = body.add_region("right", fm.Box(40 * nm, 20 * nm, 4 * nm))
 
 # %% Coupling and stages
 study.couplings.exchange(left, right, mode="explicit", inter_exchange=13e-12)
-study.stages.add_relax(stage_id="relax", tolT=1e-6, max_steps=50_000)
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="llg_overdamped",
+    solver="rk23",
+    dt_initial=1e-15,
+    dt_min=1e-17,
+    dt_max=1e-14,
+    max_err=1e-7,
+    relax_alpha=1.0,
+    tolT=1e-6,
+    max_steps=50_000,
+)
 study.stages.add_run(stage_id="run", until=1e-9)
 ```
 

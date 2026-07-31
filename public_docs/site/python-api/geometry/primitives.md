@@ -41,6 +41,31 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | `Box.name` | `str` | `"box"` | $1$ | Non-empty geometry identity. | Non-empty geometry identity. | FEM/FDM CPU/GPU; planner checks combinations | `geometry.entries[].name` |
 
 
+### Complete geometry stage scenario
+
+Geometry is introduced through `study.geometry(...)` and then used by a fully configured magnetic
+study; constructing a `Box` alone is not an executable example.
+
+```python
+# %% Box geometry in a complete stage-first study
+import fullmag as fm
+
+nm = 1.0e-9
+study = fm.study("box_geometry_example")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.cell(2 * nm, 2 * nm, 5 * nm)
+study.exchange()
+film = study.geometry(fm.Box(size=(100 * nm, 20 * nm, 5 * nm), name="film"), name="film")
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.solver(integrator="rk45", fix_dt=1.0e-15, gamma=2.211e5)
+study.stages.add_run(stage_id="run", until=1.0e-9)
+```
+
 (python-api-geometry-primitives-problem-ir)=
 <!-- (problem-ir)= -->
 ## ProblemIR

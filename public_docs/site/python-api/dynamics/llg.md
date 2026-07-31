@@ -41,6 +41,40 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | `LLG.field_refresh` | `FieldRefreshPolicy \| None` | `None` | $1$ | Optional field-refresh policy. | Optional field-refresh policy. | FEM/FDM CPU/GPU; planner checks combinations | `study.dynamics.field_refresh` |
 
 
+### Complete stage-first example
+
+The executable public form configures the LLG policy on `study.solver(...)`. The constructor
+`LLG(...)` is not a standalone simulation workflow.
+
+```python
+# %% LLG policy in a complete stage-first study
+import fullmag as fm
+
+nm = 1.0e-9
+study = fm.study("llg_api_example")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.exchange()
+study.cell(2 * nm, 2 * nm, 5 * nm)
+film = study.geometry(fm.Box(100 * nm, 20 * nm, 5 * nm), name="film")
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.solver(
+    integrator="rk45",
+    adaptive_timestep=fm.AdaptiveTimestep(
+        atol=1.0e-6,
+        rtol=1.0e-3,
+        dt_min=1.0e-15,
+        dt_max=1.0e-12,
+    ),
+    gamma=2.211e5,
+)
+study.stages.add_run(stage_id="run", until=1.0e-9)
+```
+
 (python-api-dynamics-llg-problem-ir)=
 <!-- (problem-ir)= -->
 ## ProblemIR

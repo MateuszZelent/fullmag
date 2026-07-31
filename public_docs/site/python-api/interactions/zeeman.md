@@ -95,6 +95,31 @@ materialize.
 | `E_ext` | scalar | $\mathrm{J}$ | Requires a declared Zeeman term and a lane exposing the scalar energy. |
 | `eden_ext` | spatial scalar field | $\mathrm{J\,m^{-3}}$ | Requires a declared Zeeman term and a lane exposing spatial energy density. |
 
+### Complete external-field stage scenario
+
+The uniform field is declared on the study in tesla and then consumed by an ordered stage.
+
+```python
+# %% Zeeman field in a complete stage-first study
+import fullmag as fm
+
+nm = 1.0e-9
+study = fm.study("zeeman_api_example")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.cell(2 * nm, 2 * nm, 5 * nm)
+study.exchange()
+film = study.geometry(fm.Box(100 * nm, 20 * nm, 5 * nm), name="film")
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.b_ext(0.0, 0.0, 0.1)  # Bz = 0.1 T
+study.solver(integrator="rk45", fix_dt=1.0e-15, gamma=2.211e5)
+study.stages.add_run(stage_id="run", until=1.0e-9)
+```
+
 (zeeman-api-problem-ir)=
 ## Canonical ProblemIR lowering
 

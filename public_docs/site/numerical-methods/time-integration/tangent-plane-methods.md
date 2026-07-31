@@ -77,7 +77,13 @@ study = fm.study("tangent_plane_relaxation")
 study.engine("fem")
 study.device("cpu", precision="double")
 study.mode("strict")
-study.geometry(fm.Box(40 * nm, 20 * nm, 5 * nm), name="film")
+film = study.geometry(fm.Box(40 * nm, 20 * nm, 5 * nm), name="film")
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.exchange()
+study.solver(integrator="rk45", fix_dt=1.0e-15, gamma=2.211e5)
 study.stages.add_relax(
     algorithm="tangent_plane_implicit",
     tolT=1.0e-6,
