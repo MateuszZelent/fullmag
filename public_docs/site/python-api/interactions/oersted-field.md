@@ -210,66 +210,28 @@ The half-open pulse convention is fixed: the source is active at t_on and inacti
 (oersted-api-problem-ir)=
 ## Canonical ProblemIR lowering
 
-The following complete example is intentionally executable as a notebook-style Python block. It
-creates a magnetic object, a prescribed current module, a source-bound Oersted term, and an
-`H_oe` output request. `Problem.to_ir()` lowers the authored request; it does not start a native
-solver or claim that a selected backend has passed qualification.
+The stage-first study workflow is the executable path. The following notebook block shows the
+object-level source binding and interaction fragment that the stage capture lowers; it does not
+construct a top-level problem or start a native solver.
 
 ```python
-# %% Imports and SI constants
+# %% Oersted object fragments; no solver is launched here.
 import json
 import fullmag as fm
 
-nm = 1.0e-9
-ps = 1.0e-12
-
-# %% Geometry, material, and initial state
-material = fm.Material(
-    name="Permalloy",
-    Ms=800.0e3,       # A/m
-    A=13.0e-12,       # J/m
-    alpha=0.01,
-)
-magnet = fm.Ferromagnet(
-    name="pillar",
-    geometry=fm.Box(size=(100 * nm, 100 * nm, 20 * nm), name="pillar"),
-    material=material,
-    m0=fm.texture.uniform((1.0, 0.0, 0.0)),
-)
-
-# %% Current source and Oersted interaction
 drive = fm.CurrentTransport(
     name="drive",
     model="prescribed_density",
     current_density=(0.0, 0.0, 5.0e10),  # A/m^2
     solve_region="pillar",
 )
-problem = fm.Problem(
-    name="oersted_api_example",
-    magnets=[magnet],
-    energy=[fm.OerstedField(source="drive")],
-    current_modules=[drive],
-    study=fm.TimeEvolution(
-        dynamics=fm.LLG(),
-        outputs=[fm.SaveField("H_oe", every=1 * ps)],
-    ),
-)
-
-# %% Canonical lowering and contract assertions
-problem_ir = problem.to_ir(include_geometry_assets=False)
-assert problem_ir["energy_terms"] == [{
+term = fm.OerstedField(source="drive")
+assert term.to_ir() == {
     "kind": "oersted_field",
     "model": "from_current_solution",
     "source": "drive",
-}]
-assert problem_ir["current_modules"][0]["name"] == "drive"
-assert problem_ir["current_modules"][0]["model"] == "prescribed_density"
-assert problem_ir["current_modules"][0]["current_density"] == [0.0, 0.0, 5.0e10]
-assert any(
-    output.get("name") == "H_oe"
-    for output in problem_ir["study"]["sampling"]["outputs"]
-)
-print(json.dumps(problem_ir, indent=2))
+}
+print(json.dumps({"current_module": drive.to_ir(), "energy_term": term.to_ir()}, indent=2))
 ```
 
 For this example the interaction fragment is exactly:

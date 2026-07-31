@@ -258,35 +258,19 @@ not prove that the selected solver/device can execute it.
 (oersted-problem-ir)=
 ## Canonical ProblemIR and normalization
 
-The following executable, runtime-independent example uses a cylindrical source-bound current.
-It records the authored source, while the planner later resolves it to an analytic cylinder.
+The following runtime-independent example inspects the source-bound and analytic-cylinder object
+fragments. The executable simulation workflow remains the stage-first study pattern described in
+the Python API section.
 
 ```python
-# %% Imports and SI constants
+# %% Oersted object fragments; no solver is launched here.
 import json
 import fullmag as fm
 
 nm = 1.0e-9
 ps = 1.0e-12
 
-# %% Magnetic cylinder and source current
-pillar_geometry = fm.Cylinder(
-    radius=50 * nm,
-    height=100 * nm,
-    name="pillar",
-)
-material = fm.Material(
-    name="Permalloy",
-    Ms=800.0e3,
-    A=13.0e-12,
-    alpha=0.01,
-)
-magnet = fm.Ferromagnet(
-    name="pillar",
-    geometry=pillar_geometry,
-    material=material,
-    m0=fm.texture.uniform((0.0, 0.0, 1.0)),
-)
+# %% Source current and source-bound interaction
 transport = fm.CurrentTransport(
     name="drive",
     model="prescribed_density",
@@ -294,34 +278,8 @@ transport = fm.CurrentTransport(
     solve_region="pillar",
 )
 
-# %% Oersted source-bound term and output
+# %% Oersted source-bound and analytic-cylinder terms
 term = fm.OerstedField(source="drive")
-study = fm.TimeEvolution(
-    dynamics=fm.LLG(),
-    outputs=[fm.SaveField("H_oe", every=ps)],
-)
-problem = fm.Problem(
-    name="oersted_source_bound",
-    magnets=[magnet],
-    energy=[fm.Exchange(), term],
-    current_modules=[transport],
-    study=study,
-    discretization=fm.DiscretizationHints(
-        fdm=fm.FDM(cell=(2 * nm, 2 * nm, 2 * nm)),
-    ),
-)
-
-# %% Canonical lowering; no native solver is launched
-problem_ir = problem.to_ir(include_geometry_assets=False)
-assert problem_ir["energy_terms"][1] == {
-    "kind": "oersted_field",
-    "model": "from_current_solution",
-    "source": "drive",
-}
-assert problem_ir["current_modules"][0]["current_density"] == [0.0, 0.0, 5.0e10]
-print(json.dumps(problem_ir, indent=2))
-
-# %% Direct analytic-cylinder authoring is a separate requested intent
 cylinder_term = fm.OerstedCylinder(
     current=5.0e-3,
     radius=50 * nm,
@@ -329,7 +287,11 @@ cylinder_term = fm.OerstedCylinder(
     axis=(0.0, 0.0, 1.0),
     time_dependence=fm.Sinusoidal(frequency_hz=1.0e9, offset=0.25),
 )
-print(cylinder_term.to_ir())
+print(json.dumps({
+    "current_module": transport.to_ir(),
+    "source_bound_term": term.to_ir(),
+    "analytic_cylinder_term": cylinder_term.to_ir(),
+}, indent=2))
 ```
 
 The relevant serialized records produced by this example are:
@@ -352,9 +314,9 @@ The relevant serialized records produced by this example are:
 }
 ```
 
-This is the exact shape of the relevant Problem.to_ir records; the complete payload also contains
-geometry, materials, magnets, study, backend policy, validation profile, and provenance. The
-direct OerstedCylinder fragment is normalized as:
+These are the exact shapes of the relevant object-level IR records. A complete stage capture also
+contains geometry, materials, magnetization, backend policy, validation profile, and provenance.
+The direct OerstedCylinder fragment is normalized as:
 
 ```json
 {
