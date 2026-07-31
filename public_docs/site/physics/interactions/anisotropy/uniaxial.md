@@ -45,8 +45,8 @@ resolved scalar/spatial material data, solver, device, precision, and output leg
 (uniaxial-problem-statement)=
 ## Physical problem
 
-Let $Omega_m$ be the magnetic domain, $mathbf m=mathbf M/M_s$ the reduced magnetization,
-$mathbf u$ the normalized easy-axis direction, and
+Let $\Omega_m$ be the magnetic domain, $\mathbf m=\mathbf M/M_s$ the reduced magnetization,
+$\mathbf u$ the normalized easy-axis direction, and
 
 ```{math}
 :label: eq-uniaxial-projection
@@ -85,7 +85,7 @@ With positive $M_s$, the effective field obtained from the FullMag convention is
 \frac{2K_{u1}q+4K_{u2}q^3}{\mu_0M_s}\,\mathbf u.
 ```
 
-For an admissible variation $oldsymbol\eta$, the directional derivative is
+For an admissible variation $\boldsymbol\eta$, the directional derivative is
 
 ```{math}
 :label: eq-uniaxial-directional-derivative
@@ -133,7 +133,7 @@ normalization are owned by the dynamics contract.
   Native paths normalize it; the stored public tuple is not silently treated as unit length.
 - The reduced magnetization is expected to satisfy the surrounding dynamics normalization contract.
 - `Ms` must be finite and positive. The field scales as $1/M_s$; the energy does not contain an
-  additional hidden $mu_0$ factor.
+  additional hidden $\mu_0$ factor.
 - Spatial `Ku_field` and `Ku2_field` override scalar material values only where the corresponding
   backend supports their cardinality and interpolation. They are not arbitrary-length arrays.
 - The absolute energy uses the negative-power convention stated above. Comparing to a shifted
@@ -232,7 +232,7 @@ Unsupported combinations are planner errors, not silent fallbacks.
 
 ### FDM CPU
 
-For active cell $i$, the CPU reference uses the normalized cell axis $mathbf u_i$ and computes
+For active cell $i$, the CPU reference uses the normalized cell axis $\mathbf u_i$ and computes
 
 ```{math}
 :label: eq-uniaxial-fdm-field
@@ -304,8 +304,8 @@ stable symbol and inspect the current line range when reviewing a particular rev
 (uniaxial-validation)=
 ## Validation and qualification
 
-For $mathbf m=\mathbf u$, verify $q=1$ and
-$\mathbf H_{\mathrm u}=(2K_{u1}+4K_{u2})\mathbf u/(\mu_0M_s)$. For $mathbf m\perp\mathbf u$,
+For $\mathbf m=\mathbf u$, verify $q=1$ and
+$\mathbf H_{\mathrm u}=(2K_{u1}+4K_{u2})\mathbf u/(\mu_0M_s)$. For $\mathbf m\perp\mathbf u$,
 verify zero field and zero FullMag density. Reverse `Ku1` and verify the easy-axis/easy-plane
 behavior. Compare finite differences of the reported energy with the analytic field.
 
