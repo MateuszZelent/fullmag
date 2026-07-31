@@ -159,27 +159,67 @@ $\mathrm{J\,m^{-1}}$, while `Material.Ms` is the saturation magnetization in
 $\mathrm{A\,m^{-1}}$. This separation is intentional: the energy-term list enables the
 interaction, and each magnetic material supplies the coefficient used on its domain.
 
-### Complete, copyable example
+### Executable user workflow: study and stages
+
+The normal user script declares one study and appends its execution stages. The physical model is
+captured by each stage; the sequence is not represented by manually constructing a flat
+`fm.Problem` object. This is the form used by the public script loader and by the stage tests.
 
 The following block is both a regular Python script and a Jupyter-compatible sequence of `# %%`
-cells. It builds an exchange-only problem, requests the exchange field and energy, and prints the
-canonical IR without launching a solver.
+cells. It builds an exchange-only study with relaxation followed by a physical-time run.
 
 ```python
 # %% Imports and SI constants
+import fullmag as fm
+
+nm = 1.0e-9
+
+study = fm.study("exchange_only")
+study.engine("fdm")
+study.exchange()
+study.cell(2 * nm, 2 * nm, 1 * nm)
+
+# %% Geometry and material
+body = study.geometry(fm.Box(40 * nm, 20 * nm, 5 * nm), name="film")
+body.Ms = 800.0e3       # A/m
+body.Aex = 13.0e-12     # J/m
+body.alpha = 0.01       # dimensionless
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
+
+# %% Ordered execution pipeline
+study.stages.add_relax(
+    stage_id="relax",
+    tolT=1.0e-6,
+    dt=1.0e-15,
+    max_steps=50_000,
+)
+study.stages.add_run(stage_id="run", until=1.0e-9)
+```
+
+`study.stages` is the public execution pipeline. `relax` and `run` are separate stages with
+different stopping variables and provenance. The selected solver, device, precision, mesh, and
+resolved outputs are determined by the planner/runtime; the Python stage declarations preserve the
+requested intent.
+
+### Low-level physical snapshot and `ProblemIR` inspection
+
+`fm.Problem` remains a public structural object, but it is not the normal stage-oriented user
+workflow. It represents the physical model snapshot carried by a stage and is useful for testing,
+lowering inspection, and API documentation. The following block deliberately demonstrates that
+lowering boundary without claiming to replace `fm.study(...).stages`.
+
+```python
+# %% Low-level snapshot: Python objects -> canonical ProblemIR
 import json
 import fullmag as fm
 
 nm = 1.0e-9
-ps = 1.0e-12
-
-# %% Geometry and material
 geometry = fm.Box(size=(40 * nm, 20 * nm, 5 * nm), name="film")
 material = fm.Material(
     name="Permalloy",
-    Ms=800.0e3,       # A/m
-    A=13.0e-12,       # J/m
-    alpha=0.01,       # dimensionless
+    Ms=800.0e3,
+    A=13.0e-12,
+    alpha=0.01,
 )
 magnet = fm.Ferromagnet(
     name="film",
@@ -187,34 +227,18 @@ magnet = fm.Ferromagnet(
     material=material,
     m0=fm.texture.uniform((1.0, 0.0, 0.0)),
 )
-
-# %% Exchange, outputs, and both discretization hints
-study = fm.TimeEvolution(
-    dynamics=fm.LLG(),
-    outputs=[
-        fm.SaveField("H_ex", every=1 * ps),
-        fm.SaveScalar("E_ex", every=1 * ps),
-    ],
-)
-problem = fm.Problem(
-    name="exchange_only",
+snapshot = fm.Problem(
+    name="exchange_only_snapshot",
     magnets=[magnet],
     energy=[fm.Exchange()],
-    study=study,
-    discretization=fm.DiscretizationHints(
-        fdm=fm.FDM(cell=(2 * nm, 2 * nm, 1 * nm)),
-        fem=fm.FEM(order=1, maximum_element_size=2 * nm),
-    ),
+    study=fm.TimeEvolution(dynamics=fm.LLG(), outputs=[]),
 )
-
-# %% Canonical, runtime-independent lowering
-problem_ir = problem.to_ir(include_geometry_assets=False)
-print(json.dumps(problem_ir, indent=2))
+print(json.dumps(snapshot.to_ir(include_geometry_assets=False), indent=2))
 ```
 
-`problem.to_ir(...)` validates and lowers authoring objects; it does not select a concrete CPU or
-GPU runtime. The planner resolves that later from `backend_policy`, installed capabilities, and
-the requested execution context.
+`snapshot.to_ir(...)` validates and lowers one physical snapshot; it does not execute a stage or
+select a concrete CPU/GPU runtime. The planner resolves that later from the requested study,
+backend policy, installed capabilities, and execution context.
 
 ### Exchange-facing parameter reference
 
@@ -531,6 +555,10 @@ be regenerated from the symbol when the code moves.
 |---|---|---|
 | Public API | canonical term | [`packages/fullmag-py/src/fullmag/model/energy.py` — `class Exchange`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/packages/fullmag-py/src/fullmag/model/energy.py#L11) |
 | Public API | material-to-IR lowering | `packages/fullmag-py/src/fullmag/model/structure.py` — `class Material` |
+| Public API | study entry point | `packages/fullmag-py/src/fullmag/world.py` — `study` |
+| Public API | study configuration facade | `packages/fullmag-py/src/fullmag/world.py` — `class StudyBuilder` |
+| Public API | ordered stage authoring | `packages/fullmag-py/src/fullmag/world.py` — `class StudyStagesBuilder` |
+| Runtime model | stage-local physical snapshot | `packages/fullmag-py/src/fullmag/world.py` — `class CapturedStage` |
 | Planner | fail-closed output validation | `crates/fullmag-plan/src/validate.rs` — `validate_executable_outputs` |
 | ProblemIR | material coefficient | [`crates/fullmag-ir/src/model.rs` — `MaterialIR::exchange_stiffness`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/crates/fullmag-ir/src/model.rs#L413) |
 | FDM CPU | runtime field stencil | [`crates/fullmag-engine/src/fdm/cpu/fields.rs` — `exchange_field_add_into_soa`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/crates/fullmag-engine/src/fdm/cpu/fields.rs#L959) |

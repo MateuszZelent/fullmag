@@ -215,8 +215,49 @@ still public and are migrated only for a single material target.
 | `Material.Kc2_field` | `list[float] or None` | `None` | $\mathrm{J\,m^{-3}}$ | finite values; mesh cardinality downstream | spatial $K_{c2}$ override | FEM and supported allocating FDM reference paths | `materials[].kc2_field` |
 | `Material.Kc3_field` | `list[float] or None` | `None` | $\mathrm{J\,m^{-3}}$ | finite values; mesh cardinality downstream | spatial $K_{c3}$ override | FEM and supported allocating FDM reference paths | `materials[].kc3_field` |
 
+### Executable user workflow: study and stages
+
+The normal user-facing script uses the study/stage API. The anisotropy constants are assigned to
+the geometry handle, and the ordered relaxation/run pipeline is declared explicitly.
+
 ```python
-# %% Copyable Python/Jupyter example: canonical material-owned anisotropy
+# %% Copyable Python/Jupyter example: canonical study pipeline
+import fullmag as fm
+
+nm = 1.0e-9
+study = fm.study("uniaxial-example")
+study.engine("fdm")
+study.cell(2 * nm, 2 * nm, 1 * nm)
+
+body = study.geometry(fm.Box(40 * nm, 20 * nm, 5 * nm), name="film")
+body.Ms = 800.0e3
+body.Aex = 13.0e-12
+body.alpha = 0.01
+body.Ku1 = 0.5e6
+body.anisU = (0.0, 0.0, 1.0)
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
+
+study.stages.add_relax(
+    stage_id="relax",
+    tolT=1.0e-6,
+    dt=1.0e-15,
+    max_steps=50_000,
+)
+study.stages.add_run(stage_id="run", until=1.0e-9)
+```
+
+`study.stages` is the executable user workflow. It produces stage-local physical snapshots that
+are later lowered and planned; the solver/device realization is resolved after the script has
+declared its intent.
+
+### Low-level physical snapshot and `ProblemIR` inspection
+
+The following separate block is intentionally lower-level. `fm.Problem` is a public physical
+snapshot/container used to inspect Python-to-`ProblemIR` lowering; it is not a replacement for the
+stage pipeline shown above.
+
+```python
+# %% Low-level snapshot: canonical material-owned anisotropy
 import json
 import fullmag as fm
 
@@ -236,27 +277,27 @@ magnet = fm.Ferromagnet(
     material=material,
     m0=fm.texture.uniform((1.0, 0.0, 0.0)),
 )
-problem = fm.Problem(
+snapshot = fm.Problem(
     name="uniaxial-example",
     magnets=[magnet],
     energy=[fm.Exchange()],
     study=fm.TimeEvolution(dynamics=fm.LLG(), outputs=[]),
 )
-print(json.dumps(problem.to_ir(include_geometry_assets=False), indent=2))
+print(json.dumps(snapshot.to_ir(include_geometry_assets=False), indent=2))
 
 # %% Compatibility form: migrated to the same material-owned representation
-legacy = fm.Problem(
+legacy_snapshot = fm.Problem(
     name="legacy-anisotropy-example",
     magnets=[magnet],
     energy=[fm.UniaxialAnisotropy(ku1=0.5e6, ku2=0.05e6, axis=(0.0, 0.0, 1.0))],
     study=fm.TimeEvolution(dynamics=fm.LLG(), outputs=[]),
 )
-print(json.dumps(legacy.to_ir(include_geometry_assets=False), indent=2))
+print(json.dumps(legacy_snapshot.to_ir(include_geometry_assets=False), indent=2))
 ```
 
-The code block is an authoring example, not device qualification. It shows the public lowering
-contract and can be adapted to a cubic material by setting `Kc1`, `Kc2`, `Kc3`, `anisC1`, and
-`anisC2`, or by using `fm.CubicAnisotropy` as the compatibility energy term.
+The low-level block is a lowering example, not device qualification. It can be adapted to a cubic
+material by setting `Kc1`, `Kc2`, `Kc3`, `anisC1`, and `anisC2`, or by using `fm.CubicAnisotropy`
+as the compatibility energy term.
 
 (anisotropy-problem-ir)=
 ## ProblemIR and planner resolution
@@ -402,6 +443,10 @@ qualified parity.
 | `packages/fullmag-py/src/fullmag/model/energy.py` | `class UniaxialAnisotropy` | Compatibility uniaxial constructor and serialization. |
 | `packages/fullmag-py/src/fullmag/model/energy.py` | `class CubicAnisotropy` | Compatibility cubic constructor and serialization. |
 | `packages/fullmag-py/src/fullmag/model/structure.py` | `class Material` | Canonical anisotropy fields and material serialization. |
+| `packages/fullmag-py/src/fullmag/world.py` | `study` | Public study-root entry point for executable scripts. |
+| `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` | Study-level engine, geometry, and material configuration facade. |
+| `packages/fullmag-py/src/fullmag/world.py` | `class StudyStagesBuilder` | Ordered relaxation and physical-time stage authoring. |
+| `packages/fullmag-py/src/fullmag/world.py` | `class CapturedStage` | Stage-local physical Problem snapshot and requested action. |
 | `packages/fullmag-py/src/fullmag/model/problem.py` | `_migrate_legacy_anisotropy_energy_terms` | Conflict-checked compatibility migration. |
 | `crates/fullmag-plan/src/fdm.rs` | `plan_fdm` | FDM material and execution-plan resolution. |
 | `crates/fullmag-plan/src/fem.rs` | `plan_fem` | FEM material promotion and axis legality. |

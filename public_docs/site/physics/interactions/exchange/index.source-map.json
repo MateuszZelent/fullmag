@@ -13,6 +13,10 @@
   "sources": [
     {"id": "python-exchange", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class Exchange", "responsibility": "Public Exchange term and canonical lowering."},
     {"id": "python-material", "path": "packages/fullmag-py/src/fullmag/model/structure.py", "symbol": "class Material", "responsibility": "Material A and Ms validation and lowering into ProblemIR."},
+    {"id": "python-study", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "study", "responsibility": "Public study-root entry point for executable scripts."},
+    {"id": "python-study-builder", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyBuilder", "responsibility": "Study-level engine, geometry, and interaction configuration facade."},
+    {"id": "python-stage-builder", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyStagesBuilder", "responsibility": "Ordered relaxation and physical-time stage authoring."},
+    {"id": "python-captured-stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class CapturedStage", "responsibility": "Stage-local physical Problem snapshot and requested action."},
     {"id": "planner-output-validation", "path": "crates/fullmag-plan/src/validate.rs", "symbol": "validate_executable_outputs", "responsibility": "Fail-closed Exchange output validation."},
     {"id": "fdm-cpu-field", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "exchange_field_add_into_soa", "responsibility": "Persistent FDM CPU exchange stencil."},
     {"id": "fdm-cpu-reference", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "cell_exchange_field", "responsibility": "Allocating heterogeneous FDM reference accessor."},
